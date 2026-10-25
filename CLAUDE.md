@@ -40,11 +40,11 @@ If it isn't connected, use the list below and mention ticket keys in commits.
 - PROJ-20: content endpoints
 - PROJ-21: token-efficient API-mode tools
 - PROJ-22: TURN
+- PROJ-24: seed a profile from your own Chrome (cookie and localStorage JSON export/import)
 - PROJ-16: logo
 
 **Later:**
 - PROJ-23: MP4 recording
-- PROJ-24: cookie JSON export/import
 - PROJ-25: automatic CAPTCHA detection
 
 Don't start v1.1 or later work until the v1 tasks it depends on are done.
