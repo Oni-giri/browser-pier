@@ -1,6 +1,6 @@
 # BrowserPier — Spec
 
-**Version:** v0.2 · 23 Oct 2026
+**Version:** v0.3 · 25 Oct 2026
 **Status:** design and decisions done, backend not started
 **Repo:** https://github.com/Oni-giri/browser-pier
 **Images:** `ghcr.io/oni-giri/browser-pier` (orchestrator) and `ghcr.io/oni-giri/browser-pier-chromium` (browser)
@@ -271,6 +271,7 @@ Designs: the "Browser Orchestrator UI" canvas (private to the author). The UI st
 ### Still open
 
 - **Logo:** navy style (v1.1).
+- **License:** Apache 2.0 (most adoption, same as Steel and Kernel) or AGPL (a cloud host must share changes). Decide before the first public release.
 
 ---
 
@@ -301,6 +302,44 @@ Designs: the "Browser Orchestrator UI" canvas (private to the author). The UI st
 - MP4 recording of each session from the existing H.264 stream, for replay
 - Cookie and localStorage JSON export/import, e.g. to seed a profile from your own Chrome
 - Automatic login-wall and CAPTCHA detection that triggers a handoff
+
+### Beyond v1: productization (vision, not committed)
+
+v1 stays fully self-hosted on one box. This is where BrowserPier could go if it becomes a public FOSS project and, later, a product. Nothing here is scheduled; it exists so v1 doesn't close doors.
+
+**Groundwork that's cheap in v1**
+- Put the browser lifecycle behind a `Runner` interface (start, stop, and optionally suspend/resume, for a profile) with local Docker as the only v1 backend.
+- Put profile storage behind a `ProfileStore` interface with a local volume as the only v1 backend.
+- Both are internal Go interfaces: no new features, no new config.
+
+**Stage 1: FOSS adoption**
+- One-line install; templates for Umbrel, CasaOS, Unraid and Coolify.
+- Python and TypeScript SDKs; ready-made integrations with browser-use, Stagehand and Playwright.
+- Docs and example agents ("log into X once, then automate it").
+- Pick the license before the first public release (see Still open).
+
+**Stage 2: teams and several machines** (likely the first paid tier)
+- Postgres instead of SQLite; a distributed lock so "one running browser per profile" holds across machines.
+- `ProfileStore` on S3-compatible storage (S3, R2, MinIO): profile packed, encrypted and uploaded on stop, restored on start. Chrome caches (Cache, Code Cache, GPUCache) are left out so snapshots stay small and cold starts fast.
+- `Runner` backends for remote Docker hosts and Kubernetes.
+- Multiple users with roles, SSO (OIDC), an audit log, profiles shared within a team.
+- Team handoff queue: "google needs a human", whoever is free takes it; push notifications or a small mobile app.
+
+**Stage 3: hosted product**
+- Billing per browser-hour plus profile storage; regions; bring-your-own or provided proxies.
+- Freeze/resume browsers from memory snapshots instead of stop/start: an idle browser costs disk only and resumes in milliseconds with its tabs open. Candidates: Unikraft Cloud (what Kernel uses for headful Chromium) or Firecracker on our own bare metal (needs KVM).
+- Abuse prevention from day one: sign-up checks, rate limits, domain blocklists. Hosted browsers attract spam and fraud.
+- Trust: profiles encrypted with customer-held keys, EU hosting and data residency.
+
+**What sets it apart** (the others compete on scale; this competes on identities and humans)
+- Profile health: detect when a profile has been logged out and ask a human to log in again before an agent hits the wall.
+- Password manager integration (Bitwarden, 1Password) for re-logins without exposing secrets.
+- Session recordings and an audit trail of who, agent or human, did what in which account.
+- Handoff as a product: the phone and PIN flow, team routing, response-time stats.
+
+**Business model:** open core. The self-hosted single box stays free; team features (Stage 2) paid or source-available; a hosted cloud for people who don't want to run it.
+
+**Landscape to watch:** Browserbase (hosted), Steel (open source, Apache 2.0), Kernel (hosted on Unikraft; its browser images are open source under Apache 2.0, with headful Chromium and a WebRTC live view), Cloudflare Browser Run (hosted; every request carries signed bot-identification headers, so it doesn't suit anti-bot use).
 
 ---
 
