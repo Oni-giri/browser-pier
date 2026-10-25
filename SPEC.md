@@ -295,17 +295,17 @@ Designs: the "Browser Orchestrator UI" canvas (private to the author). The UI st
 - Content endpoints: page to Markdown or readability text, screenshot, PDF (API mode)
 - Token-efficient API-mode tools: accessibility snapshot with stable refs, find, batch, covered-element check
 - TURN support for viewers on UDP-blocking networks
+- Seed a profile from your own Chrome: cookie and localStorage JSON export/import, so you don't have to log in again inside BrowserPier
 - Navy-style logo
 
 ### Later: useful, not urgent
 
 - MP4 recording of each session from the existing H.264 stream, for replay
-- Cookie and localStorage JSON export/import, e.g. to seed a profile from your own Chrome
 - Automatic login-wall and CAPTCHA detection that triggers a handoff
 
 ### Beyond v1: productization (vision, not committed)
 
-v1 stays fully self-hosted on one box. This is where BrowserPier could go if it becomes a public FOSS project and, later, a product. Nothing here is scheduled; it exists so v1 doesn't close doors.
+v1 stays fully self-hosted on one box. The aim right now is to ship a complete, solid FOSS product, not to compete with hosted providers or chase uniqueness; good ideas from other projects are welcome. This section is where BrowserPier could go afterwards. Nothing here is scheduled; it exists so v1 doesn't close doors.
 
 **Groundwork that's cheap in v1**
 - Put the browser lifecycle behind a `Runner` interface (start, stop, and optionally suspend/resume, for a profile) with local Docker as the only v1 backend.
@@ -314,7 +314,7 @@ v1 stays fully self-hosted on one box. This is where BrowserPier could go if it 
 
 **Stage 1: FOSS adoption**
 - One-line install; templates for Umbrel, CasaOS, Unraid and Coolify.
-- Python and TypeScript SDKs; ready-made integrations with browser-use, Stagehand and Playwright.
+- Python and TypeScript SDKs; ready-made integrations with browser-use (the first example: it connects over CDP), Stagehand and Playwright.
 - Docs and example agents ("log into X once, then automate it").
 - Pick the license before the first public release (see Still open).
 
@@ -331,15 +331,15 @@ v1 stays fully self-hosted on one box. This is where BrowserPier could go if it 
 - Abuse prevention from day one: sign-up checks, rate limits, domain blocklists. Hosted browsers attract spam and fraud.
 - Trust: profiles encrypted with customer-held keys, EU hosting and data residency.
 
-**What sets it apart** (the others compete on scale; this competes on identities and humans)
+**Ideas that grow out of the core** (not a race with anyone; just what persistent profiles and handoffs make possible)
 - Profile health: detect when a profile has been logged out and ask a human to log in again before an agent hits the wall.
-- Password manager integration (Bitwarden, 1Password) for re-logins without exposing secrets.
+- Password manager integration (Bitwarden, 1Password) for re-logins without exposing secrets, with domain-bound secrets: a credential can only be typed on the domains it's allowed for.
 - Session recordings and an audit trail of who, agent or human, did what in which account.
 - Handoff as a product: the phone and PIN flow, team routing, response-time stats.
 
 **Business model:** open core. The self-hosted single box stays free; team features (Stage 2) paid or source-available; a hosted cloud for people who don't want to run it.
 
-**Landscape to watch:** Browserbase (hosted), Steel (open source, Apache 2.0), Kernel (hosted on Unikraft; its browser images are open source under Apache 2.0, with headful Chromium and a WebRTC live view), Cloudflare Browser Run (hosted; every request carries signed bot-identification headers, so it doesn't suit anti-bot use).
+**Landscape to watch:** Browserbase (hosted), Steel (open source, Apache 2.0), Kernel (hosted on Unikraft; its browser images are open source under Apache 2.0, with headful Chromium and a WebRTC live view), Cloudflare Browser Run (hosted; every request carries signed bot-identification headers, so it doesn't suit anti-bot use), browser-use (an open-source agent library that drives any CDP browser, so a client of BrowserPier rather than an alternative; its hosted Browser Use Cloud keeps cookies and localStorage per profile, syncs logins from a local browser and has a live preview).
 
 ---
 
