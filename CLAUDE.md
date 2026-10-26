@@ -1,6 +1,6 @@
 # CLAUDE.md — working on BrowserPier
 
-Read `SPEC.md` first. It is the source of truth for behaviour, decisions and scope. If code and spec disagree, raise it; don't silently diverge. Update the spec when a decision changes.
+Read `SPEC.md` first. It is the source of truth for behaviour, decisions and scope. For anything visual (web UI, handoff page, landing page), follow `design/DESIGN.md` and the screens in `design/screens/`. If code and spec disagree, raise it; don't silently diverge. Update the spec when a decision changes.
 
 ## Task tracking (Jira)
 
