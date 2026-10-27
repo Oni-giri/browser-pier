@@ -56,6 +56,8 @@ Self-hosted, persistent browsers for AI agents. Agents start a browser when they
 - **Live stream:** WebRTC, served by the orchestrator with pion on a single muxed UDP port (TCP fallback). It relays each container's stream to the viewer and passes mouse and keyboard from the viewer back over a data channel to xdotool. No CDP is involved, so Visual mode stays clean.
 - **Profile volume**, one per profile: mounted as Chromium's user data directory. It outlives every container.
 - **Proxying:** CDP, the live stream and the visual endpoints are reached only through the orchestrator, behind token checks. Browser containers publish no ports.
+- **Control socket:** the container's entry process listens on a Unix socket in a volume shared only with the orchestrator, never on a network port, so neither pages nor other browser containers can reach it. It relays CDP (headful Chromium binds it to the container's own loopback), serves the H.264 stream and, later, Visual-mode input and screenshots.
+- **Sandbox:** Chromium's own sandbox stays on. It needs user namespaces, which Docker's default seccomp profile blocks, so the orchestrator starts browser containers with BrowserPier's seccomp profile: Docker's default plus namespace creation. Never `--no-sandbox`.
 - **Chrome launch setup:**
   - Drop `--enable-automation` and set `--disable-blink-features=AutomationControlled`.
   - `--use-gl=swiftshader`, so WebGL works in a container.
@@ -268,6 +270,8 @@ Designs: the "Browser Orchestrator UI" canvas (private to the author). The UI st
 | Deployment | Generic docker-compose first (any VPS), Umbrel app second | The author runs it on Umbrel, but it should work for anyone on a plain server. |
 | Fingerprints | No spoofing; one stable real fingerprint per profile | Spoofing needs CDP on every page, and a changing fingerprint flags logged-in accounts. |
 | Proxies | Per-profile, authenticated, via a forwarding proxy; timezone and locale matched | On a VPS, residential proxies are what makes protected sites usable. |
+| Orchestrator ↔ browser container | A Unix socket on a volume shared with the orchestrator | Nothing listens on a network, so a page or another container can't reach CDP. |
+| Chromium sandbox | On, with a seccomp profile that allows user namespaces | Pages are untrusted; the container is a second boundary, not the only one. |
 
 ### Still open
 
