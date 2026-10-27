@@ -31,6 +31,27 @@ Agents start a browser when they need one. It keeps its cookies and logins, and 
                       one persistent volume per profile
 ```
 
+## Development
+
+Needs Go (version in `go.mod`), [golangci-lint](https://golangci-lint.run) v2 and Docker.
+
+```sh
+make build        # bin/browserpier
+make test         # fast tests, no Docker needed
+make test-docker  # also runs tests tagged `//go:build docker`
+make lint
+make image        # orchestrator image, ghcr.io/oni-giri/browser-pier
+```
+
+Configuration is through `BROWSERPIER_*` environment variables:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `BROWSERPIER_LISTEN` | `:8080` | Address the HTTP server binds to |
+| `BROWSERPIER_DATA_DIR` | `./data` (`/data` in the image) | Database and one folder per profile |
+
+CI lints, tests and builds every push and pull request, and publishes the orchestrator image to ghcr.io from `main` (tag `edge`) and from `v*` tags.
+
 ## Security, in one paragraph
 
 A BrowserPier profile holds live logged-in sessions. Anyone with CDP access to a profile effectively controls those accounts. Keep BrowserPier private (Tailscale or a VPN) when you can; if it's public, HTTPS is required. Give each agent its own token scoped to the profiles it needs.
