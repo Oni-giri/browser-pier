@@ -23,7 +23,7 @@ RUN apt-get update \
 # Fail the build, not the first session, if a plugin or a switch the entrypoint relies on is missing.
 RUN for el in ximagesrc videoconvert x264enc fdsink; do gst-inspect-1.0 "$el" >/dev/null || { echo "missing GStreamer element $el"; exit 1; }; done \
  && for sw in remote-debugging-port password-store disable-blink-features use-angle enable-unsafe-swiftshader \
-               force-webrtc-ip-handling-policy disable-component-update hide-crash-restore-bubble; do \
+               webrtc-ip-handling-policy disable-component-update hide-crash-restore-bubble; do \
       grep -qa -- "$sw" /usr/lib/chromium/chromium || { echo "chromium binary lacks --$sw"; exit 1; }; done
 
 # Chromium runs as pier (uid 1000). /profile is the profile volume and

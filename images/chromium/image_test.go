@@ -418,6 +418,27 @@ func TestBrowserEnvironment(t *testing.T) {
 		}
 		t.Logf("WebGL renderer: %v", v)
 	})
+	t.Run("webrtc sends no unproxied udp", func(t *testing.T) {
+		// With no proxy, disable_non_proxied_udp leaves WebRTC no UDP candidates at all.
+		v := p.eval(`new Promise(resolve => {
+			const pc = new RTCPeerConnection({iceServers: []});
+			const found = [];
+			pc.onicecandidate = e => { if (e.candidate) found.push(e.candidate.candidate); else resolve(found); };
+			pc.createDataChannel('x');
+			pc.createOffer().then(o => pc.setLocalDescription(o));
+			setTimeout(() => resolve(found), 5000);
+		})`)
+		found, ok := v.([]any)
+		if !ok {
+			t.Fatalf("candidate gathering returned %v", v)
+		}
+		for _, c := range found {
+			if strings.Contains(strings.ToLower(fmt.Sprint(c)), " udp ") {
+				t.Fatalf("UDP ICE candidate gathered: %v", c)
+			}
+		}
+		t.Logf("ICE candidates: %v", found)
+	})
 	t.Run("window covers the display", func(t *testing.T) {
 		out := docker(t, "exec", b.name, "xdotool", "search", "--onlyvisible", "--class", "chromium", "getwindowgeometry", "%@")
 		if !regexp.MustCompile(`Position: 0,0 .*\n\s*Geometry: 1280x800`).MatchString(out) {

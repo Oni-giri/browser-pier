@@ -17,7 +17,7 @@ func chromiumArgs(c config, smallShm bool) []string {
 		"--use-angle=swiftshader",
 		"--enable-unsafe-swiftshader",
 		// A proxied profile can't leak the host IP over WebRTC.
-		"--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+		"--webrtc-ip-handling-policy=disable_non_proxied_udp",
 		"--disable-component-update",
 		"--disable-background-networking",
 		"--no-first-run",

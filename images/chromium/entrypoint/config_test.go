@@ -65,7 +65,7 @@ func TestChromiumArgs(t *testing.T) {
 		"--user-data-dir=/profile",
 		"--password-store=basic",
 		"--disable-blink-features=AutomationControlled",
-		"--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+		"--webrtc-ip-handling-policy=disable_non_proxied_udp",
 		"--disable-component-update",
 		"--disable-background-networking",
 		"--no-first-run",
