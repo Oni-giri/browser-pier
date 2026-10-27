@@ -20,11 +20,16 @@ RUN apt-get update \
       ca-certificates tzdata \
  && rm -rf /var/lib/apt/lists/*
 
-# Fail the build, not the first session, if a plugin or a switch the entrypoint relies on is missing.
+# Fail the build, not the first session, if a plugin or a switch the entrypoint
+# relies on is missing. Chromium ignores unknown switches silently, so each
+# switch must appear in the binary as a whole NUL-terminated string.
 RUN for el in ximagesrc videoconvert x264enc fdsink; do gst-inspect-1.0 "$el" >/dev/null || { echo "missing GStreamer element $el"; exit 1; }; done \
- && for sw in remote-debugging-port password-store disable-blink-features use-angle enable-unsafe-swiftshader \
-               webrtc-ip-handling-policy disable-component-update hide-crash-restore-bubble; do \
-      grep -qa -- "$sw" /usr/lib/chromium/chromium || { echo "chromium binary lacks --$sw"; exit 1; }; done
+ && tr '\0' '\n' < /usr/lib/chromium/chromium > /tmp/strings \
+ && for sw in user-data-dir remote-debugging-port password-store disable-blink-features use-angle enable-unsafe-swiftshader \
+               webrtc-ip-handling-policy disable-component-update disable-background-networking no-first-run \
+               no-default-browser-check hide-crash-restore-bubble noerrdialogs window-position window-size disable-dev-shm-usage; do \
+      LC_ALL=C grep -qaxF -- "$sw" /tmp/strings || { echo "chromium binary lacks --$sw"; exit 1; }; done \
+ && rm /tmp/strings
 
 # Chromium runs as pier (uid 1000). /profile is the profile volume and
 # /run/browserpier holds the control socket; a fresh named volume mounted on
