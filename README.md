@@ -47,7 +47,7 @@ Configuration is through `BROWSERPIER_*` environment variables:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `BROWSERPIER_LISTEN` | `:8080` | Address the HTTP server binds to |
+| `BROWSERPIER_LISTEN` | `:7437` | Address the HTTP server binds to |
 | `BROWSERPIER_DATA_DIR` | `./data` (`/data` in the image) | Database and one folder per profile |
 
 CI lints, tests and builds every push and pull request, and publishes the orchestrator image to ghcr.io from `main` (tag `edge`) and from `v*` tags.

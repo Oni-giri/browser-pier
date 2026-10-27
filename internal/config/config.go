@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	DefaultListen  = ":8080"
+	DefaultListen  = ":7437"
 	DefaultDataDir = "./data"
 )
 

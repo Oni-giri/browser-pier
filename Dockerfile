@@ -17,5 +17,5 @@ COPY --from=build /out/browserpier /usr/local/bin/browserpier
 COPY --from=build --chown=nonroot:nonroot /out/data /data
 ENV BROWSERPIER_DATA_DIR=/data
 VOLUME /data
-EXPOSE 8080
+EXPOSE 7437
 ENTRYPOINT ["/usr/local/bin/browserpier"]
