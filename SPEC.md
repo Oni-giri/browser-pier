@@ -64,7 +64,7 @@ Self-hosted, persistent browsers for AI agents. Agents start a browser when they
   - `--webrtc-ip-handling-policy=disable_non_proxied_udp`, so a proxied profile doesn't leak the host IP.
   - No component updates, background networking or first-run screens.
   - `--password-store=basic`, so cookies decrypt the same way in every container and logins survive image updates.
-- **Graceful shutdown:** Chrome is closed cleanly and waited on before its container stops, so recent cookie writes are never lost. The entry process runs as PID 1 and handles stop signals itself.
+- **Graceful shutdown:** Chrome is closed cleanly and waited on before its container stops, so recent cookie writes are never lost. The entry process runs as PID 1 and handles stop signals itself. On SIGTERM it closes Chrome through CDP's `Browser.close`, not a signal: Chrome's own SIGTERM handler exits before flushing the cookie store, which loses a login made in the last half minute.
 - **Egress:** when a profile has a proxy, a small forwarding proxy in the container adds upstream credentials (Chrome's `--proxy-server` can't take a username and password) and counts traffic. The timezone and locale are looked up from the proxy's exit IP and applied at launch, so the two always agree.
 
 **Capacity:** plan for 1–2 GB per running browser. The author's Umbrel has 16 GB; a typical 4–8 GB VPS fits 2–4 browsers. When a new session wouldn't fit under the RAM limit (a setting, default 70% of host RAM), the orchestrator stops the longest-idle browser that no agent is using. If none can be stopped, it refuses with a clear error listing what is running.

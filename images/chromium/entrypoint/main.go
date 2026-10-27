@@ -2,6 +2,10 @@
 // Chromium, serves the control socket for the orchestrator, reaps every
 // orphaned process, and on SIGTERM closes Chromium gracefully so recent
 // cookie writes reach the profile before the container stops.
+//
+// Graceful means CDP's Browser.close: Chromium's SIGTERM handler exits
+// before the cookie store is flushed, which loses a login made in the
+// last half minute or so.
 package main
 
 import (
@@ -71,13 +75,13 @@ func run(log *slog.Logger) error {
 		_ = resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
 	}); err != nil {
-		browser.stop(syscall.SIGTERM, cfg.StopTimeout)
+		closeChromium(browser, cfg.StopTimeout, log)
 		return fmt.Errorf("chromium: %w", err)
 	}
 
 	ln, err := listenControl(cfg.ControlSocket)
 	if err != nil {
-		browser.stop(syscall.SIGTERM, cfg.StopTimeout)
+		closeChromium(browser, cfg.StopTimeout, log)
 		return err
 	}
 	defer func() { _ = os.Remove(cfg.ControlSocket) }()
@@ -97,7 +101,7 @@ func run(log *slog.Logger) error {
 
 	log.Info("stopping: closing Chromium", "timeout", cfg.StopTimeout)
 	_ = srv.Close()
-	if !browser.stop(syscall.SIGTERM, cfg.StopTimeout) {
+	if !closeChromium(browser, cfg.StopTimeout, log) {
 		return fmt.Errorf("chromium did not close within %s and was killed; recent profile writes may be lost", cfg.StopTimeout)
 	}
 	log.Info("Chromium closed", "status", describe(browser.status))
@@ -153,6 +157,20 @@ func listenControl(path string) (net.Listener, error) {
 	return ln, nil
 }
 
+// closeChromium closes Chromium gracefully: Browser.close over CDP, or SIGTERM
+// if CDP doesn't answer, then a kill once timeout has passed. It reports
+// whether Chromium exited before being killed.
+func closeChromium(p *process, timeout time.Duration, log *slog.Logger) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	err := closeBrowser(ctx, cdpAddr)
+	cancel()
+	if err != nil {
+		log.Warn("Browser.close over CDP failed; sending SIGTERM, which may lose recent cookie writes", "err", err)
+		return p.stop(syscall.SIGTERM, timeout)
+	}
+	return p.wait(timeout)
+}
+
 // process is a child started through the reaper.
 type process struct {
 	cmd    *exec.Cmd
@@ -178,6 +196,12 @@ func spawn(cmd *exec.Cmd) (*process, error) {
 // whether the process exited before the timeout.
 func (p *process) stop(sig syscall.Signal, timeout time.Duration) bool {
 	_ = p.cmd.Process.Signal(sig)
+	return p.wait(timeout)
+}
+
+// wait waits up to timeout for the process to exit, then kills it. It reports
+// whether the process exited before the timeout.
+func (p *process) wait(timeout time.Duration) bool {
 	select {
 	case <-p.done:
 		return true

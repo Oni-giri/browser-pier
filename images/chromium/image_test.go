@@ -338,8 +338,8 @@ func TestLoginSurvivesStopStartAndRebuild(t *testing.T) {
 	if code := b.stop(); code != "0" {
 		t.Fatalf("exit code after stop = %s, want 0\n%s", code, b.logs())
 	}
-	if !strings.Contains(b.logs(), "Chromium closed") {
-		t.Fatalf("no graceful close in the logs\n%s", b.logs())
+	if logs := b.logs(); !strings.Contains(logs, "Chromium closed") || strings.Contains(logs, "sending SIGTERM") {
+		t.Fatalf("Chromium wasn't closed through CDP\n%s", logs)
 	}
 
 	b = startBrowser(t, image, vol)
