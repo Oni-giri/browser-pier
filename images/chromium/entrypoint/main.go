@@ -75,13 +75,13 @@ func run(log *slog.Logger) error {
 		_ = resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
 	}); err != nil {
-		closeChromium(browser, cfg.StopTimeout, log)
+		_ = closeChromium(browser, cdpAddr, cfg.StopTimeout)
 		return fmt.Errorf("chromium: %w", err)
 	}
 
 	ln, err := listenControl(cfg.ControlSocket)
 	if err != nil {
-		closeChromium(browser, cfg.StopTimeout, log)
+		_ = closeChromium(browser, cdpAddr, cfg.StopTimeout)
 		return err
 	}
 	defer func() { _ = os.Remove(cfg.ControlSocket) }()
@@ -101,8 +101,8 @@ func run(log *slog.Logger) error {
 
 	log.Info("stopping: closing Chromium", "timeout", cfg.StopTimeout)
 	_ = srv.Close()
-	if !closeChromium(browser, cfg.StopTimeout, log) {
-		return fmt.Errorf("chromium did not close within %s and was killed; recent profile writes may be lost", cfg.StopTimeout)
+	if err := closeChromium(browser, cdpAddr, cfg.StopTimeout); err != nil {
+		return err
 	}
 	log.Info("Chromium closed", "status", describe(browser.status))
 	return nil
@@ -138,7 +138,8 @@ func smallShm() bool {
 }
 
 func listenControl(path string) (net.Listener, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+	// Traversable by others: the orchestrator runs as a different user.
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil { //nolint:gosec // see above
 		return nil, fmt.Errorf("control socket dir: %w", err)
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -157,18 +158,22 @@ func listenControl(path string) (net.Listener, error) {
 	return ln, nil
 }
 
-// closeChromium closes Chromium gracefully: Browser.close over CDP, or SIGTERM
-// if CDP doesn't answer, then a kill once timeout has passed. It reports
-// whether Chromium exited before being killed.
-func closeChromium(p *process, timeout time.Duration, log *slog.Logger) bool {
+// closeChromium closes Chromium through Browser.close over CDP at cdp and
+// waits up to timeout, then kills it. If CDP doesn't answer it falls back to
+// SIGTERM, which can lose recent cookie writes, so that is an error too:
+// nil means the profile is safely on disk.
+func closeChromium(p *process, cdp string, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	err := closeBrowser(ctx, cdpAddr)
+	err := closeBrowser(ctx, cdp)
 	cancel()
 	if err != nil {
-		log.Warn("Browser.close over CDP failed; sending SIGTERM, which may lose recent cookie writes", "err", err)
-		return p.stop(syscall.SIGTERM, timeout)
+		exited := p.stop(syscall.SIGTERM, timeout)
+		return fmt.Errorf("Browser.close over CDP failed (%w); stopped Chromium with SIGTERM instead (exited in time: %t), so recent cookie writes may be lost", err, exited) //nolint:staticcheck // Browser.close is a CDP method name
 	}
-	return p.wait(timeout)
+	if !p.wait(timeout) {
+		return fmt.Errorf("chromium did not close within %s and was killed; recent profile writes may be lost", timeout)
+	}
+	return nil
 }
 
 // process is a child started through the reaper.

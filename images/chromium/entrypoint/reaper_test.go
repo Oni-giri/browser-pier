@@ -101,3 +101,26 @@ func children(t *testing.T) (n, zombies int) {
 	}
 	return n, zombies
 }
+
+func TestReaperReleasesProcessHandles(t *testing.T) {
+	// Nothing calls Wait, so without an explicit Release every reaped child
+	// would leave its pidfd open until the garbage collector runs.
+	count := func() int {
+		fds, err := os.ReadDir("/proc/self/fd")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(fds)
+	}
+	before := count()
+	for range 50 {
+		ch, err := procs.start(exec.Command("true"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitStatus(t, ch)
+	}
+	if after := count(); after > before+5 {
+		t.Fatalf("open fds grew from %d to %d over 50 reaped children", before, after)
+	}
+}

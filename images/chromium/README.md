@@ -29,7 +29,7 @@ Settings, all optional:
 | `BROWSERPIER_PROFILE_DIR` | `/profile` | |
 | `BROWSERPIER_CONTROL_SOCKET` | `/run/browserpier/control.sock` | |
 
-The container exits 0 after a graceful stop. It exits 1 if Chromium crashed, failed to start or had to be killed; the last log line says which.
+The container exits 0 only after a graceful stop: Chromium closed through CDP's `Browser.close` in time, so the profile is safely on disk. It exits 1 if Chromium crashed, failed to start, had to be killed, or had to be stopped with SIGTERM because CDP didn't answer (which can lose the last few seconds of cookie writes); the last log line says which.
 
 ## Control socket
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -54,5 +55,23 @@ func TestCloseBrowserFailsWithoutCDP(t *testing.T) {
 	defer cancel()
 	if err := closeBrowser(ctx, "127.0.0.1:1"); err == nil {
 		t.Fatal("want an error when nothing listens")
+	}
+}
+
+func TestCloseChromiumFallbackIsAnError(t *testing.T) {
+	// With no CDP to answer, the SIGTERM fallback stops the process but may
+	// have lost cookie writes, so it must not count as a clean close.
+	p, err := spawn(exec.Command("sleep", "30"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = closeChromium(p, "127.0.0.1:1", 5*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "SIGTERM") {
+		t.Fatalf("closeChromium = %v, want an error naming the SIGTERM fallback", err)
+	}
+	select {
+	case <-p.done:
+	default:
+		t.Fatal("process still running after the fallback")
 	}
 }

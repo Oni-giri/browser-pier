@@ -18,11 +18,16 @@ var procs = newReaper()
 // Processes started through it must not be waited on with cmd.Wait.
 type reaper struct {
 	mu      sync.Mutex
-	waiters map[int]chan syscall.WaitStatus
+	waiters map[int]waiter
+}
+
+type waiter struct {
+	proc *os.Process
+	ch   chan syscall.WaitStatus
 }
 
 func newReaper() *reaper {
-	r := &reaper{waiters: map[int]chan syscall.WaitStatus{}}
+	r := &reaper{waiters: map[int]waiter{}}
 	sigchld := make(chan os.Signal, 1)
 	signal.Notify(sigchld, syscall.SIGCHLD)
 	go func() {
@@ -45,7 +50,7 @@ func (r *reaper) start(cmd *exec.Cmd) (<-chan syscall.WaitStatus, error) {
 		return nil, err
 	}
 	ch := make(chan syscall.WaitStatus, 1)
-	r.waiters[cmd.Process.Pid] = ch
+	r.waiters[cmd.Process.Pid] = waiter{proc: cmd.Process, ch: ch}
 	return ch, nil
 }
 
@@ -61,8 +66,11 @@ func (r *reaper) reap() {
 		if err != nil || pid <= 0 {
 			return
 		}
-		if ch, ok := r.waiters[pid]; ok {
-			ch <- ws
+		if w, ok := r.waiters[pid]; ok {
+			// Nothing calls Wait, so release the handle (a pidfd) here
+			// rather than leave it open until the garbage collector runs.
+			_ = w.proc.Release()
+			w.ch <- ws
 			delete(r.waiters, pid)
 		}
 	}
