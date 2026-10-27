@@ -44,7 +44,7 @@ func TestServeStopsOnCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || string(body) != "ok\n" {
 		t.Fatalf("healthz = %d %q", resp.StatusCode, body)
 	}
