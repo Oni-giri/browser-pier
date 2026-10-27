@@ -270,6 +270,8 @@ func newSite(t *testing.T) *site {
 	}
 	logged := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Logf("site: %s %s", r.Method, r.URL.Path)
+		// Content sniffing doesn't take a page starting with <form> as HTML.
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		mux.ServeHTTP(w, r)
 	})
 	srv := &http.Server{Handler: logged, ReadHeaderTimeout: 5 * time.Second}
@@ -444,10 +446,18 @@ func TestBrowserEnvironment(t *testing.T) {
 		t.Logf("ICE candidates: %v", found)
 	})
 	t.Run("window covers the display", func(t *testing.T) {
+		// Visual-mode coordinates are screen coordinates, so the window must sit at 0,0.
+		// Without a window manager Chromium comes out a pixel short of --window-size.
 		out := docker(t, "exec", b.name, "xdotool", "search", "--onlyvisible", "--class", "chromium", "getwindowgeometry", "%@")
-		if !regexp.MustCompile(`Position: 0,0 .*\n\s*Geometry: 1280x800`).MatchString(out) {
-			t.Fatalf("no window at 0,0 sized 1280x800:\n%s", out)
+		for _, m := range regexp.MustCompile(`Position: 0,0 .*\n\s*Geometry: (\d+)x(\d+)`).FindAllStringSubmatch(out, -1) {
+			var w, h int
+			_, _ = fmt.Sscan(m[1], &w)
+			_, _ = fmt.Sscan(m[2], &h)
+			if w >= 1278 && w <= 1280 && h >= 798 && h <= 800 {
+				return
+			}
 		}
+		t.Fatalf("no window at 0,0 covering the 1280x800 display:\n%s", out)
 	})
 	t.Run("xdotool input", func(t *testing.T) {
 		docker(t, "exec", b.name, "xdotool", "mousemove", "40", "50")
