@@ -2,4 +2,5 @@
 !go.mod
 !go.sum
 !images/chromium/entrypoint
+!images/chromium/policies.json
 images/chromium/entrypoint/*_test.go

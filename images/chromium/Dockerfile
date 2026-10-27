@@ -40,6 +40,9 @@ RUN useradd --uid 1000 --user-group --create-home --shell /usr/sbin/nologin pier
  && chmod 1777 /tmp/.X11-unix
 
 COPY --from=build /out/entrypoint /usr/local/bin/browserpier-entrypoint
+# Hides the "unsupported command-line flag" bar that --disable-blink-features
+# would otherwise put over every page the human sees.
+COPY images/chromium/policies.json /etc/chromium/policies/managed/browserpier.json
 
 # Changing REBUILD forces a new image without reinstalling packages (used by the persistence test).
 ARG REBUILD=0

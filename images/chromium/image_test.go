@@ -408,7 +408,28 @@ func TestBrowserEnvironment(t *testing.T) {
 		}
 	})
 
+	t.Run("policy hides the flag warning", func(t *testing.T) {
+		p.navigate("chrome://policy/")
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			text, _ := p.eval("document.body.innerText").(string)
+			if strings.Contains(text, "CommandLineFlagSecurityWarningsEnabled") {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("policy not loaded; chrome://policy says:\n%s", text)
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+	})
+
 	p.navigate(s.url + "/account")
+	t.Run("no warning bar over the page", func(t *testing.T) {
+		// Tabs and toolbar take about 87px; an infobar would add about 56.
+		if ui, _ := p.eval("window.outerHeight - window.innerHeight").(float64); ui > 120 {
+			t.Fatalf("browser UI above the page is %vpx tall; is an infobar showing?", ui)
+		}
+	})
 	t.Run("no automation flag", func(t *testing.T) {
 		if v := p.eval("navigator.webdriver"); v != false {
 			t.Fatalf("navigator.webdriver = %v", v)
