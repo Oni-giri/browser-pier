@@ -338,7 +338,7 @@ func TestLoginSurvivesStopStartAndRebuild(t *testing.T) {
 	if code := b.stop(); code != "0" {
 		t.Fatalf("exit code after stop = %s, want 0\n%s", code, b.logs())
 	}
-	if logs := b.logs(); !strings.Contains(logs, "Chromium closed") || strings.Contains(logs, "sending SIGTERM") {
+	if logs := b.logs(); !strings.Contains(logs, "Chromium closed") || strings.Contains(logs, "SIGTERM instead") {
 		t.Fatalf("Chromium wasn't closed through CDP\n%s", logs)
 	}
 

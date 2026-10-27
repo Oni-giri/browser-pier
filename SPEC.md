@@ -60,7 +60,7 @@ Self-hosted, persistent browsers for AI agents. Agents start a browser when they
 - **Sandbox:** Chromium's own sandbox stays on. It needs user namespaces, which Docker's default seccomp profile blocks, so the orchestrator starts browser containers with BrowserPier's seccomp profile: Docker's default plus namespace creation. Never `--no-sandbox`.
 - **Chrome launch setup:**
   - Drop `--enable-automation` and set `--disable-blink-features=AutomationControlled`.
-  - `--use-gl=swiftshader`, so WebGL works in a container.
+  - `--use-angle=swiftshader --enable-unsafe-swiftshader`, so WebGL works in a container (software rendering on SwiftShader; this combination is checked in CI).
   - `--webrtc-ip-handling-policy=disable_non_proxied_udp`, so a proxied profile doesn't leak the host IP.
   - No component updates, background networking or first-run screens.
   - `--password-store=basic`, so cookies decrypt the same way in every container and logins survive image updates.
