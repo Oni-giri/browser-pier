@@ -48,7 +48,8 @@ RUN echo "$REBUILD" > /etc/browserpier-rebuild
 USER pier
 WORKDIR /home/pier
 ENV BROWSERPIER_PROFILE_DIR=/profile \
-    BROWSERPIER_CONTROL_SOCKET=/run/browserpier/control.sock
+    BROWSERPIER_CONTROL_SOCKET=/run/browserpier/control.sock \
+    DISPLAY=:99
 # The entrypoint closes Chromium on SIGTERM; give it time with `docker stop -t`.
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/local/bin/browserpier-entrypoint"]

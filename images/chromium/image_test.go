@@ -268,7 +268,11 @@ func newSite(t *testing.T) *site {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	logged := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Logf("site: %s %s", r.Method, r.URL.Path)
+		mux.ServeHTTP(w, r)
+	})
+	srv := &http.Server{Handler: logged, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
 	s.url = fmt.Sprintf("http://host.docker.internal:%d", ln.Addr().(*net.TCPAddr).Port)
@@ -302,7 +306,7 @@ func (s *site) login(t *testing.T, p *cdp) string {
 			return issued
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("login form was not submitted")
+			t.Fatalf("login form was not submitted; page at %v says %q", p.eval("location.href"), p.eval("document.body && document.body.innerText"))
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
