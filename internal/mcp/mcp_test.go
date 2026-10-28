@@ -282,18 +282,29 @@ func TestHandoffThroughURLElicitation(t *testing.T) {
 	}
 }
 
-func TestDeclinedHandoffGivesTheBrowserBack(t *testing.T) {
-	f := newFixture(t)
-	cs := f.connect(f.all, versions[0], func(*sdk.ElicitRequest) (*sdk.ElicitResult, error) {
-		return &sdk.ElicitResult{Action: "decline"}, nil
-	})
-	s, _, _ := f.m.Start(context.Background(), "google", "")
-	_, out := call(t, cs, "request_handoff", map[string]any{"session_id": s.ID, "reason": "captcha", "detail": "Solve the CAPTCHA"})
-	if !strings.Contains(out, "declined") {
-		t.Fatalf("request_handoff: %s", out)
-	}
-	if live, _ := f.m.Live("google"); live.State != sessions.Running {
-		t.Fatalf("browser still waiting: %s", live.State)
+// A headless client declines without asking anyone: the agent gets the
+// link to pass on, and can withdraw it.
+func TestDeclinedHandoffGivesTheLinkAndCanBeCancelled(t *testing.T) {
+	for _, v := range versions {
+		t.Run(v, func(t *testing.T) {
+			f := newFixture(t)
+			cs := f.connect(f.all, v, func(*sdk.ElicitRequest) (*sdk.ElicitResult, error) {
+				return &sdk.ElicitResult{Action: "decline"}, nil
+			})
+			s, _, _ := f.m.Start(context.Background(), "google", "")
+			_, out := call(t, cs, "request_handoff", map[string]any{"session_id": s.ID, "reason": "captcha", "detail": "Solve the CAPTCHA"})
+			open, _ := f.handoffs.Pending(context.Background())
+			if len(open) != 1 || !strings.Contains(out, "/h/") || !strings.Contains(out, "wait_for_handoff") || !strings.Contains(out, open[0].ID) {
+				t.Fatalf("request_handoff: %s (pending %+v)", out, open)
+			}
+			_, out = call(t, cs, "cancel_handoff", map[string]any{"handoff_id": open[0].ID})
+			if !strings.Contains(out, "Withdrawn") {
+				t.Fatalf("cancel_handoff: %s", out)
+			}
+			if live, _ := f.m.Live("google"); live.State != sessions.Running {
+				t.Fatalf("browser still waiting: %s", live.State)
+			}
+		})
 	}
 }
 

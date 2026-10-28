@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -20,6 +21,7 @@ func (s *Server) addHandoffTools(srv *sdk.Server) {
 		"They get a one-time link; you're paused until they hand back. Clients that can open links show it to the user and wait; " +
 		"otherwise send the link yourself and call wait_for_handoff."}, s.requestHandoff)
 	sdk.AddTool(srv, &sdk.Tool{Name: "wait_for_handoff", Description: "Wait for the person to hand back. Returns at once if they have; call it again while it says pending."}, s.waitForHandoff)
+	sdk.AddTool(srv, &sdk.Tool{Name: "cancel_handoff", Description: "Withdraw a handoff nobody will take: the link stops working and you get the browser back."}, s.cancelHandoff)
 }
 
 type handoffArgs struct {
@@ -48,13 +50,13 @@ const elicitKey = "handoff"
 func (s *Server) requestHandoff(ctx context.Context, req *sdk.CallToolRequest, in handoffArgs) (*sdk.CallToolResult, any, error) {
 	// Second round: the client answered the elicitation.
 	if resp, ok := req.Params.InputResponses[elicitKey]; ok && req.Params.RequestState != "" {
-		id := req.Params.RequestState
+		id, link, _ := strings.Cut(req.Params.RequestState, " ")
 		if res, ok := resp.(*sdk.ElicitResult); ok && res.Action != "accept" {
-			var h handoffOut
-			if err := s.callJSON(ctx, req.Extra, "DELETE", "/api/handoffs/"+url.PathEscape(id), map[string]string{"note": "the person declined it in the agent's app"}, &h); err != nil {
-				return nil, nil, err
-			}
-			return text("The person declined to take over. You have the browser back. %s", h.Message), nil, nil
+			// Headless clients decline without asking anyone, so the link
+			// stays open for the agent to pass on another way.
+			return text("The link wasn't opened in this app (%s). If the person is elsewhere, send it to them yourself: %s\n"+
+				"It works once, for 15 minutes. Then call wait_for_handoff with handoff_id %s; you're paused until they hand back. "+
+				"If nobody will take it, call cancel_handoff.", res.Action, link, id), nil, nil
 		}
 		return s.waitAndReport(ctx, req, id, inCallWait)
 	}
@@ -77,11 +79,26 @@ func (s *Server) requestHandoff(ctx context.Context, req *sdk.CallToolRequest, i
 				Mode: "url", URL: h.URL, ElicitationID: h.ID,
 				Message: msg + ". The link works once, for 15 minutes.",
 			}},
-			RequestState: h.ID,
+			RequestState: h.ID + " " + h.URL, // the link, in case the client doesn't show it
 		}, nil, nil
 	}
 	return text("Send this link to the person through your own channel: %s\n"+
 		"It works once, for 15 minutes. handoff_id: %s. Then call wait_for_handoff; you're paused until they hand back.", h.URL, h.ID), nil, nil
+}
+
+type handoffIDArgs struct {
+	HandoffID string `json:"handoff_id" jsonschema:"from request_handoff"`
+}
+
+func (s *Server) cancelHandoff(ctx context.Context, req *sdk.CallToolRequest, in handoffIDArgs) (*sdk.CallToolResult, any, error) {
+	var h handoffOut
+	if err := s.callJSON(ctx, req.Extra, "DELETE", "/api/handoffs/"+url.PathEscape(in.HandoffID), nil, &h); err != nil {
+		return nil, nil, err
+	}
+	if h.Status != "cancelled" {
+		return text("It had already ended: %s. %s", h.Status, h.Message), nil, nil
+	}
+	return text("Withdrawn. %s", h.Message), nil, nil
 }
 
 type waitHandoffArgs struct {

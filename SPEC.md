@@ -182,7 +182,7 @@ Typed so the UI can word the request well, each with a free-text detail:
 `request_handoff` opens the handoff, then:
 - **Clients that can open URLs for their user** (URL elicitation, such as Claude) are asked to show the link. The tool call waits for the hand-back, up to 4 minutes at a time, then says it's still pending so the agent calls `wait_for_handoff`.
   - It works on both the session-based 2025-11-25 protocol and the 2026-07-28 multi-round-trip one.
-  - If the person declines the link in the client, the handoff is withdrawn and the agent has its browser back at once.
+  - If the client declines the link (headless clients, such as `claude -p`, do so without asking anyone), the link stays open and the agent gets it to pass on itself, as below. The agent can call `cancel_handoff` if nobody will take it.
 - **Other clients** get the link to pass on themselves, and wait with `wait_for_handoff`.
 - **The same rules as the API apply:** a PIN-policy handoff is refused while no handoff PIN is set.
 
@@ -238,7 +238,7 @@ Downloads land in a per-profile folder. The API lists, fetches and deletes them,
   - `list_profiles`, `start_browser`, `stop_browser`
   - `screenshot`, `click`, `type_text`, `press_keys`, `scroll`, `drag`, `wait`, `zoom`
   - `list_files`
-  - `request_handoff`, `wait_for_handoff`
+  - `request_handoff`, `wait_for_handoff`, `cancel_handoff`
 - **Explicit handles:** `start_browser` returns a `session_id` and every stateful tool takes it as an argument. Nothing depends on the MCP connection staying open, so several browsers can run in one conversation.
 - **Untrusted content:** every piece of page-derived text returned to an agent (downloaded file names now; snapshots and markdown in v1.1) is handled the same way:
   - wrapped in an `<untrusted-content>` fence with a random marker the page can't close early, saying it is data, not instructions
