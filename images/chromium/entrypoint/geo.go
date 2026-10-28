@@ -67,24 +67,33 @@ func lookupGeo(ctx context.Context, client *http.Client, endpoint string) (ip, c
 }
 
 // decideGeo picks the time zone and language for this start. In order:
-// the profile's manual settings; a fresh lookup through the proxy (keeping
+// the profile's manual settings (each one replacing its part); a fresh lookup through the proxy (keeping
 // the stored time zone while the country is the same, so a rotating proxy
 // doesn't flip the zone between sessions of one account); the stored
 // value if the lookup fails; and, with no proxy, nothing (the container's
 // UTC), with a warning. A proxied profile with nothing to go on doesn't
 // start: a mismatch is what anti-bot systems look for.
 func decideGeo(c config, proxied bool, lookup func() (ip, country, tz string, err error)) (geo, error) {
-	if c.OverrideTZ != "" || c.OverrideLocale != "" {
-		g := geo{Source: "override", TimeZone: c.OverrideTZ, Country: c.StoredCountry}
-		if g.TimeZone == "" {
-			g.TimeZone = c.StoredTZ
-		}
-		g.Locale, g.Accept = localeFor(c.StoredCountry)
-		if c.OverrideLocale != "" {
-			g.Locale, g.Accept = c.OverrideLocale, acceptFor(c.OverrideLocale)
-		}
-		return g, nil
+	if c.OverrideTZ != "" && c.OverrideLocale != "" {
+		// Both set by hand: nothing to look up.
+		return geo{Source: "override", Country: c.StoredCountry, TimeZone: c.OverrideTZ,
+			Locale: c.OverrideLocale, Accept: acceptFor(c.OverrideLocale)}, nil
 	}
+	g, err := lookupOrStored(c, proxied, lookup)
+	if err != nil {
+		return geo{}, err
+	}
+	// One of the two set by hand replaces just that part.
+	if c.OverrideTZ != "" {
+		g.TimeZone = c.OverrideTZ
+	}
+	if c.OverrideLocale != "" {
+		g.Locale, g.Accept = c.OverrideLocale, acceptFor(c.OverrideLocale)
+	}
+	return g, nil
+}
+
+func lookupOrStored(c config, proxied bool, lookup func() (ip, country, tz string, err error)) (geo, error) {
 	var lookupErr error
 	if c.GeoURL != "" {
 		ip, country, tz, err := lookup()
