@@ -259,3 +259,17 @@ func TestUploadOverTheCapFails(t *testing.T) {
 		t.Fatalf("an upload that can't fit: %v", err)
 	}
 }
+
+func TestUploadIsCountedOnce(t *testing.T) {
+	// 6 bytes under a 10-byte cap: if the temporary link were counted as
+	// well, the cap would look exceeded and the upload would be evicted.
+	s, dir := setup(t, 10)
+	if _, _, err := s.Upload("google", "six", strings.NewReader("123456"), 100); err != nil {
+		t.Fatal(err)
+	}
+	// Another upload still arriving doesn't count either.
+	write(t, filepath.Join(dir, Uploads, ".upload-123"), "1234567890", 0)
+	if removed, err := s.Enforce("google"); err != nil || len(removed) != 0 {
+		t.Fatalf("Enforce removed %v, %v", removed, err)
+	}
+}

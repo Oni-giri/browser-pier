@@ -217,6 +217,9 @@ func (s *Store) Upload(profile, name string, r io.Reader, max int64) (File, stri
 	if err != nil {
 		return File{}, "", err
 	}
+	// Drop the temporary name before counting: it is a second link to the
+	// same file and would be counted twice.
+	_ = root.Remove(tmp)
 	removed, err := s.Enforce(profile)
 	if err != nil {
 		return File{}, "", err
@@ -278,8 +281,11 @@ func (s *Store) Enforce(profile string) ([]string, error) {
 			return nil, err
 		}
 		for _, f := range files {
+			if strings.HasPrefix(f.Name, ".upload-") {
+				continue // an upload still arriving; counted once it's published
+			}
 			total += f.Size
-			if !strings.HasSuffix(f.Name, partial) && !strings.HasPrefix(f.Name, ".upload-") {
+			if !strings.HasSuffix(f.Name, partial) {
 				all = append(all, entry{f, root, sub})
 			}
 		}
