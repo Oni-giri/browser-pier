@@ -273,7 +273,19 @@ Designs: the "Browser Orchestrator UI" canvas (private to the author). The UI st
 - **Handing back from the app:** when an agent asked for help, the profile page shows the request with **Done, hand back** and **Can't do this** and a note, like the phone page; either answers the agent at once.
 - **Agent log:** the profile page lists what agents did in the current session (attached, clicked, typed N characters, took a screenshot, asked for help). It never shows typed text, and it is kept in memory only.
 - **Previews:** profile cards show a small screenshot of each running browser. Taking one doesn't count as use, so an open page never keeps a browser from stopping when idle.
-- Not yet in the UI: export and import (PROJ-13) and MCP (PROJ-12).
+
+### Export and import
+
+- **Export:** a stopped profile can be exported from Profiles' ⋯ menu, by the admin only (never through the agent API or MCP: an archive is live cookies).
+  - **Format:** a gzipped tar encrypted with age and a passphrase of at least 10 characters (`age -d` opens it too). It starts with `manifest.json`: the format version, the BrowserPier version and the profile's settings.
+  - **Contents:** the profile's `chrome/` and `files/`, without `run/` (the control socket, and briefly proxy credentials), Chromium's caches and locks, or the mount markers. Only regular files and folders are read, through `os.Root`.
+  - **The proxy:** it comes with the archive, password included, since the archive is a secret anyway.
+  - **Streaming:** the archive is streamed as it's made, with no temporary file. If anything fails midway, the download is cut off, and an age archive cut short doesn't decrypt.
+- **Import:** from Profiles. The archive becomes a new profile under its own name or one you give.
+  - **Streaming:** the upload is streamed, never stored whole. It's extracted into a folder of its own, then the profile is created and the folder moved into place last.
+  - **What's accepted:** only regular files and folders under `chrome/` and `files/`, through `os.Root`, with caps on total size (8 GiB) and entries. The import stops before it would leave less than 512 MiB of disk free.
+  - **Cost cap:** a crafted archive can't make the passphrase check cost more than age's default scrypt work factor (2^18).
+- **While a profile is exported or imported** its browser can't start and the profile can't be deleted.
 
 ### Interaction rules
 
