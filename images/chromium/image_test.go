@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"image/png"
 	"io"
 	"net/http"
 	"os"
@@ -259,6 +260,49 @@ func TestBrowserEnvironment(t *testing.T) {
 		docker(t, "exec", b.name, "xdotool", "mousemove", "40", "50")
 		if out := docker(t, "exec", b.name, "xdotool", "getmouselocation"); !strings.HasPrefix(out, "x:40 y:50 ") {
 			t.Fatalf("mouse at %q, want x:40 y:50", out)
+		}
+	})
+	t.Run("visual mode click and type", func(t *testing.T) {
+		// A page with a text box; find it on screen, click it through xdotool
+		// and type, then read the value back over CDP to check it landed.
+		p.Navigate(`data:text/html,<input id="box" style="position:absolute;left:200px;top:150px;width:300px;height:40px">`)
+		chrome, _ := p.Eval("window.outerHeight - window.innerHeight").(float64)
+		x := 200 + 150
+		y := int(chrome) + 150 + 20
+		post := func(path, body string) {
+			resp, err := b.http.Post("http://control"+path, "application/json", strings.NewReader(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusNoContent {
+				t.Fatalf("%s: %d", path, resp.StatusCode)
+			}
+		}
+		post("/input/click", fmt.Sprintf(`{"x": %d, "y": %d}`, x, y))
+		post("/input/type", `{"text": "hello pier"}`)
+		deadline := time.Now().Add(5 * time.Second)
+		for p.Eval("document.getElementById('box').value") != "hello pier" {
+			if time.Now().After(deadline) {
+				t.Fatalf("box holds %v after click at (%d, %d) and typing", p.Eval("document.getElementById('box').value"), x, y)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	})
+	t.Run("screenshot", func(t *testing.T) {
+		for width, want := range map[string][2]int{"": {1280, 800}, "?width=640": {640, 400}} {
+			resp, err := b.http.Get("http://control/screenshot" + width)
+			if err != nil {
+				t.Fatal(err)
+			}
+			img, err := png.Decode(resp.Body)
+			_ = resp.Body.Close()
+			if err != nil {
+				t.Fatalf("screenshot%s isn't a PNG: %v", width, err)
+			}
+			if got := img.Bounds().Size(); got.X != want[0] || got.Y != want[1] {
+				t.Fatalf("screenshot%s is %v, want %v", width, got, want)
+			}
 		}
 	})
 	t.Run("h264 stream", func(t *testing.T) {

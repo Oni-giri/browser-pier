@@ -93,7 +93,9 @@ func run(log *slog.Logger) error {
 	}
 	defer func() { _ = os.Remove(cfg.ControlSocket) }()
 	srv := &http.Server{
-		Handler:           newControlHandler(cdpAddr, &streamer{command: func() *exec.Cmd { return exec.Command("gst-launch-1.0", streamArgs()...) }}),
+		Handler: newControlHandler(cdpAddr,
+			&streamer{command: func() *exec.Cmd { return exec.Command("gst-launch-1.0", streamArgs()...) }},
+			newVisual(cfg.Width, cfg.Height)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() { _ = srv.Serve(ln) }()
