@@ -28,7 +28,7 @@ Agents start a browser when they need one. It keeps its cookies and logins, and 
                       one browser container per running session
                       (headful Chromium + Xvfb + xdotool + H.264 stream)
                                    │
-                      one persistent volume per profile
+                      one persistent folder per profile
 ```
 
 ## Development
