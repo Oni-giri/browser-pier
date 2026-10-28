@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"log/slog"
@@ -14,8 +15,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
+
+// maxWaiting caps sign-ins queued behind the global throttle.
+const maxWaiting = 64
 
 // CookieName is the admin session cookie; DeviceCookie marks a browser
 // that has signed in before.
@@ -46,6 +51,7 @@ type Web struct {
 	loginIP     *Lockout  // per client
 	backstop    *backstop // failures from everywhere; past a limit, sign-ins are slowed
 	deviceFails *Lockout  // per device cookie; a locked one is treated as unknown
+	waiting     atomic.Int32
 	slow        chan struct{}
 	setup       *Lockout
 	badToken    *Lockout
@@ -314,18 +320,25 @@ func (w *Web) loginPage(rw http.ResponseWriter, r *http.Request) {
 }
 
 func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(rw, r.Body, 8<<10)
-	d := pageData{Title: "Sign in", Next: safeNext(r.PostFormValue("next")), Remember: r.PostFormValue("remember") == "1", EnvManaged: w.admin.EnvManaged()}
 	if w.admin.NeedsSetup() {
 		http.Redirect(rw, r, "/setup", http.StatusSeeOther)
 		return
 	}
+	// Count the attempt before reading the body, so slow bodies are
+	// limited per address like any other try.
 	ip := w.ClientIP(r)
 	mine, wait := w.loginIP.Begin(ip)
 	if mine == nil {
-		w.locked(rw, d, wait)
+		w.locked(rw, pageData{Title: "Sign in", Next: "/", EnvManaged: w.admin.EnvManaged()}, wait)
 		return
 	}
+	if err := readForm(rw, r); err != nil {
+		mine.Cancel()
+		http.Error(rw, "bad form", http.StatusBadRequest)
+		return
+	}
+	d := pageData{Title: "Sign in", Next: safeNext(r.PostFormValue("next")), Remember: r.PostFormValue("remember") == "1", EnvManaged: w.admin.EnvManaged()}
+
 	// After many failures from everywhere, sign-ins from unknown devices go
 	// one at a time, each after a delay that grows with the failures: an
 	// attacker spread over many addresses gets a few thousand guesses a day
@@ -337,30 +350,27 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 	}
 	var global *backstopAttempt
 	if device == nil {
-		var d time.Duration
-		global, d = w.backstop.begin()
+		var delay time.Duration
+		global, delay = w.backstop.begin()
 		defer global.end()
-		if d > 0 {
-			release, ok := w.throttle(r.Context(), d)
+		if delay > 0 {
+			release, ok := w.throttle(r.Context(), delay)
 			if !ok {
-				mine.Cancel() // the client gave up
+				mine.Cancel()
+				retryAfter(rw, time.Minute)
+				d.Error = "Too many sign-in attempts right now. Try again in a minute."
+				w.render(rw, http.StatusTooManyRequests, "login", d)
 				return
 			}
 			defer release()
 		}
 	}
-	ok, err := w.admin.CheckPassword(r.Context(), r.PostFormValue("password"))
-	if err != nil {
-		mine.Cancel()
-		if device != nil {
-			device.Cancel()
-		}
-		w.log.Error("checking the admin password", "err", err)
-		d.Error = "Something went wrong. Try again."
-		w.render(rw, http.StatusInternalServerError, "login", d)
-		return
+	oldCookie := ""
+	if c, err := r.Cookie(CookieName); err == nil {
+		oldCookie = c.Value
 	}
-	if !ok {
+	value, s, err := w.admin.SignIn(r.Context(), r.PostFormValue("password"), d.Remember, r.UserAgent(), oldCookie)
+	if errors.Is(err, ErrWrongPassword) {
 		left := mine.Fail()
 		if global != nil {
 			global.fail()
@@ -377,19 +387,44 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 		w.render(rw, http.StatusUnauthorized, "login", d)
 		return
 	}
+	if err != nil {
+		mine.Cancel()
+		if device != nil {
+			device.Cancel()
+		}
+		w.log.Error("signing in", "err", err)
+		d.Error = "Something went wrong. Try again."
+		w.render(rw, http.StatusInternalServerError, "login", d)
+		return
+	}
 	mine.Succeed()
 	if device != nil {
 		device.Succeed()
 	}
-	w.signIn(rw, r, d.Remember)
+	w.setCookies(rw, r, value, s)
 	w.log.Info("admin signed in", "ip", ip, "remember", d.Remember)
 	http.Redirect(rw, r, d.Next, http.StatusSeeOther)
+}
+
+// readForm parses a small form with a deadline, so a client can't hold a
+// connection open by sending its body slowly.
+func readForm(rw http.ResponseWriter, r *http.Request) error {
+	_ = http.NewResponseController(rw).SetReadDeadline(time.Now().Add(15 * time.Second))
+	r.Body = http.MaxBytesReader(rw, r.Body, 8<<10)
+	return r.ParseForm()
 }
 
 // throttle waits for the one sign-in slot and then for d. The caller
 // holds the slot through its password check, until it calls release. It
 // waits as long as the client does, and returns false if it gives up.
 func (w *Web) throttle(ctx context.Context, d time.Duration) (release func(), ok bool) {
+	// At most maxWaiting attempts queue at once; the rest are told to come
+	// back, which keeps memory bounded. Known devices never queue.
+	if w.waiting.Add(1) > maxWaiting {
+		w.waiting.Add(-1)
+		return nil, false
+	}
+	defer w.waiting.Add(-1)
 	select {
 	case w.slow <- struct{}{}:
 	case <-ctx.Done():
@@ -484,17 +519,9 @@ func (w *Web) locked(rw http.ResponseWriter, d pageData, wait time.Duration) {
 	w.render(rw, http.StatusTooManyRequests, "login", d)
 }
 
-func (w *Web) signIn(rw http.ResponseWriter, r *http.Request, remember bool) {
-	// Drop any session this browser already had: a fresh value per login.
-	if c, err := r.Cookie(CookieName); err == nil {
-		_ = w.admin.EndSession(r.Context(), c.Value)
-	}
-	value, s, err := w.admin.NewSession(r.Context(), remember, r.UserAgent())
-	if err != nil {
-		w.log.Error("creating an admin session", "err", err)
-		http.Error(rw, "couldn't sign in", http.StatusInternalServerError)
-		return
-	}
+// setCookies hands the browser its new session cookie, and a device
+// cookie that marks it as known for future sign-ins.
+func (w *Web) setCookies(rw http.ResponseWriter, r *http.Request, value string, s AdminSession) {
 	//nolint:gosec // Secure is set whenever served over HTTPS; plain-HTTP private setups can't store a Secure cookie
 	c := &http.Cookie{
 		Name:     CookieName,
@@ -504,7 +531,7 @@ func (w *Web) signIn(rw http.ResponseWriter, r *http.Request, remember bool) {
 		Secure:   w.secureCookie(r),
 		SameSite: http.SameSiteLaxMode,
 	}
-	if remember {
+	if s.Remember {
 		c.Expires = s.ExpiresAt
 	}
 	http.SetCookie(rw, c)
@@ -541,13 +568,17 @@ func (w *Web) doSetup(rw http.ResponseWriter, r *http.Request) {
 		http.NotFound(rw, r)
 		return
 	}
-	r.Body = http.MaxBytesReader(rw, r.Body, 8<<10)
 	d := pageData{Title: "Set up"}
 	attempt, wait := w.setup.Begin("setup")
 	if attempt == nil {
 		retryAfter(rw, wait)
 		d.Error = "Too many wrong setup codes. Wait a few minutes, or restart BrowserPier for a new code."
 		w.render(rw, http.StatusTooManyRequests, "setup", d)
+		return
+	}
+	if err := readForm(rw, r); err != nil {
+		attempt.Cancel()
+		http.Error(rw, "bad form", http.StatusBadRequest)
 		return
 	}
 	password := r.PostFormValue("password")
@@ -576,6 +607,13 @@ func (w *Web) doSetup(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	attempt.Succeed()
-	w.signIn(rw, r, false)
+	value, s, err := w.admin.SignIn(r.Context(), password, false, r.UserAgent(), "")
+	if err != nil {
+		// The password is set; only the automatic sign-in failed.
+		w.log.Error("signing in after setup", "err", err)
+		http.Redirect(rw, r, "/login", http.StatusSeeOther)
+		return
+	}
+	w.setCookies(rw, r, value, s)
 	http.Redirect(rw, r, "/", http.StatusSeeOther)
 }

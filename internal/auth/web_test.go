@@ -441,7 +441,7 @@ func TestKnownDeviceSkipsTheBackstop(t *testing.T) {
 	if !f.admin.KnownDevice(ctx, dev) {
 		t.Fatal("device cookie not recognised")
 	}
-	if err := f.admin.storePassword(ctx, "a-new-password"); err != nil {
+	if err := f.admin.storePassword(ctx, "a-new-password", ""); err != nil {
 		t.Fatal(err)
 	}
 	if f.admin.KnownDevice(ctx, dev) {
@@ -484,5 +484,22 @@ func TestFailingDeviceCookieStopsBeingTrusted(t *testing.T) {
 	f.post(b, "/login", url.Values{"password": {"guess"}})
 	if len(f.web.backstop.fails) != before+1 {
 		t.Fatal("an untrusted device's failure wasn't counted by the backstop")
+	}
+}
+
+func TestThrottleQueueIsBounded(t *testing.T) {
+	f := newWebFixture(t, "the-admin-password", WebOptions{})
+	f.web.waiting.Store(maxWaiting)
+	if _, ok := f.web.throttle(context.Background(), time.Millisecond); ok {
+		t.Fatal("a sign-in queued past the limit")
+	}
+	f.web.waiting.Store(0)
+	release, ok := f.web.throttle(context.Background(), time.Millisecond)
+	if !ok {
+		t.Fatal("an empty queue refused a sign-in")
+	}
+	release()
+	if n := f.web.waiting.Load(); n != 0 {
+		t.Fatalf("%d left waiting", n)
 	}
 }

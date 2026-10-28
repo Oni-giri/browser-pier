@@ -210,3 +210,25 @@ func TestHandoffPIN(t *testing.T) {
 		t.Fatalf("PIN stored as %q", stored)
 	}
 }
+
+func TestSignInReplacesTheOldSession(t *testing.T) {
+	ctx := context.Background()
+	a, _ := newAdmin(t, openDB(t), "the-password")
+	old, _, err := a.SignIn(ctx, "the-password", false, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.SignIn(ctx, "nope", false, "", old); !errors.Is(err, ErrWrongPassword) {
+		t.Fatalf("wrong password: %v", err)
+	}
+	if _, err := a.Session(ctx, old); err != nil {
+		t.Fatal("a failed sign-in ended the existing session")
+	}
+	fresh, _, err := a.SignIn(ctx, "the-password", true, "", old)
+	if err != nil || fresh == old {
+		t.Fatalf("SignIn = %q, %v", fresh, err)
+	}
+	if _, err := a.Session(ctx, old); !errors.Is(err, ErrNoSession) {
+		t.Fatal("the old session survived a new sign-in")
+	}
+}

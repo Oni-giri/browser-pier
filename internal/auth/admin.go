@@ -55,6 +55,11 @@ type Admin struct {
 
 	mu        sync.Mutex
 	setupCode string // set until a password exists
+
+	// cred is held for reading across a sign-in's password check and
+	// session creation, and for writing while the password changes, so no
+	// session is ever created on a password that was just replaced.
+	cred sync.RWMutex
 }
 
 // NewAdmin loads the admin account. A password from the environment wins
@@ -72,12 +77,9 @@ func NewAdmin(ctx context.Context, db *sql.DB, envPassword string, log *slog.Log
 	case envPassword != "":
 		a.envManaged = true
 		if stored == "" || !VerifySecret(stored, envPassword) {
-			if err := a.storePassword(ctx, envPassword); err != nil {
-				return nil, err
-			}
 			// A changed password is how a lost or leaked one is reset, so
 			// every browser signed in with the old one is signed out.
-			if _, err := db.ExecContext(ctx, `DELETE FROM admin_sessions`); err != nil {
+			if err := a.storePassword(ctx, envPassword, ""); err != nil {
 				return nil, err
 			}
 			log.Info("admin password set from BROWSERPIER_ADMIN_PASSWORD; signed out every browser")
@@ -112,7 +114,9 @@ func (a *Admin) Setup(ctx context.Context, code, password string) error {
 	if err := checkPassword(password); err != nil {
 		return err
 	}
-	if err := a.storePassword(ctx, password); err != nil {
+	a.cred.Lock()
+	defer a.cred.Unlock()
+	if err := a.storePassword(ctx, password, ""); err != nil {
 		return err
 	}
 	a.setupCode = ""
@@ -144,6 +148,11 @@ func (a *Admin) ChangePassword(ctx context.Context, current, next, keepCookie st
 	if a.envManaged {
 		return ErrEnvManaged
 	}
+	if err := checkPassword(next); err != nil {
+		return err
+	}
+	a.cred.Lock()
+	defer a.cred.Unlock()
 	ok, err := a.CheckPassword(ctx, current)
 	if err != nil {
 		return err
@@ -151,26 +160,35 @@ func (a *Admin) ChangePassword(ctx context.Context, current, next, keepCookie st
 	if !ok {
 		return ErrWrongPassword
 	}
-	if err := checkPassword(next); err != nil {
-		return err
+	if keepCookie == "" {
+		keepCookie = "-" // matches no session
 	}
-	if err := a.storePassword(ctx, next); err != nil {
-		return err
-	}
-	return a.EndOtherSessions(ctx, keepCookie)
+	return a.storePassword(ctx, next, keepCookie)
 }
 
-// storePassword sets the password and rotates the device key, so devices
-// that signed in with the old password are no longer trusted.
-func (a *Admin) storePassword(ctx context.Context, password string) error {
+// storePassword sets the password, rotates the device key and signs out
+// every browser but keepCookie's ("" signs out all), in one transaction:
+// a failure part way never leaves a new password with old sessions or
+// device cookies still trusted. The caller holds a.cred for writing.
+func (a *Admin) storePassword(ctx context.Context, password, keepCookie string) error {
 	h, err := HashSecret(password)
 	if err != nil {
 		return err
 	}
-	if err := a.setSetting(ctx, "admin_password_hash", h); err != nil {
+	tx, err := a.db.BeginTx(ctx, nil)
+	if err != nil {
 		return err
 	}
-	return a.setSetting(ctx, "device_key", randomString(32))
+	defer func() { _ = tx.Rollback() }()
+	for _, kv := range [][2]string{{"admin_password_hash", h}, {"device_key", randomString(32)}} {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`, kv[0], kv[1]); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM admin_sessions WHERE hash != ?`, hashToken(keepCookie)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // DeviceTTL is how long a device that signed in stays known.
@@ -229,9 +247,53 @@ func (a *Admin) verify(ctx context.Context, hash, secret string) (bool, error) {
 	return VerifySecret(hash, secret), nil
 }
 
+// SignIn checks the password and, if it is right, replaces the browser's
+// old session (oldCookie, if any) with a new one, in one transaction. It
+// returns ErrWrongPassword for a wrong password.
+func (a *Admin) SignIn(ctx context.Context, password string, remember bool, userAgent, oldCookie string) (string, AdminSession, error) {
+	a.cred.RLock()
+	defer a.cred.RUnlock()
+	ok, err := a.CheckPassword(ctx, password)
+	if err != nil {
+		return "", AdminSession{}, err
+	}
+	if !ok {
+		return "", AdminSession{}, ErrWrongPassword
+	}
+	return a.replaceSession(ctx, remember, userAgent, oldCookie)
+}
+
+// replaceSession ends oldCookie's session, if any, and starts a new one,
+// in one transaction.
+func (a *Admin) replaceSession(ctx context.Context, remember bool, userAgent, oldCookie string) (string, AdminSession, error) {
+	tx, err := a.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", AdminSession{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if oldCookie != "" {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM admin_sessions WHERE hash = ?`, hashToken(oldCookie)); err != nil {
+			return "", AdminSession{}, err
+		}
+	}
+	cookie, s, err := a.insertSession(ctx, tx, remember, userAgent)
+	if err != nil {
+		return "", AdminSession{}, err
+	}
+	return cookie, s, tx.Commit()
+}
+
 // NewSession signs a browser in and returns its cookie value. Each login
 // gets a fresh value, so a session can't be fixed in advance.
 func (a *Admin) NewSession(ctx context.Context, remember bool, userAgent string) (string, AdminSession, error) {
+	return a.insertSession(ctx, a.db, remember, userAgent)
+}
+
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func (a *Admin) insertSession(ctx context.Context, db execer, remember bool, userAgent string) (string, AdminSession, error) {
 	cookie := randomString(32)
 	now := a.now().Truncate(time.Millisecond)
 	life := SessionFor
@@ -242,7 +304,7 @@ func (a *Admin) NewSession(ctx context.Context, remember bool, userAgent string)
 		userAgent = userAgent[:200]
 	}
 	s := AdminSession{ID: hashToken(cookie), CreatedAt: now, ExpiresAt: now.Add(life), LastSeenAt: now, Remember: remember, UserAgent: userAgent}
-	_, err := a.db.ExecContext(ctx, `INSERT INTO admin_sessions (hash, created_at, expires_at, last_seen_at, remember, user_agent) VALUES (?, ?, ?, ?, ?, ?)`,
+	_, err := db.ExecContext(ctx, `INSERT INTO admin_sessions (hash, created_at, expires_at, last_seen_at, remember, user_agent) VALUES (?, ?, ?, ?, ?, ?)`,
 		s.ID, s.CreatedAt.UnixMilli(), s.ExpiresAt.UnixMilli(), s.LastSeenAt.UnixMilli(), s.Remember, s.UserAgent)
 	if err != nil {
 		return "", AdminSession{}, err
@@ -324,10 +386,17 @@ func (a *Admin) SetPIN(ctx context.Context, pin string) error {
 	if err != nil {
 		return err
 	}
-	if err := a.setSetting(ctx, "handoff_pin_hash", h); err != nil {
+	tx, err := a.db.BeginTx(ctx, nil)
+	if err != nil {
 		return err
 	}
-	return a.setSetting(ctx, "handoff_pin_changed_at", strconv.FormatInt(a.now().UnixMilli(), 10))
+	defer func() { _ = tx.Rollback() }()
+	for _, kv := range [][2]string{{"handoff_pin_hash", h}, {"handoff_pin_changed_at", strconv.FormatInt(a.now().UnixMilli(), 10)}} {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`, kv[0], kv[1]); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // PINChangedAt returns when the handoff PIN was last set; zero if it never was.
@@ -361,9 +430,4 @@ func (a *Admin) setting(ctx context.Context, key string) (string, error) {
 		return "", nil
 	}
 	return v, err
-}
-
-func (a *Admin) setSetting(ctx context.Context, key, value string) error {
-	_, err := a.db.ExecContext(ctx, `INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`, key, value)
-	return err
 }

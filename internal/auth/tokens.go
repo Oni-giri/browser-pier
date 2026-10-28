@@ -145,6 +145,9 @@ func (s *Tokens) Authenticate(ctx context.Context, secret string) (Token, error)
 		return Token{}, err
 	}
 	t, err := s.Get(ctx, id)
+	if errors.Is(err, ErrTokenNotFound) {
+		return Token{}, ErrInvalidToken // revoked a moment ago
+	}
 	if err != nil {
 		return Token{}, err
 	}
