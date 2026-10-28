@@ -38,11 +38,13 @@ type Web struct {
 	log    *slog.Logger
 	opts   WebOptions
 
-	loginIP  *Lockout // per client
-	loginAll *Lockout // backstop for when client addresses can't be told apart
-	setup    *Lockout
-	badToken *Lockout
-	pages    map[string]*template.Template
+	loginIP   *Lockout // per client
+	loginAll  *Lockout // counts failures from everywhere; past its limit, attempts are throttled
+	slow      chan struct{}
+	slowDelay time.Duration
+	setup     *Lockout
+	badToken  *Lockout
+	pages     map[string]*template.Template
 }
 
 //go:embed pages.html
@@ -51,11 +53,13 @@ var pagesHTML string
 func NewWeb(admin *Admin, tokens *Tokens, log *slog.Logger, opts WebOptions) *Web {
 	w := &Web{
 		admin: admin, tokens: tokens, log: log, opts: opts,
-		loginIP:  NewLockout(5, 5*time.Minute, 5*time.Minute),
-		loginAll: NewLockout(20, 5*time.Minute, 5*time.Minute),
-		setup:    NewLockout(10, 5*time.Minute, 5*time.Minute),
-		badToken: NewLockout(20, 5*time.Minute, 5*time.Minute),
-		pages:    map[string]*template.Template{},
+		loginIP:   NewLockout(5, 5*time.Minute, 5*time.Minute),
+		loginAll:  NewLockout(20, 5*time.Minute, 5*time.Minute),
+		setup:     NewLockout(10, 5*time.Minute, 5*time.Minute),
+		badToken:  NewLockout(20, 5*time.Minute, 5*time.Minute),
+		slow:      make(chan struct{}, 1),
+		slowDelay: 2 * time.Second,
+		pages:     map[string]*template.Template{},
 	}
 	base := template.Must(template.New("").Parse(pagesHTML))
 	for _, name := range []string{"login", "setup"} {
@@ -250,9 +254,21 @@ func (w *Web) trusted(ip net.IP) bool {
 	return false
 }
 
-// safeNext keeps a post-login redirect on this site.
+// safeNext keeps a post-login redirect on this site: a path, nothing a
+// browser could read as another host. Browsers drop tabs and newlines
+// from URLs and treat a backslash as a slash, so any of those is refused
+// outright rather than cleaned up.
 func safeNext(next string) string {
-	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.HasPrefix(next, "/\\") || strings.ContainsAny(next, "\r\n") {
+	for _, c := range next {
+		if c < 0x20 || c == 0x7f || c == '\\' {
+			return "/"
+		}
+	}
+	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") {
+		return "/"
+	}
+	u, err := url.Parse(next)
+	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil || u.Opaque != "" {
 		return "/"
 	}
 	return next
@@ -305,23 +321,29 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 		w.locked(rw, d, wait)
 		return
 	}
-	all, wait := w.loginAll.Begin("all")
-	if all == nil {
+	all, _ := w.loginAll.Begin("all")
+	if all == nil && !w.throttle(r.Context()) {
+		// Many failures from everywhere: every attempt now waits its turn
+		// instead of being refused, so an attacker can't lock the owner out.
 		mine.Cancel()
-		w.locked(rw, d, wait)
 		return
 	}
 	ok, err := w.admin.CheckPassword(r.Context(), r.PostFormValue("password"))
 	if err != nil {
 		mine.Cancel()
-		all.Cancel()
+		if all != nil {
+			all.Cancel()
+		}
 		w.log.Error("checking the admin password", "err", err)
 		d.Error = "Something went wrong. Try again."
 		w.render(rw, http.StatusInternalServerError, "login", d)
 		return
 	}
 	if !ok {
-		left := min(mine.Fail(), all.Fail())
+		left := mine.Fail()
+		if all != nil {
+			all.Fail()
+		}
 		w.log.Warn("admin sign-in failed", "ip", ip, "tries_left", left)
 		if left == 0 {
 			w.locked(rw, d, 5*time.Minute)
@@ -332,10 +354,31 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mine.Succeed()
-	all.Cancel()
+	if all != nil {
+		all.Cancel()
+	}
 	w.signIn(rw, r, d.Remember)
 	w.log.Info("admin signed in", "ip", ip, "remember", d.Remember)
 	http.Redirect(rw, r, d.Next, http.StatusSeeOther)
+}
+
+// throttle makes the caller wait its turn: one sign-in attempt per
+// slowDelay across all clients. It returns false if the client gave up.
+func (w *Web) throttle(ctx context.Context) bool {
+	select {
+	case w.slow <- struct{}{}:
+	case <-ctx.Done():
+		return false
+	}
+	defer func() { <-w.slow }()
+	t := time.NewTimer(w.slowDelay)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func plural(n int, one, many string) string {

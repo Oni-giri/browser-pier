@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 type webFixture struct {
@@ -187,6 +189,10 @@ func TestOpenRedirectRefused(t *testing.T) {
 		"https://evil":      "/",
 		"":                  "/",
 		"/x\r\nSet-Cookie:": "/",
+		"/\t/evil.example":  "/", // browsers drop the tab and see //evil.example
+		"/\n/evil.example":  "/",
+		"/a\\b":             "/",
+		"/ok?next=//x":      "/ok?next=//x",
 	} {
 		if got := safeNext(in); got != want {
 			t.Errorf("safeNext(%q) = %q, want %q", in, got, want)
@@ -333,5 +339,29 @@ func TestHTMXGetsARedirectHeader(t *testing.T) {
 	resp, _ := f.do(f.browser(), req)
 	if resp.StatusCode != http.StatusUnauthorized || !strings.HasPrefix(resp.Header.Get("HX-Redirect"), "/login") {
 		t.Fatalf("htmx request: %d, HX-Redirect %q", resp.StatusCode, resp.Header.Get("HX-Redirect"))
+	}
+}
+
+func TestGlobalBackstopThrottlesButNeverLocksTheOwnerOut(t *testing.T) {
+	_, proxies, _ := net.ParseCIDR("127.0.0.0/8")
+	f := newWebFixture(t, "the-admin-password", WebOptions{TrustedProxies: []*net.IPNet{proxies}})
+	f.web.slowDelay = 50 * time.Millisecond
+	from := func(ip, password string) (reply, string) {
+		req, _ := http.NewRequest(http.MethodPost, f.srv.URL+"/login", strings.NewReader(url.Values{"password": {password}}.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("X-Forwarded-For", ip)
+		return f.do(f.browser(), req)
+	}
+	// An attacker spread over many addresses trips the backstop.
+	for i := range 25 {
+		from(fmt.Sprintf("198.51.100.%d", i), "guess")
+	}
+	start := time.Now()
+	resp, _ := from("203.0.113.1", "the-admin-password")
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("the owner's sign-in during an attack: %d, want it to work", resp.StatusCode)
+	}
+	if time.Since(start) < 50*time.Millisecond {
+		t.Fatal("attempts past the backstop weren't slowed")
 	}
 }
