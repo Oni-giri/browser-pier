@@ -171,5 +171,5 @@ func words(s string) string {
 
 // secretName matches the words, or the long ones inside other words.
 var secretName = regexp.MustCompile(`password|passwd|passphrase|passcode|` +
-	` (pass|pwd|pw|pin|otp|totp|mfa|2fa|cvv|cvc|csc|secret|token) |` +
+	` (pass|pwd|pw|pin|otp|totp|mfa|2 fa|cvv|cvc|csc|secret|token) |` + // as words() splits them
 	`one ?time|verification ?code|security ?code|sms ?code|auth(entication)? ?code|confirmation ?code`)
