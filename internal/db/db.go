@@ -79,6 +79,28 @@ var migrations = []string{
 	ALTER TABLE profiles ADD COLUMN geo_time_zone TEXT NOT NULL DEFAULT '';
 	ALTER TABLE profiles ADD COLUMN geo_ip TEXT NOT NULL DEFAULT '';
 	ALTER TABLE profiles ADD COLUMN geo_checked_at INTEGER NOT NULL DEFAULT 0;`,
+
+	// Handoffs: an agent asking a person to take over. The link's token and
+	// the browser it was opened in are stored as SHA-256 hashes.
+	`CREATE TABLE handoffs (
+		id           TEXT PRIMARY KEY,
+		session_id   TEXT NOT NULL,
+		profile      TEXT NOT NULL REFERENCES profiles(name) ON DELETE CASCADE,
+		agent        TEXT NOT NULL,
+		reason       TEXT NOT NULL,
+		detail       TEXT NOT NULL,
+		origin       TEXT NOT NULL,
+		policy       TEXT NOT NULL,
+		status       TEXT NOT NULL,
+		note         TEXT NOT NULL DEFAULT '',
+		token_hash   TEXT NOT NULL UNIQUE,
+		browser_hash TEXT NOT NULL DEFAULT '',
+		pin_failures INTEGER NOT NULL DEFAULT 0,
+		created_at   INTEGER NOT NULL,
+		expires_at   INTEGER NOT NULL,
+		finished_at  INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE INDEX handoffs_session ON handoffs(session_id);`,
 }
 
 // Open opens (creating if needed) the database at path and migrates it.

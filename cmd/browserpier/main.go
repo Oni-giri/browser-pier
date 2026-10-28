@@ -27,6 +27,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/db"
 	"github.com/Oni-giri/browser-pier/internal/docker"
 	"github.com/Oni-giri/browser-pier/internal/files"
+	"github.com/Oni-giri/browser-pier/internal/handoff"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/webrtc"
 )
@@ -41,6 +42,13 @@ func main() {
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(version)
+		return
+	}
+	if flag.Arg(0) == "pin" {
+		if err := pinCommand(os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "browserpier pin:", err)
+			os.Exit(1)
+		}
 		return
 	}
 	if flag.Arg(0) == "token" {
@@ -166,7 +174,10 @@ func run(log *slog.Logger) error {
 	}
 	defer func() { _ = relay.Close() }()
 	live := webrtc.NewHandler(relay, mgr, web, log)
-	return serve(ctx, ln, newHandler(web, agentAPI, live), log)
+	handoffs := handoff.New(database, mgr, log)
+	go handoffs.Sweep(ctx, 15*time.Second)
+	agentAPI.SetHandoffs(handoffs)
+	return serve(ctx, ln, newHandler(web, agentAPI, live, handoff.NewWeb(handoffs, web, live, mgr, log)), log)
 }
 
 // perBrowser is the memory a new browser is expected to need when
@@ -238,7 +249,7 @@ func browserUser(uid, gid int) (int, int) {
 
 // newHandler is every route. Cross-origin form posts are refused, so a
 // page elsewhere can't act with the admin's cookie.
-func newHandler(web *auth.Web, agentAPI *api.API, live *webrtc.Handler) http.Handler {
+func newHandler(web *auth.Web, agentAPI *api.API, live *webrtc.Handler, handoffs *handoff.Web) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -248,6 +259,9 @@ func newHandler(web *auth.Web, agentAPI *api.API, live *webrtc.Handler) http.Han
 	agentAPI.Register(mux)
 	if live != nil {
 		live.Register(mux)
+	}
+	if handoffs != nil {
+		handoffs.Register(mux)
 	}
 	// Until the web UI lands (PROJ-11), the home page only confirms the sign-in.
 	mux.Handle("GET /{$}", web.RequireAdmin(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

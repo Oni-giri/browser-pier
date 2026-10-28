@@ -83,7 +83,13 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) offer(w http.ResponseWriter, r *http.Request) {
-	profile := r.PathValue("profile")
+	h.Offer(w, r, r.PathValue("profile"), false)
+}
+
+// Offer answers a WebRTC offer for profile's live view. The caller has
+// already checked who may watch. With control set, the viewer has the
+// mouse and keyboard from the start (a handoff link, once unlocked).
+func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, control bool) {
 	s, ok := h.m.Live(profile)
 	if !ok || (s.State != sessions.Running && s.State != sessions.NeedsHelp) {
 		http.Error(w, "the browser isn't running", http.StatusConflict)
@@ -102,6 +108,9 @@ func (h *Handler) offer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	vw := &viewer{h: h, session: s.ID, sock: h.m.Layout().ControlSocket(profile)}
+	if control && h.m.TakeControl(s.ID) == nil {
+		vw.control = true
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	v, answer, err := h.relay.Connect(ctx, profile, in.SDP, vw.message)

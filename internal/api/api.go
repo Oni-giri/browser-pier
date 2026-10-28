@@ -19,17 +19,19 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/files"
+	"github.com/Oni-giri/browser-pier/internal/handoff"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
 // API is the agent-facing HTTP API.
 type API struct {
-	m      *sessions.Manager
-	web    *auth.Web
-	files  *files.Store
-	log    *slog.Logger
-	public string // BROWSERPIER_PUBLIC_URL, if set
+	m        *sessions.Manager
+	web      *auth.Web
+	files    *files.Store
+	handoffs *handoff.Service
+	log      *slog.Logger
+	public   string // BROWSERPIER_PUBLIC_URL, if set
 }
 
 func New(m *sessions.Manager, web *auth.Web, fs *files.Store, log *slog.Logger, publicURL string) *API {
@@ -54,6 +56,9 @@ func (a *API) Register(mux *http.ServeMux) {
 	mux.Handle("DELETE /api/profiles/{name}/files/{file}", t(a.deleteFile))
 	// Many CDP clients can't set headers, so the CDP proxy also takes the
 	// token as ?token=.
+	if a.handoffs != nil {
+		a.registerHandoffs(mux)
+	}
 	mux.Handle("GET /cdp/{profile}", tokenFromQuery(t(a.cdp)))
 	mux.Handle("GET /cdp/{profile}/{path...}", tokenFromQuery(t(a.cdp)))
 }

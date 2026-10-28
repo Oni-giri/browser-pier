@@ -81,6 +81,19 @@ func NewWeb(admin *Admin, tokens *Tokens, log *slog.Logger, opts WebOptions) *We
 	return w
 }
 
+// SignedIn reports whether the request comes from a signed-in browser.
+func (w *Web) SignedIn(r *http.Request) bool {
+	c, err := r.Cookie(CookieName)
+	if err != nil {
+		return false
+	}
+	_, err = w.admin.Session(r.Context(), c.Value)
+	return err == nil
+}
+
+// Admin is the admin account behind the sign-in, for the handoff PIN.
+func (w *Web) Admin() *Admin { return w.admin }
+
 // Tokens is the agent token store the middleware checks against.
 func (w *Web) Tokens() *Tokens { return w.tokens }
 
