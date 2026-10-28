@@ -170,10 +170,20 @@ func runCommand(ctx context.Context, name string, args ...string) ([]byte, error
 		return nil, err
 	}
 	defer context.AfterFunc(ctx, func() { _ = cmd.Process.Kill() })()
-	out, readErr := io.ReadAll(io.LimitReader(pr, 64<<20))
+	out, readErr := io.ReadAll(io.LimitReader(pr, maxOutput+1))
+	if len(out) > maxOutput {
+		// Stop reading and kill it; otherwise it would block on a full pipe.
+		_ = pr.Close()
+		_ = cmd.Process.Kill()
+		<-exited
+		return nil, fmt.Errorf("%s: output over %d bytes", name, maxOutput)
+	}
 	ws := <-exited
 	if !ws.Exited() || ws.ExitStatus() != 0 {
 		return nil, fmt.Errorf("%s: %s", name, describe(ws))
 	}
 	return out, readErr
 }
+
+// maxOutput caps what runCommand reads from a command, a screenshot say.
+const maxOutput = 64 << 20

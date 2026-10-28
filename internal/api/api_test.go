@@ -102,6 +102,7 @@ type fixture struct {
 	scoped   string // token for google only
 	tokens   *auth.Tokens
 	profiles *profiles.Store
+	web      *auth.Web
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -144,6 +145,7 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	web := auth.NewWeb(admin, f.tokens, log, auth.WebOptions{CookieSecure: "auto"})
+	f.web = web
 	mux := http.NewServeMux()
 	New(f.m, web, log, "").Register(mux)
 	f.srv = httptest.NewServer(mux)
@@ -442,5 +444,55 @@ func waitFor(t *testing.T, cond func() bool) {
 			t.Fatal("timed out")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestCDPConnectionsCloseOnHandoffAndRevocation(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	host := strings.TrimPrefix(f.srv.URL, "http://")
+	dial := func(token string) *websocket.Conn {
+		t.Helper()
+		dctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		//nolint:bodyclose // after an upgrade the connection owns the body
+		conn, _, err := websocket.Dial(dctx, "ws://"+host+"/cdp/google?token="+token, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return conn
+	}
+	closed := func(conn *websocket.Conn) bool {
+		rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		_, _, err := conn.Read(rctx)
+		return err != nil && rctx.Err() == nil
+	}
+
+	s := f.start(f.all, "google", "api")
+	conn := dial(f.all)
+	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if !closed(conn) {
+		t.Fatal("the agent's CDP connection stayed open while a person has the browser")
+	}
+	if _, err := f.m.SetNeedsHelp(s.ID, false); err != nil {
+		t.Fatal(err)
+	}
+
+	tok, secret, err := f.tokens.Create(ctx, "doomed", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn = dial(secret)
+	waitFor(t, func() bool { live, _ := f.m.Live("google"); return len(live.InUseBy) == 1 })
+	if err := f.tokens.Revoke(ctx, tok.ID); err != nil {
+		t.Fatal(err)
+	}
+	a := New(f.m, f.web, slog.New(slog.DiscardHandler), "")
+	a.checkRevocations(ctx)
+	if !closed(conn) {
+		t.Fatal("a revoked token's CDP connection stayed open")
 	}
 }

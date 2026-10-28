@@ -122,7 +122,9 @@ func run(log *slog.Logger) error {
 	}
 	log.Info("starting", "version", version, "listen", ln.Addr().String(), "data_dir", dataDir,
 		"host_data_dir", hostDataDir, "browser_image", image)
-	return serve(ctx, ln, newHandler(web, api.New(mgr, web, log, cfg.PublicURL)), log)
+	agentAPI := api.New(mgr, web, log, cfg.PublicURL)
+	go agentAPI.WatchRevocations(ctx, 10*time.Second)
+	return serve(ctx, ln, newHandler(web, agentAPI), log)
 }
 
 // defaultBrowserImage is the browser image built alongside this version:
