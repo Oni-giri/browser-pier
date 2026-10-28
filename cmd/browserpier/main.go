@@ -4,6 +4,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -78,7 +80,11 @@ func run(log *slog.Logger) error {
 	if image == "" {
 		image = defaultBrowserImage(version)
 	}
-	dc, err := docker.New(docker.Options{Image: image, UsernsMode: cfg.UsernsMode})
+	instance, err := instanceID(dataDir)
+	if err != nil {
+		return err
+	}
+	dc, err := docker.New(docker.Options{Image: image, UsernsMode: cfg.UsernsMode, Instance: instance})
 	if err != nil {
 		return err
 	}
@@ -125,6 +131,26 @@ func run(log *slog.Logger) error {
 	agentAPI := api.New(mgr, web, log, cfg.PublicURL)
 	go agentAPI.WatchRevocations(ctx, 10*time.Second)
 	return serve(ctx, ln, newHandler(web, agentAPI), log)
+}
+
+// instanceID is this BrowserPier's ID, made on first start and kept in the
+// data dir. Its browser containers carry it, so another BrowserPier on the
+// same Docker host never adopts or removes them.
+func instanceID(dataDir string) (string, error) {
+	path := filepath.Join(dataDir, "instance-id")
+	if b, err := os.ReadFile(path); err == nil { //nolint:gosec // our own data dir
+		if id := strings.TrimSpace(string(b)); id != "" {
+			return id, nil
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	id := hex.EncodeToString(b)
+	return id, os.WriteFile(path, []byte(id+"\n"), 0o600)
 }
 
 // defaultBrowserImage is the browser image built alongside this version:
