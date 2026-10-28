@@ -107,13 +107,31 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 		return
 	}
 	vw := &viewer{h: h, session: s.ID, sock: h.m.Layout().ControlSocket(profile), allowed: o.Allowed}
-	if o.Control && h.m.TakeControl(s.ID) == nil {
+	// A viewer promised control gets it or isn't connected: a page that
+	// thinks it drives while it only watches would send input into nothing.
+	if o.Control {
+		if err := h.m.TakeControl(s.ID); err != nil {
+			unwatch()
+			msg := "The browser isn't running."
+			switch {
+			case errors.Is(err, sessions.ErrHumanDriving):
+				msg = "Someone else has control."
+			case errors.Is(err, sessions.ErrAgentDriving):
+				msg = "The agent is driving."
+			}
+			http.Error(w, msg, http.StatusConflict)
+			return
+		}
 		vw.control = true
 	}
+	control := vw.control // read before the data channel can change it
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	v, answer, err := h.relay.Connect(ctx, profile, in.SDP, vw.message)
 	if err != nil {
+		if control {
+			h.m.ReleaseControl(s.ID) // nothing was pressed yet: no need to lift keys
+		}
 		unwatch()
 		http.Error(w, "couldn't connect: "+err.Error(), http.StatusBadRequest)
 		return
@@ -128,7 +146,8 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 		unwatch()
 	}()
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"sdp": answer})
+	// control says whether this viewer starts with the mouse and keyboard.
+	_ = json.NewEncoder(w).Encode(map[string]any{"sdp": answer, "control": control})
 }
 
 // viewer is one live view's input: it only reaches the browser while

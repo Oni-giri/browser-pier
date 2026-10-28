@@ -70,6 +70,24 @@ func (a *API) createHandoff(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &in) {
 		return
 	}
+	// A PIN link with no PIN set can't be opened: say so now, rather than
+	// pause the agent for a link nobody can use.
+	p, err := a.m.Profiles().Get(r.Context(), s.Profile)
+	if err != nil {
+		a.internal(w, "loading a profile", err)
+		return
+	}
+	if handoff.Stricter(p.HandoffPolicy, profiles.HandoffPolicy(in.Require)) == profiles.PolicyPIN {
+		set, err := a.web.Admin().PINChangedAt(r.Context())
+		if err != nil {
+			a.internal(w, "reading the handoff PIN", err)
+			return
+		}
+		if set.IsZero() {
+			writeError(w, http.StatusConflict, "no handoff PIN is set: ask the person to set one in Settings, or use require=signin")
+			return
+		}
+	}
 	tok, _ := auth.TokenFromContext(r.Context())
 	h, token, err := a.handoffs.Create(r.Context(), s.ID, tok.Name, handoff.Reason(in.Reason), in.Detail, profiles.HandoffPolicy(in.Require))
 	switch {

@@ -99,14 +99,18 @@ type Service struct {
 	m   *sessions.Manager
 	log *slog.Logger
 	now func() time.Time
+	// beforeListen, if set, runs in Wait between its first read and
+	// registering to be woken (tests).
+	beforeListen func()
 
-	mu      sync.Mutex
-	waiters map[string][]chan struct{}
-	viewers map[string][]*webrtc.Viewer // live views opened through a handoff
+	mu       sync.Mutex
+	waiters  map[string][]chan struct{}
+	viewers  map[string][]*webrtc.Viewer // live views opened through a handoff
+	checking map[string]int              // PIN checks under way, per handoff
 }
 
 func New(db *sql.DB, m *sessions.Manager, log *slog.Logger) *Service {
-	return &Service{db: db, m: m, log: log, now: time.Now, waiters: map[string][]chan struct{}{}, viewers: map[string][]*webrtc.Viewer{}}
+	return &Service{db: db, m: m, log: log, now: time.Now, waiters: map[string][]chan struct{}{}, viewers: map[string][]*webrtc.Viewer{}, checking: map[string]int{}}
 }
 
 var rank = map[profiles.HandoffPolicy]int{profiles.PolicyLink: 0, profiles.PolicyPIN: 1, profiles.PolicySignIn: 2}
@@ -173,6 +177,9 @@ func (s *Service) Create(ctx context.Context, sessionID, agent string, reason Re
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		h.ID, h.SessionID, h.Profile, h.Agent, h.Reason, h.Detail, h.Origin, h.Policy, h.Status, hash(token),
 		h.CreatedAt.UnixMilli(), h.ExpiresAt.UnixMilli()); err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed: handoffs.session_id") {
+			return Handoff{}, "", ErrOpen // another Create got in first
+		}
 		return Handoff{}, "", err
 	}
 	if _, err := s.m.SetNeedsHelp(sessionID, true); err != nil {
@@ -358,31 +365,62 @@ func (s *Service) Unlocked(ctx context.Context, h Handoff, browser string) bool 
 	return n == 1
 }
 
-// ReservePINTry counts a PIN attempt before it is checked, so parallel
-// guesses can't all be tried before the count catches up. It returns
-// false if the link has no tries left. A right PIN gives the try back
-// (PINRight); a wrong one keeps it and cancels the link at the limit
-// (PINWrong).
+// ReservePINTry starts a PIN check. It refuses while the link's wrong
+// PINs plus the checks already under way reach MaxPINFailures, so parallel
+// guesses can't all be tried before the count catches up. End each
+// reserved check with PINRight or PINWrong; only a wrong PIN counts.
 func (s *Service) ReservePINTry(ctx context.Context, h Handoff) (bool, error) {
-	res, err := s.db.ExecContext(ctx, `UPDATE handoffs SET pin_failures = pin_failures + 1 WHERE id = ? AND status = 'pending' AND pin_failures < ?`,
-		h.ID, MaxPINFailures)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var failures int
+	err := s.db.QueryRowContext(ctx, `SELECT pin_failures FROM handoffs WHERE id = ? AND status = 'pending'`, h.ID).Scan(&failures)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
-	n, _ := res.RowsAffected()
-	return n == 1, nil
+	if failures+s.checking[h.ID] >= MaxPINFailures {
+		return false, nil
+	}
+	s.checking[h.ID]++
+	return true, nil
 }
 
-// PINRight gives back the try reserved for a right PIN.
-func (s *Service) PINRight(ctx context.Context, h Handoff) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE handoffs SET pin_failures = pin_failures - 1 WHERE id = ? AND pin_failures > 0`, h.ID)
-	return err
+// doneChecking ends a reserved check. Call it with s.mu held.
+func (s *Service) doneChecking(id string) {
+	if s.checking[id]--; s.checking[id] <= 0 {
+		delete(s.checking, id)
+	}
 }
 
-// PINWrong returns how many tries are left after a wrong PIN, cancelling
-// the link when none are.
+// PINRight ends a check that found the right PIN (or never got to check
+// it): it isn't counted.
+func (s *Service) PINRight(h Handoff) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.doneChecking(h.ID)
+}
+
+// PINWrong ends a check that found a wrong PIN, counts it, and returns how
+// many tries are left, cancelling the link when none are. It fails
+// closed: the guess is counted even if the client has gone, and if it
+// can't be recorded the check stays reserved, still using up a try.
 func (s *Service) PINWrong(ctx context.Context, h Handoff) (int, error) {
-	h, err := s.Get(ctx, h.ID)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	s.mu.Lock()
+	// Count it in the same step as ending the check, so a reservation never
+	// sees it as neither.
+	_, err := s.db.ExecContext(ctx, `UPDATE handoffs SET pin_failures = pin_failures + 1 WHERE id = ? AND status = 'pending'`, h.ID)
+	if err == nil {
+		s.doneChecking(h.ID)
+	}
+	s.mu.Unlock()
+	if err != nil {
+		return 0, err
+	}
+	h, err = s.Get(ctx, h.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -449,6 +487,7 @@ func (s *Service) wake(id string) {
 		v.Close()
 	}
 	delete(s.viewers, id)
+	delete(s.checking, id)
 }
 
 // track remembers a live view opened through a handoff, to close it when
@@ -482,11 +521,49 @@ func (s *Service) track(id string, v *webrtc.Viewer) {
 	}()
 }
 
+// replaceViewers closes the live views already open through a handoff,
+// for when its browser opens it again (a reload), and waits until they
+// have let go of the controls, so their hand-back can't take control from
+// the new view.
+func (s *Service) replaceViewers(ctx context.Context, h Handoff) {
+	s.mu.Lock()
+	old := slices.Clone(s.viewers[h.ID])
+	s.mu.Unlock()
+	if len(old) == 0 {
+		return
+	}
+	for _, v := range old {
+		v.Close()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	for _, v := range old {
+		select {
+		case <-v.Done():
+		case <-ctx.Done():
+			return
+		}
+	}
+	for {
+		if sess, ok := s.m.Live(h.Profile); !ok || !sess.HumanControl {
+			return
+		}
+		select {
+		case <-time.After(20 * time.Millisecond):
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 // Wait returns the handoff once it's over, or as it stands after wait.
 func (s *Service) Wait(ctx context.Context, id string, wait time.Duration) (Handoff, error) {
 	h, err := s.Get(ctx, id)
 	if err != nil || h.Status.Final() || wait <= 0 {
 		return h, err
+	}
+	if s.beforeListen != nil {
+		s.beforeListen()
 	}
 	ch := make(chan struct{})
 	s.mu.Lock()
@@ -503,6 +580,10 @@ func (s *Service) Wait(ctx context.Context, id string, wait time.Duration) (Hand
 		}
 		s.mu.Unlock()
 	}()
+	// It may have ended before we listened, waking nobody: read it again.
+	if h, err = s.Get(ctx, id); err != nil || h.Status.Final() {
+		return h, err
+	}
 	// Wake by the expiry too, so a waiter learns of it without polling.
 	until := time.Until(h.ExpiresAt)
 	t := time.NewTimer(min(wait, max(until, 0)+time.Second))
@@ -516,8 +597,9 @@ func (s *Service) Wait(ctx context.Context, id string, wait time.Duration) (Hand
 	return s.Get(ctx, id)
 }
 
-// Sweep expires handoffs left pending past their time, every interval,
-// so their browsers go back to the agents.
+// Sweep checks every pending handoff, every interval: one whose time is
+// up expires and one whose browser stopped is cancelled, so the agents
+// waiting on them hear at once and their browsers go back to them.
 func (s *Service) Sweep(ctx context.Context, every time.Duration) {
 	t := time.NewTicker(every)
 	defer t.Stop()
@@ -526,23 +608,27 @@ func (s *Service) Sweep(ctx context.Context, every time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			rows, err := s.db.QueryContext(ctx, `SELECT id FROM handoffs WHERE status = 'pending' AND expires_at <= ?`, s.now().UnixMilli())
-			if err != nil {
-				continue
-			}
-			var ids []string
-			for rows.Next() {
-				var id string
-				if rows.Scan(&id) == nil {
-					ids = append(ids, id)
-				}
-			}
-			_ = rows.Close()
-			for _, id := range ids {
-				if _, err := s.Get(ctx, id); err != nil {
-					s.log.Warn("expiring a handoff", "handoff", id, "err", fmt.Sprint(err))
-				}
-			}
+			s.sweep(ctx)
+		}
+	}
+}
+
+func (s *Service) sweep(ctx context.Context) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM handoffs WHERE status = 'pending'`)
+	if err != nil {
+		return
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	_ = rows.Close()
+	for _, id := range ids {
+		if _, err := s.Get(ctx, id); err != nil { // Get ends it if it should
+			s.log.Warn("checking a handoff", "handoff", id, "err", fmt.Sprint(err))
 		}
 	}
 }

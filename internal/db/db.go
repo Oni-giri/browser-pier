@@ -101,6 +101,12 @@ var migrations = []string{
 		finished_at  INTEGER NOT NULL DEFAULT 0
 	);
 	CREATE INDEX handoffs_session ON handoffs(session_id);`,
+
+	// One open handoff per session, even when two agents ask at once. Any
+	// duplicates left by that race are cancelled first, keeping the oldest.
+	`UPDATE handoffs SET status = 'cancelled', note = 'another handoff was open'
+		WHERE status = 'pending' AND rowid NOT IN (SELECT min(rowid) FROM handoffs WHERE status = 'pending' GROUP BY session_id);
+	CREATE UNIQUE INDEX handoffs_one_pending ON handoffs(session_id) WHERE status = 'pending';`,
 }
 
 // Open opens (creating if needed) the database at path and migrates it.

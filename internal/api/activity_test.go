@@ -45,6 +45,9 @@ func TestActivityLog(t *testing.T) {
 	if r, _ := f.raw(f.all, http.MethodPost, "/api/sessions/"+s.ID+"/files", &body, mw.FormDataContentType()); r.StatusCode != http.StatusCreated {
 		t.Fatalf("upload: %d", r.StatusCode)
 	}
+	if err := f.web.Admin().SetPIN(context.Background(), "4821"); err != nil {
+		t.Fatal(err)
+	}
 	if code := f.call(f.all, http.MethodPost, "/api/sessions/"+s.ID+"/handoff", `{"reason": "captcha"}`, nil); code != http.StatusCreated {
 		t.Fatalf("handoff: %d", code)
 	}

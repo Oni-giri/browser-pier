@@ -75,8 +75,7 @@ type view struct {
 	Reason    string
 	Error     string
 	TriesLeft int
-	Ended     string // done, cant, cancelled, expired, missing
-	Insecure  bool   // "link only" over plain HTTP from outside: asked for the PIN instead
+	Ended     string // done, cant, cancelled, expired, missing, insecure
 	ExpiresMs int64
 }
 
@@ -118,14 +117,16 @@ func (w *Web) holder(r *http.Request, h Handoff) bool {
 	return err == nil && w.svc.Unlocked(r.Context(), h, c.Value)
 }
 
-// policy is what this request must pass. "Link only" is honoured over
-// HTTPS or from a private address (Tailscale, the LAN); a link opened
-// over plain HTTP from the internet asks for the PIN instead.
-func (w *Web) policy(r *http.Request, h Handoff) (profiles.HandoffPolicy, bool) {
-	if h.Policy == profiles.PolicyLink && !w.web.IsHTTPS(r) && !private(w.web.ClientIP(r)) {
-		return profiles.PolicyPIN, true
+// insecure reports whether the link was opened over plain HTTP from
+// outside the LAN or Tailscale. Such a request is asked for nothing and
+// unlocks nothing: a PIN or password would travel in the clear, and so
+// would the cookie that holds the browser.
+func (w *Web) insecure(rw http.ResponseWriter, r *http.Request, h Handoff) bool {
+	if w.web.IsHTTPS(r) || private(w.web.ClientIP(r)) {
+		return false
 	}
-	return h.Policy, false
+	w.render(rw, http.StatusForbidden, view{Step: "ended", Ended: "insecure", H: h})
+	return true
 }
 
 func private(ip string) bool {
@@ -147,15 +148,15 @@ func (w *Web) unlock(rw http.ResponseWriter, r *http.Request, h Handoff, token s
 		w.render(rw, http.StatusForbidden, view{Step: "other", H: h})
 		return false
 	}
-	//nolint:gosec // Secure whenever served over HTTPS, as for the sign-in cookie
+	//nolint:gosec // Secure as the sign-in cookie is (CookieSecure, HTTPS, an https public URL)
 	http.SetCookie(rw, &http.Cookie{Name: browserCookie, Value: secret, Path: "/h/" + token, HttpOnly: true,
-		Secure: w.web.IsHTTPS(r), SameSite: http.SameSiteStrictMode, Expires: h.ExpiresAt})
+		Secure: w.web.SecureCookie(r), SameSite: http.SameSiteStrictMode, Expires: h.ExpiresAt})
 	return true
 }
 
 func (w *Web) show(rw http.ResponseWriter, r *http.Request) {
 	h, token, ok := w.load(rw, r)
-	if !ok {
+	if !ok || w.insecure(rw, r, h) {
 		return
 	}
 	if w.holder(r, h) {
@@ -166,8 +167,7 @@ func (w *Web) show(rw http.ResponseWriter, r *http.Request) {
 		w.render(rw, http.StatusForbidden, view{Step: "other", H: h})
 		return
 	}
-	policy, insecure := w.policy(r, h)
-	switch policy {
+	switch h.Policy {
 	case profiles.PolicyLink:
 		if w.unlock(rw, r, h, token) {
 			http.Redirect(rw, r, "/h/"+url.PathEscape(token), http.StatusSeeOther)
@@ -181,13 +181,13 @@ func (w *Web) show(rw http.ResponseWriter, r *http.Request) {
 			http.Redirect(rw, r, "/h/"+url.PathEscape(token), http.StatusSeeOther)
 		}
 	default:
-		w.render(rw, http.StatusOK, view{Step: "pin", H: h, Token: token, TriesLeft: MaxPINFailures - h.PINFailures, Insecure: insecure})
+		w.render(rw, http.StatusOK, view{Step: "pin", H: h, Token: token, TriesLeft: MaxPINFailures - h.PINFailures})
 	}
 }
 
 func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 	h, token, ok := w.load(rw, r)
-	if !ok {
+	if !ok || w.insecure(rw, r, h) {
 		return
 	}
 	if h.unlocked {
@@ -196,7 +196,7 @@ func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 	}
 	// The PIN only opens a link whose policy asks for it: a "full sign-in"
 	// link can't be opened with the PIN instead of the admin password.
-	if policy, _ := w.policy(r, h); policy != profiles.PolicyPIN {
+	if h.Policy != profiles.PolicyPIN {
 		http.Redirect(rw, r, "/h/"+url.PathEscape(token), http.StatusSeeOther)
 		return
 	}
@@ -223,20 +223,21 @@ func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 	}
 	all := attempts{prof, glob}
 	// Reserve this link's try before checking, so parallel guesses can't
-	// all get in before the count does.
+	// all get in before the count does. A refusal isn't a wrong PIN.
 	reserved, err := w.svc.ReservePINTry(r.Context(), h)
 	if err != nil || !reserved {
 		mine.Cancel()
 		all.Cancel()
-		if err != nil {
-			http.Error(rw, "something went wrong", http.StatusInternalServerError)
-			return
+		if err == nil {
+			h, err = w.svc.Get(r.Context(), h.ID)
 		}
-		left, _ := w.svc.PINWrong(r.Context(), h)
-		if left <= 0 {
-			w.render(rw, http.StatusGone, view{Step: "ended", Ended: string(Cancelled), H: h})
-		} else {
-			w.render(rw, http.StatusTooManyRequests, view{Step: "pin", H: h, Token: token, TriesLeft: left, Error: "Wait for your other attempts to finish."})
+		switch {
+		case err != nil:
+			http.Error(rw, "something went wrong", http.StatusInternalServerError)
+		case h.Status.Final():
+			w.render(rw, http.StatusGone, view{Step: "ended", Ended: string(h.Status), H: h})
+		default:
+			w.render(rw, http.StatusTooManyRequests, view{Step: "pin", H: h, Token: token, TriesLeft: MaxPINFailures - h.PINFailures, Error: "Wait for your other attempts to finish."})
 		}
 		return
 	}
@@ -245,7 +246,7 @@ func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		mine.Cancel()
 		all.Cancel()
-		_ = w.svc.PINRight(r.Context(), h) // not a guess: give the try back
+		w.svc.PINRight(h) // not a guess: give the try back
 		http.Error(rw, "something went wrong", http.StatusInternalServerError)
 		return
 	}
@@ -267,7 +268,7 @@ func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 	}
 	mine.Succeed()
 	all.Cancel() // a right PIN doesn't clear wrong guesses made at other links
-	_ = w.svc.PINRight(r.Context(), h)
+	w.svc.PINRight(h)
 	if w.unlock(rw, r, h, token) {
 		http.Redirect(rw, r, "/h/"+url.PathEscape(token), http.StatusSeeOther)
 	}
@@ -280,6 +281,9 @@ func (w *Web) offer(rw http.ResponseWriter, r *http.Request) {
 		http.Error(rw, "this link isn't open here", http.StatusForbidden)
 		return
 	}
+	// This browser holds the link, so an earlier view of it is a page
+	// since reloaded: replace it rather than refuse "someone else has control".
+	w.svc.replaceViewers(r.Context(), h)
 	id := h.ID
 	w.live.Offer(rw, r, h.Profile, webrtc.OfferOptions{
 		Control: true,

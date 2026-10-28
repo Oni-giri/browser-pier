@@ -6,10 +6,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
 func TestHandoffAPI(t *testing.T) {
 	f := newFixture(t)
+	if err := f.web.Admin().SetPIN(context.Background(), "4821"); err != nil {
+		t.Fatal(err)
+	}
 	s := f.start(f.all, "github", "visual") // the scoped token can't see github
 
 	var h handoffJSON
@@ -48,5 +53,22 @@ func TestHandoffAPI(t *testing.T) {
 	}
 	if code := f.call(f.all, http.MethodPost, "/api/sessions/"+s.ID+"/click", `{"x": 1, "y": 1}`, nil); code != http.StatusNoContent {
 		t.Fatalf("click after hand-back: %d", code)
+	}
+}
+
+func TestHandoffNeedsAPINToBeSet(t *testing.T) {
+	f := newFixture(t) // no PIN set; profiles default to the PIN policy
+	s := f.start(f.all, "github", "visual")
+	var e struct{ Error string }
+	if code := f.call(f.all, http.MethodPost, "/api/sessions/"+s.ID+"/handoff", `{"reason": "sensitive_input"}`, &e); code != http.StatusConflict || !strings.Contains(e.Error, "PIN") {
+		t.Fatalf("PIN handoff with no PIN set: %d %+v", code, e)
+	}
+	if live, _ := f.m.Live("github"); live.State != sessions.Running {
+		t.Fatalf("refused handoff left the session %s", live.State)
+	}
+	// Full sign-in needs no PIN, and nothing was left open by the refusal.
+	var h handoffJSON
+	if code := f.call(f.all, http.MethodPost, "/api/sessions/"+s.ID+"/handoff", `{"reason": "sensitive_input", "require": "signin"}`, &h); code != http.StatusCreated || h.Policy != "signin" {
+		t.Fatalf("sign-in handoff with no PIN set: %d %+v", code, h)
 	}
 }

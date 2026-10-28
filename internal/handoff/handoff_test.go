@@ -2,6 +2,7 @@ package handoff
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -17,6 +18,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	pionwebrtc "github.com/pion/webrtc/v4"
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/db"
@@ -163,6 +166,30 @@ func TestCreatePausesTheAgentAndShowsOnlyTheOrigin(t *testing.T) {
 	}
 }
 
+func TestConcurrentCreatesOpenOneHandoff(t *testing.T) {
+	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
+	s := f.running()
+	errs := make(chan error, 8)
+	for range cap(errs) {
+		go func() {
+			_, _, err := f.svc.Create(context.Background(), s.ID, "research-bot", Captcha, "", "")
+			errs <- err
+		}()
+	}
+	won := 0
+	for range cap(errs) {
+		switch err := <-errs; {
+		case err == nil:
+			won++
+		case !errors.Is(err, ErrOpen):
+			t.Fatalf("a losing Create: %v", err)
+		}
+	}
+	if won != 1 {
+		t.Fatalf("%d concurrent Creates won, want 1", won)
+	}
+}
+
 func TestAgentsCanOnlyRaiseThePolicy(t *testing.T) {
 	for _, c := range []struct{ profile, require, want profiles.HandoffPolicy }{
 		{profiles.PolicyPIN, profiles.PolicyLink, profiles.PolicyPIN},
@@ -272,13 +299,35 @@ func TestLinkOnlyAndSignIn(t *testing.T) {
 	}
 }
 
-func TestLinkOnlyOverPlainHTTPFromOutsideAsksForThePIN(t *testing.T) {
+func TestPlainHTTPFromOutsideAsksForNothing(t *testing.T) {
 	_, trusted, _ := net.ParseCIDR("127.0.0.0/8")
+	outside := http.Header{"X-Forwarded-For": {"203.0.113.5"}}
+	for _, policy := range []profiles.HandoffPolicy{profiles.PolicyLink, profiles.PolicyPIN, profiles.PolicySignIn} {
+		f := newFixture(t, policy, auth.WebOptions{TrustedProxies: []*net.IPNet{trusted}})
+		h, token := f.open("")
+		b := browser()
+		p := f.do(b, "GET", "/h/"+token, nil, outside)
+		if p.code != http.StatusForbidden || !strings.Contains(p.body, "needs HTTPS") || strings.Contains(p.body, "<form") {
+			t.Fatalf("%s from outside over HTTP: %d %s", policy, p.code, p.body)
+		}
+		// Not even the right PIN, sent anyway, unlocks it or counts.
+		if p := f.do(b, "POST", "/h/"+token+"/pin", url.Values{"pin": {"4821"}}, outside); p.code != http.StatusForbidden {
+			t.Fatalf("%s: PIN from outside over HTTP: %d", policy, p.code)
+		}
+		if got, _ := f.svc.Get(context.Background(), h.ID); got.unlocked || got.PINFailures != 0 {
+			t.Fatalf("%s: plain HTTP from outside unlocked the link or counted a try: %+v", policy, got)
+		}
+	}
+	// Through an HTTPS proxy, the same address is fine.
 	f := newFixture(t, profiles.PolicyLink, auth.WebOptions{TrustedProxies: []*net.IPNet{trusted}})
 	_, token := f.open("")
-	p := f.do(browser(), "GET", "/h/"+token, nil, http.Header{"X-Forwarded-For": {"203.0.113.5"}})
-	if p.code != http.StatusOK || !strings.Contains(p.body, "Unlock and take control") || !strings.Contains(p.body, "plain HTTP") {
-		t.Fatalf("link only from outside over HTTP: %d %s", p.code, p.body)
+	if p := f.do(browser(), "GET", "/h/"+token, nil, http.Header{"X-Forwarded-For": {"203.0.113.5"}, "X-Forwarded-Proto": {"https"}}); p.code != http.StatusSeeOther {
+		t.Fatalf("link only from outside over HTTPS: %d", p.code)
+	}
+	g := newFixture(t, profiles.PolicyPIN, auth.WebOptions{TrustedProxies: []*net.IPNet{trusted}})
+	_, token = g.open("")
+	if p := g.do(browser(), "POST", "/h/"+token+"/pin", url.Values{"pin": {"4821"}}, http.Header{"X-Forwarded-For": {"203.0.113.5"}, "X-Forwarded-Proto": {"https"}}); p.code != http.StatusSeeOther {
+		t.Fatalf("PIN from outside over HTTPS: %d", p.code)
 	}
 }
 
@@ -336,6 +385,127 @@ func TestParallelWrongPINsStopAtFive(t *testing.T) {
 	}
 }
 
+func TestWaitSeesAFinishJustBeforeItListens(t *testing.T) {
+	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
+	ctx := context.Background()
+	h, _ := f.open("")
+	f.svc.beforeListen = func() { _, _ = f.svc.Finish(ctx, h, Done, "") }
+	start := time.Now()
+	got, err := f.svc.Wait(ctx, h.ID, 10*time.Second)
+	if err != nil || got.Status != Done || time.Since(start) > 2*time.Second {
+		t.Fatalf("Wait: %s, %v after %s", got.Status, err, time.Since(start))
+	}
+}
+
+func TestSweepCancelsAHandoffWhoseBrowserStopped(t *testing.T) {
+	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
+	ctx := context.Background()
+	h, _ := f.open("")
+	waited := make(chan Handoff, 1)
+	go func() {
+		got, _ := f.svc.Wait(ctx, h.ID, time.Minute)
+		waited <- got
+	}()
+	for listening := false; !listening; time.Sleep(10 * time.Millisecond) {
+		f.svc.mu.Lock()
+		listening = len(f.svc.waiters[h.ID]) > 0
+		f.svc.mu.Unlock()
+	}
+	if _, err := f.m.Stop(ctx, h.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	f.svc.sweep(ctx)
+	var status Status
+	if err := f.svc.db.QueryRow(`SELECT status FROM handoffs WHERE id = ?`, h.ID).Scan(&status); err != nil || status != Cancelled {
+		t.Fatalf("after a sweep: %s, %v", status, err)
+	}
+	select {
+	case got := <-waited:
+		if got.Status != Cancelled {
+			t.Fatalf("waiter got %s", got.Status)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the long-poll didn't wake when the browser stopped")
+	}
+}
+
+func TestWrongPINsCountEvenWhenRecordingThemFails(t *testing.T) {
+	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
+	ctx := context.Background()
+	h, _ := f.open("")
+	reserve := func() bool {
+		ok, err := f.svc.ReservePINTry(ctx, h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+
+	// The client went away mid-check: the guess still counts.
+	gone, cancel := context.WithCancel(ctx)
+	cancel()
+	if !reserve() {
+		t.Fatal("first reservation refused")
+	}
+	if _, err := f.svc.PINWrong(gone, h); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := f.svc.Get(ctx, h.ID); got.PINFailures != 1 {
+		t.Fatalf("a wrong PIN from a client that left: %d failures, want 1", got.PINFailures)
+	}
+
+	// The count can't be written: the try stays used up.
+	if _, err := f.svc.db.Exec(`CREATE TRIGGER no_count BEFORE UPDATE OF pin_failures ON handoffs BEGIN SELECT RAISE(FAIL, 'disk on fire'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if !reserve() {
+		t.Fatal("second reservation refused")
+	}
+	if _, err := f.svc.PINWrong(ctx, h); err == nil {
+		t.Fatal("PINWrong didn't report the failed write")
+	}
+	if _, err := f.svc.db.Exec(`DROP TRIGGER no_count`); err != nil {
+		t.Fatal(err)
+	}
+	for i := range MaxPINFailures - 2 {
+		if !reserve() {
+			t.Fatalf("reservation %d of the %d tries left refused", i+1, MaxPINFailures-2)
+		}
+	}
+	if reserve() {
+		t.Fatal("a guess whose count failed to write was given back")
+	}
+}
+
+func TestParallelRightPINsDontCancel(t *testing.T) {
+	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
+	h, token := f.open("")
+	codes := make(chan int, MaxPINFailures+1)
+	var start sync.WaitGroup
+	start.Add(1)
+	for range cap(codes) {
+		go func() {
+			start.Wait()
+			codes <- f.do(browser(), "POST", "/h/"+token+"/pin", url.Values{"pin": {"4821"}}, nil).code
+		}()
+	}
+	start.Done()
+	unlocked := 0
+	for range cap(codes) {
+		switch c := <-codes; c {
+		case http.StatusSeeOther:
+			unlocked++
+		case http.StatusForbidden, http.StatusTooManyRequests: // another browser got it, or wait
+		default:
+			t.Fatalf("a right PIN answered %d", c)
+		}
+	}
+	got, _ := f.svc.Get(context.Background(), h.ID)
+	if unlocked != 1 || got.Status != Pending || !got.unlocked || got.PINFailures != 0 {
+		t.Fatalf("after %d parallel right PINs: %d unlocked, %+v", cap(codes), unlocked, got)
+	}
+}
+
 func TestWrongPINsAcrossLinksAndProfilesAreCapped(t *testing.T) {
 	_, local, _ := net.ParseCIDR("127.0.0.0/8")
 	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{TrustedProxies: []*net.IPNet{local}})
@@ -351,7 +521,7 @@ func TestWrongPINsAcrossLinksAndProfilesAreCapped(t *testing.T) {
 	guess := func(token, pin string) reply {
 		ip++ // a new address every time, so only the link, profile and global caps apply
 		return f.do(browser(), "POST", "/h/"+token+"/pin", url.Values{"pin": {pin}},
-			http.Header{"X-Forwarded-For": {"203.0.113." + strconv.Itoa(ip)}})
+			http.Header{"X-Forwarded-For": {"203.0.113." + strconv.Itoa(ip)}, "X-Forwarded-Proto": {"https"}})
 	}
 	link := func(profile string) string {
 		s, _, err := f.m.Start(ctx, profile, "")
@@ -422,5 +592,80 @@ func TestPendingAndStats(t *testing.T) {
 	n, median, err := f.svc.Stats(ctx, start.Add(-time.Minute))
 	if err != nil || n != 2 || median < 47*time.Second || median > 49*time.Second {
 		t.Fatalf("stats: %d, %s, %v", n, median, err)
+	}
+}
+
+func TestHandoffCookieFollowsCookieSecure(t *testing.T) {
+	f := newFixture(t, profiles.PolicyLink, auth.WebOptions{CookieSecure: "always"})
+	_, token := f.open("")
+	resp, err := browser().Get(f.srv.URL + "/h/" + token) // plain HTTP, but the admin says always Secure
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	var c *http.Cookie
+	for _, x := range resp.Cookies() {
+		if x.Name == browserCookie {
+			c = x
+		}
+	}
+	if resp.StatusCode != http.StatusSeeOther || c == nil || !c.Secure {
+		t.Fatalf("link only with CookieSecure=always: %d, cookie %+v", resp.StatusCode, c)
+	}
+}
+
+// pionOffer is a viewer's offer, as the handoff page's script makes it.
+func pionOffer(t *testing.T) string {
+	t.Helper()
+	pc, err := pionwebrtc.NewPeerConnection(pionwebrtc.Configuration{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pc.Close() })
+	if _, err := pc.AddTransceiverFromKind(pionwebrtc.RTPCodecTypeVideo, pionwebrtc.RTPTransceiverInit{Direction: pionwebrtc.RTPTransceiverDirectionRecvonly}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pc.CreateDataChannel("input", nil); err != nil {
+		t.Fatal(err)
+	}
+	offer, err := pc.CreateOffer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gathered := pionwebrtc.GatheringCompletePromise(pc)
+	if err := pc.SetLocalDescription(offer); err != nil {
+		t.Fatal(err)
+	}
+	<-gathered
+	b, _ := json.Marshal(map[string]string{"sdp": pc.LocalDescription().SDP})
+	return string(b)
+}
+
+func TestReloadedHandoffPageGetsControlBack(t *testing.T) {
+	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
+	_, token := f.open("")
+	phone := browser()
+	if p := f.do(phone, "POST", "/h/"+token+"/pin", url.Values{"pin": {"4821"}}, nil); p.code != http.StatusSeeOther {
+		t.Fatalf("right PIN: %d %s", p.code, p.body)
+	}
+	offer := func() reply {
+		req, _ := http.NewRequest(http.MethodPost, f.srv.URL+"/h/"+token+"/offer", strings.NewReader(pionOffer(t)))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := phone.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		b, _ := io.ReadAll(resp.Body)
+		return reply{code: resp.StatusCode, body: string(b)}
+	}
+	for i := range 2 { // the page, then the same page reloaded
+		r := offer()
+		if r.code != http.StatusOK || !strings.Contains(r.body, `"control":true`) {
+			t.Fatalf("offer %d: %d %s", i+1, r.code, r.body)
+		}
+	}
+	if s, _ := f.m.Live("google"); !s.HumanControl {
+		t.Fatal("the reloaded page doesn't hold control")
 	}
 }

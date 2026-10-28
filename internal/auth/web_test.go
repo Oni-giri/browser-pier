@@ -316,18 +316,18 @@ func TestClientIPAndHTTPS(t *testing.T) {
 	}
 	tlsReq := req("203.0.113.9:1", "", "")
 	tlsReq.TLS = &tls.ConnectionState{}
-	if !w.IsHTTPS(tlsReq) || !w.secureCookie(tlsReq) {
+	if !w.IsHTTPS(tlsReq) || !w.SecureCookie(tlsReq) {
 		t.Error("direct TLS not seen as HTTPS")
 	}
-	if w.secureCookie(req("203.0.113.9:1", "", "")) {
+	if w.SecureCookie(req("203.0.113.9:1", "", "")) {
 		t.Error("Secure cookie over plain HTTP under auto")
 	}
 	w.opts.PublicURL = "https://pier.example.com"
-	if !w.secureCookie(req("203.0.113.9:1", "", "")) {
+	if !w.SecureCookie(req("203.0.113.9:1", "", "")) {
 		t.Error("an https public URL should make cookies Secure")
 	}
 	w.opts.CookieSecure = "never"
-	if w.secureCookie(tlsReq) {
+	if w.SecureCookie(tlsReq) {
 		t.Error("never means never")
 	}
 }
