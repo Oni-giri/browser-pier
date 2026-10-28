@@ -5,6 +5,8 @@
 package webrtc
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -19,7 +21,6 @@ import (
 	"github.com/pion/ice/v4"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
-	"github.com/pion/webrtc/v4/pkg/media/h264reader"
 )
 
 // Options say how viewers reach the relay.
@@ -240,23 +241,29 @@ func (r *Relay) pumpOnce(ctx context.Context, profile string, track *webrtc.Trac
 
 var startCode = []byte{0, 0, 0, 1}
 
+// maxFrame caps one frame, so a misbehaving browser container can't make
+// the orchestrator buffer without end.
+const maxFrame = 8 << 20
+
 // writeFrames splits an Annex-B stream into frames: each slice NAL, with
 // the parameter sets and SEI before it, is one sample, timed by when it
-// arrived.
+// arrived. A NAL or frame over maxFrame ends the stream with an error.
 func writeFrames(in io.Reader, write func(media.Sample) error) error {
-	rd, err := h264reader.NewReader(in)
-	if err != nil {
-		return err
-	}
+	sc := bufio.NewScanner(in)
+	sc.Buffer(make([]byte, 0, 256<<10), maxFrame)
+	sc.Split(splitNALs)
 	var pending []byte
 	last := time.Now()
-	for {
-		nal, err := rd.NextNAL()
-		if err != nil {
-			return err
+	for sc.Scan() {
+		nal := sc.Bytes()
+		if len(nal) == 0 {
+			continue
 		}
-		pending = append(append(pending, startCode...), nal.Data...)
-		if nal.UnitType != h264reader.NalUnitTypeCodedSliceIdr && nal.UnitType != h264reader.NalUnitTypeCodedSliceNonIdr {
+		if len(pending)+len(startCode)+len(nal) > maxFrame {
+			return errors.New("frame too large")
+		}
+		pending = append(append(pending, startCode...), nal...)
+		if t := nal[0] & 0x1f; t != 1 && t != 5 { // not a slice: keep collecting
 			continue
 		}
 		now := time.Now()
@@ -265,4 +272,39 @@ func writeFrames(in io.Reader, write func(media.Sample) error) error {
 		}
 		pending, last = nil, now
 	}
+	if err := sc.Err(); err != nil {
+		return err
+	}
+	return io.EOF
+}
+
+// splitNALs is a bufio.SplitFunc for Annex-B: each token is one NAL unit,
+// without its start code (00 00 01 or 00 00 00 01).
+func splitNALs(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	start := bytes.Index(data, []byte{0, 0, 1})
+	if start < 0 {
+		if atEOF {
+			return len(data), nil, nil
+		}
+		return 0, nil, nil
+	}
+	body := start + 3
+	next := bytes.Index(data[body:], []byte{0, 0, 1})
+	if next < 0 {
+		if atEOF {
+			return len(data), trimZeros(data[body:]), nil
+		}
+		return start, nil, nil // need more data; drop what precedes the start code
+	}
+	end := body + next
+	return end, trimZeros(data[body:end]), nil
+}
+
+// trimZeros drops the zero that starts a four-byte start code, which
+// belongs to the next NAL, not this one.
+func trimZeros(b []byte) []byte {
+	for len(b) > 0 && b[len(b)-1] == 0 {
+		b = b[:len(b)-1]
+	}
+	return b
 }

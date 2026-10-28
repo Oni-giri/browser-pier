@@ -1,6 +1,7 @@
 package webrtc
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -41,7 +42,7 @@ func newFakeBrowser(t *testing.T) *fakeBrowser {
 	mux.HandleFunc("GET /stream", func(w http.ResponseWriter, r *http.Request) {
 		fb.readers.Add(1)
 		defer fb.readers.Add(-1)
-		frame := func(t byte) []byte { return append([]byte{0, 0, 0, 1, t}, make([]byte, 200)...) }
+		frame := func(t byte) []byte { return append([]byte{0, 0, 0, 1, t}, bytes.Repeat([]byte{0x80}, 200)...) }
 		for i := 0; r.Context().Err() == nil; i++ {
 			var b []byte
 			if i%30 == 0 {
@@ -170,7 +171,8 @@ func TestRelayStreamsVideoAndCarriesInput(t *testing.T) {
 }
 
 func TestWriteFramesGroupsParameterSetsWithTheirFrame(t *testing.T) {
-	nal := func(t byte, n int) []byte { return append([]byte{0, 0, 0, 1, t}, make([]byte, n)...) }
+	// Real NAL units never end in a zero byte (their trailing bits end in a 1).
+	nal := func(t byte, n int) []byte { return append([]byte{0, 0, 0, 1, t}, bytes.Repeat([]byte{0x80}, n)...) }
 	var in []byte
 	in = append(in, nal(0x67, 4)...) // SPS
 	in = append(in, nal(0x68, 3)...) // PPS
@@ -198,4 +200,43 @@ func (o *onceReader) Read(p []byte) (int, error) {
 	n := copy(p, o.b)
 	o.b = o.b[n:]
 	return n, nil
+}
+
+func TestWriteFramesRefusesAnEndlessNAL(t *testing.T) {
+	// A NAL that never ends (no start code after it) must not be buffered forever.
+	endless := io.MultiReader(bytes.NewReader([]byte{0, 0, 0, 1, 0x06}), &zeros{n: maxFrame + 1<<20})
+	err := writeFrames(endless, func(media.Sample) error { return nil })
+	if err == nil || errors.Is(err, io.EOF) {
+		t.Fatalf("writeFrames = %v, want an error", err)
+	}
+}
+
+// zeros yields n non-start-code bytes.
+type zeros struct{ n int }
+
+func (z *zeros) Read(p []byte) (int, error) {
+	if z.n <= 0 {
+		return 0, io.EOF
+	}
+	n := min(len(p), z.n)
+	for i := range p[:n] {
+		p[i] = 0xAB
+	}
+	z.n -= n
+	return n, nil
+}
+
+func TestSplitNALsHandlesBothStartCodes(t *testing.T) {
+	in := []byte{0, 0, 0, 1, 0x67, 1, 2, 0, 0, 1, 0x68, 3, 0, 0, 0, 1, 0x65, 4, 5}
+	var samples []media.Sample
+	_ = writeFrames(bytes.NewReader(in), func(s media.Sample) error { samples = append(samples, s); return nil })
+	want := []byte{0, 0, 0, 1, 0x67, 1, 2, 0, 0, 0, 1, 0x68, 3, 0, 0, 0, 1, 0x65, 4, 5}
+	if len(samples) != 1 || !bytes.Equal(samples[0].Data, want) {
+		t.Fatalf("%d samples (first %x), want one %x", len(samples), func() []byte {
+			if len(samples) > 0 {
+				return samples[0].Data
+			}
+			return nil
+		}(), want)
+	}
 }
