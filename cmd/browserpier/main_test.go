@@ -7,12 +7,16 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/Oni-giri/browser-pier/internal/api"
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/db"
+	"github.com/Oni-giri/browser-pier/internal/sessions"
+	"github.com/Oni-giri/browser-pier/internal/sessions/sessionstest"
 )
 
 func testHandler(t *testing.T) http.Handler {
@@ -27,7 +31,18 @@ func testHandler(t *testing.T) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newHandler(auth.NewWeb(admin, auth.NewTokens(d), log, auth.WebOptions{CookieSecure: "auto"}))
+	web := auth.NewWeb(admin, auth.NewTokens(d), log, auth.WebOptions{CookieSecure: "auto"})
+	dir, err := os.MkdirTemp("", "bp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	mgr, err := sessions.NewManager(d, sessionstest.New(dir), sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(mgr.Close)
+	return newHandler(web, api.New(mgr, web, log, ""))
 }
 
 func TestHealthz(t *testing.T) {
@@ -42,6 +57,7 @@ func TestHealthz(t *testing.T) {
 		{http.MethodGet, "/nope", http.StatusNotFound},
 		{http.MethodGet, "/", http.StatusSeeOther}, // to the sign-in page
 		{http.MethodGet, "/login", http.StatusOK},
+		{http.MethodGet, "/api/profiles", http.StatusUnauthorized}, // no token
 	} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
