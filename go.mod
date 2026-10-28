@@ -7,6 +7,7 @@ require (
 	github.com/containerd/errdefs v1.0.0
 	github.com/moby/moby/api v1.56.1
 	github.com/moby/moby/client v0.6.2
+	golang.org/x/crypto v0.58.0
 	modernc.org/sqlite v1.61.0
 )
 
