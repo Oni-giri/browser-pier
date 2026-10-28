@@ -337,3 +337,19 @@ func TestScreenToScreenshotScaling(t *testing.T) {
 		t.Fatalf("a small screen is scaled: %dx%d", w, h)
 	}
 }
+
+func TestClickIsScaledToTheScreen(t *testing.T) {
+	f := newFixture(t)
+	cs := f.connect(f.all, versions[1], nil)
+	s, _, _ := f.m.Start(context.Background(), "google", "")
+	// The centre of a 1152×720 screenshot is the centre of the 1440×900 screen.
+	_, out := call(t, cs, "click", map[string]any{"session_id": s.ID, "x": 576, "y": 360, "double": true})
+	if !strings.Contains(out, "Clicked") {
+		t.Fatalf("click: %s", out)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.clicks) != 1 || !strings.Contains(f.clicks[0], `"x":720`) || !strings.Contains(f.clicks[0], `"y":450`) || !strings.Contains(f.clicks[0], `"double":true`) {
+		t.Fatalf("the browser was asked to click %v", f.clicks)
+	}
+}
