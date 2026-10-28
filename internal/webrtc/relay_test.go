@@ -240,3 +240,25 @@ func TestSplitNALsHandlesBothStartCodes(t *testing.T) {
 		}(), want)
 	}
 }
+
+// trickle hands out one byte per Read, the worst case for a splitter that
+// rescans on every call.
+type trickle struct{ r io.Reader }
+
+func (t trickle) Read(p []byte) (int, error) { return t.r.Read(p[:1]) }
+
+func TestSplitterIsLinearOnATrickle(t *testing.T) {
+	nal := append([]byte{0, 0, 0, 1, 0x65}, bytes.Repeat([]byte{0x80}, 2<<20)...)
+	in := append(append([]byte{}, nal...), 0, 0, 0, 1, 0x41, 0x80)
+	start := time.Now()
+	var got int
+	err := writeFrames(trickle{bytes.NewReader(in)}, func(s media.Sample) error { got++; return nil })
+	if !errors.Is(err, io.EOF) || got != 2 {
+		t.Fatalf("writeFrames = %v with %d frames", err, got)
+	}
+	// Linear scanning takes well under a second; rescanning a 2 MiB NAL
+	// on each of its 2M reads would take hours.
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("took %s", d)
+	}
+}

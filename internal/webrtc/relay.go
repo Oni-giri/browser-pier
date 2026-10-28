@@ -251,7 +251,7 @@ const maxFrame = 8 << 20
 func writeFrames(in io.Reader, write func(media.Sample) error) error {
 	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 0, 256<<10), maxFrame)
-	sc.Split(splitNALs)
+	sc.Split(newNALSplitter())
 	var pending []byte
 	last := time.Now()
 	for sc.Scan() {
@@ -278,26 +278,40 @@ func writeFrames(in io.Reader, write func(media.Sample) error) error {
 	return io.EOF
 }
 
-// splitNALs is a bufio.SplitFunc for Annex-B: each token is one NAL unit,
-// without its start code (00 00 01 or 00 00 00 01).
-func splitNALs(data []byte, atEOF bool) (advance int, token []byte, err error) {
-	start := bytes.Index(data, []byte{0, 0, 1})
-	if start < 0 {
-		if atEOF {
-			return len(data), nil, nil
+// newNALSplitter returns a bufio.SplitFunc for Annex-B: each token is one
+// NAL unit, without its start code (00 00 01 or 00 00 00 01). It remembers
+// how far it has searched, so a NAL that trickles in a byte at a time is
+// still scanned once, not again on every read.
+func newNALSplitter() bufio.SplitFunc {
+	code := []byte{0, 0, 1}
+	searched := 0 // bytes after the current NAL's start code already searched
+	return func(data []byte, atEOF bool) (advance int, token []byte, err error) {
+		start := bytes.Index(data, code)
+		if start < 0 {
+			if atEOF {
+				return len(data), nil, nil
+			}
+			// Keep the last two bytes: they may begin a start code.
+			return max(0, len(data)-2), nil, nil
 		}
-		return 0, nil, nil
-	}
-	body := start + 3
-	next := bytes.Index(data[body:], []byte{0, 0, 1})
-	if next < 0 {
+		body := start + 3
+		from := body + max(0, searched-2) // a start code may straddle the old end
+		if from > len(data) {
+			from = len(data)
+		}
+		if next := bytes.Index(data[from:], code); next >= 0 {
+			searched = 0
+			end := from + next
+			return end, trimZeros(data[body:end]), nil
+		}
 		if atEOF {
+			searched = 0
 			return len(data), trimZeros(data[body:]), nil
 		}
-		return start, nil, nil // need more data; drop what precedes the start code
+		searched = len(data) - body
+		// Drop anything before the start code; the NAL then begins at 0.
+		return start, nil, nil
 	}
-	end := body + next
-	return end, trimZeros(data[body:end]), nil
 }
 
 // trimZeros drops the zero that starts a four-byte start code, which
