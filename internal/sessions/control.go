@@ -37,6 +37,9 @@ func (m *Manager) TakeControl(id string) error {
 	if len(l.conns) > 0 || m.now().Sub(l.lastAgentInput) < agentQuiet {
 		return ErrAgentDriving
 	}
+	if l.human {
+		return ErrHumanDriving // one person at a time
+	}
 	l.human = true
 	l.lastActivity = m.now()
 	return nil

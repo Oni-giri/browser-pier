@@ -241,19 +241,22 @@ func (r *Relay) pumpOnce(ctx context.Context, profile string, track *webrtc.Trac
 
 var startCode = []byte{0, 0, 0, 1}
 
+// frameDuration is the encoder's frame interval (30 fps, see the image's
+// stream pipeline); frames are timed by it, not by when they were read,
+// since a burst of buffered frames would otherwise share a timestamp.
+const frameDuration = time.Second / 30
+
 // maxFrame caps one frame, so a misbehaving browser container can't make
 // the orchestrator buffer without end.
 const maxFrame = 8 << 20
 
 // writeFrames splits an Annex-B stream into frames: each slice NAL, with
-// the parameter sets and SEI before it, is one sample, timed by when it
-// arrived. A NAL or frame over maxFrame ends the stream with an error.
+// the parameter sets and SEI before it, is one sample. A NAL or frame over maxFrame ends the stream with an error.
 func writeFrames(in io.Reader, write func(media.Sample) error) error {
 	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 0, 256<<10), maxFrame)
 	sc.Split(newNALSplitter())
 	var pending []byte
-	last := time.Now()
 	for sc.Scan() {
 		nal := sc.Bytes()
 		if len(nal) == 0 {
@@ -266,11 +269,10 @@ func writeFrames(in io.Reader, write func(media.Sample) error) error {
 		if t := nal[0] & 0x1f; t != 1 && t != 5 { // not a slice: keep collecting
 			continue
 		}
-		now := time.Now()
-		if err := write(media.Sample{Data: pending, Duration: now.Sub(last)}); err != nil && !errors.Is(err, io.ErrClosedPipe) {
+		if err := write(media.Sample{Data: pending, Duration: frameDuration}); err != nil && !errors.Is(err, io.ErrClosedPipe) {
 			return err
 		}
-		pending, last = nil, now
+		pending = nil
 	}
 	if err := sc.Err(); err != nil {
 		return err
