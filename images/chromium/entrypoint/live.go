@@ -91,7 +91,7 @@ func (li *liveInput) lines(e event) ([]string, error) {
 		steps(e.DX, 6, 7) // left, right
 		return out, nil
 	case "keydown", "keyup":
-		if !keysymRE.MatchString(e.K) {
+		if !keysymRE.MatchString(e.K) || xdotoolCommand(e.K) {
 			return nil, fmt.Errorf("key %q: want an X keysym name", e.K)
 		}
 		return []string{e.T + " " + e.K}, nil

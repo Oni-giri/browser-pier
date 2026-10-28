@@ -151,6 +151,9 @@ func TestKey(t *testing.T) {
 		`{"keys": "--help"}`, `{"keys": "exec sh"}`, `{"keys": "a;b"}`, `{"keys": "a\nkey b"}`, `{"keys": "é"}`,
 		`{"keys": "a+b+c+d+e+f"}`, `{"keys": "` + strings.Repeat("x", 33) + `"}`, eleven,
 		`{"keys": 5}`, `{"keys": [1]}`, `{}`, `{"keys": "a", "text": "b"}`,
+		// xdotool would run these as commands, not press them.
+		`{"keys": ["Return", "exec", "touch", "pwned"]}`, `{"keys": ["EXEC"]}`, `{"keys": ["windowkill"]}`,
+		`{"keys": ["ctrl+getactivewindow"]}`, `{"keys": ["sleep"]}`, `{"keys": ["Type"]}`, `{"keys": ["mousemove_relative"]}`,
 	} {
 		if rec := serveVisual(v, http.MethodPost, "/input/key", body); rec.Code != http.StatusBadRequest {
 			t.Errorf("%s: %d", body, rec.Code)

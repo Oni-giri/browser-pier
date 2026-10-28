@@ -232,6 +232,40 @@ var keyAliases = map[string]string{
 
 // keyArgs presses each combination in turn. Every key must be an X keysym
 // name (or an alias for one), so nothing else reaches xdotool.
+// xdotoolCommand reports whether a word is one of xdotool's commands.
+// xdotool key stops reading keys at the first argument that names a
+// command (in any case, even after --) and runs the rest as that command:
+// "Return exec touch x" would run a program. So no key may be one.
+func xdotoolCommand(word string) bool {
+	w := strings.ToLower(word)
+	if xdotoolCommands[w] {
+		return true
+	}
+	// Prefixes of whole families, for commands a newer xdotool may add.
+	for _, p := range []string{"window", "get", "set_", "behave", "mouse"} {
+		if strings.HasPrefix(w, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// xdotoolCommands are `xdotool help`'s commands (3.x), plus a few from
+// other versions.
+var xdotoolCommands = map[string]bool{}
+
+func init() {
+	for _, c := range strings.Fields(`behave behave_screen_edge click exec get_desktop get_desktop_for_window
+		get_desktop_viewport get_num_desktops getactivewindow getdisplaygeometry getmouselocation getwindowfocus
+		getwindowgeometry getwindowname getwindowpid getwindowclassname help key keydown keyup mousedown mousemove
+		mousemove_relative mouseup search selectwindow set_desktop set_desktop_for_window set_desktop_viewport
+		set_num_desktops set_window sleep type version windowactivate windowclose windowfocus windowkill windowmap
+		windowminimize windowmove windowraise windowreparent windowsize windowunmap windowstate windowquit
+		windowlower windowunminimize`) {
+		xdotoolCommands[c] = true
+	}
+}
+
 func keyArgs(keys combos) ([]string, error) {
 	if len(keys) == 0 || len(keys) > maxCombos {
 		return nil, fmt.Errorf("keys: want 1 to %d key combinations", maxCombos)
@@ -249,6 +283,9 @@ func keyArgs(keys combos) ([]string, error) {
 			}
 			if !keysymRE.MatchString(k) {
 				return nil, fmt.Errorf("key %q: want X keysym names joined by +, like ctrl+l or Return", c)
+			}
+			if xdotoolCommand(k) {
+				return nil, fmt.Errorf("key %q: %q isn't a key", c, k)
 			}
 			parts[i] = k
 		}

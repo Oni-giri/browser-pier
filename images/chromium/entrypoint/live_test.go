@@ -72,6 +72,8 @@ func TestLiveEventsRefuseAnythingElse(t *testing.T) {
 		`[{"t":"down","b":9}]`,
 		`[{"t":"keydown","k":"a\nexec sh"}]`,
 		`[{"t":"keydown","k":"exec sh"}]`,
+		`[{"t":"keydown","k":"exec"}]`,
+		`[{"t":"keyup","k":"windowkill"}]`,
 		`[{"t":"exec"}]`,
 		`[{"t":"move","x":1,"y":1,"cmd":"x"}]`,
 	} {
