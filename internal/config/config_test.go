@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"net"
+	"strings"
+	"testing"
+)
 
 func env(m map[string]string) func(string) (string, bool) {
 	return func(k string) (string, bool) {
@@ -51,11 +55,50 @@ func TestLoadRejectsBadValues(t *testing.T) {
 		"empty listen":        {"BROWSERPIER_LISTEN": ""},
 		"empty data dir":      {"BROWSERPIER_DATA_DIR": ""},
 		"relative host dir":   {"BROWSERPIER_HOST_DATA_DIR": "data"},
+		"bad proxy":           {"BROWSERPIER_TRUSTED_PROXIES": "10.0.0.0/33"},
+		"bad cookie mode":     {"BROWSERPIER_COOKIE_SECURE": "yes"},
+		"bad public url":      {"BROWSERPIER_PUBLIC_URL": "pier.example.com"},
+		"short password":      {"BROWSERPIER_ADMIN_PASSWORD": "short"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := load(env(vars)); err == nil {
 				t.Error("want error, got nil")
 			}
 		})
+	}
+}
+
+func TestTrustedProxies(t *testing.T) {
+	c, err := load(env(map[string]string{"BROWSERPIER_TRUSTED_PROXIES": "172.18.0.2, 10.1.0.0/16,private,::1"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := func(ip string) bool {
+		for _, n := range c.TrustedProxies {
+			if n.Contains(net.ParseIP(ip)) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, ip := range []string{"172.18.0.2", "10.1.2.3", "192.168.1.1", "::1"} {
+		if !in(ip) {
+			t.Errorf("%s not trusted", ip)
+		}
+	}
+	for _, ip := range []string{"100.64.0.1", "8.8.8.8"} { // Tailscale's range isn't private
+		if in(ip) {
+			t.Errorf("%s trusted", ip)
+		}
+	}
+	if c, _ := load(env(nil)); len(c.TrustedProxies) != 0 || c.CookieSecure != "auto" {
+		t.Fatalf("defaults: %d trusted proxies, cookie %q", len(c.TrustedProxies), c.CookieSecure)
+	}
+}
+
+func TestBadPasswordErrorHidesIt(t *testing.T) {
+	_, err := load(env(map[string]string{"BROWSERPIER_ADMIN_PASSWORD": "s3cr"}))
+	if err == nil || strings.Contains(err.Error(), "s3cr") {
+		t.Fatalf("err = %v", err)
 	}
 }

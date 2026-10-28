@@ -8,6 +8,9 @@ import (
 // Lockout counts failed attempts per key and locks a key out once it has
 // failed too often within a window. Keys are, for example, "admin" or a
 // client address. It is in memory: a restart clears it.
+//
+// An attempt counts from the moment it begins, so requests sent in
+// parallel can't all get through before the first failure is recorded.
 type Lockout struct {
 	max     int
 	window  time.Duration
@@ -20,6 +23,7 @@ type Lockout struct {
 
 type attempts struct {
 	failures    []time.Time // within the window, oldest first
+	pending     int         // begun, not yet finished
 	lockedUntil time.Time
 }
 
@@ -28,23 +32,17 @@ func NewLockout(max int, window, lockFor time.Duration) *Lockout {
 	return &Lockout{max: max, window: window, lockFor: lockFor, now: time.Now, keys: map[string]*attempts{}}
 }
 
-// Check reports whether key may try now, and if not, for how long it is locked.
-func (l *Lockout) Check(key string) (ok bool, retryAfter time.Duration) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	a := l.keys[key]
-	if a == nil {
-		return true, 0
-	}
-	if d := a.lockedUntil.Sub(l.now()); d > 0 {
-		return false, d
-	}
-	return true, 0
+// Attempt is one try against a Lockout; finish it with exactly one of
+// Fail, Succeed or Cancel.
+type Attempt struct {
+	l   *Lockout
+	key string
 }
 
-// Fail records a failed attempt and returns how many are left before a
-// lockout (0 means the key is now locked).
-func (l *Lockout) Fail(key string) (left int) {
+// Begin starts an attempt, or refuses and says how long to wait: while
+// the key is locked, or while recent failures plus attempts in flight
+// already reach the limit.
+func (l *Lockout) Begin(key string) (*Attempt, time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
@@ -53,21 +51,61 @@ func (l *Lockout) Fail(key string) (left int) {
 		a = &attempts{}
 		l.keys[key] = a
 	}
+	if d := a.lockedUntil.Sub(now); d > 0 {
+		return nil, d
+	}
+	a.failures = prune(a.failures, now.Add(-l.window))
+	if len(a.failures)+a.pending >= l.max {
+		return nil, time.Second
+	}
+	a.pending++
+	l.gc(now)
+	return &Attempt{l: l, key: key}, 0
+}
+
+// Fail records the attempt as failed and returns how many are left before
+// a lockout; 0 means the key is now locked.
+func (t *Attempt) Fail() (left int) {
+	l := t.l
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	a := l.end(t.key)
 	a.failures = append(prune(a.failures, now.Add(-l.window)), now)
 	if len(a.failures) >= l.max {
 		a.lockedUntil = now.Add(l.lockFor)
 		a.failures = nil
 		return 0
 	}
-	l.gc(now)
 	return l.max - len(a.failures)
 }
 
-// Succeed clears a key's failures.
-func (l *Lockout) Succeed(key string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	delete(l.keys, key)
+// Succeed clears the key's failures.
+func (t *Attempt) Succeed() {
+	t.l.mu.Lock()
+	defer t.l.mu.Unlock()
+	a := t.l.end(t.key)
+	a.failures = nil
+}
+
+// Cancel ends the attempt without counting it, for when it never got to
+// check anything (another limit refused it, say).
+func (t *Attempt) Cancel() {
+	t.l.mu.Lock()
+	defer t.l.mu.Unlock()
+	t.l.end(t.key)
+}
+
+func (l *Lockout) end(key string) *attempts {
+	a := l.keys[key]
+	if a == nil { // forgotten by gc while in flight; can't happen with pending > 0
+		a = &attempts{}
+		l.keys[key] = a
+	}
+	if a.pending > 0 {
+		a.pending--
+	}
+	return a
 }
 
 func prune(ts []time.Time, after time.Time) []time.Time {
@@ -85,7 +123,7 @@ func (l *Lockout) gc(now time.Time) {
 		return
 	}
 	for k, a := range l.keys {
-		if a.lockedUntil.Before(now) && len(prune(a.failures, now.Add(-l.window))) == 0 {
+		if a.pending == 0 && a.lockedUntil.Before(now) && len(prune(a.failures, now.Add(-l.window))) == 0 {
 			delete(l.keys, k)
 		}
 	}
