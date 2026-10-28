@@ -151,6 +151,9 @@ func containerName(profile string) string { return "browserpier-" + profile }
 // starting or running (attached is then true). It returns once the browser
 // is ready or has failed. mode "" means the profile's default.
 func (m *Manager) Start(ctx context.Context, profile string, mode profiles.Mode) (s Session, attached bool, err error) {
+	if m.ctx.Err() != nil {
+		return Session{}, false, ErrClosed
+	}
 	for {
 		m.mu.Lock()
 		l, ok := m.live[profile]
@@ -471,6 +474,9 @@ func (m *Manager) stopContainer(cid string) {
 // Stop closes the session's browser gracefully and waits until its
 // container is gone. Stopping a session that has already ended returns it.
 func (m *Manager) Stop(ctx context.Context, id string) (Session, error) {
+	if m.ctx.Err() != nil {
+		return Session{}, ErrClosed
+	}
 	l := m.find(id)
 	if l == nil {
 		return getSession(ctx, m.db, id)

@@ -428,3 +428,19 @@ func TestMarkerWriteDoesNotFollowSymlinks(t *testing.T) {
 		t.Fatalf("marker = %q", b)
 	}
 }
+
+func TestClosedManagerRefuses(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	f.m.Close()
+	if _, err := f.m.Stop(context.Background(), s.ID); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Stop after Close = %v", err)
+	}
+	if _, _, err := f.m.Start(context.Background(), "google", ""); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Start after Close = %v", err)
+	}
+	// Closing leaves the browser running for the next orchestrator.
+	if c, _ := f.rt.container(s.ContainerID); c.state != "running" {
+		t.Fatalf("container %s after Close", c.state)
+	}
+}

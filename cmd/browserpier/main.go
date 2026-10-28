@@ -69,7 +69,7 @@ func run(log *slog.Logger) error {
 	if image == "" {
 		image = defaultBrowserImage(version)
 	}
-	dc, err := docker.New(image)
+	dc, err := docker.New(docker.Options{Image: image, UsernsMode: cfg.UsernsMode})
 	if err != nil {
 		return err
 	}
@@ -82,6 +82,9 @@ func run(log *slog.Logger) error {
 	}
 	hostDataDir, err := dc.HostDataDir(ctx, dataDir, cfg.HostDataDir)
 	if err != nil {
+		return err
+	}
+	if err := dc.UseDataDir(ctx, dataDir, hostDataDir); err != nil {
 		return err
 	}
 	uid, gid := browserUser(os.Getuid(), os.Getgid())

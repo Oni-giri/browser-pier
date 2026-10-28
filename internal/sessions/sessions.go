@@ -39,6 +39,7 @@ var (
 	ErrProfileBusy = errors.New("the profile's browser is running; stop it first")
 	ErrNotRunning  = errors.New("the session isn't running")
 	ErrStartFailed = errors.New("the browser failed to start")
+	ErrClosed      = errors.New("the session manager is closed")
 )
 
 // Session is one run of a profile's browser.

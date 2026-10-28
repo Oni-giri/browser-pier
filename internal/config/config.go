@@ -27,6 +27,9 @@ type Config struct {
 	// BrowserImage overrides the browser image (BROWSERPIER_BROWSER_IMAGE).
 	// Empty means the one matching this build.
 	BrowserImage string
+	// UsernsMode is the browser containers' user namespace mode
+	// (BROWSERPIER_USERNS_MODE): "keep-id" under rootless Podman.
+	UsernsMode string
 }
 
 // Load reads the configuration from the process environment.
@@ -46,6 +49,7 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		DataDir:      get("BROWSERPIER_DATA_DIR", DefaultDataDir),
 		HostDataDir:  get("BROWSERPIER_HOST_DATA_DIR", ""),
 		BrowserImage: get("BROWSERPIER_BROWSER_IMAGE", ""),
+		UsernsMode:   get("BROWSERPIER_USERNS_MODE", ""),
 	}
 
 	_, port, err := net.SplitHostPort(c.Listen)

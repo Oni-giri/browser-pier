@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/system"
 	"github.com/moby/moby/client"
 
 	"github.com/Oni-giri/browser-pier/images/chromium"
@@ -67,11 +70,25 @@ type Container struct {
 type Client struct {
 	api     *client.Client
 	image   string
-	seccomp string
+	seccomp string // the profile JSON, compact
+	// seccompOpt is the security option that applies it: the JSON itself
+	// for Docker, a host path for Podman (see UseDataDir).
+	seccompOpt string
+	userns     string
+}
+
+// Options configure a Client.
+type Options struct {
+	Image string // the browser image every container starts from
+	// UsernsMode is the containers' user namespace mode. Rootless Podman
+	// needs "keep-id" so the browser's uid matches the orchestrator's on
+	// the profile folders; Docker needs nothing.
+	UsernsMode string
 }
 
 // New connects to the Docker daemon named by the usual DOCKER_* variables.
-func New(image string) (*Client, error) {
+func New(o Options) (*Client, error) {
+	image := o.Image
 	if image == "" {
 		return nil, errors.New("no browser image set")
 	}
@@ -83,7 +100,43 @@ func New(image string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{api: api, image: image, seccomp: seccomp.String()}, nil
+	return &Client{api: api, image: image, seccomp: seccomp.String(), seccompOpt: "seccomp=" + seccomp.String(), userns: o.UsernsMode}, nil
+}
+
+// UseDataDir finishes setting up against the daemon, given the data dir as
+// this process and as the daemon see it. Podman's Docker API takes the
+// seccomp profile as a path rather than inline, so for Podman the profile
+// is written into the data dir and passed by its host path.
+func (c *Client) UseDataDir(ctx context.Context, dataDir, hostDataDir string) error {
+	v, err := c.api.ServerVersion(ctx, client.ServerVersionOptions{})
+	if err != nil {
+		return err
+	}
+	if !isPodman(v.Components) {
+		return nil
+	}
+	root, err := os.OpenRoot(dataDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	if err := root.WriteFile("seccomp.json.tmp", []byte(c.seccomp), 0o644); err != nil {
+		return err
+	}
+	if err := root.Rename("seccomp.json.tmp", "seccomp.json"); err != nil {
+		return err
+	}
+	c.seccompOpt = "seccomp=" + filepath.Join(hostDataDir, "seccomp.json")
+	return nil
+}
+
+func isPodman(components []system.ComponentVersion) bool {
+	for _, comp := range components {
+		if strings.Contains(comp.Name, "Podman") {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Client) Close() error { return c.api.Close() }
@@ -100,7 +153,8 @@ func (c *Client) Ping(ctx context.Context) error {
 // Create creates a browser container, pulling the image first if Docker
 // doesn't have it.
 func (c *Client) Create(ctx context.Context, spec BrowserSpec) (string, error) {
-	cfg, host := browserConfig(c.image, c.seccomp, spec)
+	cfg, host := browserConfig(c.image, c.seccompOpt, spec)
+	host.UsernsMode = container.UsernsMode(c.userns)
 	opts := client.ContainerCreateOptions{Name: spec.Name, Config: cfg, HostConfig: host}
 	res, err := c.api.ContainerCreate(ctx, opts)
 	if cerrdefs.IsNotFound(err) {
@@ -128,7 +182,7 @@ func (c *Client) pull(ctx context.Context) error {
 }
 
 // browserConfig is the whole container definition. It publishes no ports.
-func browserConfig(image, seccomp string, spec BrowserSpec) (*container.Config, *container.HostConfig) {
+func browserConfig(image, seccompOpt string, spec BrowserSpec) (*container.Config, *container.HostConfig) {
 	stop := int(StopTimeout / time.Second)
 	initProc := false // the image's entrypoint is PID 1 and reaps
 	cfg := &container.Config{
@@ -150,10 +204,13 @@ func browserConfig(image, seccomp string, spec BrowserSpec) (*container.Config, 
 			{Type: mount.TypeBind, Source: spec.ProfileDir, Target: "/profile"},
 			{Type: mount.TypeBind, Source: spec.ControlDir, Target: "/run/browserpier"},
 		},
-		// Chromium's sandbox needs the seccomp profile (see images/chromium);
-		// it needs no capabilities and no setuid.
-		SecurityOpt: []string{"seccomp=" + seccomp, "no-new-privileges:true"},
+		// Chromium's sandbox needs the seccomp profile (see images/chromium)
+		// and no setuid. The browser's user has no effective capabilities,
+		// but the sandbox chroots inside its own user namespace, which needs
+		// SYS_CHROOT left in the bounding set; nothing else is.
+		SecurityOpt: []string{seccompOpt, "no-new-privileges:true"},
 		CapDrop:     []string{"ALL"},
+		CapAdd:      []string{"SYS_CHROOT"},
 		ShmSize:     shmSize,
 		Init:        &initProc,
 	}

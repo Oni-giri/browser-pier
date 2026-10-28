@@ -7,6 +7,7 @@ import (
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/system"
 )
 
 func TestBrowserConfigLocksDownTheContainer(t *testing.T) {
@@ -15,7 +16,7 @@ func TestBrowserConfigLocksDownTheContainer(t *testing.T) {
 		ProfileDir: "/srv/bp/profiles/google/chrome", ControlDir: "/srv/bp/profiles/google/run",
 		User: "1000:1000", Screen: "1440x900", MountCheck: "s1",
 	}
-	cfg, host := browserConfig("ghcr.io/oni-giri/browser-pier-chromium:1.0.0", `{"defaultAction":"SCMP_ACT_ERRNO"}`, spec)
+	cfg, host := browserConfig("ghcr.io/oni-giri/browser-pier-chromium:1.0.0", `seccomp={"defaultAction":"SCMP_ACT_ERRNO"}`, spec)
 
 	if cfg.Image != "ghcr.io/oni-giri/browser-pier-chromium:1.0.0" || cfg.User != "1000:1000" {
 		t.Fatalf("image %q, user %q", cfg.Image, cfg.User)
@@ -26,8 +27,8 @@ func TestBrowserConfigLocksDownTheContainer(t *testing.T) {
 	if host.NetworkMode.IsHost() || host.Privileged || host.PidMode.IsHost() || host.IpcMode.IsHost() {
 		t.Fatal("the browser container must not share host namespaces or run privileged")
 	}
-	if len(host.CapAdd) != 0 || len(host.CapDrop) != 1 || host.CapDrop[0] != "ALL" {
-		t.Fatalf("caps add %v drop %v; want none added, ALL dropped", host.CapAdd, host.CapDrop)
+	if len(host.CapAdd) != 1 || host.CapAdd[0] != "SYS_CHROOT" || len(host.CapDrop) != 1 || host.CapDrop[0] != "ALL" {
+		t.Fatalf("caps add %v drop %v; want ALL dropped and only SYS_CHROOT (for the sandbox) back", host.CapAdd, host.CapDrop)
 	}
 	opts := strings.Join(host.SecurityOpt, " ")
 	if !strings.Contains(opts, `seccomp={"defaultAction":"SCMP_ACT_ERRNO"}`) || !strings.Contains(opts, "no-new-privileges:true") {
@@ -68,15 +69,18 @@ func TestBrowserConfigLocksDownTheContainer(t *testing.T) {
 }
 
 func TestNewCompactsTheEmbeddedSeccompProfile(t *testing.T) {
-	c, err := New("img")
+	c, err := New(Options{Image: "img"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = c.Close() }()
+	if c.seccompOpt != "seccomp="+c.seccomp {
+		t.Fatalf("Docker takes the profile inline; got %.40s…", c.seccompOpt)
+	}
 	if strings.ContainsAny(c.seccomp, "\n\t") || !json.Valid([]byte(c.seccomp)) || !strings.Contains(c.seccomp, `"unshare"`) {
 		t.Fatalf("seccomp profile not compact valid JSON with the sandbox rules: %.80s…", c.seccomp)
 	}
-	if _, err := New(""); err == nil {
+	if _, err := New(Options{}); err == nil {
 		t.Fatal("New must refuse an empty image")
 	}
 }
@@ -135,5 +139,14 @@ func TestLastLine(t *testing.T) {
 	long := strings.Repeat("é", 400) // 800 bytes
 	if got := lastLine([]byte(long)); len(got) > maxLogLine+len("…") || !strings.HasSuffix(got, "…") {
 		t.Fatalf("long line kept %d bytes", len(got))
+	}
+}
+
+func TestIsPodman(t *testing.T) {
+	if !isPodman([]system.ComponentVersion{{Name: "Podman Engine"}}) {
+		t.Fatal("Podman not recognised")
+	}
+	if isPodman([]system.ComponentVersion{{Name: "Engine"}, {Name: "containerd"}, {Name: "runc"}}) {
+		t.Fatal("Docker taken for Podman")
 	}
 }
