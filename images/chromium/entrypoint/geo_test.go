@@ -70,6 +70,21 @@ func TestDecideGeo(t *testing.T) {
 	if g, err := decideGeo(on, false, failed); err != nil || g.Source != "none" || g.Warning == "" {
 		t.Fatalf("direct with nothing: %+v, %v", g, err)
 	}
+	// Only the language set by hand: the time zone still comes from the exit.
+	langOnly := on
+	langOnly.OverrideLocale = "ja-JP"
+	if g, err := decideGeo(langOnly, true, found("FR", "Europe/Paris")); err != nil || g.TimeZone != "Europe/Paris" || g.Locale != "ja-JP" || g.Source != "lookup" {
+		t.Fatalf("language only: %+v, %v", g, err)
+	}
+	// Only the time zone set by hand, and nothing to find the language from: still refused.
+	tzOnly := on
+	tzOnly.OverrideTZ = "Asia/Tokyo"
+	if _, err := decideGeo(tzOnly, true, failed); err == nil {
+		t.Fatal("a proxied profile with only a time zone set and no lookup started anyway")
+	}
+	if g, _ := decideGeo(tzOnly, true, found("DE", "Europe/Berlin")); g.TimeZone != "Asia/Tokyo" || g.Locale != "de-DE" {
+		t.Fatalf("time zone only: %+v", g)
+	}
 	// Manual settings win, without asking anyone.
 	manual := stored
 	manual.OverrideTZ, manual.OverrideLocale = "Asia/Tokyo", "ja-JP"
