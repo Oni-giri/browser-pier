@@ -395,3 +395,22 @@ func TestWrongPINsAcrossLinksAndProfilesAreCapped(t *testing.T) {
 		t.Fatalf("a try after 30 wrong overall: %d", r.code)
 	}
 }
+
+func TestHandoffCookieFollowsCookieSecure(t *testing.T) {
+	f := newFixture(t, profiles.PolicyLink, auth.WebOptions{CookieSecure: "always"})
+	_, token := f.open("")
+	resp, err := browser().Get(f.srv.URL + "/h/" + token) // plain HTTP, but the admin says always Secure
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	var c *http.Cookie
+	for _, x := range resp.Cookies() {
+		if x.Name == browserCookie {
+			c = x
+		}
+	}
+	if resp.StatusCode != http.StatusSeeOther || c == nil || !c.Secure {
+		t.Fatalf("link only with CookieSecure=always: %d, cookie %+v", resp.StatusCode, c)
+	}
+}

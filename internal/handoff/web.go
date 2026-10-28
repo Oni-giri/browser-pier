@@ -147,9 +147,9 @@ func (w *Web) unlock(rw http.ResponseWriter, r *http.Request, h Handoff, token s
 		w.render(rw, http.StatusForbidden, view{Step: "other", H: h})
 		return false
 	}
-	//nolint:gosec // Secure whenever served over HTTPS, as for the sign-in cookie
+	//nolint:gosec // Secure as the sign-in cookie is (CookieSecure, HTTPS, an https public URL)
 	http.SetCookie(rw, &http.Cookie{Name: browserCookie, Value: secret, Path: "/h/" + token, HttpOnly: true,
-		Secure: w.web.IsHTTPS(r), SameSite: http.SameSiteStrictMode, Expires: h.ExpiresAt})
+		Secure: w.web.SecureCookie(r), SameSite: http.SameSiteStrictMode, Expires: h.ExpiresAt})
 	return true
 }
 

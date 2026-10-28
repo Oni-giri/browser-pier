@@ -250,7 +250,10 @@ func (w *Web) IsHTTPS(r *http.Request) bool {
 	return w.trusted(remoteIP(r)) && strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
 }
 
-func (w *Web) secureCookie(r *http.Request) bool {
+// SecureCookie reports whether a cookie set on this request should be
+// Secure: per CookieSecure, or under "auto" when served over HTTPS or
+// the public URL is https.
+func (w *Web) SecureCookie(r *http.Request) bool {
 	switch w.opts.CookieSecure {
 	case "always":
 		return true
@@ -544,7 +547,7 @@ func (w *Web) setCookies(rw http.ResponseWriter, r *http.Request, value string, 
 		Value:    value,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   w.secureCookie(r),
+		Secure:   w.SecureCookie(r),
 		SameSite: http.SameSiteLaxMode,
 	}
 	if s.Remember {
@@ -567,7 +570,7 @@ func (w *Web) logout(rw http.ResponseWriter, r *http.Request) {
 		}
 	}
 	//nolint:gosec // as in signIn
-	http.SetCookie(rw, &http.Cookie{Name: CookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: w.secureCookie(r), SameSite: http.SameSiteLaxMode})
+	http.SetCookie(rw, &http.Cookie{Name: CookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: w.SecureCookie(r), SameSite: http.SameSiteLaxMode})
 	http.Redirect(rw, r, "/login", http.StatusSeeOther)
 }
 
