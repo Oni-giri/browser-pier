@@ -31,11 +31,12 @@ func TestLoadConfigFromEnv(t *testing.T) {
 		"BROWSERPIER_PROFILE_DIR":    "/p",
 		"BROWSERPIER_CONTROL_SOCKET": "/s/c.sock",
 		"BROWSERPIER_STOP_TIMEOUT":   "45s",
+		"BROWSERPIER_MOUNT_CHECK":    "s1",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := config{Width: 1280, Height: 800, ProfileDir: "/p", ControlSocket: "/s/c.sock", StopTimeout: 45 * time.Second}
+	want := config{Width: 1280, Height: 800, ProfileDir: "/p", ControlSocket: "/s/c.sock", StopTimeout: 45 * time.Second, MountCheck: "s1"}
 	if c != want {
 		t.Fatalf("got %+v, want %+v", c, want)
 	}

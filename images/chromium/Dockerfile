@@ -31,9 +31,10 @@ RUN for el in ximagesrc videoconvert x264enc fdsink; do gst-inspect-1.0 "$el" >/
       LC_ALL=C grep -qaxF -- "$sw" /tmp/strings || { echo "chromium binary lacks --$sw"; exit 1; }; done \
  && rm /tmp/strings
 
-# Chromium runs as pier (uid 1000). /profile is the profile volume and
-# /run/browserpier holds the control socket; a fresh named volume mounted on
-# either inherits this ownership.
+# Chromium runs as pier (uid 1000) by default. The orchestrator runs it as its
+# own uid instead, so it owns the profile files; HOME is set to a path any uid
+# can create, since that uid has no home here. /profile is the profile folder
+# and /run/browserpier holds the control socket.
 RUN useradd --uid 1000 --user-group --create-home --shell /usr/sbin/nologin pier \
  && mkdir -p /profile /run/browserpier /tmp/.X11-unix \
  && chown pier:pier /profile /run/browserpier \
@@ -52,7 +53,8 @@ USER pier
 WORKDIR /home/pier
 ENV BROWSERPIER_PROFILE_DIR=/profile \
     BROWSERPIER_CONTROL_SOCKET=/run/browserpier/control.sock \
-    DISPLAY=:99
+    DISPLAY=:99 \
+    HOME=/tmp/home
 # The entrypoint closes Chromium on SIGTERM; give it time with `docker stop -t`.
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/local/bin/browserpier-entrypoint"]
