@@ -31,6 +31,7 @@ type Runtime interface {
 	Remove(ctx context.Context, id string) error
 	RemoveStale(ctx context.Context, name, profile string) error
 	List(ctx context.Context) ([]docker.Container, error)
+	MemoryUsage(ctx context.Context, id string) (int64, error)
 }
 
 // Layout is where profile folders live:
@@ -96,6 +97,8 @@ type Manager struct {
 	readyTimeout time.Duration
 	now          func() time.Time
 	geoURL       string // where browsers look up their exit location; "" for nowhere
+	memLimit     int64  // bytes all browsers may use together; 0 for no limit
+	memEach      int64  // what a new browser is expected to take
 
 	ctx    context.Context // ends with Close
 	cancel context.CancelFunc
@@ -120,6 +123,8 @@ type live struct {
 	stop *stopAttempt
 	// conns are the agents' open connections to the browser.
 	conns map[*conn]struct{}
+	// lastActivity is when an agent or person last used the browser.
+	lastActivity time.Time
 }
 
 // conn is one agent connection to a browser; cancelling it closes it.
@@ -134,7 +139,7 @@ type stopAttempt struct {
 }
 
 func newLive(s Session) *live {
-	return &live{sess: s, ready: make(chan struct{}), done: make(chan struct{})}
+	return &live{sess: s, ready: make(chan struct{}), done: make(chan struct{}), lastActivity: time.Now()}
 }
 
 // markReady unblocks everyone waiting for the start to resolve, either way.
@@ -213,6 +218,14 @@ func containerName(profile string) string { return "browserpier-" + profile }
 func (m *Manager) Start(ctx context.Context, profile string, mode profiles.Mode) (s Session, attached bool, err error) {
 	if m.ctx.Err() != nil {
 		return Session{}, false, ErrClosed
+	}
+	m.mu.Lock()
+	_, running := m.live[profile]
+	m.mu.Unlock()
+	if !running {
+		if err := m.makeRoom(ctx); err != nil {
+			return Session{}, false, err
+		}
 	}
 	for {
 		m.mu.Lock()
@@ -706,12 +719,14 @@ func (m *Manager) Attach(ctx context.Context, id, tokenID, agent string) (contex
 		l.conns = map[*conn]struct{}{}
 	}
 	l.conns[c] = struct{}{}
+	l.lastActivity = m.now()
 	var once sync.Once
 	return cctx, func() {
 		once.Do(func() {
 			cancel()
 			m.mu.Lock()
 			delete(l.conns, c)
+			l.lastActivity = m.now()
 			m.mu.Unlock()
 		})
 	}, nil
