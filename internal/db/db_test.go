@@ -15,7 +15,7 @@ func TestOpenMigratesAndReopens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.ExecContext(ctx, `INSERT INTO profiles VALUES ('google', 'visual', 15, 1440, 900, '', 'pin', 0, 0)`); err != nil {
+	if _, err := d.ExecContext(ctx, `INSERT INTO profiles (name, default_mode, auto_stop_minutes, screen_width, screen_height, proxy, handoff_policy, created_at, updated_at) VALUES ('google', 'visual', 15, 1440, 900, '', 'pin', 0, 0)`); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.Close(); err != nil {
@@ -50,7 +50,7 @@ func TestOneLiveSessionPerProfile(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	mustExec(`INSERT INTO profiles VALUES ('google', 'visual', 15, 1440, 900, '', 'pin', 0, 0)`)
+	mustExec(`INSERT INTO profiles (name, default_mode, auto_stop_minutes, screen_width, screen_height, proxy, handoff_policy, created_at, updated_at) VALUES ('google', 'visual', 15, 1440, 900, '', 'pin', 0, 0)`)
 	mustExec(`INSERT INTO sessions (id, profile, state, mode, created_at, updated_at) VALUES ('a', 'google', 'stopped', 'api', 0, 0)`)
 	mustExec(`INSERT INTO sessions (id, profile, state, mode, created_at, updated_at) VALUES ('b', 'google', 'running', 'api', 0, 0)`)
 	_, err = d.ExecContext(ctx, `INSERT INTO sessions (id, profile, state, mode, created_at, updated_at) VALUES ('c', 'google', 'starting', 'api', 0, 0)`)

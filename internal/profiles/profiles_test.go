@@ -54,6 +54,8 @@ func TestValidateSettings(t *testing.T) {
 		"proxy scheme": func(p *Profile) { p.Proxy = "ftp://proxy:21" },
 		"proxy port":   func(p *Profile) { p.Proxy = "http://proxy" },
 		"proxy path":   func(p *Profile) { p.Proxy = "http://proxy:8080/x" },
+		"time zone":    func(p *Profile) { p.TimeZone = "Mars/Olympus" },
+		"locale":       func(p *Profile) { p.Locale = "german" },
 	}
 	for name, mutate := range bad {
 		p := New("google")
@@ -134,5 +136,27 @@ func TestStoreCRUD(t *testing.T) {
 	}
 	if err := s.Delete(ctx, "google"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("second Delete = %v, want ErrNotFound", err)
+	}
+}
+
+func TestOverridesAndLocation(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	p := New("google")
+	p.TimeZone, p.Locale = "Europe/Berlin", "de-DE"
+	if _, err := s.Create(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	when := time.UnixMilli(1_800_000_000_000)
+	if err := s.SetLocation(ctx, "google", Location{Country: "DE", TimeZone: "Europe/Berlin", IP: "203.0.113.7", CheckedAt: when}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.Get(ctx, "google")
+	if got.TimeZone != "Europe/Berlin" || got.Locale != "de-DE" || got.Location.Country != "DE" || got.Location.IP != "203.0.113.7" || !got.Location.CheckedAt.Equal(when) {
+		t.Fatalf("got %+v", got)
+	}
+	got.TimeZone = ""
+	if got, err := s.Update(ctx, got); err != nil || got.TimeZone != "" || got.Location.Country != "DE" {
+		t.Fatalf("update kept the location? %+v, %v", got, err)
 	}
 }
