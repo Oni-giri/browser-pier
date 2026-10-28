@@ -376,3 +376,33 @@ dialog .dlg-head,dialog .dlg-foot{flex:none}
 .sign-art h2{margin:0 0 20px;max-width:520px;font-size:40px;line-height:1.1;font-weight:600;letter-spacing:-1.6px}
 .sign-art .checks li{font-size:15px}
 @media (max-width:860px){.sign{grid-template-columns:1fr}.sign-art{display:none}}
+
+/* Handoff page (phone first) */
+.ho-top{display:flex;align-items:center;justify-content:space-between;padding:14px 16px}
+.ho-timer{padding:3px 10px;border-radius:999px;background:var(--surface);box-shadow:0 0 0 1px var(--line);font-size:13px;color:var(--ink-2)}
+.ho{width:min(520px,100%);margin:0 auto;padding:4px 16px 24px}
+.ho-ask{padding:16px 18px}
+.ho-who{display:flex;align-items:center;gap:10px}
+.ho-who>div{flex:1;min-width:0}
+.ho-who h1{margin:0;font-size:15px;font-weight:500;letter-spacing:0}
+.ho-who .caption{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ho-detail{margin:12px 0 0;font-size:20px;line-height:1.35;font-weight:500;letter-spacing:-.3px;overflow-wrap:anywhere}
+.ho-form{margin-top:22px}
+.ho-form label,.ho-label{display:block;font-weight:500;margin:14px 0 8px}
+.ho-form label:first-child{margin-top:0}
+.ho-pin{height:56px;font-size:28px;letter-spacing:12px;text-align:center;font-family:var(--mono)}
+.ho-pin.bad{box-shadow:0 0 0 1px var(--red),0 0 0 4px var(--red-tint)}
+.ho-error{margin:8px 0;color:var(--red-text);font-size:14px}
+.ho-bottom{position:sticky;bottom:0;padding:16px 0 calc(8px + env(safe-area-inset-bottom));margin-top:24px;background:linear-gradient(transparent,var(--bg) 30%)}
+.ho-bottom .btn{min-height:50px;font-size:16px;border-radius:12px}
+.ho-tools{display:flex;align-items:center;gap:8px;padding:8px 16px;background:var(--surface);box-shadow:0 1px 0 var(--line),0 -1px 0 var(--line)}
+.ho-tools #who{position:static;background:var(--blue-tint);color:var(--blue-text)}
+.ho-tools #who::before{background:var(--blue)}
+.ho-stage{aspect-ratio:auto;height:56vh;min-height:280px;border-radius:0}
+.ho-hint{margin:6px 16px 0}
+textarea.input{height:auto;padding:10px 12px;resize:vertical}
+.ho-row{display:flex;gap:8px;margin-top:12px}
+.ho-row .btn{flex:1;min-height:44px}
+.ho-end{text-align:center;padding:32px 20px}
+.ho-end h1{margin:0 0 8px;font-size:20px;font-weight:600;letter-spacing:-.4px}
+.ho-end p{margin:0 0 16px;color:var(--ink-2)}
