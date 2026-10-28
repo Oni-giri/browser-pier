@@ -93,12 +93,8 @@ func (a *API) deleteFile(w http.ResponseWriter, r *http.Request) {
 // it in the file chooser. It takes a multipart form with a "file" field,
 // or the raw body with ?name=.
 func (a *API) uploadFile(w http.ResponseWriter, r *http.Request) {
-	s, ok := a.session(w, r)
+	s, ok := a.running(w, r, false) // a person may need the file during a handoff
 	if !ok {
-		return
-	}
-	if !s.State.Live() {
-		writeError(w, http.StatusConflict, "the session is "+string(s.State)+"; start the browser first")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxUpload+1<<20)
@@ -135,7 +131,10 @@ func (a *API) uploadFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name: use a plain file name, without folders, not starting with a dot")
 		return
 	case errors.Is(err, files.ErrTooLarge):
-		writeError(w, http.StatusRequestEntityTooLarge, "the file is over 100 MiB")
+		writeError(w, http.StatusRequestEntityTooLarge, "the file is over 100 MiB or the profile's files cap")
+		return
+	case errors.Is(err, files.ErrOverCap):
+		writeError(w, http.StatusInsufficientStorage, err.Error())
 		return
 	case err != nil:
 		var tooBig *http.MaxBytesError

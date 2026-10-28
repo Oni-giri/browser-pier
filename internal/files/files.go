@@ -36,6 +36,9 @@ var (
 	ErrNotFound = errors.New("no such file")
 	ErrBadName  = errors.New("not a valid file name")
 	ErrTooLarge = errors.New("the file is too large")
+	// ErrOverCap: the file doesn't fit under the profile's cap even after
+	// evicting everything older.
+	ErrOverCap = errors.New("the file doesn't fit under the profile's files cap")
 )
 
 // File is a downloaded or uploaded file.
@@ -47,14 +50,17 @@ type File struct {
 
 // Store reads and writes profiles' files folders.
 type Store struct {
-	dir   func(profile string) string // the profile's files folder
-	limit int64                       // bytes per profile, both folders together; 0 is no limit
+	dir      func(profile string) string // the profile's files folder
+	limit    int64                       // bytes per profile, both folders together; 0 is no limit
+	uid, gid int                         // the browser's user, who must be able to read uploads
 }
 
 // New makes a Store. dir gives a profile's files folder; limit caps the
 // bytes a profile's files may take, evicting the oldest first (0: no cap).
-func New(dir func(profile string) string, limit int64) *Store {
-	return &Store{dir: dir, limit: limit}
+// uid and gid are the browser containers' user: uploads are handed to it
+// when the orchestrator runs as root.
+func New(dir func(profile string) string, limit int64, uid, gid int) *Store {
+	return &Store{dir: dir, limit: limit, uid: uid, gid: gid}
 }
 
 // Limit is the per-profile cap in bytes, or 0.
@@ -175,6 +181,9 @@ func (s *Store) Upload(profile, name string, r io.Reader, max int64) (File, stri
 	if !ValidName(name) {
 		return File{}, "", ErrBadName
 	}
+	if s.limit > 0 && s.limit < max {
+		max = s.limit
+	}
 	root, err := s.open(profile, Uploads)
 	if err != nil {
 		return File{}, "", err
@@ -185,6 +194,15 @@ func (s *Store) Upload(profile, name string, r io.Reader, max int64) (File, stri
 	if err != nil {
 		return File{}, "", err
 	}
+	defer func() { _ = root.Remove(tmp) }()
+	if os.Getuid() == 0 {
+		// A root orchestrator runs browsers as another user, who must
+		// be able to read the file.
+		if err := f.Chown(s.uid, s.gid); err != nil {
+			_ = f.Close()
+			return File{}, "", err
+		}
+	}
 	n, err := io.Copy(f, io.LimitReader(r, max+1))
 	if cerr := f.Close(); err == nil {
 		err = cerr
@@ -193,26 +211,28 @@ func (s *Store) Upload(profile, name string, r io.Reader, max int64) (File, stri
 		err = ErrTooLarge
 	}
 	if err != nil {
-		_ = root.Remove(tmp)
 		return File{}, "", err
 	}
-	final, err := freeName(root, name)
-	if err == nil {
-		err = root.Rename(tmp, final)
-	}
+	final, err := publish(root, tmp, name)
 	if err != nil {
-		_ = root.Remove(tmp)
 		return File{}, "", err
 	}
-	if _, err := s.Enforce(profile); err != nil {
+	removed, err := s.Enforce(profile)
+	if err != nil {
 		return File{}, "", err
+	}
+	for _, r := range removed {
+		if r == Uploads+"/"+final {
+			return File{}, "", ErrOverCap
+		}
 	}
 	return File{Name: final, Size: n, Modified: time.Now()}, path.Join(MountPoint, Uploads, final), nil
 }
 
-// freeName returns name, or name with " (2)", " (3)"… before its
-// extension, whichever isn't taken.
-func freeName(root *os.Root, name string) (string, error) {
+// publish links tmp in as name, or name with " (2)", " (3)"… before its
+// extension, whichever is free. A hard link never replaces an existing
+// file, so two uploads with the same name can't overwrite each other.
+func publish(root *os.Root, tmp, name string) (string, error) {
 	ext := path.Ext(name)
 	stem := strings.TrimSuffix(name, ext)
 	for i := 1; i < 1000; i++ {
@@ -220,8 +240,12 @@ func freeName(root *os.Root, name string) (string, error) {
 		if i > 1 {
 			try = fmt.Sprintf("%s (%d)%s", stem, i, ext)
 		}
-		if _, err := root.Lstat(try); errors.Is(err, fs.ErrNotExist) {
+		err := root.Link(tmp, try)
+		if err == nil {
 			return try, nil
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return "", err
 		}
 	}
 	return "", errors.New("too many files with that name")

@@ -103,7 +103,7 @@ func newRealAPI(t *testing.T) agent {
 	}
 	web := auth.NewWeb(admin, tokens, log, auth.WebOptions{CookieSecure: "auto"})
 	mux := http.NewServeMux()
-	New(m, web, files.New(m.Layout().FilesDir, 0), log, "").Register(mux)
+	New(m, web, files.New(m.Layout().FilesDir, 0, os.Getuid(), os.Getgid()), log, "").Register(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return agent{t: t, base: srv.URL, token: secret}
