@@ -398,3 +398,33 @@ func TestLayoutRejectsLongDataDir(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestMarkerWriteDoesNotFollowSymlinks(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	if _, err := f.m.Stop(context.Background(), s.ID); err != nil {
+		t.Fatal(err)
+	}
+	// A compromised browser can leave a symlink where the marker goes.
+	target := filepath.Join(f.dir, "outside")
+	if err := os.WriteFile(target, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(f.dir, "profiles", "google", "chrome", mountMarker)
+	if err := os.Remove(marker); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, marker); err != nil {
+		t.Fatal(err)
+	}
+	next := f.start(f.m)
+	if b, _ := os.ReadFile(target); string(b) != "keep" {
+		t.Fatalf("the marker write went through the symlink: target now %q", b)
+	}
+	if st, err := os.Lstat(marker); err != nil || !st.Mode().IsRegular() {
+		t.Fatalf("marker is not a regular file: %v, %v", st, err)
+	}
+	if b, _ := os.ReadFile(marker); strings.TrimSpace(string(b)) != next.ID {
+		t.Fatalf("marker = %q", b)
+	}
+}

@@ -253,28 +253,54 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 }
 
 // prepare creates the profile's folders and writes this start's marker.
+// The browser can write anything inside both folders, symlinks included,
+// so everything in them is touched through os.Root, which won't follow a
+// link out of the folder.
 func (m *Manager) prepare(profile, sessionID string) error {
 	for _, sub := range []string{"chrome", "run"} {
 		dir := m.layout.dir(profile, sub)
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return err
 		}
-		marker := filepath.Join(dir, mountMarker)
-		if err := os.WriteFile(marker, []byte(sessionID+"\n"), 0o600); err != nil {
+		if err := m.writeMarker(dir, sessionID); err != nil {
 			return err
 		}
-		if os.Getuid() == 0 {
-			// Chromium won't run as root with its sandbox on, so a root
-			// orchestrator hands the folders to the browser's user.
-			for _, p := range []string{dir, marker} {
-				if err := os.Lchown(p, m.layout.UID, m.layout.GID); err != nil {
-					return err
-				}
-			}
-		}
 	}
-	if err := os.Remove(m.layout.ControlSocket(profile)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	return nil
+}
+
+func (m *Manager) writeMarker(dir, sessionID string) error {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
 		return err
+	}
+	defer func() { _ = root.Close() }()
+	if err := root.Remove(mountMarker); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := root.Remove("control.sock"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	f, err := root.OpenFile(mountMarker, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.WriteString(sessionID + "\n"); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if os.Getuid() == 0 {
+		// Chromium won't run as root with its sandbox on, so a root
+		// orchestrator hands the folders to the browser's user.
+		if err := root.Lchown(".", m.layout.UID, m.layout.GID); err != nil {
+			return err
+		}
+		if err := root.Lchown(mountMarker, m.layout.UID, m.layout.GID); err != nil {
+			return err
+		}
 	}
 	return nil
 }
