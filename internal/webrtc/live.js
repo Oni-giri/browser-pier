@@ -3,10 +3,10 @@
 "use strict";
 (() => {
   const profile = document.body.dataset.profile;
-  // A handoff page points these at its own endpoints and starts in control.
+  // A handoff page points these at its own endpoints; its offer answers
+  // with control from the start.
   const offerURL = document.body.dataset.offer || `/live/${encodeURIComponent(profile)}/offer`;
   const statusURL = document.body.dataset.status || `/live/${encodeURIComponent(profile)}/status`;
-  const startInControl = document.body.dataset.control === "on";
   const video = document.getElementById("screen");
   const stage = document.getElementById("stage");
   const who = document.getElementById("who");
@@ -121,9 +121,9 @@
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sdp: pc.localDescription.sdp }),
     });
     if (!r.ok) { who.textContent = (await r.text()).trim() || "Couldn't connect"; return; }
-    const { sdp } = await r.json();
-    await pc.setRemoteDescription({ type: "answer", sdp });
-    if (startInControl) { control = true; keyboard = !touch; status.human_control = true; render(); }
+    const answer = await r.json();
+    await pc.setRemoteDescription({ type: "answer", sdp: answer.sdp });
+    if (answer.control) { control = true; keyboard = !touch; status.human_control = true; render(); }
   }
 
   if (takeBtn) takeBtn.onclick = () => send({ type: control ? "release" : "take" });
