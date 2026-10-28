@@ -2,6 +2,7 @@ package handoff
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -17,6 +18,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	pionwebrtc "github.com/pion/webrtc/v4"
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/db"
@@ -579,5 +582,61 @@ func TestHandoffCookieFollowsCookieSecure(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusSeeOther || c == nil || !c.Secure {
 		t.Fatalf("link only with CookieSecure=always: %d, cookie %+v", resp.StatusCode, c)
+	}
+}
+
+// pionOffer is a viewer's offer, as the handoff page's script makes it.
+func pionOffer(t *testing.T) string {
+	t.Helper()
+	pc, err := pionwebrtc.NewPeerConnection(pionwebrtc.Configuration{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pc.Close() })
+	if _, err := pc.AddTransceiverFromKind(pionwebrtc.RTPCodecTypeVideo, pionwebrtc.RTPTransceiverInit{Direction: pionwebrtc.RTPTransceiverDirectionRecvonly}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pc.CreateDataChannel("input", nil); err != nil {
+		t.Fatal(err)
+	}
+	offer, err := pc.CreateOffer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gathered := pionwebrtc.GatheringCompletePromise(pc)
+	if err := pc.SetLocalDescription(offer); err != nil {
+		t.Fatal(err)
+	}
+	<-gathered
+	b, _ := json.Marshal(map[string]string{"sdp": pc.LocalDescription().SDP})
+	return string(b)
+}
+
+func TestReloadedHandoffPageGetsControlBack(t *testing.T) {
+	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
+	_, token := f.open("")
+	phone := browser()
+	if p := f.do(phone, "POST", "/h/"+token+"/pin", url.Values{"pin": {"4821"}}, nil); p.code != http.StatusSeeOther {
+		t.Fatalf("right PIN: %d %s", p.code, p.body)
+	}
+	offer := func() reply {
+		req, _ := http.NewRequest(http.MethodPost, f.srv.URL+"/h/"+token+"/offer", strings.NewReader(pionOffer(t)))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := phone.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		b, _ := io.ReadAll(resp.Body)
+		return reply{code: resp.StatusCode, body: string(b)}
+	}
+	for i := range 2 { // the page, then the same page reloaded
+		r := offer()
+		if r.code != http.StatusOK || !strings.Contains(r.body, `"control":true`) {
+			t.Fatalf("offer %d: %d %s", i+1, r.code, r.body)
+		}
+	}
+	if s, _ := f.m.Live("google"); !s.HumanControl {
+		t.Fatal("the reloaded page doesn't hold control")
 	}
 }

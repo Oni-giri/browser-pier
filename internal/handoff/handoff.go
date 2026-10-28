@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -446,6 +447,41 @@ func (s *Service) track(id string, v *webrtc.Viewer) {
 			delete(s.viewers, id)
 		}
 	}()
+}
+
+// replaceViewers closes the live views already open through a handoff,
+// for when its browser opens it again (a reload), and waits until they
+// have let go of the controls, so their hand-back can't take control from
+// the new view.
+func (s *Service) replaceViewers(ctx context.Context, h Handoff) {
+	s.mu.Lock()
+	old := slices.Clone(s.viewers[h.ID])
+	s.mu.Unlock()
+	if len(old) == 0 {
+		return
+	}
+	for _, v := range old {
+		v.Close()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	for _, v := range old {
+		select {
+		case <-v.Done():
+		case <-ctx.Done():
+			return
+		}
+	}
+	for {
+		if sess, ok := s.m.Live(h.Profile); !ok || !sess.HumanControl {
+			return
+		}
+		select {
+		case <-time.After(20 * time.Millisecond):
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 // Wait returns the handoff once it's over, or as it stands after wait.

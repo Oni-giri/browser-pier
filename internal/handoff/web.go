@@ -281,6 +281,9 @@ func (w *Web) offer(rw http.ResponseWriter, r *http.Request) {
 		http.Error(rw, "this link isn't open here", http.StatusForbidden)
 		return
 	}
+	// This browser holds the link, so an earlier view of it is a page
+	// since reloaded: replace it rather than refuse "someone else has control".
+	w.svc.replaceViewers(r.Context(), h)
 	id := h.ID
 	w.live.Offer(rw, r, h.Profile, webrtc.OfferOptions{
 		Control: true,
