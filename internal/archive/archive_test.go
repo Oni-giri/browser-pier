@@ -65,9 +65,9 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatalf("manifest %+v", got)
 	}
 	for name, want := range map[string]string{
-		"chrome/Default/Cookies":                         "session=abc",
+		"chrome/Default/Cookies":                          "session=abc",
 		"chrome/Default/Local Storage/leveldb/000003.log": "storage",
-		"files/downloads/report.csv":                     "a,b",
+		"files/downloads/report.csv":                      "a,b",
 	} {
 		if b, err := os.ReadFile(filepath.Join(dest, name)); err != nil || string(b) != want {
 			t.Errorf("%s: %q, %v", name, b, err)
