@@ -59,3 +59,26 @@ func TestServeStopsOnCancel(t *testing.T) {
 		t.Fatal("serve did not return after cancel")
 	}
 }
+
+func TestDefaultBrowserImage(t *testing.T) {
+	for version, want := range map[string]string{
+		"v1.2.3":              "ghcr.io/oni-giri/browser-pier-chromium:1.2.3",
+		"v1.2.3-4-gabcdef0":   "ghcr.io/oni-giri/browser-pier-chromium:edge",
+		"dev":                 "ghcr.io/oni-giri/browser-pier-chromium:edge",
+		"abcdef0-dirty":       "ghcr.io/oni-giri/browser-pier-chromium:edge",
+		"v1.2.3\nevil:latest": "ghcr.io/oni-giri/browser-pier-chromium:edge",
+	} {
+		if got := defaultBrowserImage(version); got != want {
+			t.Errorf("defaultBrowserImage(%q) = %q, want %q", version, got, want)
+		}
+	}
+}
+
+func TestBrowserUser(t *testing.T) {
+	if u, g := browserUser(1001, 1002); u != 1001 || g != 1002 {
+		t.Errorf("browserUser(1001, 1002) = %d, %d", u, g)
+	}
+	if u, g := browserUser(0, 0); u != 1000 || g != 1000 {
+		t.Errorf("browserUser(0, 0) = %d, %d; Chromium can't run as root", u, g)
+	}
+}

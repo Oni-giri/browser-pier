@@ -12,10 +12,16 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/config"
+	"github.com/Oni-giri/browser-pier/internal/db"
+	"github.com/Oni-giri/browser-pier/internal/docker"
+	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -46,12 +52,77 @@ func run(log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	dataDir, err := filepath.Abs(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return err
+	}
+	database, err := db.Open(ctx, filepath.Join(dataDir, "browserpier.db"))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = database.Close() }()
+
+	image := cfg.BrowserImage
+	if image == "" {
+		image = defaultBrowserImage(version)
+	}
+	dc, err := docker.New(image)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dc.Close() }()
+	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	err = dc.Ping(pingCtx)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("can't reach Docker, which BrowserPier needs to start browsers: %w", err)
+	}
+	hostDataDir, err := dc.HostDataDir(ctx, dataDir, cfg.HostDataDir)
+	if err != nil {
+		return err
+	}
+	uid, gid := browserUser(os.Getuid(), os.Getgid())
+	mgr, err := sessions.NewManager(database, dc, sessions.Layout{DataDir: dataDir, HostDataDir: hostDataDir, UID: uid, GID: gid}, log)
+	if err != nil {
+		return err
+	}
+	defer mgr.Close()
+	if err := mgr.Reconcile(ctx); err != nil {
+		return fmt.Errorf("checking browsers left running: %w", err)
+	}
+
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return err
 	}
-	log.Info("starting", "version", version, "listen", ln.Addr().String(), "data_dir", cfg.DataDir)
+	log.Info("starting", "version", version, "listen", ln.Addr().String(), "data_dir", dataDir,
+		"host_data_dir", hostDataDir, "browser_image", image)
 	return serve(ctx, ln, newHandler(), log)
+}
+
+// defaultBrowserImage is the browser image built alongside this version:
+// the release's own tag, or edge for anything else.
+func defaultBrowserImage(version string) string {
+	const repo = "ghcr.io/oni-giri/browser-pier-chromium"
+	if releaseRE.MatchString(version) {
+		return repo + ":" + strings.TrimPrefix(version, "v")
+	}
+	return repo + ":edge"
+}
+
+var releaseRE = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
+
+// browserUser is who browser containers run as: the orchestrator's own
+// user, so it owns the profile files, except root, as which Chromium won't
+// run with its sandbox on.
+func browserUser(uid, gid int) (int, int) {
+	if uid == 0 {
+		return 1000, 1000
+	}
+	return uid, gid
 }
 
 func newHandler() http.Handler {
