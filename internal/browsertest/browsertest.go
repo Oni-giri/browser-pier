@@ -223,6 +223,18 @@ func NewSite(t *testing.T, host string) *Site {
 		}
 		_, _ = io.WriteString(w, "<h1>Signed in as pier</h1><p>BrowserPier persistence test</p>")
 	})
+	mux.HandleFunc("GET /download", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Disposition", `attachment; filename="report.csv"`)
+		w.Header().Set("Content-Type", "text/csv")
+		_, _ = io.WriteString(w, "a,b\n1,2\n")
+	})
+	mux.HandleFunc("GET /upload", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `<input type="file" id="file"><pre id="out"></pre><script>
+document.getElementById('file').addEventListener('change', async e => {
+  const f = e.target.files[0];
+  document.getElementById('out').textContent = f.name + ':' + await f.text();
+});</script>`)
+	})
 	ln, err := net.Listen("tcp", ":0") //nolint:gosec // the browser container reaches it over the bridge
 	if err != nil {
 		t.Fatal(err)

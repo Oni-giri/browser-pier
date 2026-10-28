@@ -18,6 +18,7 @@ The orchestrator starts these containers; nothing else should. Each one needs:
 | User | `--user UID:GID` (any non-root uid) | The orchestrator runs it as its own uid so it owns the profile files. `HOME` is `/tmp/home`, created at startup. |
 | Profile folder | mounted at `/profile` | Chromium's user data dir, writable by that user. |
 | Control socket dir | mounted at `/run/browserpier`, shared only with the orchestrator | The entrypoint creates `control.sock` there. |
+| Files folder | mounted at `/files`, with `downloads/` and `uploads/` in it | A managed policy sends every download to `/files/downloads` without asking; the orchestrator puts uploads in `/files/uploads`. |
 | Stop timeout | `docker stop -t 30` (or `StopTimeout` in the API) | The entrypoint closes Chromium on SIGTERM. Docker's default of 10 s is too short to rely on. |
 | Shared memory | `--shm-size=1g` | Under 512 MiB the entrypoint falls back to `--disable-dev-shm-usage`, which is slower. |
 | No published ports | — | Everything goes through the control socket. |
@@ -42,6 +43,9 @@ HTTP over the Unix socket:
 |---|---|
 | `GET /healthz` | `ok` once Chromium answers on CDP. The socket only appears once it does. |
 | `/cdp/...` | CDP over HTTP and WebSocket, relayed to Chromium's loopback port (`/cdp/json/version`, `/cdp/devtools/browser/...`). URLs in CDP's JSON still say `ws://127.0.0.1:9222`; rewrite them. |
+| `GET /screenshot` | The display as PNG; `?width=` scales it down. `X-Screen-Width` and `X-Screen-Height` give the screen size. |
+| `POST /input/click` | `{"x", "y", "button", "double"}` in screen pixels, through xdotool. |
+| `POST /input/type` | `{"text"}`, up to 2000 characters, through xdotool; `\n` presses Enter. |
 | `GET /stream` | The display as an H.264 Annex-B byte stream (constrained baseline, 30 fps, keyframe every 2 s), one reader at a time (409 otherwise). The encoder runs only while it's read. |
 
 ## Seccomp profile

@@ -15,6 +15,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/api"
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/db"
+	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/sessions/sessionstest"
 )
@@ -42,7 +43,7 @@ func testHandler(t *testing.T) http.Handler {
 		t.Fatal(err)
 	}
 	t.Cleanup(mgr.Close)
-	return newHandler(web, api.New(mgr, web, log, ""))
+	return newHandler(web, api.New(mgr, web, files.New(mgr.Layout().FilesDir, 0), log, ""))
 }
 
 func TestHealthz(t *testing.T) {

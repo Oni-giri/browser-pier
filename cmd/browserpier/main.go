@@ -23,6 +23,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/config"
 	"github.com/Oni-giri/browser-pier/internal/db"
 	"github.com/Oni-giri/browser-pier/internal/docker"
+	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
@@ -116,13 +117,24 @@ func run(log *slog.Logger) error {
 		PublicURL:      cfg.PublicURL,
 	})
 
+	fileStore := files.New(mgr.Layout().FilesDir, int64(cfg.FilesLimitMB)<<20)
+	go fileStore.Sweep(ctx, func() []string {
+		var live []string
+		for _, s := range mgr.List() {
+			live = append(live, s.Profile)
+		}
+		return live
+	}, time.Minute, func(profile string, err error) {
+		log.Warn("enforcing the files cap", "profile", profile, "err", err)
+	})
+
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return err
 	}
 	log.Info("starting", "version", version, "listen", ln.Addr().String(), "data_dir", dataDir,
 		"host_data_dir", hostDataDir, "browser_image", image)
-	return serve(ctx, ln, newHandler(web, api.New(mgr, web, log, cfg.PublicURL)), log)
+	return serve(ctx, ln, newHandler(web, api.New(mgr, web, fileStore, log, cfg.PublicURL)), log)
 }
 
 // defaultBrowserImage is the browser image built alongside this version:
