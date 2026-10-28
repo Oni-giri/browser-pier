@@ -395,3 +395,32 @@ func TestWrongPINsAcrossLinksAndProfilesAreCapped(t *testing.T) {
 		t.Fatalf("a try after 30 wrong overall: %d", r.code)
 	}
 }
+
+func TestPendingAndStats(t *testing.T) {
+	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
+	ctx := context.Background()
+	start := time.Now()
+	h, _ := f.open("")
+	open, err := f.svc.Pending(ctx)
+	if err != nil || len(open) != 1 || open[0].ID != h.ID {
+		t.Fatalf("pending: %v %+v", err, open)
+	}
+	f.svc.now = func() time.Time { return start.Add(48 * time.Second) }
+	if _, err := f.svc.Finish(ctx, h, Done, ""); err != nil {
+		t.Fatal(err)
+	}
+	if open, _ := f.svc.Pending(ctx); len(open) != 0 {
+		t.Fatalf("still pending after done: %+v", open)
+	}
+	// A second one, left to expire, counts but has no time to hand back.
+	f.svc.now = time.Now
+	h2, _ := f.open("")
+	f.svc.now = func() time.Time { return h2.ExpiresAt.Add(time.Second) }
+	if open, _ := f.svc.Pending(ctx); len(open) != 0 {
+		t.Fatalf("an expired link is still pending: %+v", open)
+	}
+	n, median, err := f.svc.Stats(ctx, start.Add(-time.Minute))
+	if err != nil || n != 2 || median < 47*time.Second || median > 49*time.Second {
+		t.Fatalf("stats: %d, %s, %v", n, median, err)
+	}
+}
