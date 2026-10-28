@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/db"
+	"github.com/Oni-giri/browser-pier/internal/docker"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 )
 
@@ -442,5 +443,161 @@ func TestClosedManagerRefuses(t *testing.T) {
 	// Closing leaves the browser running for the next orchestrator.
 	if c, _ := f.rt.container(s.ContainerID); c.state != "running" {
 		t.Fatalf("container %s after Close", c.state)
+	}
+}
+
+func TestStartNeverRemovesSomeoneElsesContainer(t *testing.T) {
+	f := newFixture(t)
+	f.rt.mu.Lock()
+	f.rt.containers["theirs"] = &fakeContainer{id: "theirs", state: "exited", foreign: true, exited: make(chan struct{})}
+	f.rt.containers["theirs"].spec.Name = "browserpier-google"
+	f.rt.mu.Unlock()
+
+	s, _, err := f.m.Start(context.Background(), "google", "")
+	if !errors.Is(err, ErrStartFailed) || !strings.Contains(s.Error, "already named browserpier-google") {
+		t.Fatalf("Start = %+v, %v; want a name-collision failure", s, err)
+	}
+	if _, ok := f.rt.container("theirs"); !ok {
+		t.Fatal("an unrelated container was deleted")
+	}
+
+	// A stopped one of our own for this profile is cleared out of the way.
+	f.rt.mu.Lock()
+	delete(f.rt.containers, "theirs")
+	f.rt.containers["ours"] = &fakeContainer{id: "ours", state: "exited", exited: make(chan struct{})}
+	f.rt.containers["ours"].spec = docker.BrowserSpec{Name: "browserpier-google", Profile: "google"}
+	f.rt.mu.Unlock()
+	if s := f.start(f.m); s.State != Running {
+		t.Fatalf("Start with a stale container of ours: %+v", s)
+	}
+	if _, ok := f.rt.container("ours"); ok {
+		t.Fatal("our stale container wasn't removed")
+	}
+}
+
+func TestFailedSaveFailsTheStartAndHeals(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	if _, err := f.m.db.ExecContext(ctx, `CREATE TRIGGER no_updates BEFORE UPDATE ON sessions BEGIN SELECT RAISE(ABORT, 'disk on fire'); END`); err != nil {
+		t.Fatal(err)
+	}
+	s, _, err := f.m.Start(ctx, "google", "")
+	if !errors.Is(err, ErrStartFailed) || !strings.Contains(s.Error, "saving the session") {
+		t.Fatalf("Start with a failing database = %+v, %v", s, err)
+	}
+	if f.rt.count() != 0 {
+		t.Fatal("a container was left behind with no record of it")
+	}
+	if _, err := f.m.db.ExecContext(ctx, `DROP TRIGGER no_updates`); err != nil {
+		t.Fatal(err)
+	}
+	// The row still says starting; the next start must clear it, not trip
+	// over the one-live-session index.
+	if got := f.stored(s.ID); got.State != Starting {
+		t.Fatalf("stored state %s; the test assumes the final save failed", got.State)
+	}
+	if next := f.start(f.m); next.State != Running {
+		t.Fatalf("retry: %+v", next)
+	}
+	if got := f.stored(s.ID); got.State != Failed {
+		t.Fatalf("stale row %s, want failed", got.State)
+	}
+}
+
+func TestCloseReleasesWaitingCallers(t *testing.T) {
+	f := newFixture(t)
+	f.rt.unhealthy = true
+	f.m.readyTimeout = time.Hour
+	errc := make(chan error, 1)
+	go func() {
+		_, _, err := f.m.Start(context.Background(), "google", "")
+		errc <- err
+	}()
+	eventually(t, "the container to start", func() bool { return f.rt.count() == 1 })
+	f.m.Close()
+	select {
+	case err := <-errc:
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("Start = %v, want ErrClosed", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start still blocked after Close")
+	}
+}
+
+func TestStopErrorLeavesTheSessionRunning(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	s := f.start(f.m)
+	f.rt.stopErr = errors.New("daemon hiccup")
+	if _, err := f.m.Stop(ctx, s.ID); err == nil || !strings.Contains(err.Error(), "daemon hiccup") {
+		t.Fatalf("Stop = %v, want the Docker error", err)
+	}
+	if got, _ := f.m.Live("google"); got.State != Running {
+		t.Fatalf("after a failed stop the session is %s, want running", got.State)
+	}
+	if got := f.stored(s.ID); got.State != Running {
+		t.Fatalf("stored %s, want running", got.State)
+	}
+	f.rt.stopErr = nil
+	if got, err := f.m.Stop(ctx, s.ID); err != nil || got.State != Stopped {
+		t.Fatalf("retry Stop = %+v, %v", got, err)
+	}
+}
+
+func TestConcurrentStopsShareOneAttempt(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	var wg sync.WaitGroup
+	for range 5 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if got, err := f.m.Stop(context.Background(), s.ID); err != nil || got.State != Stopped {
+				t.Errorf("Stop = %+v, %v", got, err)
+			}
+		}()
+	}
+	wg.Wait()
+	if f.rt.stops != 1 {
+		t.Fatalf("%d Docker stops for one session", f.rt.stops)
+	}
+}
+
+func TestDeleteProfileKeepsTheRecordIfTheFolderCantMove(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	s := f.start(f.m)
+	if _, err := f.m.Stop(ctx, s.ID); err != nil {
+		t.Fatal(err)
+	}
+	profilesDir := filepath.Join(f.dir, "profiles")
+	if err := os.Chmod(profilesDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	err := f.m.DeleteProfile(ctx, "google")
+	_ = os.Chmod(profilesDir, 0o700)
+	if err == nil {
+		t.Fatal("DeleteProfile succeeded with an unwritable profiles folder")
+	}
+	if _, err := f.m.Profiles().Get(ctx, "google"); err != nil {
+		t.Fatalf("the profile record is gone after a failed delete: %v", err)
+	}
+	if err := f.m.DeleteProfile(ctx, "google"); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+}
+
+func TestReconcileRemovesTombstones(t *testing.T) {
+	f := newFixture(t)
+	tomb := filepath.Join(f.dir, "profiles", tombstonePrefix+"old-abc")
+	if err := os.MkdirAll(filepath.Join(tomb, "chrome"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(tomb); !os.IsNotExist(err) {
+		t.Fatalf("tombstone still there: %v", err)
 	}
 }

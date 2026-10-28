@@ -2,6 +2,7 @@ package sessions
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/docker"
@@ -12,6 +13,7 @@ import (
 // orchestrator was down are picked up where they were; sessions whose
 // container is gone are failed; containers with no live session are stopped.
 func (m *Manager) Reconcile(ctx context.Context) error {
+	m.removeTombstones()
 	containers, err := m.rt.List(ctx)
 	if err != nil {
 		return err
@@ -51,11 +53,8 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		m.watch(l, c.ID)
 		switch s.State {
 		case Starting:
-			m.wg.Add(1)
-			go func(cid string) {
-				defer m.wg.Done()
-				m.awaitReady(l, cid)
-			}(c.ID)
+			cid := c.ID
+			m.spawn(func() { m.awaitReady(l, cid) })
 		case Stopping:
 			l.markReady()
 			m.stopContainer(c.ID)
@@ -65,11 +64,15 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	}
 	m.mu.Unlock()
 
+	// Strays are stopped before Reconcile returns, so their names are free
+	// by the time the first Start comes in. A failure is logged, not fatal:
+	// it only blocks the one profile whose name the stray holds.
+	var strays sync.WaitGroup
 	for _, c := range byID {
 		m.log.Warn("stopping a browser container with no session", "container", c.Name)
-		m.wg.Add(1)
+		strays.Add(1)
 		go func(c docker.Container) {
-			defer m.wg.Done()
+			defer strays.Done()
 			ctx, cancel := context.WithTimeout(m.ctx, stopTimeout+30*time.Second)
 			defer cancel()
 			if c.State == "running" {
@@ -83,5 +86,6 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			}
 		}(c)
 	}
+	strays.Wait()
 	return nil
 }

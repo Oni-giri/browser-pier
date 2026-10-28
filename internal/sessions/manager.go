@@ -27,6 +27,7 @@ type Runtime interface {
 	Wait(ctx context.Context, id string) (int, error)
 	LastLogLine(ctx context.Context, id string) (string, error)
 	Remove(ctx context.Context, id string) error
+	RemoveStale(ctx context.Context, name, profile string) error
 	List(ctx context.Context) ([]docker.Container, error)
 }
 
@@ -92,6 +93,8 @@ type Manager struct {
 	ctx    context.Context // ends with Close
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+	goMu   sync.Mutex
+	closed bool // set by Close; guarded by goMu
 
 	mu   sync.Mutex
 	live map[string]*live // by profile name
@@ -106,6 +109,13 @@ type live struct {
 	// failure, when set, is why the orchestrator gave up on the session;
 	// it's applied once the container has exited.
 	failure string
+	// stop is the stop in progress, if any; everyone stopping waits on it.
+	stop *stopAttempt
+}
+
+type stopAttempt struct {
+	done chan struct{}
+	err  error // set before done closes
 }
 
 func newLive(s Session) *live {
@@ -137,8 +147,39 @@ func NewManager(db *sql.DB, rt Runtime, layout Layout, log *slog.Logger) (*Manag
 // Close stops tracking sessions. Browsers keep running; Reconcile picks them
 // up on the next start, so restarting the orchestrator doesn't log anyone out.
 func (m *Manager) Close() {
+	m.goMu.Lock()
+	m.closed = true
+	m.goMu.Unlock()
 	m.cancel()
 	m.wg.Wait()
+}
+
+// spawn runs f in a goroutine that Close waits for. Once Close has begun
+// it runs nothing and returns false.
+func (m *Manager) spawn(f func()) bool {
+	m.goMu.Lock()
+	defer m.goMu.Unlock()
+	if m.closed {
+		return false
+	}
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		f()
+	}()
+	return true
+}
+
+// wait waits for ch, the caller's ctx, or the manager closing.
+func (m *Manager) wait(ctx context.Context, ch <-chan struct{}) error {
+	select {
+	case <-ch:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-m.ctx.Done():
+		return ErrClosed
+	}
 }
 
 func (m *Manager) Profiles() *profiles.Store { return m.profiles }
@@ -163,7 +204,7 @@ func (m *Manager) Start(ctx context.Context, profile string, mode profiles.Mode)
 		state := l.sess.State
 		m.mu.Unlock()
 		if state == Stopping {
-			if err := wait(ctx, l.done); err != nil {
+			if err := m.wait(ctx, l.done); err != nil {
 				return Session{}, false, err
 			}
 			continue
@@ -176,11 +217,10 @@ func (m *Manager) Start(ctx context.Context, profile string, mode profiles.Mode)
 	if err != nil {
 		return Session{}, false, err
 	}
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
-		m.launch(l, p)
-	}()
+	if !m.spawn(func() { m.launch(l, p) }) {
+		m.end(l, "", func(s *Session) { s.State, s.Error = Failed, "BrowserPier was shutting down" })
+		return Session{}, false, ErrClosed
+	}
 	return m.awaitStart(ctx, l, false)
 }
 
@@ -197,6 +237,12 @@ func (m *Manager) begin(ctx context.Context, profile string, mode profiles.Mode)
 		return nil, p, fmt.Errorf("mode %q: want %q or %q", mode, profiles.ModeAPI, profiles.ModeVisual)
 	}
 	now := m.now()
+	// With no live session in memory, any live row for this profile is
+	// stale, left by a save that failed; clear it so the profile isn't stuck.
+	if _, err := m.db.ExecContext(ctx, `UPDATE sessions SET state = 'failed', error = 'its final state was never saved', updated_at = ?
+		WHERE profile = ? AND state IN ('starting', 'running', 'needs_help', 'stopping')`, now.UnixMilli(), profile); err != nil {
+		return nil, p, err
+	}
 	s := Session{ID: newID(), Profile: profile, Mode: mode, State: Starting, CreatedAt: now, UpdatedAt: now}
 	if err := insertSession(ctx, m.db, s); err != nil {
 		return nil, p, err
@@ -207,7 +253,7 @@ func (m *Manager) begin(ctx context.Context, profile string, mode profiles.Mode)
 }
 
 func (m *Manager) awaitStart(ctx context.Context, l *live, attached bool) (Session, bool, error) {
-	if err := wait(ctx, l.ready); err != nil {
+	if err := m.wait(ctx, l.ready); err != nil {
 		return Session{}, attached, err
 	}
 	s := m.snapshot(l)
@@ -228,8 +274,8 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 		return
 	}
 	// A container left behind by a crash would hold the name.
-	if err := m.rt.Remove(ctx, containerName(p.Name)); err != nil {
-		m.abort(l, "", fmt.Sprintf("an old container for this profile is in the way: %v", err))
+	if err := m.rt.RemoveStale(ctx, containerName(p.Name), p.Name); err != nil {
+		m.abort(l, "", err.Error())
 		return
 	}
 	cid, err := m.rt.Create(ctx, docker.BrowserSpec{
@@ -246,7 +292,11 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 		m.abort(l, "", fmt.Sprintf("creating the browser container: %v", err))
 		return
 	}
-	m.update(l, func(s *Session) { s.ContainerID = cid })
+	if err := m.update(l, func(s *Session) { s.ContainerID = cid }); err != nil {
+		// Unrecorded, the container would be stopped as a stray after a restart.
+		m.abort(l, cid, fmt.Sprintf("saving the session: %v", err))
+		return
+	}
 	if err := m.rt.Start(ctx, cid); err != nil {
 		m.abort(l, cid, fmt.Sprintf("starting the browser container: %v", err))
 		return
@@ -318,11 +368,18 @@ func (m *Manager) awaitReady(l *live, cid string) {
 	defer tick.Stop()
 	for {
 		if healthy(m.ctx, sock) {
-			m.update(l, func(s *Session) {
+			err := m.update(l, func(s *Session) {
 				if s.State == Starting {
 					s.State = Running
 				}
 			})
+			if err != nil {
+				m.mu.Lock()
+				l.failure = fmt.Sprintf("saving the session: %v", err)
+				m.mu.Unlock()
+				m.stopContainer(cid)
+				return
+			}
 			l.markReady()
 			return
 		}
@@ -363,15 +420,13 @@ func healthy(ctx context.Context, sock string) bool {
 
 // watch finishes the session when its container exits.
 func (m *Manager) watch(l *live, cid string) {
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
+	m.spawn(func() {
 		code, err := m.rt.Wait(m.ctx, cid)
 		if m.ctx.Err() != nil {
 			return // closing: leave the browser running for the next Reconcile
 		}
 		m.finish(l, cid, code, err)
-	}()
+	})
 }
 
 // finish records how the session ended and removes its container.
@@ -416,17 +471,28 @@ func (m *Manager) cleanup(cid string) string {
 	return lastLog
 }
 
-// end makes the session final and releases its profile.
+// end makes the session final and releases its profile. If the final
+// state can't be saved after a few tries, the profile is released anyway:
+// the next Start for it, or the next Reconcile, clears the stale row.
 func (m *Manager) end(l *live, lastLog string, final func(*Session)) {
 	m.mu.Lock()
 	final(&l.sess)
 	l.sess.LastLog = lastLog
 	l.sess.UpdatedAt = m.now()
-	if m.live[l.sess.Profile] == l {
-		delete(m.live, l.sess.Profile)
-	}
 	s := l.sess
-	m.persistLocked(s)
+	m.mu.Unlock()
+	for i, backoff := range []time.Duration{0, 200 * time.Millisecond, time.Second} {
+		time.Sleep(backoff)
+		err := updateSession(context.Background(), m.db, s)
+		if err == nil {
+			break
+		}
+		m.log.Error("saving the final session state", "session", s.ID, "state", s.State, "try", i+1, "err", err)
+	}
+	m.mu.Lock()
+	if m.live[s.Profile] == l {
+		delete(m.live, s.Profile)
+	}
 	m.mu.Unlock()
 	if s.State == Failed {
 		m.log.Warn("session failed", "session", s.ID, "profile", s.Profile, "err", s.Error, "last_log", s.LastLog)
@@ -437,18 +503,20 @@ func (m *Manager) end(l *live, lastLog string, final func(*Session)) {
 	close(l.done)
 }
 
-func (m *Manager) update(l *live, change func(*Session)) {
+// update changes the session and saves it. If the save fails, the
+// change is undone and the error returned.
+func (m *Manager) update(l *live, change func(*Session)) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	before := l.sess
 	change(&l.sess)
 	l.sess.UpdatedAt = m.now()
-	m.persistLocked(l.sess)
-}
-
-func (m *Manager) persistLocked(s Session) {
-	if err := updateSession(context.Background(), m.db, s); err != nil {
-		m.log.Error("saving session state", "session", s.ID, "state", s.State, "err", err)
+	if err := updateSession(context.Background(), m.db, l.sess); err != nil {
+		l.sess = before
+		m.log.Error("saving session state", "session", before.ID, "err", err)
+		return err
 	}
+	return nil
 }
 
 func (m *Manager) snapshot(l *live) Session {
@@ -460,19 +528,19 @@ func (m *Manager) snapshot(l *live) Session {
 // stopContainer asks Docker to stop a container without waiting for it; the
 // watcher records the outcome.
 func (m *Manager) stopContainer(cid string) {
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
+	m.spawn(func() {
 		ctx, cancel := context.WithTimeout(m.ctx, stopTimeout)
 		defer cancel()
 		if err := m.rt.Stop(ctx, cid); err != nil && m.ctx.Err() == nil {
 			m.log.Warn("stopping the browser container", "container", cid, "err", err)
 		}
-	}()
+	})
 }
 
 // Stop closes the session's browser gracefully and waits until its
 // container is gone. Stopping a session that has already ended returns it.
+// If Docker fails to stop the container, the session goes back to the
+// state it was in and every caller gets the error.
 func (m *Manager) Stop(ctx context.Context, id string) (Session, error) {
 	if m.ctx.Err() != nil {
 		return Session{}, ErrClosed
@@ -481,25 +549,63 @@ func (m *Manager) Stop(ctx context.Context, id string) (Session, error) {
 	if l == nil {
 		return getSession(ctx, m.db, id)
 	}
-	if err := wait(ctx, l.ready); err != nil {
+	if err := m.wait(ctx, l.ready); err != nil {
 		return Session{}, err
 	}
 	m.mu.Lock()
-	first := l.sess.State == Running || l.sess.State == NeedsHelp
-	if first {
+	attempt := l.stop
+	if attempt == nil && (l.sess.State == Running || l.sess.State == NeedsHelp) {
+		prev := l.sess.State
 		l.sess.State = Stopping
 		l.sess.UpdatedAt = m.now()
-		m.persistLocked(l.sess)
+		if err := updateSession(context.Background(), m.db, l.sess); err != nil {
+			// Stopping anyway beats refusing; the final state is saved with retries.
+			m.log.Error("saving session state", "session", id, "err", err)
+		}
+		attempt = &stopAttempt{done: make(chan struct{})}
+		l.stop = attempt
+		cid := l.sess.ContainerID
+		if !m.spawn(func() { m.runStop(l, attempt, cid, prev) }) {
+			m.mu.Unlock()
+			return Session{}, ErrClosed
+		}
 	}
-	cid := l.sess.ContainerID
 	m.mu.Unlock()
-	if first {
-		m.stopContainer(cid)
+	if attempt != nil {
+		if err := m.wait(ctx, attempt.done); err != nil {
+			return m.snapshot(l), err
+		}
+		if attempt.err != nil {
+			return m.snapshot(l), fmt.Errorf("stopping the browser: %w", attempt.err)
+		}
 	}
-	if err := wait(ctx, l.done); err != nil {
+	if err := m.wait(ctx, l.done); err != nil {
 		return m.snapshot(l), err
 	}
 	return m.snapshot(l), nil
+}
+
+// runStop asks Docker to stop the container. On failure it puts the
+// session back as it was, so a later Stop can try again.
+func (m *Manager) runStop(l *live, attempt *stopAttempt, cid string, prev State) {
+	ctx, cancel := context.WithTimeout(m.ctx, stopTimeout)
+	defer cancel()
+	err := m.rt.Stop(ctx, cid)
+	if err != nil && m.ctx.Err() == nil {
+		m.log.Warn("stopping the browser container", "container", cid, "err", err)
+		m.mu.Lock()
+		if l.sess.State == Stopping {
+			l.sess.State = prev
+			l.sess.UpdatedAt = m.now()
+			if err := updateSession(context.Background(), m.db, l.sess); err != nil {
+				m.log.Error("saving session state", "session", l.sess.ID, "err", err)
+			}
+		}
+		l.stop = nil
+		m.mu.Unlock()
+	}
+	attempt.err = err
+	close(attempt.done)
 }
 
 // SetNeedsHelp moves a running session to Needs help and back.
@@ -517,9 +623,13 @@ func (m *Manager) SetNeedsHelp(id string, needsHelp bool) (Session, error) {
 	switch l.sess.State {
 	case to:
 	case from:
+		before := l.sess
 		l.sess.State = to
 		l.sess.UpdatedAt = m.now()
-		m.persistLocked(l.sess)
+		if err := updateSession(context.Background(), m.db, l.sess); err != nil {
+			l.sess = before
+			return before, err
+		}
 	default:
 		return l.sess, ErrNotRunning
 	}
@@ -564,11 +674,53 @@ func (m *Manager) DeleteProfile(ctx context.Context, name string) error {
 	if _, ok := m.live[name]; ok {
 		return ErrProfileBusy
 	}
+	// Move the folder aside first, so a failure leaves either everything
+	// (the record and the folder) or a tombstone that Reconcile removes,
+	// never logged-in browser data with no profile pointing at it. name was
+	// validated when the profile was created, so this stays inside profiles/.
+	dir := m.layout.dir(name)
+	tomb := filepath.Join(m.layout.DataDir, "profiles", tombstonePrefix+name+"-"+newID())
+	moved := true
+	if err := os.Rename(dir, tomb); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("moving the profile folder aside: %w", err)
+		}
+		moved = false
+	}
 	if err := m.profiles.Delete(ctx, name); err != nil {
+		if moved {
+			if rerr := os.Rename(tomb, dir); rerr != nil {
+				m.log.Error("putting the profile folder back", "profile", name, "err", rerr)
+			}
+		}
 		return err
 	}
-	// name was validated when the profile was created, so this stays inside profiles/.
-	return os.RemoveAll(m.layout.dir(name))
+	if moved {
+		if err := os.RemoveAll(tomb); err != nil {
+			m.log.Warn("removing a deleted profile's folder; will retry at the next start", "profile", name, "err", err)
+		}
+	}
+	return nil
+}
+
+// tombstonePrefix names folders of deleted profiles not yet removed.
+// Profile names can't start with a dot, so they never collide.
+const tombstonePrefix = ".deleted-"
+
+// removeTombstones finishes deleting profile folders a past deletion
+// couldn't remove.
+func (m *Manager) removeTombstones() {
+	entries, err := os.ReadDir(filepath.Join(m.layout.DataDir, "profiles"))
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() && strings.HasPrefix(e.Name(), tombstonePrefix) {
+			if err := os.RemoveAll(filepath.Join(m.layout.DataDir, "profiles", e.Name())); err != nil {
+				m.log.Warn("removing a deleted profile's folder", "folder", e.Name(), "err", err)
+			}
+		}
+	}
 }
 
 func (m *Manager) find(id string) *live {
@@ -584,13 +736,4 @@ func (m *Manager) findLocked(id string) *live {
 		}
 	}
 	return nil
-}
-
-func wait(ctx context.Context, ch <-chan struct{}) error {
-	select {
-	case <-ch:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }

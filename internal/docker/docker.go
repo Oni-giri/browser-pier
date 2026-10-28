@@ -283,6 +283,30 @@ func (c *Client) Remove(ctx context.Context, id string) error {
 	return err
 }
 
+// RemoveStale removes a leftover container that holds name, but only a
+// stopped one BrowserPier made for this profile. Any other container by
+// that name is left alone and reported, never deleted.
+func (c *Client) RemoveStale(ctx context.Context, name, profile string) error {
+	res, err := c.api.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
+	if cerrdefs.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var labels map[string]string
+	if res.Container.Config != nil {
+		labels = res.Container.Config.Labels
+	}
+	if labels[LabelManaged] != "true" || labels[LabelProfile] != profile {
+		return fmt.Errorf("another container is already named %s; BrowserPier didn't create it, so rename or remove it yourself", name)
+	}
+	if res.Container.State != nil && res.Container.State.Running {
+		return fmt.Errorf("an earlier browser container for this profile (%s) is still running", name)
+	}
+	return c.Remove(ctx, res.Container.ID)
+}
+
 // List returns every browser container BrowserPier started, running or not.
 func (c *Client) List(ctx context.Context) ([]Container, error) {
 	res, err := c.api.ContainerList(ctx, client.ContainerListOptions{
