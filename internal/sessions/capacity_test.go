@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -136,5 +137,73 @@ func TestMemoryLimitStopsTheLongestIdle(t *testing.T) {
 	// Attaching to a running one needs no room.
 	if _, attached, err := f.m.Start(ctx, "b", ""); err != nil || !attached {
 		t.Fatalf("attach with no room: %t, %v", attached, err)
+	}
+}
+
+func TestStartingBrowserCountsItsShare(t *testing.T) {
+	f := newFixture(t)
+	const gib = 1 << 30
+	f.rt.Memory = 0 // a booting browser reads near zero
+	f.rt.Unhealthy = true
+	f.m.readyTimeout = time.Hour
+	f.m.SetMemoryLimit(gib+gib/2, gib)
+	f.profile("a", 0)
+	f.profile("b", 0)
+	go func() { _, _, _ = f.m.Start(context.Background(), "a", "") }()
+	eventually(t, "a to be starting with a container", func() bool {
+		s, ok := f.m.Live("a")
+		return ok && s.ContainerID != ""
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, _, err := f.m.Start(ctx, "b", ""); !errors.Is(err, ErrNoRoom) {
+		t.Fatalf("second browser while the first boots = %v, want ErrNoRoom", err)
+	}
+}
+
+func TestHandBackRestartsTheIdleClock(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	advance := f.clock()
+	f.profile("h", 5*time.Minute)
+	s := f.startProfile("h")
+	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	advance(30 * time.Minute) // a long handoff
+	if _, err := f.m.SetNeedsHelp(s.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	f.m.stopIdle(ctx)
+	if _, ok := f.m.Live("h"); !ok {
+		t.Fatal("stopped right after hand-back for idleness from before the handoff")
+	}
+}
+
+func TestConcurrentStartsAtTheLimitShareOneBrowser(t *testing.T) {
+	f := newFixture(t)
+	const gib = 1 << 30
+	f.rt.Memory = gib
+	f.m.SetMemoryLimit(gib+gib/2, gib) // room for exactly one
+	f.profile("x", 0)
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _, err := f.m.Start(context.Background(), "x", "")
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("a start of the same profile failed: %v", err)
+		}
+	}
+	if f.rt.Creates != 1 {
+		t.Fatalf("%d containers for one profile", f.rt.Creates)
 	}
 }

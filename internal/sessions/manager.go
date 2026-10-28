@@ -223,53 +223,68 @@ func (m *Manager) Start(ctx context.Context, profile string, mode profiles.Mode)
 	if m.ctx.Err() != nil {
 		return Session{}, false, ErrClosed
 	}
-	m.mu.Lock()
-	_, running := m.live[profile]
-	m.mu.Unlock()
-	admitted := func() {}
-	defer func() { admitted() }()
-	if !running {
-		// Check the request before stopping anyone's browser for it.
-		if _, err := m.profiles.Get(ctx, profile); err != nil {
-			return Session{}, false, err
-		}
-		if mode != "" && mode != profiles.ModeAPI && mode != profiles.ModeVisual {
-			return Session{}, false, fmt.Errorf("mode %q: want %q or %q", mode, profiles.ModeAPI, profiles.ModeVisual)
-		}
-		m.admit.Lock()
-		admitted = sync.OnceFunc(m.admit.Unlock)
-		if err := m.makeRoom(ctx); err != nil {
-			return Session{}, false, err
-		}
-	}
 	for {
 		m.mu.Lock()
 		l, ok := m.live[profile]
-		if !ok {
-			break // keep the lock
-		}
-		state := l.sess.State
 		m.mu.Unlock()
-		if state == Stopping {
-			if err := m.wait(ctx, l.done); err != nil {
-				return Session{}, false, err
+		if ok {
+			if m.snapshot(l).State == Stopping {
+				if err := m.wait(ctx, l.done); err != nil {
+					return Session{}, false, err
+				}
+				continue
 			}
-			continue
+			return m.awaitStart(ctx, l, true)
 		}
-		return m.awaitStart(ctx, l, true)
+		l, p, again, err := m.admitAndBegin(ctx, profile, mode)
+		if err != nil {
+			return Session{}, false, err
+		}
+		if again {
+			continue // another start got there first: attach to it
+		}
+		if !m.spawn(func() { m.launch(l, p) }) {
+			m.end(l, "", func(s *Session) { s.State, s.Error = Failed, "BrowserPier was shutting down" })
+			return Session{}, false, ErrClosed
+		}
+		return m.awaitStart(ctx, l, false)
 	}
+}
 
-	l, p, err := m.begin(ctx, profile, mode)
-	m.mu.Unlock()
-	admitted() // the new session counts towards memory from here on
-	if err != nil {
-		return Session{}, false, err
+// admitAndBegin makes room for a new browser and records its session, one
+// start at a time: the admission lock is held from the memory check until
+// the session counts towards memory. again is true if a session for the
+// profile appeared meanwhile, to attach to instead.
+func (m *Manager) admitAndBegin(ctx context.Context, profile string, mode profiles.Mode) (l *live, p profiles.Profile, again bool, err error) {
+	// Check the request before stopping anyone's browser for it.
+	if _, err := m.profiles.Get(ctx, profile); err != nil {
+		return nil, p, false, err
 	}
-	if !m.spawn(func() { m.launch(l, p) }) {
-		m.end(l, "", func(s *Session) { s.State, s.Error = Failed, "BrowserPier was shutting down" })
-		return Session{}, false, ErrClosed
+	if mode != "" && mode != profiles.ModeAPI && mode != profiles.ModeVisual {
+		return nil, p, false, fmt.Errorf("mode %q: want %q or %q", mode, profiles.ModeAPI, profiles.ModeVisual)
 	}
-	return m.awaitStart(ctx, l, false)
+	m.admit.Lock()
+	defer m.admit.Unlock()
+	if m.hasLive(profile) {
+		return nil, p, true, nil
+	}
+	if err := m.makeRoom(ctx); err != nil {
+		return nil, p, false, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.live[profile]; ok {
+		return nil, p, true, nil
+	}
+	l, p, err = m.begin(ctx, profile, mode)
+	return l, p, false, err
+}
+
+func (m *Manager) hasLive(profile string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.live[profile]
+	return ok
 }
 
 // begin records a new Starting session. m.mu must be held.
@@ -829,8 +844,9 @@ func (m *Manager) stopIf(ctx context.Context, id string, cond func(*live) bool) 
 	attempt := l.stop
 	if attempt == nil && (l.sess.State == Running || l.sess.State == NeedsHelp) {
 		if cond != nil && !cond(l) {
+			snap := l.snapshotLocked()
 			m.mu.Unlock()
-			return l.snapshotLocked(), errStillInUse
+			return snap, errStillInUse
 		}
 		prev := l.sess.State
 		l.sess.State = Stopping
@@ -911,6 +927,9 @@ func (m *Manager) SetNeedsHelp(id string, needsHelp bool) (Session, error) {
 			// The agent is paused while a person has the browser: its
 			// connections close, and new ones are refused until hand-back.
 			l.disconnectLocked()
+		}
+		if to == Running {
+			l.lastActivity = m.now() // idle time starts at hand-back
 		}
 	default:
 		return l.sess, ErrNotRunning

@@ -167,6 +167,11 @@ func (m *Manager) memoryInUse(ctx context.Context) (int64, []Usage) {
 		if e.cid != "" {
 			if n, err := m.rt.MemoryUsage(ctx, e.cid); err == nil {
 				used = n
+				// A browser still booting will grow: count at least what a
+				// new one is expected to take.
+				if e.state == Starting {
+					used = max(n, m.memEach)
+				}
 			}
 		}
 		total += used
