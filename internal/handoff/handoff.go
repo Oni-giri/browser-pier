@@ -172,6 +172,9 @@ func (s *Service) Create(ctx context.Context, sessionID, agent string, reason Re
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		h.ID, h.SessionID, h.Profile, h.Agent, h.Reason, h.Detail, h.Origin, h.Policy, h.Status, hash(token),
 		h.CreatedAt.UnixMilli(), h.ExpiresAt.UnixMilli()); err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed: handoffs.session_id") {
+			return Handoff{}, "", ErrOpen // another Create got in first
+		}
 		return Handoff{}, "", err
 	}
 	if _, err := s.m.SetNeedsHelp(sessionID, true); err != nil {

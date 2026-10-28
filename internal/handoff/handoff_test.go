@@ -163,6 +163,30 @@ func TestCreatePausesTheAgentAndShowsOnlyTheOrigin(t *testing.T) {
 	}
 }
 
+func TestConcurrentCreatesOpenOneHandoff(t *testing.T) {
+	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
+	s := f.running()
+	errs := make(chan error, 8)
+	for range cap(errs) {
+		go func() {
+			_, _, err := f.svc.Create(context.Background(), s.ID, "research-bot", Captcha, "", "")
+			errs <- err
+		}()
+	}
+	won := 0
+	for range cap(errs) {
+		switch err := <-errs; {
+		case err == nil:
+			won++
+		case !errors.Is(err, ErrOpen):
+			t.Fatalf("a losing Create: %v", err)
+		}
+	}
+	if won != 1 {
+		t.Fatalf("%d concurrent Creates won, want 1", won)
+	}
+}
+
 func TestAgentsCanOnlyRaiseThePolicy(t *testing.T) {
 	for _, c := range []struct{ profile, require, want profiles.HandoffPolicy }{
 		{profiles.PolicyPIN, profiles.PolicyLink, profiles.PolicyPIN},
