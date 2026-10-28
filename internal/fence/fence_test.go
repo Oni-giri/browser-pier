@@ -51,19 +51,30 @@ func TestRedactInputs(t *testing.T) {
 		`<input name="otp" value=123456>` +
 		`<input autocomplete="one-time-code" value='654321'>` +
 		`<INPUT TYPE=text id="pin-code" VALUE="4821">` +
-		`<input name="spinner" value="keep"></form>`
+		`<input name="userPassword" value="camel1">` +
+		`<input name="pwd" value="short2">` +
+		`<input title=">" type=password value="quoted3">` +
+		`<input name="spinner" value="keep"><input name="passport" value="kept-too"></form>`
 	out := RedactInputs(html)
-	for _, secret := range []string{"hunter2", "123456", "654321", "4821"} {
+	for _, secret := range []string{"hunter2", "123456", "654321", "4821", "camel1", "short2", "quoted3"} {
 		if strings.Contains(out, secret) {
 			t.Errorf("%s survived: %s", secret, out)
 		}
 	}
-	for _, kept := range []string{"me@example.com", `value="keep"`} {
+	for _, kept := range []string{"me@example.com", `value="keep"`, `value="kept-too"`, `<form>`, `</form>`} {
 		if !strings.Contains(out, kept) {
-			t.Errorf("%s was redacted: %s", kept, out)
+			t.Errorf("%s was lost: %s", kept, out)
 		}
 	}
-	if strings.Count(out, Redacted) != 4 {
-		t.Errorf("want 4 redactions: %s", out)
+	if strings.Count(out, Redacted) != 7 {
+		t.Errorf("want 7 redactions: %s", out)
+	}
+}
+
+func TestWords(t *testing.T) {
+	for in, want := range map[string]string{"userPassword_2": " user password 2 ", "OTP": " otp ", "pin-code": " pin code "} {
+		if got := words(in); got != want {
+			t.Errorf("words(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

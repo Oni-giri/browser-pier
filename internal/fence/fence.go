@@ -10,6 +10,9 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
 // Clean removes what a person reading the page wouldn't see but a model
@@ -70,45 +73,83 @@ const Redacted = "[redacted]"
 
 // RedactInputs hides the values of password and one-time-code fields in
 // HTML, so a page snapshot never hands an agent a password a person
-// typed or a code sent to their phone.
-func RedactInputs(html string) string {
-	return inputTag.ReplaceAllStringFunc(html, func(tag string) string {
-		if !Secret(attr(tag, "type"), attr(tag, "autocomplete"), attr(tag, "name")+" "+attr(tag, "id")) {
-			return tag
+// typed or a code sent to their phone. It tokenizes the HTML as a browser
+// would, so quoting tricks can't hide a field; everything else is kept
+// byte for byte.
+func RedactInputs(doc string) string {
+	z := html.NewTokenizer(strings.NewReader(doc))
+	var b strings.Builder
+	for {
+		tt := z.Next()
+		if tt == html.ErrorToken {
+			return b.String() // io.EOF, or the rest wasn't HTML: dropped
 		}
-		return valueAttr.ReplaceAllString(tag, `${1}value="`+Redacted+`"`)
-	})
+		raw := z.Raw()
+		if tt != html.StartTagToken && tt != html.SelfClosingTagToken {
+			b.Write(raw)
+			continue
+		}
+		tok := z.Token()
+		if tok.DataAtom != atom.Input || !secretInput(tok.Attr) {
+			b.Write(raw)
+			continue
+		}
+		for i := range tok.Attr {
+			if strings.EqualFold(tok.Attr[i].Key, "value") {
+				tok.Attr[i].Val = Redacted
+			}
+		}
+		b.WriteString(tok.String())
+	}
 }
 
-// Secret reports whether a form field holds a password or one-time code,
-// from its type, autocomplete and name or id.
+func secretInput(attrs []html.Attribute) bool {
+	var typ, autocomplete, name string
+	for _, a := range attrs {
+		switch strings.ToLower(a.Key) {
+		case "type":
+			typ = a.Val
+		case "autocomplete":
+			autocomplete = a.Val
+		case "name", "id", "aria-label", "placeholder":
+			name += " " + a.Val
+		}
+	}
+	return Secret(typ, autocomplete, name)
+}
+
+// Secret reports whether a form field holds a password, a one-time code
+// or a card's security code, from its type, autocomplete and names.
 func Secret(typ, autocomplete, name string) bool {
-	typ, autocomplete, name = strings.ToLower(typ), strings.ToLower(autocomplete), strings.ToLower(name)
-	if typ == "password" || strings.Contains(autocomplete, "password") || strings.Contains(autocomplete, "one-time-code") {
+	typ, autocomplete = strings.ToLower(typ), strings.ToLower(autocomplete)
+	if typ == "password" || strings.Contains(autocomplete, "password") || strings.Contains(autocomplete, "one-time-code") ||
+		strings.Contains(autocomplete, "cc-csc") {
 		return true
 	}
-	return otpName.MatchString(name)
+	return secretName.MatchString(words(name))
 }
 
-var (
-	inputTag  = regexp.MustCompile(`(?is)<input\b[^>]*>`)
-	valueAttr = regexp.MustCompile(`(?is)(\s)value\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)`)
-	otpName   = regexp.MustCompile(`(^|[^a-z])(otp|totp|mfa|2fa|passcode|one.?time|verification.?code|security.?code|sms.?code|auth.?code|pin)([^a-z]|$)`)
-)
-
-// attr reads one attribute's value from an HTML tag, or "".
-func attr(tag, name string) string {
-	m := attrs[name].FindStringSubmatch(tag)
-	if m == nil {
-		return ""
+// words splits camelCase and separators into spaced lowercase words:
+// "userPassword_2" → " user password 2 ".
+func words(s string) string {
+	var b strings.Builder
+	b.WriteByte(' ')
+	prev := ' '
+	for _, r := range s {
+		switch {
+		case unicode.IsUpper(r) && unicode.IsLower(prev):
+			b.WriteByte(' ')
+		case !unicode.IsLetter(r) && !unicode.IsDigit(r):
+			r = ' '
+		}
+		b.WriteRune(unicode.ToLower(r))
+		prev = r
 	}
-	return m[2] + m[3] + m[4]
+	b.WriteByte(' ')
+	return b.String()
 }
 
-var attrs = map[string]*regexp.Regexp{}
-
-func init() {
-	for _, name := range []string{"type", "autocomplete", "name", "id"} {
-		attrs[name] = regexp.MustCompile(`(?is)\s` + name + `\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))`)
-	}
-}
+// secretName matches the words, or the long ones inside other words.
+var secretName = regexp.MustCompile(`password|passwd|passphrase|passcode|` +
+	` (pass|pwd|pw|pin|otp|totp|mfa|2fa|cvv|cvc|csc|secret|token) |` +
+	`one ?time|verification ?code|security ?code|sms ?code|auth(entication)? ?code|confirmation ?code`)
