@@ -63,6 +63,9 @@ func (l Layout) hostDir(profile, sub string) string {
 	return filepath.Join(l.HostDataDir, "profiles", profile, sub)
 }
 
+// ProfileDir is a profile's whole folder, as the orchestrator sees it.
+func (l Layout) ProfileDir(profile string) string { return l.dir(profile) }
+
 // FilesDir is a profile's downloads and uploads folder, as the orchestrator sees it.
 func (l Layout) FilesDir(profile string) string { return l.dir(profile, "files") }
 

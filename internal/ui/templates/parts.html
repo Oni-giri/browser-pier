@@ -23,6 +23,7 @@
     <button type="button" data-copy="{{.CDPURL}}" data-copied="Copied CDP URL for {{.Name}}">Copy CDP URL</button>
     {{if .Live}}<button type="button" data-dialog="stop-dialog" data-name="{{.Name}}" data-agent="{{if .Session.InUseBy}}{{join .Session.InUseBy ", "}}{{end}}">Stop browser</button>{{else}}<button type="button" disabled>Stop browser</button>{{end}}
     <a href="/profiles/{{.Name}}/edit">Edit settings</a>
+    {{if .Live}}<button type="button" disabled title="Stop the browser first">Export profile…</button>{{else}}<button type="button" data-dialog="export-dialog" data-name="{{.Name}}">Export profile…</button>{{end}}
     <hr>
     <button type="button" class="danger" data-dialog="delete-dialog" data-name="{{.Name}}">Delete profile…</button>
   </div>
@@ -64,6 +65,28 @@
       <p data-text="{agent-warning}Cookies and logins are kept; you can start it again any time."></p>
     </div>
     <div class="dlg-foot"><button class="btn" type="button" data-close>Cancel</button><button class="btn primary" type="submit">Stop browser</button></div>
+  </form>
+</dialog>
+<dialog id="export-dialog" aria-labelledby="export-title">
+  <form method="post" data-action="/profiles/{name}/export" data-download="Exporting. The download starts in a moment.">
+    <div class="dlg-head"><div><h2 id="export-title" data-text="Export {name}"></h2><p>An encrypted archive of its cookies, logins, storage and files, to import here or on another BrowserPier.</p></div><button class="close" type="button" data-close aria-label="Close">✕</button></div>
+    <div class="dlg-body">
+      <p class="notice warn">Anyone with the archive and its passphrase can use these logins. Keep both safe.</p>
+      <label class="field"><span class="label">Passphrase</span><input class="input" name="passphrase" type="password" minlength="10" autocomplete="new-password" required><span class="hint">At least 10 characters. You'll need it to import. It also opens with <code>age -d</code>.</span></label>
+      <label class="field"><span class="label">Repeat it</span><input class="input" name="confirm" type="password" minlength="10" autocomplete="new-password" required></label>
+    </div>
+    <div class="dlg-foot"><button class="btn" type="button" data-close>Cancel</button><button class="btn primary" type="submit">Export</button></div>
+  </form>
+</dialog>
+<dialog id="import-dialog" aria-labelledby="import-title">
+  <form method="post" action="/profiles/import" enctype="multipart/form-data" data-busy="Importing…">
+    <div class="dlg-head"><div><h2 id="import-title">Import a profile</h2><p>From an archive exported by BrowserPier. It becomes a new profile, logged in where the original was.</p></div><button class="close" type="button" data-close aria-label="Close">✕</button></div>
+    <div class="dlg-body">
+      <label class="field"><span class="label">Name <span class="muted" style="font-weight:400">· optional</span></span><span class="prefix"><span>/profiles/</span><input name="name" pattern="[a-z0-9]([a-z0-9\-]{0,30}[a-z0-9])?" maxlength="32" autocomplete="off" spellcheck="false" placeholder="the exported one's"></span></label>
+      <label class="field"><span class="label">Passphrase</span><input class="input" name="passphrase" type="password" autocomplete="off" required></label>
+      <label class="field"><span class="label">Archive</span><input class="input" name="archive" type="file" accept=".age" required style="padding:8px 10px"><span class="hint">Its proxy, if it had one, comes with it.</span></label>
+    </div>
+    <div class="dlg-foot"><button class="btn" type="button" data-close>Cancel</button><button class="btn primary" type="submit">Import</button></div>
   </form>
 </dialog>
 <dialog id="delete-dialog" class="alert" aria-labelledby="delete-title">

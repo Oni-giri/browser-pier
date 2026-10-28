@@ -36,6 +36,8 @@ type Options struct {
 	RAMLimitFromEnv bool
 	// SetRAMLimit applies a new memory limit, as a percent of host memory.
 	SetRAMLimit func(percent int)
+	// Version is BrowserPier's, written into exports.
+	Version string
 }
 
 // UI is the web UI for the signed-in admin.
@@ -100,6 +102,8 @@ func (u *UI) Register(mux *http.ServeMux) {
 	mux.Handle("POST /profiles/{name}/stop", admin(u.stopProfile))
 	mux.Handle("POST /profiles/{name}/delete", admin(u.deleteProfile))
 	mux.Handle("POST /profiles/{name}/handback", admin(u.handBack))
+	mux.Handle("POST /profiles/{name}/export", admin(u.exportProfile))
+	mux.Handle("POST /profiles/import", admin(u.importProfile))
 	mux.Handle("GET /agents", admin(u.agentsPage))
 	mux.Handle("POST /agents/tokens", admin(u.createToken))
 	mux.Handle("POST /agents/tokens/{id}/revoke", admin(u.revokeToken))

@@ -68,6 +68,13 @@
   // Forms say they're busy, so a slow start isn't clicked twice.
   document.addEventListener("submit", (e) => {
     const form = e.target;
+    // A download doesn't leave the page: close the dialog and say so.
+    if (form.dataset.download) {
+      const dialog = form.closest("dialog");
+      setTimeout(() => { form.reset(); if (dialog) dialog.close(); }, 0);
+      toast(form.dataset.download);
+      return;
+    }
     const label = form.dataset.busy;
     if (!label) return;
     const btns = $$("button[type=submit]", form).concat(form.id ? $$(`button[type=submit][form="${form.id}"]`) : []);
