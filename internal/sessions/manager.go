@@ -115,8 +115,14 @@ type live struct {
 	failure string
 	// stop is the stop in progress, if any; everyone stopping waits on it.
 	stop *stopAttempt
-	// users counts open connections per agent.
-	users map[string]int
+	// conns are the agents' open connections to the browser.
+	conns map[*conn]struct{}
+}
+
+// conn is one agent connection to a browser; cancelling it closes it.
+type conn struct {
+	tokenID, agent string
+	cancel         context.CancelFunc
 }
 
 type stopAttempt struct {
@@ -528,6 +534,7 @@ func (m *Manager) end(l *live, lastLog string, final func(*Session)) {
 	if m.live[s.Profile] == l {
 		delete(m.live, s.Profile)
 	}
+	l.disconnectLocked()
 	m.mu.Unlock()
 	if s.State == Failed {
 		m.log.Warn("session failed", "session", s.ID, "profile", s.Profile, "err", s.Error, "last_log", s.LastLog)
@@ -563,37 +570,82 @@ func (m *Manager) snapshot(l *live) Session {
 func (l *live) snapshotLocked() Session {
 	s := l.sess
 	s.InUseBy = nil
-	for agent := range l.users {
-		s.InUseBy = append(s.InUseBy, agent)
+	seen := map[string]bool{}
+	for c := range l.conns {
+		if !seen[c.agent] {
+			seen[c.agent] = true
+			s.InUseBy = append(s.InUseBy, c.agent)
+		}
 	}
 	sort.Strings(s.InUseBy)
 	return s
 }
 
-// Attach records that agent has a connection open to the session's
-// browser, until release is called. It shows as "In use by", and a
-// browser in use isn't idle.
-func (m *Manager) Attach(id, agent string) (release func(), err error) {
+// Attach registers an agent's connection to a running session's browser.
+// It returns a context that ends when the connection must close: when a
+// person takes over (Needs help), when the session ends, or when the
+// agent's token is revoked (DisconnectToken). Call release when the
+// connection closes. The agent shows as "In use by" meanwhile.
+func (m *Manager) Attach(ctx context.Context, id, tokenID, agent string) (context.Context, func(), error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.findLocked(id)
-	if l == nil || !l.sess.State.Live() {
-		return nil, ErrNotRunning
+	if l == nil || l.sess.State != Running {
+		return nil, nil, ErrNotRunning
 	}
-	if l.users == nil {
-		l.users = map[string]int{}
+	cctx, cancel := context.WithCancel(ctx)
+	c := &conn{tokenID: tokenID, agent: agent, cancel: cancel}
+	if l.conns == nil {
+		l.conns = map[*conn]struct{}{}
 	}
-	l.users[agent]++
+	l.conns[c] = struct{}{}
 	var once sync.Once
-	return func() {
+	return cctx, func() {
 		once.Do(func() {
+			cancel()
 			m.mu.Lock()
-			defer m.mu.Unlock()
-			if l.users[agent]--; l.users[agent] <= 0 {
-				delete(l.users, agent)
-			}
+			delete(l.conns, c)
+			m.mu.Unlock()
 		})
 	}, nil
+}
+
+// disconnectLocked closes every agent connection to the session.
+func (l *live) disconnectLocked() {
+	for c := range l.conns {
+		c.cancel()
+	}
+}
+
+// DisconnectToken closes every connection opened with a token, for when
+// it is revoked.
+func (m *Manager) DisconnectToken(tokenID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, l := range m.live {
+		for c := range l.conns {
+			if c.tokenID == tokenID {
+				c.cancel()
+			}
+		}
+	}
+}
+
+// ConnectedTokens lists the tokens with an open connection to any browser.
+func (m *Manager) ConnectedTokens() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	seen := map[string]bool{}
+	var out []string
+	for _, l := range m.live {
+		for c := range l.conns {
+			if !seen[c.tokenID] {
+				seen[c.tokenID] = true
+				out = append(out, c.tokenID)
+			}
+		}
+	}
+	return out
 }
 
 // stopContainer asks Docker to stop a container without waiting for it; the
@@ -700,6 +752,11 @@ func (m *Manager) SetNeedsHelp(id string, needsHelp bool) (Session, error) {
 		if err := updateSession(context.Background(), m.db, l.sess); err != nil {
 			l.sess = before
 			return before, err
+		}
+		if to == NeedsHelp {
+			// The agent is paused while a person has the browser: its
+			// connections close, and new ones are refused until hand-back.
+			l.disconnectLocked()
 		}
 	default:
 		return l.sess, ErrNotRunning

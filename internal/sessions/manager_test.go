@@ -603,29 +603,85 @@ func TestReconcileRemovesTombstones(t *testing.T) {
 	}
 }
 
-func TestAttachShowsInUseBy(t *testing.T) {
+func TestAttachShowsInUseByAndEndsWithTheSession(t *testing.T) {
 	f := newFixture(t)
+	ctx := context.Background()
 	s := f.start(f.m)
-	r1, err := f.m.Attach(s.ID, "claude")
+	c1, r1, err := f.m.Attach(ctx, s.ID, "t1", "claude")
 	if err != nil {
 		t.Fatal(err)
 	}
-	r2, _ := f.m.Attach(s.ID, "claude")
-	r3, _ := f.m.Attach(s.ID, "browser-use")
+	_, r2, _ := f.m.Attach(ctx, s.ID, "t1", "claude")
+	c3, r3, _ := f.m.Attach(ctx, s.ID, "t2", "browser-use")
 	if got, _ := f.m.Live("google"); strings.Join(got.InUseBy, ",") != "browser-use,claude" {
 		t.Fatalf("InUseBy = %v", got.InUseBy)
 	}
+	if got := f.m.ConnectedTokens(); len(got) != 2 {
+		t.Fatalf("ConnectedTokens = %v", got)
+	}
 	r1()
 	r1() // releasing twice is harmless
+	if c1.Err() == nil {
+		t.Fatal("a released connection's context is still open")
+	}
 	r3()
-	if got, _ := f.m.Get(context.Background(), s.ID); strings.Join(got.InUseBy, ",") != "claude" {
+	if c3.Err() == nil {
+		t.Fatal("release didn't cancel")
+	}
+	if got, _ := f.m.Get(ctx, s.ID); strings.Join(got.InUseBy, ",") != "claude" {
 		t.Fatalf("InUseBy after release = %v", got.InUseBy)
 	}
 	r2()
-	if got, _ := f.m.Live("google"); len(got.InUseBy) != 0 {
-		t.Fatalf("InUseBy after all released = %v", got.InUseBy)
-	}
-	if _, err := f.m.Attach("nope", "claude"); !errors.Is(err, ErrNotRunning) {
+	if _, _, err := f.m.Attach(ctx, "nope", "t1", "claude"); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("Attach unknown = %v", err)
+	}
+
+	// Stopping the session closes what's still attached.
+	c4, r4, _ := f.m.Attach(ctx, s.ID, "t1", "claude")
+	defer r4()
+	if _, err := f.m.Stop(ctx, s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if c4.Err() == nil {
+		t.Fatal("a connection outlived its session")
+	}
+}
+
+func TestHandoffClosesAgentConnections(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	s := f.start(f.m)
+	c, release, _ := f.m.Attach(ctx, s.ID, "t1", "claude")
+	defer release()
+	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if c.Err() == nil {
+		t.Fatal("an agent stayed connected while a person has the browser")
+	}
+	if _, _, err := f.m.Attach(ctx, s.ID, "t1", "claude"); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("Attach during a handoff = %v", err)
+	}
+	if _, err := f.m.SetNeedsHelp(s.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	_, r, err := f.m.Attach(ctx, s.ID, "t1", "claude")
+	if err != nil {
+		t.Fatalf("Attach after hand-back = %v", err)
+	}
+	r()
+}
+
+func TestDisconnectToken(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	s := f.start(f.m)
+	revoked, r1, _ := f.m.Attach(ctx, s.ID, "t1", "claude")
+	defer r1()
+	kept, r2, _ := f.m.Attach(ctx, s.ID, "t2", "other")
+	defer r2()
+	f.m.DisconnectToken("t1")
+	if revoked.Err() == nil || kept.Err() != nil {
+		t.Fatalf("after revoking t1: t1 %v, t2 %v", revoked.Err(), kept.Err())
 	}
 }

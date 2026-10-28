@@ -168,13 +168,17 @@ func (a *API) createProfile(w http.ResponseWriter, r *http.Request) {
 			p.HandoffPolicy = asked
 		}
 	}
+	if err := p.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	created, err := a.m.Profiles().Create(r.Context(), p)
 	switch {
 	case errors.Is(err, profiles.ErrExists):
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	case err != nil:
-		writeError(w, http.StatusBadRequest, err.Error())
+		a.internal(w, "creating a profile", err)
 		return
 	}
 	a.log.Info("profile created", "profile", created.Name, "token", tok.Name)

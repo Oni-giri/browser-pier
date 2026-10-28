@@ -9,6 +9,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
@@ -91,9 +92,12 @@ func (a *API) cdp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	release, err := a.m.Attach(s.ID, tok.Name)
+	// Attach checks the session is still running and gives a context that
+	// ends if a person takes over, the session ends or the token is
+	// revoked; the proxy then closes the connection.
+	ctx, release, err := a.m.Attach(r.Context(), s.ID, tok.ID, tok.Name)
 	if err != nil {
-		writeError(w, http.StatusConflict, "the session ended")
+		writeError(w, http.StatusConflict, "the session isn't running (it may have stopped, or a person has it)")
 		return
 	}
 	defer release()
@@ -111,7 +115,33 @@ func (a *API) cdp(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadGateway, "can't reach the browser: "+err.Error())
 		},
 	}
-	proxy.ServeHTTP(w, r)
+	proxy.ServeHTTP(w, r.WithContext(ctx))
+}
+
+// WatchRevocations closes CDP connections whose token has been revoked,
+// checking every interval until ctx ends. Revoking in the UI disconnects
+// at once too; this also catches the token CLI, which runs in another
+// process.
+func (a *API) WatchRevocations(ctx context.Context, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			a.checkRevocations(ctx)
+		}
+	}
+}
+
+func (a *API) checkRevocations(ctx context.Context) {
+	for _, id := range a.m.ConnectedTokens() {
+		if _, err := a.web.Tokens().Get(ctx, id); errors.Is(err, auth.ErrTokenNotFound) {
+			a.log.Info("closing connections of a revoked token", "token_id", id)
+			a.m.DisconnectToken(id)
+		}
+	}
 }
 
 // browserTarget returns the browser-level DevTools path, /devtools/browser/<id>.

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 type call struct {
@@ -116,5 +117,21 @@ func TestRunCommand(t *testing.T) {
 	}
 	if _, err := runCommand(context.Background(), "sh", "-c", "exit 2"); err == nil || !strings.Contains(err.Error(), "exit status 2") {
 		t.Fatalf("failing command: %v", err)
+	}
+}
+
+func TestRunCommandStopsAnOverlongOutput(t *testing.T) {
+	done := make(chan error, 1)
+	go func() {
+		_, err := runCommand(context.Background(), "sh", "-c", "yes >&3")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "output over") {
+			t.Fatalf("runCommand = %v, want an output-too-large error", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("runCommand hung on a command that never stops writing")
 	}
 }
