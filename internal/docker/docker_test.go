@@ -69,7 +69,7 @@ func TestBrowserConfigLocksDownTheContainer(t *testing.T) {
 }
 
 func TestNewCompactsTheEmbeddedSeccompProfile(t *testing.T) {
-	c, err := New(Options{Image: "img"})
+	c, err := New(Options{Image: "img", Instance: "i1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,8 +80,11 @@ func TestNewCompactsTheEmbeddedSeccompProfile(t *testing.T) {
 	if strings.ContainsAny(c.seccomp, "\n\t") || !json.Valid([]byte(c.seccomp)) || !strings.Contains(c.seccomp, `"unshare"`) {
 		t.Fatalf("seccomp profile not compact valid JSON with the sandbox rules: %.80s…", c.seccomp)
 	}
-	if _, err := New(Options{}); err == nil {
+	if _, err := New(Options{Instance: "i1"}); err == nil {
 		t.Fatal("New must refuse an empty image")
+	}
+	if _, err := New(Options{Image: "img"}); err == nil {
+		t.Fatal("New must refuse an empty instance ID")
 	}
 }
 

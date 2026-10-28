@@ -30,6 +30,10 @@ const (
 	LabelManaged = "io.browserpier.managed"
 	LabelProfile = "io.browserpier.profile"
 	LabelSession = "io.browserpier.session"
+	// LabelInstance names the BrowserPier (one data dir) that started the
+	// container, so two of them on one Docker host leave each other's
+	// browsers alone.
+	LabelInstance = "io.browserpier.instance"
 )
 
 const (
@@ -75,6 +79,7 @@ type Client struct {
 	// for Docker, a host path for Podman (see UseDataDir).
 	seccompOpt string
 	userns     string
+	instance   string
 }
 
 // Options configure a Client.
@@ -84,6 +89,9 @@ type Options struct {
 	// needs "keep-id" so the browser's uid matches the orchestrator's on
 	// the profile folders; Docker needs nothing.
 	UsernsMode string
+	// Instance identifies this BrowserPier among others on the same
+	// Docker host; it only sees and removes its own containers.
+	Instance string
 }
 
 // New connects to the Docker daemon named by the usual DOCKER_* variables.
@@ -91,6 +99,9 @@ func New(o Options) (*Client, error) {
 	image := o.Image
 	if image == "" {
 		return nil, errors.New("no browser image set")
+	}
+	if o.Instance == "" {
+		return nil, errors.New("no instance ID set")
 	}
 	var seccomp bytes.Buffer
 	if err := json.Compact(&seccomp, chromium.SeccompProfile); err != nil {
@@ -100,7 +111,7 @@ func New(o Options) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{api: api, image: image, seccomp: seccomp.String(), seccompOpt: "seccomp=" + seccomp.String(), userns: o.UsernsMode}, nil
+	return &Client{api: api, image: image, seccomp: seccomp.String(), seccompOpt: "seccomp=" + seccomp.String(), userns: o.UsernsMode, instance: o.Instance}, nil
 }
 
 // UseDataDir finishes setting up against the daemon, given the data dir as
@@ -154,6 +165,7 @@ func (c *Client) Ping(ctx context.Context) error {
 // doesn't have it.
 func (c *Client) Create(ctx context.Context, spec BrowserSpec) (string, error) {
 	cfg, host := browserConfig(c.image, c.seccompOpt, spec)
+	cfg.Labels[LabelInstance] = c.instance
 	host.UsernsMode = container.UsernsMode(c.userns)
 	opts := client.ContainerCreateOptions{Name: spec.Name, Config: cfg, HostConfig: host}
 	res, err := c.api.ContainerCreate(ctx, opts)
@@ -298,7 +310,7 @@ func (c *Client) RemoveStale(ctx context.Context, name, profile string) error {
 	if res.Container.Config != nil {
 		labels = res.Container.Config.Labels
 	}
-	if labels[LabelManaged] != "true" || labels[LabelProfile] != profile {
+	if labels[LabelManaged] != "true" || labels[LabelInstance] != c.instance || labels[LabelProfile] != profile {
 		return fmt.Errorf("another container is already named %s; BrowserPier didn't create it, so rename or remove it yourself", name)
 	}
 	if res.Container.State != nil && res.Container.State.Running {
@@ -311,7 +323,7 @@ func (c *Client) RemoveStale(ctx context.Context, name, profile string) error {
 func (c *Client) List(ctx context.Context) ([]Container, error) {
 	res, err := c.api.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
-		Filters: make(client.Filters).Add("label", LabelManaged+"=true"),
+		Filters: make(client.Filters).Add("label", LabelManaged+"=true", LabelInstance+"="+c.instance),
 	})
 	if err != nil {
 		return nil, err
