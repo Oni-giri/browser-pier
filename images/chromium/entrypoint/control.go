@@ -18,7 +18,7 @@ import (
 //	GET /healthz   ok once Chromium answers on CDP
 //	    /cdp/...   CDP over HTTP and WebSocket, relayed to Chromium's loopback port
 //	GET /stream    the display as an H.264 Annex-B byte stream, one reader at a time
-//	GET /screenshot, POST /input/click, POST /input/type   Visual mode (see visual.go)
+//	GET /screenshot, POST /input/{click,type,scroll,key,drag}   Visual mode (see visual.go)
 //	GET /geo           the location the browser runs with
 //	GET /proxy/stats   bytes through the proxy, when there is one
 func newControlHandler(cdp string, stream http.Handler, vis *visual, fwd *forwarder, where geo) http.Handler {
