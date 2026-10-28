@@ -11,8 +11,10 @@ import (
 	"image/png"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,6 +27,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/db"
 	"github.com/Oni-giri/browser-pier/internal/docker"
 	"github.com/Oni-giri/browser-pier/internal/files"
+	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
@@ -32,6 +35,7 @@ type agent struct {
 	t     *testing.T
 	base  string
 	token string
+	m     *sessions.Manager
 }
 
 func (a agent) do(method, path, body string, out any) int {
@@ -106,7 +110,7 @@ func newRealAPI(t *testing.T) agent {
 	New(m, web, files.New(m.Layout().FilesDir, 0, os.Getuid(), os.Getgid()), log, "").Register(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return agent{t: t, base: srv.URL, token: secret}
+	return agent{t: t, base: srv.URL, token: secret, m: m}
 }
 
 func siteHost(t *testing.T) string {
@@ -281,5 +285,103 @@ func waitForFile(t *testing.T, a agent, profile, name, want string) {
 			t.Fatalf("%s never appeared; files: %v", name, list)
 		}
 		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+// TestProxiedBrowserMatchesItsExit: with a proxy, everything goes through
+// it by name, the time zone and languages match where it exits, WebRTC
+// shows no address, and if the proxy goes away nothing goes out directly.
+func TestProxiedBrowserMatchesItsExit(t *testing.T) {
+	for kind, start := range map[string]func(*testing.T, string, string) *browsertest.Proxy{
+		"http":   browsertest.NewConnectProxy,
+		"socks5": browsertest.NewSOCKS5Proxy,
+	} {
+		t.Run(kind, func(t *testing.T) {
+			a := newRealAPI(t)
+			host := siteHost(t) // how the container reaches the proxy
+			// The site has a name only the proxy can resolve: if pages load,
+			// names went through the proxy unresolved.
+			site := browsertest.NewSite(t, "browserpier.test")
+			up := start(t, "pier", "s3cret:pw")
+			up.Alias("browserpier.test", "127.0.0.1")
+			a.m.SetGeoURL(site.URL + "/geo")
+
+			name := fmt.Sprintf("p%d", time.Now().UnixNano()%1e9)
+			t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", "browserpier-"+name).Run() })
+			p := profiles.New(name)
+			p.DefaultMode, p.Width, p.Height = profiles.ModeAPI, 1280, 800
+			p.Proxy = kind + "://pier:" + url.QueryEscape("s3cret:pw") + "@" + net.JoinHostPort(host, up.Port())
+			if _, err := a.m.Profiles().Create(context.Background(), p); err != nil {
+				t.Fatal(err)
+			}
+
+			var s sessionJSON
+			if code := a.do(http.MethodPost, "/api/sessions", fmt.Sprintf(`{"profile": %q}`, name), &s); code != http.StatusCreated {
+				t.Fatalf("start: %d %+v", code, s)
+			}
+			pg := browsertest.PageVia(t, strings.Replace(s.CDPURL, "ws://", "http://", 1)+"/json/list", a.header())
+			pg.Navigate(site.URL + "/account")
+
+			if tz := pg.Eval("Intl.DateTimeFormat().resolvedOptions().timeZone"); tz != "Europe/Berlin" {
+				t.Errorf("time zone %v, want Europe/Berlin", tz)
+			}
+			if lang := pg.Eval("navigator.language"); lang != "de-DE" {
+				t.Errorf("navigator.language %v, want de-DE", lang)
+			}
+			if al := site.AcceptLanguage(); !strings.HasPrefix(al, "de-DE,de") {
+				t.Errorf("Accept-Language %q, want de-DE first", al)
+			}
+			sitePort := strings.TrimPrefix(site.URL[strings.LastIndex(site.URL, ":"):], ":")
+			found := false
+			for _, target := range up.Targets() {
+				if target == net.JoinHostPort("browserpier.test", sitePort) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("the proxy never carried the site; it saw %v", up.Targets())
+			}
+
+			var prof profileJSON
+			a.do(http.MethodGet, "/api/profiles", "", nil)
+			var list struct{ Profiles []profileJSON }
+			a.do(http.MethodGet, "/api/profiles", "", &list)
+			for _, pr := range list.Profiles {
+				if pr.Name == name {
+					prof = pr
+				}
+			}
+			if prof.Location == nil || prof.Location.Country != "DE" || prof.Location.TimeZone != "Europe/Berlin" {
+				t.Errorf("recorded location %+v", prof.Location)
+			}
+			if strings.Contains(prof.Proxy, "s3cret") {
+				t.Error("the API shows the proxy password")
+			}
+
+			// WebRTC gives away no address.
+			cands := pg.Eval(`new Promise(resolve => {
+				const pc = new RTCPeerConnection({iceServers: [{urls: 'stun:stun.l.google.com:19302'}]});
+				const found = [];
+				pc.onicecandidate = e => { if (e.candidate) found.push(e.candidate.candidate); else resolve(found); };
+				pc.createDataChannel('x');
+				pc.createOffer().then(o => pc.setLocalDescription(o));
+				setTimeout(() => resolve(found), 5000);
+			})`)
+			for _, c := range cands.([]any) {
+				f := strings.Fields(fmt.Sprint(c))
+				if len(f) > 4 && net.ParseIP(f[4]) != nil {
+					t.Errorf("WebRTC candidate with an address: %v", c)
+				}
+			}
+
+			// The proxy goes away: the page fails; nothing reaches the site directly.
+			up.Close()
+			before := site.Requests()
+			_, _ = pg.Try("Page.navigate", map[string]any{"url": site.URL + "/account?after"})
+			time.Sleep(3 * time.Second)
+			if site.Requests() != before {
+				t.Error("with the proxy down, the browser reached the site anyway")
+			}
+		})
 	}
 }

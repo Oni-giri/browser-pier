@@ -16,10 +16,61 @@ import (
 // password and records every target it was asked to reach.
 type Proxy struct {
 	Addr    string // host:port it listens on, on every interface
+	ln      net.Listener
+	aliases map[string]string
+	conns   map[net.Conn]struct{}
 	mu      sync.Mutex
 	targets []string
 	denied  int
 }
+
+// Alias makes the proxy reach name at addr (an IP), like a DNS entry only
+// the proxy has. A page that loads through such a name proves the name
+// reached the proxy unresolved.
+func (p *Proxy) Alias(name, addr string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.aliases == nil {
+		p.aliases = map[string]string{}
+	}
+	p.aliases[name] = addr
+}
+
+func (p *Proxy) dial(target string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return nil, err
+	}
+	p.mu.Lock()
+	if a, ok := p.aliases[host]; ok {
+		host = a
+	}
+	p.mu.Unlock()
+	return net.Dial("tcp", net.JoinHostPort(host, port))
+}
+
+// Close takes the proxy down: no new connections, and every open tunnel cut.
+func (p *Proxy) Close() {
+	_ = p.ln.Close()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for c := range p.conns {
+		_ = c.Close()
+	}
+}
+
+// track remembers an open connection so Close can cut it.
+func (p *Proxy) track(c net.Conn) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.conns == nil {
+		p.conns = map[net.Conn]struct{}{}
+	}
+	p.conns[c] = struct{}{}
+}
+
+// Port is the port it listens on.
+func (p *Proxy) Port() string { _, port, _ := net.SplitHostPort(p.Addr); return port }
 
 // Targets lists the host:port targets the proxy connected, in order.
 func (p *Proxy) Targets() []string {
@@ -65,7 +116,7 @@ func pipe(a, b net.Conn) {
 // basic authentication.
 func NewConnectProxy(t *testing.T, user, pass string) *Proxy {
 	ln := listen(t)
-	p := &Proxy{Addr: ln.Addr().String()}
+	p := &Proxy{Addr: ln.Addr().String(), ln: ln}
 	want := "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+pass))
 	go func() {
 		for {
@@ -86,13 +137,15 @@ func NewConnectProxy(t *testing.T, user, pass string) *Proxy {
 					_ = c.Close()
 					return
 				}
-				up, err := net.Dial("tcp", req.Host)
+				up, err := p.dial(req.Host)
 				if err != nil {
 					_, _ = io.WriteString(c, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
 					_ = c.Close()
 					return
 				}
 				p.record(req.Host, true)
+				p.track(c)
+				p.track(up)
 				_, _ = io.WriteString(c, "HTTP/1.1 200 OK\r\n\r\n")
 				if n := br.Buffered(); n > 0 {
 					b, _ := br.Peek(n)
@@ -110,7 +163,7 @@ func NewConnectProxy(t *testing.T, user, pass string) *Proxy {
 // here was not resolved by the client.
 func NewSOCKS5Proxy(t *testing.T, user, pass string) *Proxy {
 	ln := listen(t)
-	p := &Proxy{Addr: ln.Addr().String()}
+	p := &Proxy{Addr: ln.Addr().String(), ln: ln}
 	go func() {
 		for {
 			c, err := ln.Accept()
@@ -173,12 +226,14 @@ func (p *Proxy) socks(c net.Conn, user, pass string) {
 	pb := make([]byte, 2)
 	_, _ = io.ReadFull(c, pb)
 	target := net.JoinHostPort(host, strconv.Itoa(int(binary.BigEndian.Uint16(pb))))
-	up, err := net.Dial("tcp", target)
+	up, err := p.dial(target)
 	if err != nil {
 		_, _ = c.Write([]byte{0x05, 0x04, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 		return
 	}
 	p.record(target, true)
+	p.track(c)
+	p.track(up)
 	_, _ = c.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 	pipe(c, up)
 }
