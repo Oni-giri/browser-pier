@@ -7,12 +7,31 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/Oni-giri/browser-pier/internal/auth"
+	"github.com/Oni-giri/browser-pier/internal/db"
 )
 
+func testHandler(t *testing.T) http.Handler {
+	t.Helper()
+	d, err := db.Open(context.Background(), filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	log := slog.New(slog.DiscardHandler)
+	admin, err := auth.NewAdmin(context.Background(), d, "the-admin-password", log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newHandler(auth.NewWeb(admin, auth.NewTokens(d), log, auth.WebOptions{CookieSecure: "auto"}))
+}
+
 func TestHealthz(t *testing.T) {
-	h := newHandler()
+	h := testHandler(t)
 	for _, tc := range []struct {
 		method, path string
 		code         int
@@ -21,6 +40,8 @@ func TestHealthz(t *testing.T) {
 		{http.MethodHead, "/healthz", http.StatusOK},
 		{http.MethodPost, "/healthz", http.StatusMethodNotAllowed},
 		{http.MethodGet, "/nope", http.StatusNotFound},
+		{http.MethodGet, "/", http.StatusSeeOther}, // to the sign-in page
+		{http.MethodGet, "/login", http.StatusOK},
 	} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
@@ -37,7 +58,7 @@ func TestServeStopsOnCancel(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, ln, newHandler(), slog.New(slog.DiscardHandler)) }()
+	go func() { done <- serve(ctx, ln, testHandler(t), slog.New(slog.DiscardHandler)) }()
 
 	resp, err := http.Get("http://" + ln.Addr().String() + "/healthz")
 	if err != nil {

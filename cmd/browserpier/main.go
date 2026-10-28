@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/config"
 	"github.com/Oni-giri/browser-pier/internal/db"
 	"github.com/Oni-giri/browser-pier/internal/docker"
@@ -97,13 +98,23 @@ func run(log *slog.Logger) error {
 		return fmt.Errorf("checking browsers left running: %w", err)
 	}
 
+	admin, err := auth.NewAdmin(ctx, database, cfg.AdminPassword, log)
+	if err != nil {
+		return err
+	}
+	web := auth.NewWeb(admin, auth.NewTokens(database), log, auth.WebOptions{
+		TrustedProxies: cfg.TrustedProxies,
+		CookieSecure:   cfg.CookieSecure,
+		PublicURL:      cfg.PublicURL,
+	})
+
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return err
 	}
 	log.Info("starting", "version", version, "listen", ln.Addr().String(), "data_dir", dataDir,
 		"host_data_dir", hostDataDir, "browser_image", image)
-	return serve(ctx, ln, newHandler(), log)
+	return serve(ctx, ln, newHandler(web), log)
 }
 
 // defaultBrowserImage is the browser image built alongside this version:
@@ -128,13 +139,22 @@ func browserUser(uid, gid int) (int, int) {
 	return uid, gid
 }
 
-func newHandler() http.Handler {
+// newHandler is every route. Cross-origin form posts are refused, so a
+// page elsewhere can't act with the admin's cookie.
+func newHandler(web *auth.Web) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("ok\n"))
 	})
-	return mux
+	web.Register(mux)
+	// Until the web UI lands (PROJ-11), the home page only confirms the sign-in.
+	mux.Handle("GET /{$}", web.RequireAdmin(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<!doctype html><title>BrowserPier</title><p>Signed in to BrowserPier.</p>` +
+			`<form method="post" action="/logout"><button>Sign out</button></form>`))
+	})))
+	return new(http.CrossOriginProtection).Handler(mux)
 }
 
 // serve runs the HTTP server on ln until ctx is done, then shuts it down gracefully.

@@ -1,0 +1,58 @@
+{{define "page"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>BrowserPier · {{.Title}}</title>
+<style>
+:root{--bg:#FAFAFA;--surface:#FFF;--ink:#09090B;--ink2:#52525B;--ink3:#71717A;--line:#E4E4E7;--blue:#2F6BFF;--red:#DC2626;--redtext:#B91C1C}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);color:var(--ink);font:14px/1.5 Geist,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;padding:16px}
+main{width:100%;max-width:380px;background:var(--surface);border-radius:16px;box-shadow:0 0 0 1px var(--line),0 1px 2px rgba(9,9,11,.04);padding:28px}
+.brand{font-weight:600;font-size:15px;margin-bottom:24px}
+h1{font-size:22px;font-weight:600;letter-spacing:-.6px;margin:0 0 6px}
+p{color:var(--ink2);margin:0 0 20px}
+label{display:block;font-weight:500;margin:14px 0 6px}
+input[type=password],input[type=text]{width:100%;height:36px;padding:0 10px;border:0;border-radius:8px;background:var(--surface);box-shadow:0 0 0 1px var(--line),0 1px 2px rgba(9,9,11,.05);font:inherit}
+input:focus{outline:none;box-shadow:0 0 0 1px var(--blue),0 0 0 4px rgba(47,107,255,.18)}
+input.bad{box-shadow:0 0 0 1px var(--red),0 0 0 4px rgba(220,38,38,.12)}
+.check{display:flex;gap:8px;align-items:center;font-weight:400;color:var(--ink2)}
+.error{color:var(--redtext);margin:8px 0 0}
+button{margin-top:20px;width:100%;height:36px;border:0;border-radius:8px;background:var(--ink);color:#fff;font:inherit;font-weight:500;box-shadow:inset 0 1px 0 rgba(255,255,255,.12);cursor:pointer}
+code{font-family:"Geist Mono",ui-monospace,monospace;font-size:13px;background:#F4F4F5;border-radius:4px;padding:1px 4px}
+</style>
+</head>
+<body><main>
+<div class="brand">BrowserPier</div>
+{{template "body" .}}
+</main></body>
+</html>{{end}}
+
+{{define "login-body"}}
+<h1>Sign in to BrowserPier</h1>
+<p>{{if .EnvManaged}}Use the admin password set for this server (on Umbrel, the app password under BrowserPier → Info).{{else}}Use the admin password chosen at first-run setup.{{end}}</p>
+<form method="post" action="/login">
+<input type="hidden" name="next" value="{{.Next}}">
+<label for="password">Password</label>
+<input id="password" name="password" type="password" autocomplete="current-password" required autofocus{{if .Error}} class="bad" aria-invalid="true" aria-describedby="error"{{end}}>
+{{if .Error}}<div id="error" class="error" role="alert">{{.Error}}</div>{{end}}
+<label class="check"><input type="checkbox" name="remember" value="1"{{if .Remember}} checked{{end}}> Remember this device for 30 days</label>
+<button type="submit">Continue ↵</button>
+</form>
+{{end}}
+
+{{define "setup-body"}}
+<h1>Set up BrowserPier</h1>
+<p>Choose the admin password. The setup code is in BrowserPier's log, on the line that says <code>setup_code=</code>.</p>
+<form method="post" action="/setup">
+<label for="code">Setup code</label>
+<input id="code" name="code" type="text" autocomplete="off" spellcheck="false" required autofocus>
+<label for="password">Admin password</label>
+<input id="password" name="password" type="password" autocomplete="new-password" minlength="8" required>
+<label for="confirm">Repeat it</label>
+<input id="confirm" name="confirm" type="password" autocomplete="new-password" minlength="8" required>
+{{if .Error}}<div class="error" role="alert">{{.Error}}</div>{{end}}
+<button type="submit">Save and sign in</button>
+</form>
+{{end}}

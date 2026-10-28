@@ -76,7 +76,15 @@ func TestEnvPasswordWinsAtEveryStart(t *testing.T) {
 	if err := a.ChangePassword(ctx, "from-env-1", "something-else", ""); !errors.Is(err, ErrEnvManaged) {
 		t.Fatalf("ChangePassword = %v", err)
 	}
+	cookie, _, _ := a.NewSession(ctx, true, "")
+	a, _ = newAdmin(t, d, "from-env-1") // same password: sessions stay
+	if _, err := a.Session(ctx, cookie); err != nil {
+		t.Fatal("a restart with the same password signed the browser out")
+	}
 	a, _ = newAdmin(t, d, "from-env-2") // changed in the environment: the reset path
+	if _, err := a.Session(ctx, cookie); !errors.Is(err, ErrNoSession) {
+		t.Fatal("a browser signed in with the old password is still signed in")
+	}
 	if ok, _ := a.CheckPassword(ctx, "from-env-1"); ok {
 		t.Fatal("old env password still works")
 	}

@@ -71,7 +71,12 @@ func NewAdmin(ctx context.Context, db *sql.DB, envPassword string, log *slog.Log
 			if err := a.storePassword(ctx, envPassword); err != nil {
 				return nil, err
 			}
-			log.Info("admin password set from BROWSERPIER_ADMIN_PASSWORD")
+			// A changed password is how a lost or leaked one is reset, so
+			// every browser signed in with the old one is signed out.
+			if _, err := db.ExecContext(ctx, `DELETE FROM admin_sessions`); err != nil {
+				return nil, err
+			}
+			log.Info("admin password set from BROWSERPIER_ADMIN_PASSWORD; signed out every browser")
 		}
 	case stored == "":
 		a.setupCode = randomString(16) // 128 bits

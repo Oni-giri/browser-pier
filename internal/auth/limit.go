@@ -32,6 +32,21 @@ func NewLockout(max int, window, lockFor time.Duration) *Lockout {
 	return &Lockout{max: max, window: window, lockFor: lockFor, now: time.Now, keys: map[string]*attempts{}}
 }
 
+// Locked returns how long key stays locked; 0 if it isn't. Use it, with
+// Begin and Fail only on failure, where the secret can't be guessed anyway
+// (agent tokens) and counting attempts in flight would only get in the
+// way of busy clients.
+func (l *Lockout) Locked(key string) time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if a := l.keys[key]; a != nil {
+		if d := a.lockedUntil.Sub(l.now()); d > 0 {
+			return d
+		}
+	}
+	return 0
+}
+
 // Attempt is one try against a Lockout; finish it with exactly one of
 // Fail, Succeed or Cancel.
 type Attempt struct {
