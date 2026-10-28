@@ -157,6 +157,16 @@ func TestAgentLogsInThroughMCP(t *testing.T) {
 		t.Fatal("the login form was never submitted")
 	}
 
+	// A key named like an xdotool command would make xdotool run it.
+	res, out = call(t, cs, "press_keys", map[string]any{"session_id": id, "keys": "Return exec touch pwned"})
+	if !res.IsError {
+		t.Fatalf("press_keys with a command in it: %s", out)
+	}
+	found, err := exec.Command("docker", "exec", "browserpier-"+name, "sh", "-c", "find / -xdev -name pwned 2>/dev/null; echo checked").Output()
+	if err != nil || strings.TrimSpace(string(found)) != "checked" {
+		t.Fatalf("xdotool ran a program, or the check didn't run: %q, %v", found, err)
+	}
+
 	// A person helps, and the agent gets the browser back.
 	_, out = call(t, cs, "request_handoff", map[string]any{"session_id": id, "reason": "review", "detail": "Check the account page"})
 	if !strings.Contains(out, "done") {

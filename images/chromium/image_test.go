@@ -326,16 +326,28 @@ func TestBrowserEnvironment(t *testing.T) {
 	}
 	t.Run("visual mode scroll", func(t *testing.T) {
 		p.Navigate(`data:text/html,<body style="margin:0;height:5000px;width:5000px">`)
-		b.input(t, "/input/scroll", `{"x": 640, "y": 400, "dy": 3}`)
-		until(t, "window.scrollY is still 0 after scrolling down", func() bool {
-			y, _ := p.Eval("window.scrollY").(float64)
-			return y > 0
-		})
-		b.input(t, "/input/scroll", `{"x": 640, "y": 400, "dx": 2}`)
-		until(t, "window.scrollX is still 0 after scrolling right", func() bool {
-			x, _ := p.Eval("window.scrollX").(float64)
-			return x > 0
-		})
+		until(t, "the page didn't load", func() bool { return p.Eval("document.readyState") == "complete" })
+		// A page just loaded can drop the first wheel events, so scroll
+		// again until it moves (each scroll moves it when it takes them).
+		scrollUntil := func(what, body, prop string) {
+			t.Helper()
+			deadline := time.Now().Add(8 * time.Second)
+			for {
+				b.input(t, "/input/scroll", body)
+				end := time.Now().Add(time.Second)
+				for time.Now().Before(end) {
+					if v, _ := p.Eval(prop).(float64); v > 0 {
+						return
+					}
+					time.Sleep(100 * time.Millisecond)
+				}
+				if time.Now().After(deadline) {
+					t.Fatal(what)
+				}
+			}
+		}
+		scrollUntil("window.scrollY is still 0 after scrolling down", `{"x": 640, "y": 400, "dy": 3}`, "window.scrollY")
+		scrollUntil("window.scrollX is still 0 after scrolling right", `{"x": 640, "y": 400, "dx": 2}`, "window.scrollX")
 	})
 	t.Run("visual mode keys", func(t *testing.T) {
 		p.Navigate(`data:text/html,<input id="box" value="old text" style="position:absolute;left:200px;top:150px;width:300px;height:40px">`)
