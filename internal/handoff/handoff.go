@@ -99,13 +99,14 @@ type Service struct {
 	log *slog.Logger
 	now func() time.Time
 
-	mu      sync.Mutex
-	waiters map[string][]chan struct{}
-	viewers map[string][]*webrtc.Viewer // live views opened through a handoff
+	mu       sync.Mutex
+	waiters  map[string][]chan struct{}
+	viewers  map[string][]*webrtc.Viewer // live views opened through a handoff
+	checking map[string]int              // PIN checks under way, per handoff
 }
 
 func New(db *sql.DB, m *sessions.Manager, log *slog.Logger) *Service {
-	return &Service{db: db, m: m, log: log, now: time.Now, waiters: map[string][]chan struct{}{}, viewers: map[string][]*webrtc.Viewer{}}
+	return &Service{db: db, m: m, log: log, now: time.Now, waiters: map[string][]chan struct{}{}, viewers: map[string][]*webrtc.Viewer{}, checking: map[string]int{}}
 }
 
 var rank = map[profiles.HandoffPolicy]int{profiles.PolicyLink: 0, profiles.PolicyPIN: 1, profiles.PolicySignIn: 2}
@@ -297,31 +298,56 @@ func (s *Service) Unlocked(ctx context.Context, h Handoff, browser string) bool 
 	return n == 1
 }
 
-// ReservePINTry counts a PIN attempt before it is checked, so parallel
-// guesses can't all be tried before the count catches up. It returns
-// false if the link has no tries left. A right PIN gives the try back
-// (PINRight); a wrong one keeps it and cancels the link at the limit
-// (PINWrong).
+// ReservePINTry starts a PIN check. It refuses while the link's wrong
+// PINs plus the checks already under way reach MaxPINFailures, so parallel
+// guesses can't all be tried before the count catches up. End each
+// reserved check with PINRight or PINWrong; only a wrong PIN counts.
 func (s *Service) ReservePINTry(ctx context.Context, h Handoff) (bool, error) {
-	res, err := s.db.ExecContext(ctx, `UPDATE handoffs SET pin_failures = pin_failures + 1 WHERE id = ? AND status = 'pending' AND pin_failures < ?`,
-		h.ID, MaxPINFailures)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var failures int
+	err := s.db.QueryRowContext(ctx, `SELECT pin_failures FROM handoffs WHERE id = ? AND status = 'pending'`, h.ID).Scan(&failures)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
-	n, _ := res.RowsAffected()
-	return n == 1, nil
+	if failures+s.checking[h.ID] >= MaxPINFailures {
+		return false, nil
+	}
+	s.checking[h.ID]++
+	return true, nil
 }
 
-// PINRight gives back the try reserved for a right PIN.
-func (s *Service) PINRight(ctx context.Context, h Handoff) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE handoffs SET pin_failures = pin_failures - 1 WHERE id = ? AND pin_failures > 0`, h.ID)
-	return err
+// doneChecking ends a reserved check. Call it with s.mu held.
+func (s *Service) doneChecking(id string) {
+	if s.checking[id]--; s.checking[id] <= 0 {
+		delete(s.checking, id)
+	}
 }
 
-// PINWrong returns how many tries are left after a wrong PIN, cancelling
-// the link when none are.
+// PINRight ends a check that found the right PIN (or never got to check
+// it): it isn't counted.
+func (s *Service) PINRight(h Handoff) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.doneChecking(h.ID)
+}
+
+// PINWrong ends a check that found a wrong PIN, counts it, and returns how
+// many tries are left, cancelling the link when none are.
 func (s *Service) PINWrong(ctx context.Context, h Handoff) (int, error) {
-	h, err := s.Get(ctx, h.ID)
+	s.mu.Lock()
+	// Count it in the same step as ending the check, so a reservation never
+	// sees it as neither.
+	_, err := s.db.ExecContext(ctx, `UPDATE handoffs SET pin_failures = pin_failures + 1 WHERE id = ? AND status = 'pending'`, h.ID)
+	s.doneChecking(h.ID)
+	s.mu.Unlock()
+	if err != nil {
+		return 0, err
+	}
+	h, err = s.Get(ctx, h.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -379,6 +405,7 @@ func (s *Service) wake(id string) {
 		v.Close()
 	}
 	delete(s.viewers, id)
+	delete(s.checking, id)
 }
 
 // track remembers a live view opened through a handoff, to close it when

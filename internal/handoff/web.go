@@ -223,20 +223,21 @@ func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 	}
 	all := attempts{prof, glob}
 	// Reserve this link's try before checking, so parallel guesses can't
-	// all get in before the count does.
+	// all get in before the count does. A refusal isn't a wrong PIN.
 	reserved, err := w.svc.ReservePINTry(r.Context(), h)
 	if err != nil || !reserved {
 		mine.Cancel()
 		all.Cancel()
-		if err != nil {
-			http.Error(rw, "something went wrong", http.StatusInternalServerError)
-			return
+		if err == nil {
+			h, err = w.svc.Get(r.Context(), h.ID)
 		}
-		left, _ := w.svc.PINWrong(r.Context(), h)
-		if left <= 0 {
-			w.render(rw, http.StatusGone, view{Step: "ended", Ended: string(Cancelled), H: h})
-		} else {
-			w.render(rw, http.StatusTooManyRequests, view{Step: "pin", H: h, Token: token, TriesLeft: left, Error: "Wait for your other attempts to finish."})
+		switch {
+		case err != nil:
+			http.Error(rw, "something went wrong", http.StatusInternalServerError)
+		case h.Status.Final():
+			w.render(rw, http.StatusGone, view{Step: "ended", Ended: string(h.Status), H: h})
+		default:
+			w.render(rw, http.StatusTooManyRequests, view{Step: "pin", H: h, Token: token, TriesLeft: MaxPINFailures - h.PINFailures, Error: "Wait for your other attempts to finish."})
 		}
 		return
 	}
@@ -245,7 +246,7 @@ func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		mine.Cancel()
 		all.Cancel()
-		_ = w.svc.PINRight(r.Context(), h) // not a guess: give the try back
+		w.svc.PINRight(h) // not a guess: give the try back
 		http.Error(rw, "something went wrong", http.StatusInternalServerError)
 		return
 	}
@@ -267,7 +268,7 @@ func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 	}
 	mine.Succeed()
 	all.Cancel() // a right PIN doesn't clear wrong guesses made at other links
-	_ = w.svc.PINRight(r.Context(), h)
+	w.svc.PINRight(h)
 	if w.unlock(rw, r, h, token) {
 		http.Redirect(rw, r, "/h/"+url.PathEscape(token), http.StatusSeeOther)
 	}

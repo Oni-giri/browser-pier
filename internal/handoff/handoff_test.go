@@ -382,6 +382,35 @@ func TestParallelWrongPINsStopAtFive(t *testing.T) {
 	}
 }
 
+func TestParallelRightPINsDontCancel(t *testing.T) {
+	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
+	h, token := f.open("")
+	codes := make(chan int, MaxPINFailures+1)
+	var start sync.WaitGroup
+	start.Add(1)
+	for range cap(codes) {
+		go func() {
+			start.Wait()
+			codes <- f.do(browser(), "POST", "/h/"+token+"/pin", url.Values{"pin": {"4821"}}, nil).code
+		}()
+	}
+	start.Done()
+	unlocked := 0
+	for range cap(codes) {
+		switch c := <-codes; c {
+		case http.StatusSeeOther:
+			unlocked++
+		case http.StatusForbidden, http.StatusTooManyRequests: // another browser got it, or wait
+		default:
+			t.Fatalf("a right PIN answered %d", c)
+		}
+	}
+	got, _ := f.svc.Get(context.Background(), h.ID)
+	if unlocked != 1 || got.Status != Pending || !got.unlocked || got.PINFailures != 0 {
+		t.Fatalf("after %d parallel right PINs: %d unlocked, %+v", cap(codes), unlocked, got)
+	}
+}
+
 func TestWrongPINsAcrossLinksAndProfilesAreCapped(t *testing.T) {
 	_, local, _ := net.ParseCIDR("127.0.0.0/8")
 	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{TrustedProxies: []*net.IPNet{local}})
