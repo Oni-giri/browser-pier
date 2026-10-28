@@ -55,7 +55,11 @@ func New(o Options, socket func(profile string) string, log *slog.Logger) (*Rela
 		return nil, err
 	}
 	se := webrtc.SettingEngine{}
-	udp, err := ice.NewMultiUDPMuxFromPort(o.Port)
+	// Link-local addresses are left out: no viewer can reach them, and
+	// Docker's come and go with containers, failing the bind.
+	udp, err := ice.NewMultiUDPMuxFromPort(o.Port, ice.UDPMuxFromPortWithIPFilter(func(ip net.IP) bool {
+		return !ip.IsLinkLocalUnicast()
+	}))
 	if err != nil {
 		return nil, fmt.Errorf("live view UDP port %d: %w", o.Port, err)
 	}
