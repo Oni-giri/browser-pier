@@ -75,8 +75,7 @@ type view struct {
 	Reason    string
 	Error     string
 	TriesLeft int
-	Ended     string // done, cant, cancelled, expired, missing
-	Insecure  bool   // "link only" over plain HTTP from outside: asked for the PIN instead
+	Ended     string // done, cant, cancelled, expired, missing, insecure
 	ExpiresMs int64
 }
 
@@ -118,14 +117,16 @@ func (w *Web) holder(r *http.Request, h Handoff) bool {
 	return err == nil && w.svc.Unlocked(r.Context(), h, c.Value)
 }
 
-// policy is what this request must pass. "Link only" is honoured over
-// HTTPS or from a private address (Tailscale, the LAN); a link opened
-// over plain HTTP from the internet asks for the PIN instead.
-func (w *Web) policy(r *http.Request, h Handoff) (profiles.HandoffPolicy, bool) {
-	if h.Policy == profiles.PolicyLink && !w.web.IsHTTPS(r) && !private(w.web.ClientIP(r)) {
-		return profiles.PolicyPIN, true
+// insecure reports whether the link was opened over plain HTTP from
+// outside the LAN or Tailscale. Such a request is asked for nothing and
+// unlocks nothing: a PIN or password would travel in the clear, and so
+// would the cookie that holds the browser.
+func (w *Web) insecure(rw http.ResponseWriter, r *http.Request, h Handoff) bool {
+	if w.web.IsHTTPS(r) || private(w.web.ClientIP(r)) {
+		return false
 	}
-	return h.Policy, false
+	w.render(rw, http.StatusForbidden, view{Step: "ended", Ended: "insecure", H: h})
+	return true
 }
 
 func private(ip string) bool {
@@ -155,7 +156,7 @@ func (w *Web) unlock(rw http.ResponseWriter, r *http.Request, h Handoff, token s
 
 func (w *Web) show(rw http.ResponseWriter, r *http.Request) {
 	h, token, ok := w.load(rw, r)
-	if !ok {
+	if !ok || w.insecure(rw, r, h) {
 		return
 	}
 	if w.holder(r, h) {
@@ -166,8 +167,7 @@ func (w *Web) show(rw http.ResponseWriter, r *http.Request) {
 		w.render(rw, http.StatusForbidden, view{Step: "other", H: h})
 		return
 	}
-	policy, insecure := w.policy(r, h)
-	switch policy {
+	switch h.Policy {
 	case profiles.PolicyLink:
 		if w.unlock(rw, r, h, token) {
 			http.Redirect(rw, r, "/h/"+url.PathEscape(token), http.StatusSeeOther)
@@ -181,13 +181,13 @@ func (w *Web) show(rw http.ResponseWriter, r *http.Request) {
 			http.Redirect(rw, r, "/h/"+url.PathEscape(token), http.StatusSeeOther)
 		}
 	default:
-		w.render(rw, http.StatusOK, view{Step: "pin", H: h, Token: token, TriesLeft: MaxPINFailures - h.PINFailures, Insecure: insecure})
+		w.render(rw, http.StatusOK, view{Step: "pin", H: h, Token: token, TriesLeft: MaxPINFailures - h.PINFailures})
 	}
 }
 
 func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 	h, token, ok := w.load(rw, r)
-	if !ok {
+	if !ok || w.insecure(rw, r, h) {
 		return
 	}
 	if h.unlocked {
@@ -196,7 +196,7 @@ func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 	}
 	// The PIN only opens a link whose policy asks for it: a "full sign-in"
 	// link can't be opened with the PIN instead of the admin password.
-	if policy, _ := w.policy(r, h); policy != profiles.PolicyPIN {
+	if h.Policy != profiles.PolicyPIN {
 		http.Redirect(rw, r, "/h/"+url.PathEscape(token), http.StatusSeeOther)
 		return
 	}

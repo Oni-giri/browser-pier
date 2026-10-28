@@ -28,7 +28,6 @@ input:focus,textarea:focus{outline:none;box-shadow:0 0 0 1px var(--blue),0 0 0 4
 button,.button{display:inline-flex;align-items:center;justify-content:center;height:40px;padding:0 14px;border:0;border-radius:8px;font:inherit;font-weight:500;cursor:pointer;background:var(--surface);color:var(--ink);box-shadow:0 0 0 1px var(--line);text-decoration:none}
 button.primary{background:var(--ink);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.12)}
 .row{display:flex;gap:8px;margin-top:12px}.row>*{flex:1}
-.warn{background:#FFFBEB;color:#92400E;border-radius:8px;padding:8px 10px;font-size:13px;margin-top:10px}
 #stage{position:relative;overflow:hidden;background:#18181B;touch-action:none;height:56vh;min-height:280px}
 #screen{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;transform-origin:0 0;outline:none}
 #note{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);background:rgba(9,9,11,.8);color:#fff;border-radius:8px;padding:6px 12px;font-size:13px;pointer-events:none;opacity:0;transition:opacity .2s}
@@ -53,7 +52,6 @@ button.primary{background:var(--ink);color:#fff;box-shadow:inset 0 1px 0 rgba(25
     <input id="pin" name="pin" type="password" inputmode="numeric" autocomplete="off" pattern="[0-9]*" maxlength="6" required autofocus>
     {{if .Error}}<p class="error" role="alert">{{.Error}} {{.TriesLeft}} {{if eq .TriesLeft 1}}try{{else}}tries{{end}} left before this link is cancelled.</p>{{end}}
     <p class="muted">The agent never sees your PIN.</p>
-    {{if .Insecure}}<p class="warn">This link is set to open with one tap, but it was opened over plain HTTP from outside your network, so it asks for the PIN.</p>{{end}}
     <button class="primary" type="submit" style="width:100%;margin-top:8px">Unlock and take control</button>
   </form>
 </div>
@@ -81,6 +79,7 @@ button.primary{background:var(--ink);color:#fff;box-shadow:inset 0 1px 0 rgba(25
   {{if eq .Ended "done"}}<h1>Handed back</h1><p class="sub">{{.H.Agent}} has your note and is carrying on. This link no longer works.</p>
   {{else if eq .Ended "cant"}}<h1>Told the agent you couldn’t</h1><p class="sub">{{.H.Agent}} will stop this task and report back. This link no longer works.</p>
   {{else if eq .Ended "cancelled"}}<h1>This link was cancelled</h1><p class="sub">{{if .H.Note}}{{.H.Note}}. {{end}}The agent has been told.</p>
+  {{else if eq .Ended "insecure"}}<h1>This link needs HTTPS</h1><p class="sub">It was opened over plain HTTP from outside your network, where a PIN or password would travel in the clear. Open BrowserPier over HTTPS, or from your LAN or Tailscale.</p>
   {{else if eq .Ended "expired"}}<h1>This link has expired</h1><p class="sub">Handoff links last 15 minutes and work once. You can still help from the full app.</p><a class="button" href="/login">Sign in to BrowserPier</a>
   {{else}}<h1>This link doesn’t work</h1><p class="sub">It may have been mistyped, or already used.</p><a class="button" href="/login">Sign in to BrowserPier</a>{{end}}
 </div>

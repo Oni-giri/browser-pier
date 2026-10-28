@@ -272,13 +272,35 @@ func TestLinkOnlyAndSignIn(t *testing.T) {
 	}
 }
 
-func TestLinkOnlyOverPlainHTTPFromOutsideAsksForThePIN(t *testing.T) {
+func TestPlainHTTPFromOutsideAsksForNothing(t *testing.T) {
 	_, trusted, _ := net.ParseCIDR("127.0.0.0/8")
+	outside := http.Header{"X-Forwarded-For": {"203.0.113.5"}}
+	for _, policy := range []profiles.HandoffPolicy{profiles.PolicyLink, profiles.PolicyPIN, profiles.PolicySignIn} {
+		f := newFixture(t, policy, auth.WebOptions{TrustedProxies: []*net.IPNet{trusted}})
+		h, token := f.open("")
+		b := browser()
+		p := f.do(b, "GET", "/h/"+token, nil, outside)
+		if p.code != http.StatusForbidden || !strings.Contains(p.body, "needs HTTPS") || strings.Contains(p.body, "<form") {
+			t.Fatalf("%s from outside over HTTP: %d %s", policy, p.code, p.body)
+		}
+		// Not even the right PIN, sent anyway, unlocks it or counts.
+		if p := f.do(b, "POST", "/h/"+token+"/pin", url.Values{"pin": {"4821"}}, outside); p.code != http.StatusForbidden {
+			t.Fatalf("%s: PIN from outside over HTTP: %d", policy, p.code)
+		}
+		if got, _ := f.svc.Get(context.Background(), h.ID); got.unlocked || got.PINFailures != 0 {
+			t.Fatalf("%s: plain HTTP from outside unlocked the link or counted a try: %+v", policy, got)
+		}
+	}
+	// Through an HTTPS proxy, the same address is fine.
 	f := newFixture(t, profiles.PolicyLink, auth.WebOptions{TrustedProxies: []*net.IPNet{trusted}})
 	_, token := f.open("")
-	p := f.do(browser(), "GET", "/h/"+token, nil, http.Header{"X-Forwarded-For": {"203.0.113.5"}})
-	if p.code != http.StatusOK || !strings.Contains(p.body, "Unlock and take control") || !strings.Contains(p.body, "plain HTTP") {
-		t.Fatalf("link only from outside over HTTP: %d %s", p.code, p.body)
+	if p := f.do(browser(), "GET", "/h/"+token, nil, http.Header{"X-Forwarded-For": {"203.0.113.5"}, "X-Forwarded-Proto": {"https"}}); p.code != http.StatusSeeOther {
+		t.Fatalf("link only from outside over HTTPS: %d", p.code)
+	}
+	g := newFixture(t, profiles.PolicyPIN, auth.WebOptions{TrustedProxies: []*net.IPNet{trusted}})
+	_, token = g.open("")
+	if p := g.do(browser(), "POST", "/h/"+token+"/pin", url.Values{"pin": {"4821"}}, http.Header{"X-Forwarded-For": {"203.0.113.5"}, "X-Forwarded-Proto": {"https"}}); p.code != http.StatusSeeOther {
+		t.Fatalf("PIN from outside over HTTPS: %d", p.code)
 	}
 }
 
@@ -351,7 +373,7 @@ func TestWrongPINsAcrossLinksAndProfilesAreCapped(t *testing.T) {
 	guess := func(token, pin string) reply {
 		ip++ // a new address every time, so only the link, profile and global caps apply
 		return f.do(browser(), "POST", "/h/"+token+"/pin", url.Values{"pin": {pin}},
-			http.Header{"X-Forwarded-For": {"203.0.113." + strconv.Itoa(ip)}})
+			http.Header{"X-Forwarded-For": {"203.0.113." + strconv.Itoa(ip)}, "X-Forwarded-Proto": {"https"}})
 	}
 	link := func(profile string) string {
 		s, _, err := f.m.Start(ctx, profile, "")
