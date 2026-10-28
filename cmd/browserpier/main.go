@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -110,6 +111,14 @@ func run(log *slog.Logger) error {
 	}
 	defer mgr.Close()
 	mgr.SetGeoURL(cfg.GeoIPURL)
+	if cfg.RAMLimitPercent > 0 {
+		total, err := hostMemory()
+		if err != nil {
+			return fmt.Errorf("reading the host's memory for BROWSERPIER_RAM_LIMIT_PERCENT: %w", err)
+		}
+		mgr.SetMemoryLimit(total*int64(cfg.RAMLimitPercent)/100, perBrowser)
+	}
+	go mgr.WatchIdle(ctx, 30*time.Second)
 	if err := mgr.Reconcile(ctx); err != nil {
 		return fmt.Errorf("checking browsers left running: %w", err)
 	}
@@ -151,6 +160,31 @@ func run(log *slog.Logger) error {
 	agentAPI := api.New(mgr, web, fileStore, log, cfg.PublicURL)
 	go agentAPI.WatchRevocations(ctx, 10*time.Second)
 	return serve(ctx, ln, newHandler(web, agentAPI), log)
+}
+
+// perBrowser is the memory a new browser is expected to need when
+// checking it fits under the limit (SPEC §3 plans 1–2 GB each).
+const perBrowser = 1 << 30
+
+// hostMemory reads the host's total memory. In a container,
+// /proc/meminfo still shows the host's.
+func hostMemory() (int64, error) {
+	b, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0, err
+	}
+	return parseMemTotal(string(b))
+}
+
+func parseMemTotal(meminfo string) (int64, error) {
+	for _, line := range strings.Split(meminfo, "\n") {
+		f := strings.Fields(line)
+		if len(f) >= 2 && f[0] == "MemTotal:" {
+			kb, err := strconv.ParseInt(f[1], 10, 64)
+			return kb << 10, err
+		}
+	}
+	return 0, errors.New("no MemTotal in /proc/meminfo")
 }
 
 // instanceID is this BrowserPier's ID, made on first start and kept in the

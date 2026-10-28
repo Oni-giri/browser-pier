@@ -64,8 +64,13 @@ func (m *Manager) stopIdle(ctx context.Context) {
 		if err != nil || p.AutoStop <= 0 || c.idle < p.AutoStop {
 			continue
 		}
-		m.log.Info("stopping an idle browser", "profile", c.profile, "session", c.id, "idle", c.idle.Round(time.Second))
-		if _, err := m.Stop(ctx, c.id); err != nil {
+		limit := p.AutoStop
+		_, err = m.stopIf(ctx, c.id, func(l *live) bool { return l.idleLocked(m.now()) >= limit })
+		if errors.Is(err, errStillInUse) {
+			continue // used again since we looked
+		}
+		m.log.Info("stopped an idle browser", "profile", c.profile, "session", c.id, "idle", c.idle.Round(time.Second))
+		if err != nil {
 			m.log.Warn("stopping an idle browser", "profile", c.profile, "err", err)
 		}
 	}
@@ -81,19 +86,29 @@ func (m *Manager) SetMemoryLimit(limit, perBrowser int64) {
 // wouldn't fit under the memory limit and none could be stopped for it.
 var ErrNoRoom = errors.New("not enough memory for another browser")
 
-// NoRoomError says what is using the memory.
+// NoRoomError says what is using the memory. Its Error names no
+// profile; callers show each one only the browsers it may see.
 type NoRoomError struct {
 	Limit, Used int64
-	Running     []string // "google (1.4 GB, in use by claude)"
+	Running     []Usage
 }
 
+// Usage is one live browser's share of memory.
+type Usage struct {
+	Profile string
+	Bytes   int64
+	Why     string // "in use by claude", "a person has it", "starting"…
+}
+
+func (u Usage) String() string { return fmt.Sprintf("%s (%s, %s)", u.Profile, gb(u.Bytes), u.Why) }
+
 func (e *NoRoomError) Error() string {
-	return fmt.Sprintf("%v: %s of the %s limit in use, and every browser is in use: %s",
-		ErrNoRoom, gb(e.Used), gb(e.Limit), strings.Join(e.Running, ", "))
+	return fmt.Sprintf("%v: %s of the %s limit in use, and every running browser is in use", ErrNoRoom, gb(e.Used), gb(e.Limit))
 }
 
 func (e *NoRoomError) Unwrap() error { return ErrNoRoom }
 
+// GB formats bytes for people.
 func gb(n int64) string { return fmt.Sprintf("%.1f GB", float64(n)/(1<<30)) }
 
 // makeRoom makes sure a new browser fits under the memory limit, stopping
@@ -110,19 +125,28 @@ func (m *Manager) makeRoom(ctx context.Context) error {
 		}
 		victim, idle := m.longestIdle()
 		if victim == "" {
+			list := make([]string, len(running))
+			for i, u := range running {
+				list[i] = u.String()
+			}
+			m.log.Warn("refused a browser: no room", "used", gb(used), "limit", gb(m.memLimit), "running", strings.Join(list, "; "))
 			return &NoRoomError{Limit: m.memLimit, Used: used, Running: running}
 		}
-		m.log.Info("stopping the longest-idle browser to make room", "session", victim, "idle", idle.Round(time.Second))
-		if _, err := m.Stop(ctx, victim); err != nil {
+		_, err := m.stopIf(ctx, victim, func(l *live) bool { return l.idleLocked(m.now()) > 0 })
+		if errors.Is(err, errStillInUse) {
+			continue // someone started using it; look again
+		}
+		if err != nil {
 			return fmt.Errorf("making room: %w", err)
 		}
+		m.log.Info("stopped the longest-idle browser to make room", "session", victim, "idle", idle.Round(time.Second))
 	}
 	return ErrNoRoom
 }
 
 // memoryInUse adds up what the live browsers use, and describes each.
 // A browser whose usage can't be read counts as a new one would.
-func (m *Manager) memoryInUse(ctx context.Context) (int64, []string) {
+func (m *Manager) memoryInUse(ctx context.Context) (int64, []Usage) {
 	type entry struct {
 		profile, cid string
 		state        State
@@ -137,7 +161,7 @@ func (m *Manager) memoryInUse(ctx context.Context) (int64, []string) {
 	m.mu.Unlock()
 	sort.Slice(entries, func(i, j int) bool { return entries[i].profile < entries[j].profile })
 	var total int64
-	var running []string
+	var running []Usage
 	for _, e := range entries {
 		used := m.memEach
 		if e.cid != "" {
@@ -152,7 +176,7 @@ func (m *Manager) memoryInUse(ctx context.Context) (int64, []string) {
 		} else if e.state == NeedsHelp {
 			why = "a person has it"
 		}
-		running = append(running, fmt.Sprintf("%s (%s, %s)", e.profile, gb(used), why))
+		running = append(running, Usage{e.profile, used, why})
 	}
 	return total, running
 }

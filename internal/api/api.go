@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -273,12 +274,16 @@ func (a *API) startSession(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, sessions.ErrClosed):
 		writeError(w, http.StatusServiceUnavailable, "BrowserPier is shutting down")
 		return
+	case errors.Is(err, sessions.ErrNoRoom):
+		writeError(w, http.StatusServiceUnavailable, noRoomMessage(err, tok))
+		return
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return // the client went away
 	case err != nil:
 		a.internal(w, "starting a session", err)
 		return
 	}
+	a.m.Touch(s.ID)
 	status := http.StatusCreated
 	if attached {
 		status = http.StatusOK
@@ -286,6 +291,32 @@ func (a *API) startSession(w http.ResponseWriter, r *http.Request) {
 		a.log.Info("session started", "session", s.ID, "profile", s.Profile, "mode", s.Mode, "token", tok.Name)
 	}
 	writeJSON(w, status, a.sessionOut(r, s, attached))
+}
+
+// noRoomMessage explains a refusal for lack of memory, naming only the
+// browsers this token may see.
+func noRoomMessage(err error, tok auth.Token) string {
+	var full *sessions.NoRoomError
+	if !errors.As(err, &full) {
+		return err.Error()
+	}
+	var mine []string
+	others := 0
+	for _, u := range full.Running {
+		if tok.Allows(u.Profile) {
+			mine = append(mine, u.String())
+		} else {
+			others++
+		}
+	}
+	msg := full.Error() + ". Stop a browser you don't need (DELETE /api/sessions/{id})"
+	if len(mine) > 0 {
+		msg += "; yours: " + strings.Join(mine, ", ")
+	}
+	if others > 0 {
+		msg += fmt.Sprintf("; and %d more", others)
+	}
+	return msg
 }
 
 func (a *API) listSessions(w http.ResponseWriter, r *http.Request) {
@@ -369,6 +400,7 @@ func (a *API) screenshot(w http.ResponseWriter, r *http.Request) {
 		}
 		target += "?width=" + url.QueryEscape(width)
 	}
+	a.m.Touch(s.ID)
 	resp, err := a.control(r.Context(), s.Profile, http.MethodGet, target, nil)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "screenshot failed: "+err.Error())
@@ -391,6 +423,7 @@ func (a *API) input(path string) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "body too large")
 			return
 		}
+		a.m.Touch(s.ID)
 		resp, err := a.control(r.Context(), s.Profile, http.MethodPost, path, body)
 		if err != nil {
 			writeError(w, http.StatusBadGateway, "input failed: "+err.Error())

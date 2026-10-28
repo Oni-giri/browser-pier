@@ -48,6 +48,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			m.mu.Lock()
 			continue
 		}
+		l.lastActivity = m.now() // idle time restarts with the orchestrator
 		m.live[s.Profile] = l
 		m.log.Info("picked up a running browser", "session", s.ID, "profile", s.Profile, "state", s.State)
 		m.watch(l, c.ID)

@@ -497,3 +497,28 @@ func TestCDPConnectionsCloseOnHandoffAndRevocation(t *testing.T) {
 		t.Fatal("a revoked token's CDP connection stayed open")
 	}
 }
+
+func TestNoRoomNamesOnlyVisibleProfiles(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	const gib = 1 << 30
+	f.rt.Memory = gib
+	f.m.SetMemoryLimit(gib+gib/2, gib) // room for one
+	gh := f.start(f.all, "github", "")
+	_, release, err := f.m.Attach(ctx, gh.ID, "t", "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	var e map[string]string
+	if code := f.call(f.scoped, http.MethodPost, "/api/sessions", `{"profile": "google"}`, &e); code != http.StatusServiceUnavailable {
+		t.Fatalf("start with no room: %d %v", code, e)
+	}
+	if strings.Contains(e["error"], "github") || strings.Contains(e["error"], "claude") || !strings.Contains(e["error"], "1 more") {
+		t.Fatalf("a scoped token was told about other profiles: %q", e["error"])
+	}
+	if code := f.call(f.all, http.MethodPost, "/api/sessions", `{"profile": "google"}`, &e); code != http.StatusServiceUnavailable || !strings.Contains(e["error"], "github (1.0 GB, in use by claude)") {
+		t.Fatalf("all-profiles token: %d %q", code, e["error"])
+	}
+}
