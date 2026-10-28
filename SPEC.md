@@ -205,6 +205,7 @@ All endpoints take `Authorization: Bearer <agent token>`. The same actions are e
 | WS | `/cdp/{profile}` | API mode: CDP, proxied and token-checked |
 | POST | `/api/sessions/{id}/handoff` | One-time link for a human: `{reason, detail, require?}` |
 | GET | `/api/handoffs/{id}` | Long-poll for done / can't, plus the human's note |
+| DELETE | `/api/handoffs/{id}` | Withdraw a request the agent no longer needs: `{note?}` |
 
 Starting a session returns its id, the CDP URL (proxied through the orchestrator) and the live view URL.
 

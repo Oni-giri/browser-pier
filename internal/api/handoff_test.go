@@ -72,3 +72,29 @@ func TestHandoffNeedsAPINToBeSet(t *testing.T) {
 		t.Fatalf("sign-in handoff with no PIN set: %d %+v", code, h)
 	}
 }
+
+func TestWithdrawHandoff(t *testing.T) {
+	f := newFixture(t)
+	if err := f.web.Admin().SetPIN(context.Background(), "4821"); err != nil {
+		t.Fatal(err)
+	}
+	s := f.start(f.all, "github", "visual")
+	var h handoffJSON
+	if code := f.call(f.all, http.MethodPost, "/api/sessions/"+s.ID+"/handoff", `{"reason": "captcha"}`, &h); code != http.StatusCreated {
+		t.Fatalf("create: %d", code)
+	}
+	if code := f.call(f.scoped, http.MethodDelete, "/api/handoffs/"+h.ID, "", nil); code != http.StatusNotFound {
+		t.Fatalf("another profile's token withdrawing: %d", code)
+	}
+	var got handoffJSON
+	if code := f.call(f.all, http.MethodDelete, "/api/handoffs/"+h.ID, `{"note": "the person said no"}`, &got); code != http.StatusOK || got.Status != "cancelled" || !strings.Contains(got.Note, "the person said no") {
+		t.Fatalf("withdraw: %d %+v", code, got)
+	}
+	if live, _ := f.m.Live("github"); live.State != sessions.Running {
+		t.Fatalf("browser not given back: %s", live.State)
+	}
+	// Withdrawing again changes nothing.
+	if code := f.call(f.all, http.MethodDelete, "/api/handoffs/"+h.ID, "", &got); code != http.StatusOK || got.Status != "cancelled" {
+		t.Fatalf("second withdraw: %d %+v", code, got)
+	}
+}

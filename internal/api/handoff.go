@@ -19,6 +19,7 @@ func (a *API) registerHandoffs(mux *http.ServeMux) {
 	t := func(h http.HandlerFunc) http.Handler { return a.web.RequireToken(h) }
 	mux.Handle("POST /api/sessions/{id}/handoff", t(a.createHandoff))
 	mux.Handle("GET /api/handoffs/{id}", t(a.getHandoff))
+	mux.Handle("DELETE /api/handoffs/{id}", t(a.withdrawHandoff))
 }
 
 type handoffJSON struct {
@@ -112,6 +113,38 @@ func (a *API) createHandoff(w http.ResponseWriter, r *http.Request) {
 
 // maxWait caps a long-poll.
 const maxWait = 900 * time.Second
+
+// withdrawHandoff lets the agent take back a request it no longer needs
+// (the person declined it in the agent's own app, say): the link dies and
+// the agent has its browser back.
+func (a *API) withdrawHandoff(w http.ResponseWriter, r *http.Request) {
+	tok, _ := auth.TokenFromContext(r.Context())
+	h, err := a.handoffs.Get(r.Context(), r.PathValue("id"))
+	if errors.Is(err, handoff.ErrNotFound) || (err == nil && !tok.Allows(h.Profile)) {
+		writeError(w, http.StatusNotFound, "no such handoff")
+		return
+	}
+	if err != nil {
+		a.internal(w, "loading a handoff", err)
+		return
+	}
+	var in struct {
+		Note string `json:"note"`
+	}
+	if r.ContentLength > 0 && !readJSON(w, r, &in) {
+		return
+	}
+	note := "the agent withdrew it"
+	if in.Note != "" {
+		note += ": " + in.Note
+	}
+	h, err = a.handoffs.Withdraw(r.Context(), h, note)
+	if err != nil {
+		a.internal(w, "withdrawing a handoff", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, handoffOut(h))
+}
 
 func (a *API) getHandoff(w http.ResponseWriter, r *http.Request) {
 	tok, _ := auth.TokenFromContext(r.Context())

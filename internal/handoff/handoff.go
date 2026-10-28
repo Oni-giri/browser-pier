@@ -448,6 +448,16 @@ func (s *Service) Finish(ctx context.Context, h Handoff, status Status, note str
 	return s.finish(ctx, h, status, note)
 }
 
+// Withdraw cancels a pending handoff at the agent's request; the agent
+// gets its browser back. A handoff already over is returned as it is.
+func (s *Service) Withdraw(ctx context.Context, h Handoff, note string) (Handoff, error) {
+	note = strings.TrimSpace(note)
+	if len(note) > 300 {
+		note = note[:300]
+	}
+	return s.finish(ctx, h, Cancelled, note)
+}
+
 // finish ends a pending handoff, gives the browser back to the agent and
 // wakes anyone waiting.
 func (s *Service) finish(ctx context.Context, h Handoff, status Status, note string) (Handoff, error) {
