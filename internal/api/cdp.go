@@ -65,6 +65,9 @@ func (a *API) cdp(w http.ResponseWriter, r *http.Request) {
 	case s.State == sessions.NeedsHelp:
 		writeError(w, http.StatusConflict, "a person has control of this browser; wait for the handoff to finish")
 		return
+	case s.HumanControl:
+		writeError(w, http.StatusConflict, "a person is driving this browser from the live view; wait until they hand it back")
+		return
 	case s.State != sessions.Running:
 		writeError(w, http.StatusConflict, "the session is "+string(s.State)+", not running")
 		return

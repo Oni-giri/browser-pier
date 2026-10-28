@@ -93,7 +93,12 @@
     dc.onclose = () => { control = false; render(); };
     dc.onmessage = (e) => {
       const m = JSON.parse(e.data);
-      if (m.type === "control") { control = m.on; keyboard = control && !touch; if (keyboard) video.focus(); render(); }
+      if (m.type === "control") {
+        control = m.on; keyboard = control && !touch;
+        status.human_control = m.on; // until the next poll says otherwise
+        if (keyboard) video.focus();
+        render(); poll();
+      }
       if (m.type === "error") { say(m.msg); poll(); }
     };
     pc.ontrack = (e) => { video.srcObject = e.streams[0] || new MediaStream([e.track]); };
