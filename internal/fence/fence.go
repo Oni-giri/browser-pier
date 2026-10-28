@@ -73,33 +73,52 @@ const Redacted = "[redacted]"
 
 // RedactInputs hides the values of password and one-time-code fields in
 // HTML, so a page snapshot never hands an agent a password a person
-// typed or a code sent to their phone. It tokenizes the HTML as a browser
-// would, so quoting tricks can't hide a field; everything else is kept
-// byte for byte.
+// typed or a code sent to their phone. It parses the HTML into a tree the
+// way a browser does, so markup tricks can't hide a field from it, and
+// writes the tree back out (formatting may change). A whole document
+// stays a document; anything else is treated as a fragment of a body.
 func RedactInputs(doc string) string {
-	z := html.NewTokenizer(strings.NewReader(doc))
+	var nodes []*html.Node
+	if wholeDocument(doc) {
+		n, err := html.Parse(strings.NewReader(doc))
+		if err != nil {
+			return "" // fail closed
+		}
+		nodes = []*html.Node{n}
+	} else {
+		body := &html.Node{Type: html.ElementNode, Data: "body", DataAtom: atom.Body}
+		var err error
+		if nodes, err = html.ParseFragment(strings.NewReader(doc), body); err != nil {
+			return ""
+		}
+	}
 	var b strings.Builder
-	for {
-		tt := z.Next()
-		if tt == html.ErrorToken {
-			return b.String() // io.EOF, or the rest wasn't HTML: dropped
+	for _, n := range nodes {
+		redactTree(n)
+		if err := html.Render(&b, n); err != nil {
+			return ""
 		}
-		raw := z.Raw()
-		if tt != html.StartTagToken && tt != html.SelfClosingTagToken {
-			b.Write(raw)
-			continue
-		}
-		tok := z.Token()
-		if tok.DataAtom != atom.Input || !secretInput(tok.Attr) {
-			b.Write(raw)
-			continue
-		}
-		for i := range tok.Attr {
-			if strings.EqualFold(tok.Attr[i].Key, "value") {
-				tok.Attr[i].Val = Redacted
+	}
+	return b.String()
+}
+
+func wholeDocument(doc string) bool {
+	head := strings.ToLower(strings.TrimSpace(doc))
+	return strings.HasPrefix(head, "<!doctype") || strings.HasPrefix(head, "<html")
+}
+
+func redactTree(n *html.Node) {
+	// Any namespace: an <input> inside SVG isn't a field, but its value is
+	// still text the agent would read, so it fails closed.
+	if n.Type == html.ElementNode && strings.EqualFold(n.Data, "input") && secretInput(n.Attr) {
+		for i := range n.Attr {
+			if strings.EqualFold(n.Attr[i].Key, "value") {
+				n.Attr[i].Val = Redacted
 			}
 		}
-		b.WriteString(tok.String())
+	}
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		redactTree(c)
 	}
 }
 
@@ -129,15 +148,16 @@ func Secret(typ, autocomplete, name string) bool {
 	return secretName.MatchString(words(name))
 }
 
-// words splits camelCase and separators into spaced lowercase words:
-// "userPassword_2" → " user password 2 ".
+// words splits camelCase, digits and separators into spaced lowercase
+// words: "userPassword_2" → " user password 2 ", "otp1" → " otp 1 ".
 func words(s string) string {
 	var b strings.Builder
 	b.WriteByte(' ')
 	prev := ' '
 	for _, r := range s {
 		switch {
-		case unicode.IsUpper(r) && unicode.IsLower(prev):
+		case unicode.IsUpper(r) && unicode.IsLower(prev),
+			unicode.IsDigit(r) && unicode.IsLetter(prev), unicode.IsLetter(r) && unicode.IsDigit(prev):
 			b.WriteByte(' ')
 		case !unicode.IsLetter(r) && !unicode.IsDigit(r):
 			r = ' '

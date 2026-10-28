@@ -54,25 +54,31 @@ func TestRedactInputs(t *testing.T) {
 		`<input name="userPassword" value="camel1">` +
 		`<input name="pwd" value="short2">` +
 		`<input title=">" type=password value="quoted3">` +
+		`<input name="otp1" value="digit4"><input id="cvv2" value="digit5">` +
+		`<svg><style><input type=password value="foreign6"></style></svg>` +
 		`<input name="spinner" value="keep"><input name="passport" value="kept-too"></form>`
 	out := RedactInputs(html)
-	for _, secret := range []string{"hunter2", "123456", "654321", "4821", "camel1", "short2", "quoted3"} {
+	for _, secret := range []string{"hunter2", "123456", "654321", "4821", "camel1", "short2", "quoted3", "digit4", "digit5", "foreign6"} {
 		if strings.Contains(out, secret) {
 			t.Errorf("%s survived: %s", secret, out)
 		}
 	}
-	for _, kept := range []string{"me@example.com", `value="keep"`, `value="kept-too"`, `<form>`, `</form>`} {
+	for _, kept := range []string{"me@example.com", `value="keep"`, `value="kept-too"`, `<form>`} {
 		if !strings.Contains(out, kept) {
 			t.Errorf("%s was lost: %s", kept, out)
 		}
 	}
-	if strings.Count(out, Redacted) != 7 {
-		t.Errorf("want 7 redactions: %s", out)
+	if strings.Count(out, Redacted) != 10 {
+		t.Errorf("want 10 redactions: %s", out)
+	}
+	// A whole document stays one.
+	if out := RedactInputs("<!doctype html><html><body><input type=password value=x></body></html>"); !strings.HasPrefix(out, "<!DOCTYPE html>") || strings.Contains(out, `value="x"`) {
+		t.Errorf("document: %s", out)
 	}
 }
 
 func TestWords(t *testing.T) {
-	for in, want := range map[string]string{"userPassword_2": " user password 2 ", "OTP": " otp ", "pin-code": " pin code "} {
+	for in, want := range map[string]string{"userPassword_2": " user password 2 ", "OTP": " otp ", "pin-code": " pin code ", "cvv2": " cvv 2 "} {
 		if got := words(in); got != want {
 			t.Errorf("words(%q) = %q, want %q", in, got, want)
 		}
