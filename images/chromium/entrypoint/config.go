@@ -23,6 +23,17 @@ type config struct {
 	// MountCheck (BROWSERPIER_MOUNT_CHECK), when set, must match the marker
 	// file the orchestrator wrote into both mounted folders.
 	MountCheck string
+	// ProxyFile (BROWSERPIER_PROXY_FILE) holds the upstream proxy, if any;
+	// it is read and deleted at start.
+	ProxyFile string
+	// GeoURL (BROWSERPIER_GEOIP_URL) is an echoip-style endpoint for the
+	// exit location; empty turns the lookup off.
+	GeoURL string
+	// The location the profile ran with last time (BROWSERPIER_GEO_COUNTRY,
+	// BROWSERPIER_GEO_TZ), and the profile's manual settings, which win
+	// (BROWSERPIER_TZ_OVERRIDE, BROWSERPIER_LOCALE_OVERRIDE).
+	StoredCountry, StoredTZ    string
+	OverrideTZ, OverrideLocale string
 }
 
 func loadConfig(lookup func(string) (string, bool)) (config, error) {
@@ -33,9 +44,15 @@ func loadConfig(lookup func(string) (string, bool)) (config, error) {
 		return def
 	}
 	c := config{
-		ProfileDir:    get("BROWSERPIER_PROFILE_DIR", "/profile"),
-		ControlSocket: get("BROWSERPIER_CONTROL_SOCKET", "/run/browserpier/control.sock"),
-		MountCheck:    get("BROWSERPIER_MOUNT_CHECK", ""),
+		ProfileDir:     get("BROWSERPIER_PROFILE_DIR", "/profile"),
+		ControlSocket:  get("BROWSERPIER_CONTROL_SOCKET", "/run/browserpier/control.sock"),
+		MountCheck:     get("BROWSERPIER_MOUNT_CHECK", ""),
+		ProxyFile:      get("BROWSERPIER_PROXY_FILE", "/run/browserpier/proxy.json"),
+		GeoURL:         get("BROWSERPIER_GEOIP_URL", ""),
+		StoredCountry:  get("BROWSERPIER_GEO_COUNTRY", ""),
+		StoredTZ:       get("BROWSERPIER_GEO_TZ", ""),
+		OverrideTZ:     get("BROWSERPIER_TZ_OVERRIDE", ""),
+		OverrideLocale: get("BROWSERPIER_LOCALE_OVERRIDE", ""),
 	}
 
 	screen := get("BROWSERPIER_SCREEN", "1920x1080")

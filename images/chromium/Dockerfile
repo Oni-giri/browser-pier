@@ -27,7 +27,7 @@ RUN for el in ximagesrc videoconvert x264enc fdsink; do gst-inspect-1.0 "$el" >/
  && tr '\0' '\n' < /usr/lib/chromium/chromium > /tmp/strings \
  && for sw in user-data-dir remote-debugging-port password-store disable-blink-features use-angle enable-unsafe-swiftshader \
                webrtc-ip-handling-policy disable-component-update disable-background-networking no-first-run \
-               no-default-browser-check hide-crash-restore-bubble noerrdialogs window-position window-size disable-dev-shm-usage; do \
+               no-default-browser-check hide-crash-restore-bubble noerrdialogs window-position window-size disable-dev-shm-usage proxy-server host-resolver-rules; do \
       LC_ALL=C grep -qaxF -- "$sw" /tmp/strings || { echo "chromium binary lacks --$sw"; exit 1; }; done \
  && rm /tmp/strings
 
@@ -43,7 +43,8 @@ RUN useradd --uid 1000 --user-group --create-home --shell /usr/sbin/nologin pier
 COPY --from=build /out/entrypoint /usr/local/bin/browserpier-entrypoint
 # Managed policy: hides the "unsupported command-line flag" bar that
 # --disable-blink-features would put over every page, and sends downloads
-# to /files/downloads without asking, in both modes and without CDP.
+# to /files/downloads without asking, in both modes and without CDP, and
+# turns off DNS-over-HTTPS, which would go around a profile's proxy.
 COPY images/chromium/policies.json /etc/chromium/policies/managed/browserpier.json
 
 # Changing REBUILD forces a new image without reinstalling packages (used by the persistence test).

@@ -54,6 +54,40 @@ func run(log *slog.Logger) error {
 		return err
 	}
 
+	// The proxy, if any, comes up before anything goes out: with no
+	// forwarder there is no browser.
+	upstream, err := readProxyFile(cfg.ProxyFile)
+	if err != nil {
+		return err
+	}
+	var fwd *forwarder
+	lookupClient := &http.Client{}
+	if upstream != nil {
+		if fwd, err = newForwarder(upstream, log); err != nil {
+			return err
+		}
+		fln, err := net.Listen("tcp", forwarderAddr)
+		if err != nil {
+			return fmt.Errorf("start the proxy forwarder: %w", err)
+		}
+		defer func() { _ = fln.Close() }()
+		go fwd.serve(fln)
+		lookupClient.Transport = &http.Transport{DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) { return fwd.dial(ctx, addr) }}
+	}
+	where, err := decideGeo(cfg, fwd != nil, func() (string, string, string, error) {
+		return lookupGeo(ctx, lookupClient, cfg.GeoURL)
+	})
+	if err != nil {
+		return err
+	}
+	if where.Warning != "" {
+		log.Warn(where.Warning)
+	}
+	log.Info("location", "country", where.Country, "time_zone", where.TimeZone, "locale", where.Locale, "source", where.Source)
+	if err := applyAcceptLanguages(cfg.ProfileDir, where); err != nil {
+		return err
+	}
+
 	xvfb, err := spawn(exec.Command("Xvfb", display,
 		"-screen", "0", fmt.Sprintf("%dx%dx24", cfg.Width, cfg.Height), "-nolisten", "tcp"))
 	if err != nil {
@@ -67,8 +101,8 @@ func run(log *slog.Logger) error {
 		return fmt.Errorf("xvfb: %w", err)
 	}
 
-	chromium := exec.Command(chromiumBinary, chromiumArgs(cfg, smallShm())...)
-	chromium.Env = append(os.Environ(), "DISPLAY="+display)
+	chromium := exec.Command(chromiumBinary, chromiumArgs(cfg, smallShm(), fwd != nil)...)
+	chromium.Env = append(append(os.Environ(), "DISPLAY="+display), where.env()...)
 	browser, err := spawn(chromium)
 	if err != nil {
 		return fmt.Errorf("start Chromium: %w", err)
@@ -95,7 +129,7 @@ func run(log *slog.Logger) error {
 	srv := &http.Server{
 		Handler: newControlHandler(cdpAddr,
 			&streamer{command: func() *exec.Cmd { return exec.Command("gst-launch-1.0", streamArgs()...) }},
-			newVisual(cfg.Width, cfg.Height)),
+			newVisual(cfg.Width, cfg.Height), fwd, where),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() { _ = srv.Serve(ln) }()
