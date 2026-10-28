@@ -186,6 +186,24 @@ func TestAgentKeepsItsLoginThroughTheAPI(t *testing.T) {
 	if code := a.do(http.MethodPost, "/api/sessions/"+s.ID+"/click", `{"x": 640, "y": 400}`, nil); code != http.StatusNoContent {
 		t.Fatalf("click: %d", code)
 	}
+	// A computer action can answer with the screen; a zoom crops it at full size.
+	for body, want := range map[string][2]int{
+		`{"action": "scroll", "x": 640, "y": 400, "dy": 2, "screenshot": true, "width": 640}`: {640, 400},
+		`{"action": "key", "keys": "Escape", "screenshot": true}`:                             {1280, 800},
+		`{"action": "zoom", "x": 1200, "y": 100, "w": 200, "h": 50}`:                          {80, 50},
+	} {
+		req, _ := http.NewRequest(http.MethodPost, a.base+"/api/sessions/"+s.ID+"/computer", strings.NewReader(body))
+		req.Header = a.header()
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		img, err := png.Decode(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil || resp.StatusCode != http.StatusOK || img.Bounds().Dx() != want[0] || img.Bounds().Dy() != want[1] {
+			t.Fatalf("%s: %d %v", body, resp.StatusCode, err)
+		}
+	}
 }
 
 // TestDownloadsAndUploads: a download lands in the profile's files and is
