@@ -1,0 +1,82 @@
+{{define "pill"}}<span class="pill {{.Key}}">{{.Label}}</span>{{end}}
+
+{{define "shot"}}
+{{- if .Preview}}<a class="shot" href="/profiles/{{.Name}}" tabindex="-1" aria-hidden="true"><img src="/profiles/{{.Name}}/preview.png?v={{.PreviewV}}" alt="" loading="lazy">{{with .Ask}}<span class="over">“{{.Detail}}”</span>{{end}}</a>
+{{- else if eq .Status.Key "starting"}}<div class="shot starting"><div class="skel"><i></i><i></i><i></i></div><span class="over">{{if eq .Status.Label "Stopping"}}Stopping the browser…{{else}}Booting Chromium…{{end}}</span></div>
+{{- else if eq .Status.Key "failed"}}<div class="shot failed"><div class="state"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/></svg><span>{{or .Error "the browser stopped unexpectedly"}}</span></div></div>
+{{- else}}<div class="shot"><div class="skel"><i></i><i></i><i></i></div>{{if .Session.ID}}<span class="over">Last run · {{ago .Session.UpdatedAt}}</span>{{end}}</div>
+{{- end}}
+{{end}}
+
+{{define "main-action"}}
+{{- if eq .Status.Key "help"}}<a class="btn blue" href="/profiles/{{.Name}}">Take control</a>
+{{- else if eq .Status.Key "running"}}<a class="btn" href="/profiles/{{.Name}}">Live view</a>
+{{- else if eq .Status.Key "starting"}}<button class="btn" type="button" disabled>{{if eq .Status.Label "Stopping"}}Stopping…{{else}}Starting…{{end}}</button>
+{{- else}}<form method="post" action="/profiles/{{.Name}}/start" data-busy="Starting…"><input type="hidden" name="back" value="/profiles"><button class="btn primary" type="submit">{{if eq .Status.Key "failed"}}Retry{{else}}Start{{end}}</button></form>
+{{- end}}
+{{end}}
+
+{{define "menu"}}
+<details class="menu">
+  <summary class="btn icon" aria-label="More for {{.Name}}">⋯</summary>
+  <div class="menu-list{{if .Up}} up{{end}}">
+    <button type="button" data-copy="{{.CDPURL}}" data-copied="Copied CDP URL for {{.Name}}">Copy CDP URL</button>
+    {{if .Live}}<button type="button" data-dialog="stop-dialog" data-name="{{.Name}}" data-agent="{{if .Session.InUseBy}}{{join .Session.InUseBy ", "}}{{end}}">Stop browser</button>{{else}}<button type="button" disabled>Stop browser</button>{{end}}
+    <a href="/profiles/{{.Name}}/edit">Edit settings</a>
+    <hr>
+    <button type="button" class="danger" data-dialog="delete-dialog" data-name="{{.Name}}">Delete profile…</button>
+  </div>
+</details>
+{{end}}
+
+{{define "card"}}
+<article class="card{{if eq .Status.Key "help"}} help{{end}}" id="card-{{.Name}}">
+  {{template "shot" .}}
+  <div class="card-body">
+    <div class="card-title">
+      <div><h3><a href="/profiles/{{.Name}}">{{.Name}}</a></h3><p>{{.Activity}}</p></div>
+      {{template "pill" .Status}}
+    </div>
+    <div class="card-meta"><span>{{.ModeLabel}}</span><span>{{.Agent}}</span><span class="num">{{gb .Memory}}</span></div>
+    <div class="card-actions">{{template "main-action" .}}{{template "menu" (menuData . false)}}</div>
+  </div>
+</article>
+{{end}}
+
+{{define "row"}}
+<tr{{if eq .Status.Key "help"}} class="help"{{end}}>
+  <td><div class="who"><span class="initial">{{initials .Name}}</span><div><b><a href="/profiles/{{.Name}}">{{.Name}}</a></b><span class="caption">Auto-stop {{.AutoStopLabel}}</span></div></div></td>
+  <td>{{template "pill" .Status}}</td>
+  <td>{{.ModeLabel}}</td>
+  <td>{{.Agent}}</td>
+  <td class="num">{{gb .Memory}}</td>
+  <td>{{.Activity}}</td>
+  <td class="right"><div class="actions" style="justify-content:flex-end">{{template "main-action" .}}{{template "menu" (menuData . true)}}</div></td>
+</tr>
+{{end}}
+
+{{define "confirm-dialogs"}}
+<dialog id="stop-dialog" class="alert" aria-labelledby="stop-title">
+  <form method="post" data-action="/profiles/{name}/stop" data-busy="Stopping…">
+    <input type="hidden" name="back" value="{{.}}">
+    <div class="dlg-body">
+      <h2 id="stop-title" data-text="Stop {name}?"></h2>
+      <p data-text="{agent-warning}Cookies and logins are kept; you can start it again any time."></p>
+    </div>
+    <div class="dlg-foot"><button class="btn" type="button" data-close>Cancel</button><button class="btn primary" type="submit">Stop browser</button></div>
+  </form>
+</dialog>
+<dialog id="delete-dialog" class="alert" aria-labelledby="delete-title">
+  <form method="post" data-action="/profiles/{name}/delete" data-busy="Deleting…">
+    <div class="dlg-body">
+      <h2 id="delete-title" data-text="Delete {name}?"></h2>
+      <p data-text="Its cookies, logins and files will be erased. Agents that use {name} will need you to log in again. This can’t be undone."></p>
+    </div>
+    <div class="dlg-foot"><button class="btn" type="button" data-close>Cancel</button><button class="btn danger" type="submit">Delete profile</button></div>
+  </form>
+</dialog>
+{{end}}
+
+{{define "code-tabs"}}
+<div class="code-tabs" role="tablist">{{range $i, $t := .}}<button type="button" role="tab" data-tab="{{$t}}" aria-selected="{{if eq $i 0}}true{{else}}false{{end}}">{{$t}}</button>{{end}}</div>
+{{end}}

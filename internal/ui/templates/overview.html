@@ -1,0 +1,81 @@
+{{define "content"}}{{with .Data}}
+<div class="page">
+  <div class="page-head">
+    <div>
+      <h1>Overview</h1>
+      <p class="num">{{len .Profiles}} {{plural (len .Profiles) "profile" "profiles"}} · {{.Running}} running{{if .Waiting}} · {{.Waiting}} waiting for you{{end}}</p>
+    </div>
+    <a class="btn primary" href="/profiles/new" hx-get="/profiles/new" hx-target="#modal" data-key="n">New profile <kbd>N</kbd></a>
+  </div>
+  <div id="cells" hx-get="/" hx-trigger="every 6s" hx-swap="innerHTML" data-poll>{{template "cells" .}}</div>
+</div>
+{{end}}{{end}}
+
+{{define "cells"}}
+<div class="bento">
+  {{with .Help}}
+  <section class="cell span-8" aria-label="{{.Name}} needs you">
+    <div class="cell-head">
+      <div class="actions"><span class="pill help">Needs you</span><b style="font-size:16px">{{.Name}}</b>{{with .Ask}}<span class="small muted">{{.Agent}} · {{ago .CreatedAt}}</span>{{end}}</div>
+      <a class="btn blue" href="/profiles/{{.Name}}">Take control</a>
+    </div>
+    {{template "shot" .}}
+    <dl class="facts" style="margin-top:14px">
+      <div><dt>Mode</dt><dd>{{.ModeLabel}}</dd></div>
+      <div><dt>Memory</dt><dd class="num">{{gb .Memory}}</dd></div>
+      <div><dt>Policy</dt><dd>{{.PolicyLabel}}</dd></div>
+      {{with .Ask}}<div><dt>Link expires</dt><dd>at {{hhmm .ExpiresAt}}</dd></div>{{end}}
+    </dl>
+  </section>
+  {{end}}
+
+  <section class="cell {{if .Help}}span-4{{else}}span-5{{end}}" aria-labelledby="mem-title">
+    <div class="cell-head"><h2 class="cell-title" id="mem-title">Memory</h2>{{if .Mem.Limit}}<span class="caption num">limit {{gb .Mem.Limit}}</span>{{end}}</div>
+    <div class="big-num num">{{gb .Mem.Used}}{{if .Mem.Host}}<small>of {{gb .Mem.Host}}</small>{{end}}</div>
+    <div class="bar" role="img" aria-label="Memory used by each browser">{{range .Mem.Parts}}<i style="width:{{pct .Bytes $.Mem.Host}}%;background:{{.Color}}"></i>{{end}}</div>
+    {{if .Mem.Parts}}
+    <ul class="legend">{{range .Mem.Parts}}<li><span style="background:{{.Color}}"></span><span>{{.Name}}</span><span class="num">{{gb .Bytes}}</span></li>{{end}}</ul>
+    {{else}}<p class="small muted" style="margin:0">No browser is running.</p>{{end}}
+    {{if ge .Mem.Room 0}}{{if .Mem.Limit}}<p class="small" style="margin:14px 0 0;padding-top:12px;border-top:1px solid var(--line-soft)">Room for about <b>{{.Mem.Room}} more</b> before idle browsers are stopped.</p>{{end}}{{end}}
+  </section>
+
+  <section class="cell {{if .Help}}span-7{{else}}span-7{{end}}" aria-labelledby="prof-title">
+    <div class="cell-head"><h2 class="cell-title" id="prof-title">Profiles</h2><a class="cell-link" href="/profiles">View all →</a></div>
+    {{if .Profiles}}
+    <ul class="rows">{{range $i, $p := .Profiles}}{{if lt $i 6}}
+      <li><span class="initial">{{initials .Name}}</span><a class="name" href="/profiles/{{.Name}}">{{.Name}}</a><span class="dot-text {{.Status.Key}}">{{.Status.Label}}</span><span class="num small muted" style="width:64px;text-align:right">{{if .Live}}{{gb .Memory}}{{else}}—{{end}}</span></li>
+    {{end}}{{end}}</ul>
+    {{else}}<p class="small muted" style="margin:0">No profiles yet. Create one, log in once, and agents can use it.</p>{{end}}
+  </section>
+
+  <section class="code {{if .Help}}span-5{{else}}span-5{{end}}" aria-labelledby="code-title" data-tabs>
+    <div class="cell-head"><h2 class="cell-title sr-only" id="code-title">Connect an agent</h2>{{template "code-tabs" (list "CDP" "REST")}}</div>
+    <pre data-panel="CDP"><span class="c">// Playwright</span>
+const browser = await chromium.connectOverCDP(
+  <span class="s">"{{wsURL .Base}}/cdp/{{.CDPExample}}"</span>,
+  { headers: { Authorization: `Bearer ${process.env.PIER_TOKEN}` } })</pre>
+    <pre data-panel="REST" hidden><span class="c"># start (or attach to) a profile's browser</span>
+curl -X POST {{.Base}}/api/sessions \
+  -H "Authorization: Bearer $PIER_TOKEN" \
+  -d '{"profile": "{{.CDPExample}}"}'</pre>
+    <a class="btn light wide" href="/agents" style="margin-top:16px">Quick start →</a>
+  </section>
+
+  <section class="cell span-4" aria-labelledby="agents-title">
+    <div class="cell-head"><h2 class="cell-title" id="agents-title">Agents</h2><a class="cell-link" href="/agents">Manage →</a></div>
+    {{if .Tokens}}
+    <ul class="rows">{{range $i, $t := .Tokens}}{{if lt $i 4}}
+      <li><span class="badge c{{color .Name}}">{{initials .Name}}</span><span style="flex:1;min-width:0"><b style="font-weight:500">{{.Name}}</b><span class="caption" style="display:block">{{if .AllProfiles}}all profiles{{else}}{{join .Profiles ", "}}{{end}}</span></span><span class="small muted">{{lastUsed .LastUsedAt}}</span></li>
+    {{end}}{{end}}</ul>
+    {{else}}<p class="small muted" style="margin:0 0 12px">No agent tokens yet.</p><a class="btn" href="/agents">Create a token</a>{{end}}
+  </section>
+
+  <section class="cell span-4" aria-labelledby="ho-title">
+    <div class="cell-head"><h2 class="cell-title" id="ho-title">Handoffs <span class="muted">· this week</span></h2></div>
+    <div class="big-num num">{{.Handoffs.Count}}</div>
+    <p class="small" style="margin:10px 0 0;color:var(--ink-2)">{{if .Handoffs.Median}}{{seconds .Handoffs.Median}} median to hand back{{else if .Handoffs.Count}}None handed back yet{{else}}No agent asked for help this week{{end}}</p>
+  </section>
+
+  <a class="cell dashed span-4" href="/profiles/new" hx-get="/profiles/new" hx-target="#modal"><span class="plus">+</span><b>New profile</b><span class="small muted">Log in once, agents reuse it</span></a>
+</div>
+{{end}}

@@ -1,0 +1,128 @@
+{{define "content"}}{{with .Data}}
+<div class="page">
+  <div class="page-head">
+    <div>
+      <h1>Agents</h1>
+      <p>One token per agent, so you can see who’s driving and revoke one without touching the rest.</p>
+    </div>
+    <button class="btn primary" type="button" data-dialog="token-dialog" data-key="n">New token <kbd>N</kbd></button>
+  </div>
+  <div class="bento">
+    <section class="cell span-8" style="padding:0" aria-label="Tokens">
+      {{if .Tokens}}
+      <div class="table-wrap">
+      <table class="table" style="box-shadow:none">
+        <thead><tr><th>Token</th><th>Can use</th><th>Last used</th><th class="right"><span class="sr-only">Actions</span></th></tr></thead>
+        <tbody>{{range .Tokens}}
+          <tr>
+            <td><div class="who"><span class="badge c{{color .Name}}">{{initials .Name}}</span><div><b>{{.Name}}</b><span class="caption mono">bp_live_…{{.Hint}}</span></div></div></td>
+            <td>{{if .AllProfiles}}<span class="scope">all profiles</span>{{else}}<span class="scope">{{join .Profiles ", "}}</span>{{end}}</td>
+            <td>{{lastUsed .LastUsedAt}}</td>
+            <td class="right"><button class="btn small danger-text" type="button" data-dialog="revoke-dialog" data-name="{{.Name}}" data-id="{{.ID}}">Revoke</button></td>
+          </tr>{{end}}
+        </tbody>
+      </table>
+      </div>
+      {{else}}
+      <div class="empty"><h2>No agent tokens yet</h2><p>Create one for each agent. It works with the REST API and CDP, and later with MCP.</p><button class="btn primary" type="button" data-dialog="token-dialog">New token</button></div>
+      {{end}}
+    </section>
+
+    <section class="cell span-4" aria-labelledby="links-title">
+      <div class="cell-head"><h2 class="cell-title big" id="links-title">Handoff links</h2>{{if .PINSet}}<span class="pill running">PIN set</span>{{else}}<span class="pill help">No PIN</span>{{end}}</div>
+      <ul class="checks">
+        <li>Expire after 15 minutes, work once</li>
+        <li>Open one browser only</li>
+        <li>Five wrong PINs cancel the link</li>
+      </ul>
+      {{if not .PINSet}}<p class="notice warn">Set a handoff PIN, or links that ask for one can't be opened.</p>{{end}}
+      <a class="btn" href="/settings">PIN and policies in Settings →</a>
+    </section>
+
+    <section class="code span-8" aria-labelledby="qs-title" data-tabs>
+      <div class="cell-head"><h2 class="cell-title" id="qs-title" style="color:#fff">Quick start</h2>{{template "code-tabs" (list "curl" "Python")}}</div>
+      <pre data-panel="curl"><span class="c"># 1. start (or attach to) a profile's browser</span>
+curl -X POST {{.Base}}/api/sessions \
+  -H "Authorization: Bearer $PIER_TOKEN" \
+  -d '{"profile": "google", "mode": "visual"}'
+<span class="c"># → {"id": "…", "cdp_url": "{{wsURL .Base}}/cdp/google", …}</span>
+
+<span class="c"># 2. stuck? ask a human, send them the link, wait</span>
+curl -X POST {{.Base}}/api/sessions/$ID/handoff -H "Authorization: Bearer $PIER_TOKEN" \
+  -d '{"reason": "sensitive_input", "detail": "Enter the 2FA code"}'
+<span class="s"># → {"id": "…", "url": "{{.Base}}/h/…", "expires_at": "…"}</span>
+curl "{{.Base}}/api/handoffs/$HANDOFF?wait=900" -H "Authorization: Bearer $PIER_TOKEN"
+<span class="c"># → {"status": "done", "note": "used a backup code"}</span>
+
+<span class="c"># 3. done: free the memory, keep the cookies</span>
+curl -X DELETE {{.Base}}/api/sessions/$ID -H "Authorization: Bearer $PIER_TOKEN"</pre>
+      <pre data-panel="Python" hidden><span class="c"># pip install playwright requests</span>
+import os, requests
+from playwright.sync_api import sync_playwright
+
+auth = {"Authorization": "Bearer " + os.environ["PIER_TOKEN"]}
+s = requests.post("{{.Base}}/api/sessions", json={"profile": "google", "mode": "api"}, headers=auth).json()
+
+with sync_playwright() as p:
+    browser = p.chromium.connect_over_cdp(s["cdp_url"], headers=auth)
+    page = browser.contexts[0].pages[0]
+    page.goto("https://mail.google.com")
+
+requests.delete("{{.Base}}/api/sessions/" + s["id"], headers=auth)</pre>
+    </section>
+
+    <section class="cell span-4" aria-labelledby="ep-title">
+      <h2 class="cell-title big" id="ep-title" style="margin-bottom:10px">Endpoints</h2>
+      <ul class="endpoints">
+        <li><span class="m POST">POST</span><code>/api/sessions</code><span>Start or attach to a browser</span></li>
+        <li><span class="m DELETE">DELETE</span><code>/api/sessions/{id}</code><span>Stop it, keep the profile</span></li>
+        <li><span class="m WS">WS</span><code>/cdp/{profile}</code><span>API mode, token-checked</span></li>
+        <li><span class="m GET">GET</span><code>/api/sessions/{id}/screenshot</code><span>Visual mode: see the screen</span></li>
+        <li><span class="m POST">POST</span><code>/api/sessions/{id}/click</code><span>Visual mode: click, and /type to type</span></li>
+        <li><span class="m GET">GET</span><code>/api/profiles/{name}/files</code><span>Downloaded files</span></li>
+        <li><span class="m POST">POST</span><code>/api/sessions/{id}/handoff</code><span>One-time link for a human</span></li>
+        <li><span class="m GET">GET</span><code>/api/handoffs/{id}</code><span>Wait for the answer</span></li>
+      </ul>
+    </section>
+  </div>
+</div>
+
+<dialog id="token-dialog" aria-labelledby="token-title">{{template "token-dialog" .Form}}</dialog>
+<dialog id="revoke-dialog" class="alert" aria-labelledby="revoke-title">
+  <form method="post" data-action="/agents/tokens/{id}/revoke" data-busy="Revoking…">
+    <div class="dlg-body">
+      <h2 id="revoke-title" data-text="Revoke {name}?"></h2>
+      <p data-text="Agents using it are cut off within seconds, including open CDP connections. Other tokens keep working."></p>
+    </div>
+    <div class="dlg-foot"><button class="btn" type="button" data-close>Cancel</button><button class="btn danger" type="submit">Revoke token</button></div>
+  </form>
+</dialog>
+{{end}}{{end}}
+
+{{define "token-dialog"}}
+<div id="token-body">
+{{if .Secret}}
+  <div class="dlg-head"><div><h2 id="token-title">Copy your token now</h2><p>Store it in your agent’s environment as <code>PIER_TOKEN</code>. You won’t see it again.</p></div></div>
+  <div class="dlg-body">
+    <div class="secret"><code>{{.Secret}}</code><button class="btn small" type="button" data-copy="{{.Secret}}" data-copied="Token copied">Copy</button></div>
+  </div>
+  <div class="dlg-foot"><a class="btn primary" href="/agents">Done</a></div>
+{{else}}
+  <form method="post" action="/agents/tokens" hx-post="/agents/tokens" hx-target="#token-body" hx-swap="outerHTML" data-busy="Creating…">
+    <div class="dlg-head"><div><h2 id="token-title">New token</h2><p>For one agent. You can revoke it any time.</p></div><button class="close" type="button" data-close aria-label="Close">✕</button></div>
+    <div class="dlg-body">
+      {{with .Error}}<p class="errors" role="alert">{{.}}</p>{{end}}
+      <label class="field"><span class="label">Name</span><input class="input" name="name" value="{{.Name}}" maxlength="64" placeholder="research-bot" autocomplete="off" required><span class="hint">Shown as the agent on Profiles and in the agent log.</span></label>
+      <fieldset class="field" style="border:0;padding:0;margin:0">
+        <legend class="label" style="font-weight:500;margin-bottom:8px">Can use</legend>
+        <label class="radio-card"><input type="radio" name="scope" value="all"{{if .All}} checked{{end}}><span><b>All profiles</b><small>Including ones created later. Needed to create profiles.</small></span></label>
+        <label class="radio-card"><input type="radio" name="scope" value="some"{{if not .All}} checked{{end}}><span><b>Only these profiles</b>
+          {{if .Profiles}}<span class="choices" style="margin-top:8px">{{range .Profiles}}<label><input type="checkbox" name="profile" value="{{.}}"{{if index $.Chosen .}} checked{{end}}><span>{{.}}</span></label>{{end}}</span>{{else}}<small>No profiles yet.</small>{{end}}
+        </span></label>
+      </fieldset>
+    </div>
+    <div class="dlg-foot"><button class="btn" type="button" data-close>Cancel</button><button class="btn primary" type="submit">Create token</button></div>
+  </form>
+{{end}}
+</div>
+{{end}}

@@ -6,11 +6,11 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
-	"html/template"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -18,13 +18,8 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
-//go:embed live.html
-var liveHTML string
-
 //go:embed live.js
 var liveJS []byte
-
-var livePage = template.Must(template.New("live").Parse(liveHTML))
 
 // Handler serves the live view to the signed-in admin: the page, its
 // status, and the WebRTC offer.
@@ -39,7 +34,8 @@ func NewHandler(relay *Relay, m *sessions.Manager, web *auth.Web, log *slog.Logg
 	return &Handler{relay: relay, m: m, web: web, log: log}
 }
 
-// Register adds /live/{profile}, its status and offer, and the client script.
+// Register adds /live/{profile}'s status and offer, and the client script.
+// The page itself is the web UI's /profiles/{profile}.
 func (h *Handler) Register(mux *http.ServeMux) {
 	admin := func(f http.HandlerFunc) http.Handler { return h.web.RequireAdmin(f) }
 	mux.Handle("GET /live/{profile}", admin(h.page))
@@ -52,17 +48,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	})
 }
 
+// page sends the old live view address to the profile's page in the web UI.
 func (h *Handler) page(w http.ResponseWriter, r *http.Request) {
-	profile := r.PathValue("profile")
-	if _, err := h.m.Profiles().Get(r.Context(), profile); err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Frame-Options", "DENY")
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'")
-	_ = livePage.Execute(w, map[string]string{"Profile": profile})
+	http.Redirect(w, r, "/profiles/"+url.PathEscape(r.PathValue("profile")), http.StatusMovedPermanently)
 }
 
 type statusJSON struct {

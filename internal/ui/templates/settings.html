@@ -1,0 +1,93 @@
+{{define "content"}}{{with .Data}}
+<div class="page">
+  <div class="page-head">
+    <div>
+      <h1>Settings</h1>
+      <p>Defaults for new profiles and how handoffs are protected. Each profile can override them.</p>
+    </div>
+  </div>
+  {{if and .Error (eq .ErrorFor "defaults")}}<p class="errors" role="alert">{{.Error}}</p>{{end}}
+  <form id="defaults" method="post" action="/settings" data-track data-busy="Saving…"></form>
+  <div class="bento">
+    <section class="cell span-6" aria-labelledby="pin-title">
+      <div class="cell-head"><h2 class="cell-title big" id="pin-title">Handoff PIN</h2>{{if .PINChangedAt.IsZero}}<span class="pill help">Not set</span>{{else}}<span class="pill running">Set · changed {{ago .PINChangedAt}}</span>{{end}}</div>
+      <p class="small" style="margin:0 0 14px;color:var(--ink-2)">Asked on your phone before a handoff link opens a browser. Agents never see it. Five wrong tries cancel the link.</p>
+      {{if and .Error (eq .ErrorFor "pin")}}<p class="errors" role="alert">{{.Error}}</p>{{end}}
+      <details{{if or (eq .ErrorFor "pin") .PINChangedAt.IsZero}} open{{end}} class="reveal">
+        <summary class="btn">{{if .PINChangedAt.IsZero}}Set PIN{{else}}Change PIN{{end}}</summary>
+        <form method="post" action="/settings/pin" class="two" style="margin-top:14px;align-items:end" data-busy="Saving…">
+          {{if not .PINChangedAt.IsZero}}<label class="field" style="margin:0"><span class="label">Current PIN</span><input class="input mono" name="current" type="password" inputmode="numeric" autocomplete="off" maxlength="6" required></label>{{end}}
+          <label class="field" style="margin:0"><span class="label">New PIN</span><input class="input mono" name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,6}" autocomplete="new-password" maxlength="6" required title="4 to 6 digits"></label>
+          <div class="actions"><button class="btn primary" type="submit">Save PIN</button></div>
+        </form>
+      </details>
+    </section>
+
+    <section class="cell span-6" aria-labelledby="policy-title">
+      <h2 class="cell-title big" id="policy-title" style="margin:0">Default handoff policy</h2>
+      <p class="small" style="margin:2px 0 14px;color:var(--ink-2)">For new profiles. Agents can raise it for one link, never lower it.</p>
+      <div class="seg full policy">
+        {{range .Policies}}<label><input type="radio" name="policy" value="{{.Value}}" form="defaults"{{if eq .Value $.Data.DefaultPolicy}} checked{{end}}><span>{{.Title}}</span></label>{{end}}
+      </div>
+      <div class="policy-hints">{{range .Policies}}<p class="notice" data-for="{{.Value}}" style="margin:12px 0 0">{{.Hint}}</p>{{end}}</div>
+    </section>
+
+    <section class="cell span-7" aria-labelledby="mem-title">
+      <div class="cell-head" style="align-items:flex-start">
+        <div><h2 class="cell-title big" id="mem-title" style="margin:0">Memory limit</h2>
+        <p class="small" style="margin:2px 0 0;color:var(--ink-2)">Above this, starting a browser first stops the longest-idle one. If none is idle, the request is refused.</p></div>
+        <output class="big-num num" id="ram-out" for="ram" style="font-size:34px">{{.RAMPercent}}%</output>
+      </div>
+      <label class="sr-only" for="ram">Memory limit, percent of host memory</label>
+      <input id="ram" name="ram" type="range" min="10" max="100" step="5" value="{{.RAMPercent}}" form="defaults" data-host="{{.Mem.Host}}" data-each="{{.Mem.Each}}"{{if .RAMFromEnv}} disabled{{end}}>
+      <div class="meter" aria-hidden="true"><i style="width:{{pct .Mem.Used .Mem.Host}}%"></i><b id="ram-mark" style="left:{{.RAMPercent}}%"></b></div>
+      <p class="small num" style="margin:0;color:var(--ink-2)">Limit <b id="ram-gb">{{gb (ramBytes .Mem.Host .RAMPercent)}}</b>{{if .Mem.Host}} of {{gb .Mem.Host}}{{end}} · In use now <b>{{gb .Mem.Used}}</b> · Fits about <b id="ram-fits">{{.Fits}}</b> browsers</p>
+      {{if .RAMFromEnv}}<p class="notice" style="margin:12px 0 0">Set by <code>BROWSERPIER_RAM_LIMIT_PERCENT</code>. Remove it from the environment to change the limit here.</p>{{end}}
+    </section>
+
+    <section class="cell span-5" aria-labelledby="auto-title">
+      <h2 class="cell-title big" id="auto-title" style="margin:0">Default auto-stop</h2>
+      <p class="small" style="margin:2px 0 14px;color:var(--ink-2)">Stop a browser when no agent or person has used it for a while. Cookies and logins stay.</p>
+      <div class="choices">{{range .AutoStopChoices}}<label><input type="radio" name="auto_stop" value="{{.}}" form="defaults"{{if eq (minutesOf $.Data.DefaultAutoStop) .}} checked{{end}}><span>{{if eq . 0}}Never{{else}}{{.}} min{{end}}</span></label>{{end}}</div>
+      <ul class="checks" style="margin:14px 0 0"><li>Never stopped while someone is in live view or an agent is connected</li></ul>
+    </section>
+
+    <section class="cell span-7" aria-labelledby="proxy-title">
+      <h2 class="cell-title big" id="proxy-title" style="margin:0">Default proxy</h2>
+      <p class="small" style="margin:2px 0 14px;color:var(--ink-2)">Used by new profiles unless they set their own. Leave empty to use this server’s connection.</p>
+      <label class="sr-only" for="proxy">Proxy URL</label>
+      <input class="input mono" id="proxy" name="proxy" value="{{.Proxy}}" form="defaults" placeholder="socks5://user:pass@host:port" autocomplete="off" spellcheck="false">
+      <ul class="checks" style="margin:14px 0 0"><li>Time zone and language follow the proxy’s location</li></ul>
+    </section>
+
+    <section class="cell span-5" id="account" aria-labelledby="acct-title">
+      <h2 class="cell-title big" id="acct-title" style="margin:0 0 6px">Admin account</h2>
+      {{if and .Error (eq .ErrorFor "password")}}<p class="errors" role="alert">{{.Error}}</p>{{end}}
+      <ul class="kv">
+        <li><span>Password</span>{{if .PasswordEnv}}<span class="small muted">Set by BROWSERPIER_ADMIN_PASSWORD</span>{{else}}<button class="btn small" type="button" data-dialog="password-dialog">Change</button>{{end}}</li>
+        <li><span>Signed-in devices</span><span class="num">{{.Devices}}</span><form method="post" action="/settings/sign-out-others"><button class="btn small danger-text" type="submit"{{if le .Devices 1}} disabled{{end}}>Sign out others</button></form></li>
+        <li><span>This device</span><form method="post" action="/logout"><button class="btn small" type="submit">Sign out</button></form></li>
+      </ul>
+    </section>
+  </div>
+</div>
+
+<div class="unsaved" id="unsaved" hidden role="region" aria-label="Unsaved changes">
+  <span>Unsaved changes</span>
+  <button class="btn ghost" type="button" data-discard>Discard</button>
+  <button class="btn light" type="submit" form="defaults">Save changes</button>
+</div>
+
+<dialog id="password-dialog"{{if eq .ErrorFor "password"}} data-open{{end}} aria-labelledby="pw-title">
+  <form method="post" action="/settings/password" data-busy="Saving…">
+    <div class="dlg-head"><div><h2 id="pw-title">Change password</h2><p>Other devices are signed out.</p></div><button class="close" type="button" data-close aria-label="Close">✕</button></div>
+    <div class="dlg-body">
+      {{if and .Error (eq .ErrorFor "password")}}<p class="errors" role="alert">{{.Error}}</p>{{end}}
+      <label class="field"><span class="label">Current password</span><input class="input" name="current" type="password" autocomplete="current-password" required></label>
+      <label class="field"><span class="label">New password</span><input class="input" name="password" type="password" autocomplete="new-password" minlength="8" required></label>
+      <label class="field"><span class="label">Repeat it</span><input class="input" name="confirm" type="password" autocomplete="new-password" minlength="8" required></label>
+    </div>
+    <div class="dlg-foot"><button class="btn" type="button" data-close>Cancel</button><button class="btn primary" type="submit">Change password</button></div>
+  </form>
+</dialog>
+{{end}}{{end}}

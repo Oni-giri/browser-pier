@@ -1,0 +1,75 @@
+{{define "content"}}{{with .Data}}
+<div class="page">
+  <div class="crumbs" style="margin-bottom:20px"><a href="/profiles">Profiles</a><span class="sep">/</span><h1>{{if .New}}New profile{{else}}{{.Profile.Name}}{{end}}</h1></div>
+  <div class="cell" style="max-width:640px;padding:0">{{template "fields" .}}</div>
+</div>
+{{end}}{{end}}
+
+{{define "form"}}
+<dialog data-open aria-labelledby="form-title">{{template "fields" .}}</dialog>
+{{end}}
+
+{{define "fields"}}
+<form method="post" action="{{if .New}}/profiles{{else}}/profiles/{{.Profile.Name}}/edit{{end}}"
+  {{if .Modal}}hx-post="/profiles" hx-target="closest dialog" hx-swap="outerHTML"{{end}} data-busy="{{if .New}}Creating…{{else}}Saving…{{end}}">
+  <div class="dlg-head">
+    <div>
+      <h2 id="form-title">{{if .New}}New profile{{else}}Profile settings{{end}}</h2>
+      <p>{{if .New}}A saved browser. Cookies, logins and storage stay between runs.{{else}}Changes apply the next time the browser starts.{{end}}</p>
+    </div>
+    {{if .Modal}}<button class="close" type="button" data-close aria-label="Close">✕</button>{{end}}
+  </div>
+  <div class="dlg-body">
+    {{with .Error}}<p class="errors" role="alert">{{.}}</p>{{end}}
+    {{if and .Running (not .New)}}<p class="notice">The browser is running. These settings apply the next time it starts.</p>{{end}}
+    <label class="field">
+      <span class="label">Name</span>
+      <span class="prefix"><span>/profiles/</span><input name="name" value="{{.Profile.Name}}" required pattern="[a-z0-9]([a-z0-9\-]{0,30}[a-z0-9])?" maxlength="32" autocomplete="off" spellcheck="false" {{if .New}}autofocus{{else}}readonly{{end}}></span>
+      <span class="hint">{{if .New}}Agents ask for it by this name. Lowercase, numbers and dashes.{{else}}A profile's name can't change: agents use it.{{end}}</span>
+    </label>
+    <fieldset class="field" style="border:0;padding:0;margin:0 0 18px">
+      <legend class="label" style="font-weight:500;margin-bottom:8px">When an agent sends you a handoff link</legend>
+      {{range $.Policies}}
+      <label class="radio-card"><input type="radio" name="policy" value="{{.Value}}"{{if eq .Value $.Profile.HandoffPolicy}} checked{{end}}><span><b>{{.Title}}</b>{{if eq .Value "pin"}}<span class="rec">Recommended</span>{{end}}<small>{{.Desc}}</small></span></label>
+      {{end}}
+      <span class="hint">Agents can ask for a stricter level, never a looser one. The PIN is set in <a href="/settings">Settings</a>.</span>
+    </fieldset>
+    {{if .New}}<label class="check field"><input type="checkbox" name="start" value="1"{{if .Start}} checked{{end}}> Start it now and open live view so I can log in</label>{{end}}
+    <details class="advanced"{{if not .New}} open{{end}}>
+      <summary><span><b>Advanced</b><span class="caption">{{.Summary}}</span></span></summary>
+      <div>
+        <div class="field">
+          <span class="label">Default mode</span>
+          <div class="seg full">
+            <label><input type="radio" name="mode" value="visual"{{if eq .Profile.DefaultMode "visual"}} checked{{end}}><span>Visual</span></label>
+            <label><input type="radio" name="mode" value="api"{{if eq .Profile.DefaultMode "api"}} checked{{end}}><span>API</span></label>
+          </div>
+          <span class="hint">Visual: agents see screenshots and click like a person. API: agents drive the page over CDP.</span>
+        </div>
+        <div class="two">
+          <label class="field"><span class="label">Auto-stop</span>
+            <select class="input" name="auto_stop">{{range .AutoStopChoices}}<option value="{{.}}"{{if eq (minutesOf $.Profile.AutoStop) .}} selected{{end}}>{{if eq . 0}}Never{{else}}After {{.}} min idle{{end}}</option>{{end}}</select>
+          </label>
+          <label class="field"><span class="label">Screen</span>
+            <select class="input" name="screen">{{range .Screens}}<option value="{{.}}"{{if eq . $.Profile.Screen}} selected{{end}}>{{screenLabel .}}</option>{{end}}</select>
+          </label>
+        </div>
+        <label class="field"><span class="label">Proxy <span class="muted" style="font-weight:400">· optional</span></span>
+          <input class="input mono" name="proxy" value="{{.Proxy}}" placeholder="socks5://user:pass@host:port" autocomplete="off" spellcheck="false">
+          <span class="hint">HTTP, HTTPS or SOCKS5. Time zone and language follow the proxy's location.</span>
+        </label>
+        {{if not .New}}
+        <div class="two">
+          <label class="field"><span class="label">Time zone</span><input class="input" name="time_zone" value="{{.Profile.TimeZone}}" placeholder="{{or .Profile.Location.TimeZone "From the proxy"}}" autocomplete="off" spellcheck="false"><span class="hint">An IANA zone such as Europe/Berlin. Empty: match the exit.</span></label>
+          <label class="field"><span class="label">Language</span><input class="input" name="locale" value="{{.Profile.Locale}}" placeholder="From the proxy" autocomplete="off" spellcheck="false"><span class="hint">Such as de-DE. Empty: match the exit.</span></label>
+        </div>
+        {{end}}
+      </div>
+    </details>
+  </div>
+  <div class="dlg-foot">
+    {{if .Modal}}<button class="btn" type="button" data-close>Cancel</button>{{else}}<a class="btn" href="/profiles">Cancel</a>{{end}}
+    <button class="btn primary" type="submit">{{if .New}}Create profile{{else}}Save{{end}}</button>
+  </div>
+</form>
+{{end}}

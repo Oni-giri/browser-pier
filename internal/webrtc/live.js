@@ -2,11 +2,12 @@
 // send mouse and keyboard over a data channel. No build step.
 "use strict";
 (() => {
-  const profile = document.body.dataset.profile;
+  const root = document.querySelector("[data-profile]");
+  const profile = root.dataset.profile;
   // A handoff page points these at its own endpoints and starts in control.
-  const offerURL = document.body.dataset.offer || `/live/${encodeURIComponent(profile)}/offer`;
-  const statusURL = document.body.dataset.status || `/live/${encodeURIComponent(profile)}/status`;
-  const startInControl = document.body.dataset.control === "on";
+  const offerURL = root.dataset.offer || `/live/${encodeURIComponent(profile)}/offer`;
+  const statusURL = root.dataset.status || `/live/${encodeURIComponent(profile)}/status`;
+  const startInControl = root.dataset.control === "on";
   const video = document.getElementById("screen");
   const stage = document.getElementById("stage");
   const who = document.getElementById("who");
@@ -71,6 +72,7 @@
     const agentDriving = !!(status.in_use_by && status.in_use_by.length);
     if (takeBtn) {
       takeBtn.textContent = control ? "Hand back" : "Take control";
+      if (takeBtn.classList.contains("btn")) takeBtn.classList.toggle("blue", !control);
       takeBtn.disabled = !dc || dc.readyState !== "open" || (!control && (agentDriving || status.human_control || s !== "running"));
     }
     typeBtn.hidden = !(control && touch);

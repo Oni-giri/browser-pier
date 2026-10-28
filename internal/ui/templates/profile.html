@@ -1,0 +1,90 @@
+{{define "content"}}{{with .Data}}
+<div class="page" data-profile="{{.Name}}" data-state="{{.Session.State}}">
+  <div class="page-head" style="align-items:center">
+    <div class="crumbs">
+      <a href="/profiles">Profiles</a><span class="sep">/</span><h1>{{.Name}}</h1>
+      <span class="pill {{.Status.Key}}">{{.Status.Label}}{{with .Ask}} · {{.Reason.Label}}{{end}}</span>
+    </div>
+    <div class="actions">
+      {{if .Live}}
+        <button class="btn" type="button" data-dialog="stop-dialog" data-name="{{.Name}}" data-agent="{{if .Session.InUseBy}}{{join .Session.InUseBy ", "}}{{end}}">Stop browser</button>
+        {{if .Preview}}<button id="take" class="btn blue" type="button" disabled>Take control</button>{{end}}
+      {{else}}
+        <a class="btn" href="/profiles/{{.Name}}/edit">Edit settings</a>
+        <form method="post" action="/profiles/{{.Name}}/start" data-busy="Starting…"{{if .StartNow}} data-autosubmit{{end}}><input type="hidden" name="back" value="/profiles/{{.Name}}"><button class="btn primary" type="submit">{{if eq .Status.Key "failed"}}Retry{{else}}Start browser{{end}}</button></form>
+      {{end}}
+    </div>
+  </div>
+  <div class="live">
+    <section class="viewer" aria-label="Browser">
+      <div class="viewer-bar">
+        <span class="addr">{{with .Ask}}{{.Origin}}{{else}}{{.Name}}{{end}}</span>
+        <span class="num">{{.Width}} × {{.Height}}{{if .Preview}} · 30 fps{{end}}</span>
+        <button id="type" class="btn small" type="button" hidden>Type</button>
+        <button id="fit" class="btn small" type="button" hidden>Fit</button>
+      </div>
+      <div id="stage" style="--ratio:{{.Width}}/{{.Height}}">
+        {{if .Preview}}
+          <video id="screen" autoplay playsinline muted tabindex="0" aria-label="Live view of {{.Name}}"></video>
+          <span id="who" class="pill">Connecting…</span>
+          <div id="note" role="status"></div>
+        {{else}}
+          <div class="stage-off">
+            {{if eq .Status.Key "starting"}}<span class="pill starting">{{.Status.Label}}</span><span>{{if eq .Status.Label "Stopping"}}The browser is closing.{{else}}Booting Chromium…{{end}}</span>
+            {{else if eq .Status.Key "failed"}}<span class="pill failed">Failed</span><span class="mono small">{{or .Error "the browser stopped unexpectedly"}}</span>
+            {{else}}<span>This browser is stopped. Its cookies and logins are kept.</span>{{end}}
+          </div>
+        {{end}}
+      </div>
+      {{if .Preview}}<div id="hint">View only. Take control to use the mouse and keyboard.</div>{{end}}
+    </section>
+    <aside class="side" id="side" hx-get="/profiles/{{.Name}}/side" hx-trigger="every 4s" hx-swap="innerHTML" data-poll>
+      {{template "side" .}}
+    </aside>
+  </div>
+</div>
+{{template "confirm-dialogs" (printf "/profiles/%s" .Name)}}
+{{if .Preview}}<script src="/static/live.js" defer></script>{{end}}
+{{end}}{{end}}
+
+{{define "side"}}
+<div hidden data-side-state="{{.Session.State}}"></div>
+{{with .Ask}}
+<section class="cell" aria-label="Request for help">
+  <div class="who" style="display:flex;gap:10px;align-items:center">
+    <span class="badge c{{color .Agent}}">{{initials .Agent}}</span>
+    <div><b>{{.Agent}}</b><div class="caption">asked {{ago .CreatedAt}} · {{.Reason.Label}}</div></div>
+  </div>
+  <p class="ask">{{.Detail}}</p>
+  <p class="caption" style="margin:0 0 14px">on {{.Origin}} · link expires {{hhmm .ExpiresAt}}</p>
+  <form method="post" action="/profiles/{{.Profile}}/handback" data-busy="Handing back…">
+    <label class="field" style="margin-bottom:10px"><span class="sr-only">Note for the agent</span><input class="input" name="note" maxlength="1000" placeholder="Note for the agent (optional)" autocomplete="off"></label>
+    <div class="actions">
+      <button class="btn primary" type="submit" name="status" value="done">Done, hand back</button>
+      <button class="btn" type="submit" name="status" value="cant">Can't do this</button>
+    </div>
+  </form>
+</section>
+{{end}}
+<section class="cell" aria-labelledby="conn-title">
+  <h2 class="cell-title" id="conn-title" style="margin-bottom:10px">Connection</h2>
+  <div class="copy-row" style="margin-bottom:6px"><input class="input" value="{{.CDPURL}}" readonly aria-label="CDP URL"><button class="btn" type="button" data-copy="{{.CDPURL}}" data-copied="Copied">Copy</button></div>
+  <p class="caption" style="margin:0 0 14px">Agents add their token: <code>?token=bp_live_…</code> or an Authorization header.</p>
+  <dl class="facts">
+    <div><dt>Mode</dt><dd>{{.ModeLabel}}</dd></div>
+    <div><dt>Memory</dt><dd class="num">{{if .Live}}{{gb .Memory}}{{else}}—{{end}}</dd></div>
+    <div><dt>Auto-stop</dt><dd>{{.AutoStopLabel}}</dd></div>
+    <div><dt>Up for</dt><dd class="num">{{.UpFor}}</dd></div>
+    <div><dt>In use by</dt><dd>{{.Agent}}</dd></div>
+    <div><dt>Handoff</dt><dd>{{.PolicyLabel}}</dd></div>
+  </dl>
+</section>
+<section class="cell" aria-labelledby="log-title">
+  <h2 class="cell-title" id="log-title" style="margin-bottom:12px">Agent log</h2>
+  {{if .Log}}
+  <ol class="log">{{range .Log}}<li{{if .Attention}} class="attention"{{end}}>{{if .Agent}}<b style="font-weight:500">{{.Agent}}</b>: {{end}}{{.What}}<time datetime="{{.At.Format "2006-01-02T15:04:05Z07:00"}}">{{clock .At}}</time></li>{{end}}</ol>
+  {{else}}
+  <p class="small muted" style="margin:0">{{if .Live}}Nothing yet. What agents do in this browser shows up here.{{else}}Starts when the browser does.{{end}}</p>
+  {{end}}
+</section>
+{{end}}
