@@ -177,3 +177,16 @@ func TestImportRefusesAnExpensivePassphraseHeader(t *testing.T) {
 		t.Fatal("decrypted a header past the work factor cap")
 	}
 }
+
+// A profile never started has no folder: it exports as its settings.
+func TestExportAProfileThatNeverRan(t *testing.T) {
+	var buf bytes.Buffer
+	m := Manifest{Profile: Profile{Name: "new"}}
+	if err := Export(&buf, filepath.Join(t.TempDir(), "missing"), m, pass); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Import(&buf, pass, filepath.Join(t.TempDir(), "x"), DefaultLimits)
+	if err != nil || got.Profile.Name != "new" {
+		t.Fatalf("import: %+v, %v", got, err)
+	}
+}

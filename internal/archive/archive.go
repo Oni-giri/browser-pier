@@ -89,14 +89,18 @@ func Export(w io.Writer, dir string, m Manifest, passphrase string) error {
 	if err := writeManifest(tw, m); err != nil {
 		return err
 	}
+	// A profile never started has no folder yet: its archive is its settings.
 	root, err := os.OpenRoot(dir)
-	if err != nil {
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
 		return err
-	}
-	defer func() { _ = root.Close() }()
-	for _, top := range folders {
-		if err := addTree(tw, root, top); err != nil {
-			return err
+	default:
+		defer func() { _ = root.Close() }()
+		for _, top := range folders {
+			if err := addTree(tw, root, top); err != nil {
+				return err
+			}
 		}
 	}
 	// Closing in order: age's Close writes the last authenticated chunk,
