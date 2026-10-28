@@ -54,7 +54,7 @@ Self-hosted, persistent browsers for AI agents. Agents start a browser when they
 - **Web UI:** Go templates with htmx for live updates, embedded in the binary, with no JS build step. Live view and handoff use a small vanilla JS WebRTC client.
 - **Browser container**, one per running session: headful Chromium on a virtual display (Xvfb) with no automation flags. It has OS-level input (xdotool) for Visual mode and exposes CDP for API mode. A small sidecar captures the display, encodes H.264 (GStreamer) and sends it to the orchestrator.
 - **Live stream:** WebRTC, served by the orchestrator with pion on a single muxed UDP port (TCP fallback). It relays each container's stream to the viewer and passes mouse and keyboard from the viewer back over a data channel to xdotool. No CDP is involved, so Visual mode stays clean.
-  - **Ports and addresses:** `BROWSERPIER_WEBRTC_PORT` (default 7438) is the one UDP port, and the same TCP port is the fallback; `BROWSERPIER_WEBRTC_IPS` sets the addresses to advertise (a VPS's public IP, the Tailscale IP). The live view is at `/live/{profile}`, for the signed-in admin.
+  - **Ports and addresses:** `BROWSERPIER_WEBRTC_PORT` (default 7438) is the one UDP port, and the same TCP port is the fallback; `BROWSERPIER_WEBRTC_IPS` sets the addresses to advertise (a VPS's public IP, the Tailscale IP). The live view is the web UI's profile page, `/profiles/{profile}`, for the signed-in admin (`/live/{profile}` redirects there).
   - **Streaming:** a browser's stream is read only while someone watches, so an unwatched browser spends nothing on encoding. Each frame is one sample; x264 writes one slice per frame.
   - **Control:** a person takes control to send mouse and keyboard. It is refused while an agent is driving: connected over CDP, or having clicked or typed in the last 5 seconds. While a person has control, agents can only watch: their input and new CDP connections are refused, and open ones close. Esc releases the keyboard; leaving the page or losing focus lets go of any held key or button.
   - **Input safety:** input reaches the browser as structured events (move, button, wheel, key by X keysym name; printable characters as Unicode keysyms, so the viewer's own layout types), fed to one long-running `xdotool`. Every command is built in the container from checked values; nothing a viewer sends becomes script text.
@@ -246,6 +246,16 @@ Designs: the "Browser Orchestrator UI" canvas (private to the author). The UI st
 | 4 · Live view | Streamed browser, take or hand back control, controls locked while the agent drives, connection details, agent activity log, help request. |
 | 5 · API access | Agent tokens (create with scope, shown once, revoke), handoff PIN and rules, quick start, endpoint list, MCP. |
 | 6 · Handoff (phone) | PIN entry, take control on a phone (tap to click, pinch, Type, Fit), note, Done or Can't do this, then expired and finished states. |
+
+### Settings and what they decide
+
+- **Defaults for new profiles** (handoff policy, auto-stop, proxy) are set in Settings and apply to every new profile, including ones an agent creates. An agent can still only raise the policy from the default.
+- **Memory limit:** `BROWSERPIER_RAM_LIMIT_PERCENT` wins when it is set, as `BROWSERPIER_ADMIN_PASSWORD` does; otherwise the limit is set in Settings (10–100%, default 70%) and applies at once to the next start.
+- **Changing the PIN** needs the current one; changing the password needs the current one and signs out other devices. Wrong tries are limited.
+- **Handing back from the app:** when an agent asked for help, the profile page shows the request with **Done, hand back** and **Can't do this** and a note, like the phone page; either answers the agent at once.
+- **Agent log:** the profile page lists what agents did in the current session (attached, clicked, typed N characters, took a screenshot, asked for help). It never shows typed text, and it is kept in memory only.
+- **Previews:** profile cards show a small screenshot of each running browser. Taking one doesn't count as use, so an open page never keeps a browser from stopping when idle.
+- Not yet in the UI: export and import (PROJ-13) and MCP (PROJ-12).
 
 ### Interaction rules
 
