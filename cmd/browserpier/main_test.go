@@ -103,3 +103,17 @@ func TestBrowserUser(t *testing.T) {
 		t.Errorf("browserUser(0, 0) = %d, %d; Chromium can't run as root", u, g)
 	}
 }
+
+func TestInstanceIDIsKept(t *testing.T) {
+	dir := t.TempDir()
+	a, err := instanceID(dir)
+	if err != nil || len(a) != 16 {
+		t.Fatalf("instanceID = %q, %v", a, err)
+	}
+	if b, _ := instanceID(dir); b != a {
+		t.Fatalf("second call gave %q, want %q", b, a)
+	}
+	if c, _ := instanceID(t.TempDir()); c == a {
+		t.Fatal("two data dirs share an instance ID")
+	}
+}
