@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -298,5 +299,38 @@ func TestExpiry(t *testing.T) {
 	}
 	if p := f.do(browser(), "GET", "/h/nonsense", nil, nil); p.code != http.StatusNotFound {
 		t.Fatalf("unknown link: %d", p.code)
+	}
+}
+
+func TestPINCantOpenAFullSignInLink(t *testing.T) {
+	f := newFixture(t, profiles.PolicySignIn, auth.WebOptions{})
+	h, token := f.open("")
+	b := browser()
+	if p := f.do(b, "POST", "/h/"+token+"/pin", url.Values{"pin": {"4821"}}, nil); p.code != http.StatusSeeOther {
+		t.Fatalf("PIN on a sign-in link: %d", p.code)
+	}
+	if p := f.do(b, "GET", "/h/"+token, nil, nil); p.code != http.StatusSeeOther || !strings.HasPrefix(p.location, "/login") {
+		t.Fatalf("after the PIN, the link should still want a sign-in: %d to %q", p.code, p.location)
+	}
+	if got, _ := f.svc.Get(context.Background(), h.ID); got.unlocked {
+		t.Fatal("the PIN unlocked a full sign-in link")
+	}
+}
+
+func TestParallelWrongPINsStopAtFive(t *testing.T) {
+	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
+	h, token := f.open("")
+	var wg sync.WaitGroup
+	for range 25 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			f.do(browser(), "POST", "/h/"+token+"/pin", url.Values{"pin": {"0000"}}, nil)
+		}()
+	}
+	wg.Wait()
+	got, _ := f.svc.Get(context.Background(), h.ID)
+	if got.PINFailures != MaxPINFailures || got.Status != Cancelled {
+		t.Fatalf("after 25 parallel guesses: %d failures, %s", got.PINFailures, got.Status)
 	}
 }

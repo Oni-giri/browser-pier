@@ -83,13 +83,24 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) offer(w http.ResponseWriter, r *http.Request) {
-	h.Offer(w, r, r.PathValue("profile"), false)
+	h.Offer(w, r, r.PathValue("profile"), OfferOptions{})
+}
+
+// OfferOptions shape a live view.
+type OfferOptions struct {
+	// Control gives the viewer the mouse and keyboard from the start (a
+	// handoff link, once unlocked).
+	Control bool
+	// Allowed, if set, is checked before acting on the viewer's messages;
+	// once it says no, the viewer is cut off (a handoff that has ended).
+	Allowed func() bool
+	// Opened, if set, gets the viewer once connected, to close it later.
+	Opened func(*Viewer)
 }
 
 // Offer answers a WebRTC offer for profile's live view. The caller has
-// already checked who may watch. With control set, the viewer has the
-// mouse and keyboard from the start (a handoff link, once unlocked).
-func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, control bool) {
+// already checked who may watch.
+func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, o OfferOptions) {
 	s, ok := h.m.Live(profile)
 	if !ok || (s.State != sessions.Running && s.State != sessions.NeedsHelp) {
 		http.Error(w, "the browser isn't running", http.StatusConflict)
@@ -107,8 +118,8 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 		http.Error(w, "the browser isn't running", http.StatusConflict)
 		return
 	}
-	vw := &viewer{h: h, session: s.ID, sock: h.m.Layout().ControlSocket(profile)}
-	if control && h.m.TakeControl(s.ID) == nil {
+	vw := &viewer{h: h, session: s.ID, sock: h.m.Layout().ControlSocket(profile), allowed: o.Allowed}
+	if o.Control && h.m.TakeControl(s.ID) == nil {
 		vw.control = true
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
@@ -118,6 +129,10 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 		unwatch()
 		http.Error(w, "couldn't connect: "+err.Error(), http.StatusBadRequest)
 		return
+	}
+	vw.conn = v
+	if o.Opened != nil {
+		o.Opened(v)
 	}
 	go func() {
 		<-v.Done()
@@ -135,8 +150,24 @@ type viewer struct {
 	session string
 	sock    string
 
-	mu      sync.Mutex
-	control bool
+	allowed func() bool // nil: always
+	conn    *Viewer
+
+	mu        sync.Mutex
+	control   bool
+	checkedAt time.Time // when allowed last said yes
+}
+
+// stillAllowed re-checks, at most once a second, that this viewer may act.
+func (v *viewer) stillAllowed() bool {
+	if v.allowed == nil || time.Since(v.checkedAt) < time.Second {
+		return true
+	}
+	if !v.allowed() {
+		return false
+	}
+	v.checkedAt = time.Now()
+	return true
 }
 
 // message handles one data channel message from the viewer's page:
@@ -161,6 +192,13 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	if !v.stillAllowed() {
+		v.releaseLocked()
+		if v.conn != nil {
+			go v.conn.Close()
+		}
+		return
+	}
 	switch m.Type {
 	case "take":
 		err := v.h.m.TakeControl(v.session)

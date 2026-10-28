@@ -1,6 +1,7 @@
 package handoff
 
 import (
+	"context"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -36,10 +37,15 @@ type Web struct {
 	m    *sessions.Manager
 	log  *slog.Logger
 	pin  *auth.Lockout // per client address, on top of the link's own five tries
+	// pinAll caps wrong handoff PINs across all links and addresses, so
+	// someone holding many links can't spread guesses across them.
+	pinAll *auth.Lockout
 }
 
 func NewWeb(svc *Service, web *auth.Web, live *webrtc.Handler, m *sessions.Manager, log *slog.Logger) *Web {
-	return &Web{svc: svc, web: web, live: live, m: m, log: log, pin: auth.NewLockout(10, 15*time.Minute, 15*time.Minute)}
+	return &Web{svc: svc, web: web, live: live, m: m, log: log,
+		pin:    auth.NewLockout(10, 15*time.Minute, 15*time.Minute),
+		pinAll: auth.NewLockout(30, 15*time.Minute, 15*time.Minute)}
 }
 
 // Register adds the handoff routes.
@@ -182,22 +188,56 @@ func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 		w.render(rw, http.StatusForbidden, view{Step: "other", H: h})
 		return
 	}
+	// The PIN only opens a link whose policy asks for it: a "full sign-in"
+	// link can't be opened with the PIN instead of the admin password.
+	if policy, _ := w.policy(r, h); policy != profiles.PolicyPIN {
+		http.Redirect(rw, r, "/h/"+url.PathEscape(token), http.StatusSeeOther)
+		return
+	}
 	ip := w.web.ClientIP(r)
-	attempt, _ := w.pin.Begin(ip)
-	if attempt == nil {
+	mine, _ := w.pin.Begin(ip)
+	if mine == nil {
 		w.render(rw, http.StatusTooManyRequests, view{Step: "pin", H: h, Token: token, TriesLeft: MaxPINFailures - h.PINFailures, Error: "Too many wrong PINs from here. Wait a few minutes."})
 		return
 	}
+	all, _ := w.pinAll.Begin("all")
+	if all == nil {
+		mine.Cancel()
+		w.log.Warn("handoff PINs locked: too many wrong PINs across all links")
+		w.render(rw, http.StatusTooManyRequests, view{Step: "pin", H: h, Token: token, TriesLeft: MaxPINFailures - h.PINFailures, Error: "Too many wrong PINs. Wait a few minutes."})
+		return
+	}
+	// Reserve this link's try before checking, so parallel guesses can't
+	// all get in before the count does.
+	reserved, err := w.svc.ReservePINTry(r.Context(), h)
+	if err != nil || !reserved {
+		mine.Cancel()
+		all.Cancel()
+		if err != nil {
+			http.Error(rw, "something went wrong", http.StatusInternalServerError)
+			return
+		}
+		left, _ := w.svc.PINWrong(r.Context(), h)
+		if left <= 0 {
+			w.render(rw, http.StatusGone, view{Step: "ended", Ended: string(Cancelled), H: h})
+		} else {
+			w.render(rw, http.StatusTooManyRequests, view{Step: "pin", H: h, Token: token, TriesLeft: left, Error: "Wait for your other attempts to finish."})
+		}
+		return
+	}
 	r.Body = http.MaxBytesReader(rw, r.Body, 4<<10)
-	ok, err := w.web.Admin().CheckPIN(r.Context(), r.PostFormValue("pin"))
+	ok, err = w.web.Admin().CheckPIN(r.Context(), r.PostFormValue("pin"))
 	if err != nil {
-		attempt.Cancel()
+		mine.Cancel()
+		all.Cancel()
+		_ = w.svc.PINRight(r.Context(), h) // not a guess: give the try back
 		http.Error(rw, "something went wrong", http.StatusInternalServerError)
 		return
 	}
 	if !ok {
-		attempt.Fail()
-		left, err := w.svc.PINFailed(r.Context(), h)
+		mine.Fail()
+		all.Fail()
+		left, err := w.svc.PINWrong(r.Context(), h)
 		if err != nil {
 			http.Error(rw, "something went wrong", http.StatusInternalServerError)
 			return
@@ -210,7 +250,9 @@ func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 		w.render(rw, http.StatusUnauthorized, view{Step: "pin", H: h, Token: token, TriesLeft: left, Error: "Wrong PIN."})
 		return
 	}
-	attempt.Succeed()
+	mine.Succeed()
+	all.Cancel()
+	_ = w.svc.PINRight(r.Context(), h)
 	if w.unlock(rw, r, h, token) {
 		http.Redirect(rw, r, "/h/"+url.PathEscape(token), http.StatusSeeOther)
 	}
@@ -223,7 +265,16 @@ func (w *Web) offer(rw http.ResponseWriter, r *http.Request) {
 		http.Error(rw, "this link isn't open here", http.StatusForbidden)
 		return
 	}
-	w.live.Offer(rw, r, h.Profile, true)
+	id := h.ID
+	w.live.Offer(rw, r, h.Profile, webrtc.OfferOptions{
+		Control: true,
+		// Only while the handoff is open: hand-back ends this viewer's control.
+		Allowed: func() bool {
+			cur, err := w.svc.Get(context.Background(), id)
+			return err == nil && cur.Status == Pending
+		},
+		Opened: func(v *webrtc.Viewer) { w.svc.track(id, v) },
+	})
 }
 
 func (w *Web) status(rw http.ResponseWriter, r *http.Request) {

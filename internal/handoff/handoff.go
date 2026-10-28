@@ -24,6 +24,7 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
+	"github.com/Oni-giri/browser-pier/internal/webrtc"
 )
 
 // Reason says what kind of help is needed, so the page can word it.
@@ -100,10 +101,11 @@ type Service struct {
 
 	mu      sync.Mutex
 	waiters map[string][]chan struct{}
+	viewers map[string][]*webrtc.Viewer // live views opened through a handoff
 }
 
 func New(db *sql.DB, m *sessions.Manager, log *slog.Logger) *Service {
-	return &Service{db: db, m: m, log: log, now: time.Now, waiters: map[string][]chan struct{}{}}
+	return &Service{db: db, m: m, log: log, now: time.Now, waiters: map[string][]chan struct{}{}, viewers: map[string][]*webrtc.Viewer{}}
 }
 
 var rank = map[profiles.HandoffPolicy]int{profiles.PolicyLink: 0, profiles.PolicyPIN: 1, profiles.PolicySignIn: 2}
@@ -292,22 +294,40 @@ func (s *Service) Unlocked(ctx context.Context, h Handoff, browser string) bool 
 	return n == 1
 }
 
-// PINFailed counts a wrong PIN and cancels the link at the limit. It
-// returns how many tries are left.
-func (s *Service) PINFailed(ctx context.Context, h Handoff) (int, error) {
-	if _, err := s.db.ExecContext(ctx, `UPDATE handoffs SET pin_failures = pin_failures + 1 WHERE id = ?`, h.ID); err != nil {
-		return 0, err
+// ReservePINTry counts a PIN attempt before it is checked, so parallel
+// guesses can't all be tried before the count catches up. It returns
+// false if the link has no tries left. A right PIN gives the try back
+// (PINRight); a wrong one keeps it and cancels the link at the limit
+// (PINWrong).
+func (s *Service) ReservePINTry(ctx context.Context, h Handoff) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE handoffs SET pin_failures = pin_failures + 1 WHERE id = ? AND status = 'pending' AND pin_failures < ?`,
+		h.ID, MaxPINFailures)
+	if err != nil {
+		return false, err
 	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
+// PINRight gives back the try reserved for a right PIN.
+func (s *Service) PINRight(ctx context.Context, h Handoff) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE handoffs SET pin_failures = pin_failures - 1 WHERE id = ? AND pin_failures > 0`, h.ID)
+	return err
+}
+
+// PINWrong returns how many tries are left after a wrong PIN, cancelling
+// the link when none are.
+func (s *Service) PINWrong(ctx context.Context, h Handoff) (int, error) {
 	h, err := s.Get(ctx, h.ID)
 	if err != nil {
 		return 0, err
 	}
 	left := MaxPINFailures - h.PINFailures
-	if left <= 0 {
+	if left <= 0 && !h.Status.Final() {
 		_, err := s.finish(ctx, h, Cancelled, "five wrong PINs")
 		return 0, err
 	}
-	return left, nil
+	return max(left, 0), nil
 }
 
 // Finish records the person's answer: done or can't, with a note.
@@ -351,6 +371,19 @@ func (s *Service) wake(id string) {
 		close(ch)
 	}
 	delete(s.waiters, id)
+	// The link is dead: so are the live views it opened.
+	for _, v := range s.viewers[id] {
+		v.Close()
+	}
+	delete(s.viewers, id)
+}
+
+// track remembers a live view opened through a handoff, to close it when
+// the handoff ends.
+func (s *Service) track(id string, v *webrtc.Viewer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.viewers[id] = append(s.viewers[id], v)
 }
 
 // Wait returns the handoff once it's over, or as it stands after wait.
