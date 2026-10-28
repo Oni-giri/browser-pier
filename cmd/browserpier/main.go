@@ -28,6 +28,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/docker"
 	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
+	"github.com/Oni-giri/browser-pier/internal/webrtc"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -159,7 +160,13 @@ func run(log *slog.Logger) error {
 		"host_data_dir", hostDataDir, "browser_image", image)
 	agentAPI := api.New(mgr, web, fileStore, log, cfg.PublicURL)
 	go agentAPI.WatchRevocations(ctx, 10*time.Second)
-	return serve(ctx, ln, newHandler(web, agentAPI), log)
+	relay, err := webrtc.New(webrtc.Options{Port: cfg.WebRTCPort, IPs: cfg.WebRTCIPs}, mgr.Layout().ControlSocket, log)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = relay.Close() }()
+	live := webrtc.NewHandler(relay, mgr, web, log)
+	return serve(ctx, ln, newHandler(web, agentAPI, live), log)
 }
 
 // perBrowser is the memory a new browser is expected to need when
@@ -231,7 +238,7 @@ func browserUser(uid, gid int) (int, int) {
 
 // newHandler is every route. Cross-origin form posts are refused, so a
 // page elsewhere can't act with the admin's cookie.
-func newHandler(web *auth.Web, agentAPI *api.API) http.Handler {
+func newHandler(web *auth.Web, agentAPI *api.API, live *webrtc.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -239,6 +246,9 @@ func newHandler(web *auth.Web, agentAPI *api.API) http.Handler {
 	})
 	web.Register(mux)
 	agentAPI.Register(mux)
+	if live != nil {
+		live.Register(mux)
+	}
 	// Until the web UI lands (PROJ-11), the home page only confirms the sign-in.
 	mux.Handle("GET /{$}", web.RequireAdmin(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")

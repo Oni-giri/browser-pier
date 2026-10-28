@@ -58,7 +58,9 @@ func streamArgs() []string {
 		"ximagesrc", "display-name=" + display, "use-damage=false", "show-pointer=true", "!",
 		"video/x-raw,framerate=30/1", "!",
 		"videoconvert", "!", "video/x-raw,format=I420", "!",
-		"x264enc", "tune=zerolatency", "speed-preset=ultrafast", "key-int-max=60", "bframes=0", "!",
+		// One slice per frame (no sliced threads), so each slice NAL is a
+		// whole frame for the relay.
+		"x264enc", "tune=zerolatency", "speed-preset=ultrafast", "key-int-max=60", "bframes=0", "sliced-threads=false", "!",
 		"video/x-h264,profile=constrained-baseline,stream-format=byte-stream", "!",
 		"fdsink", "fd=3",
 	}

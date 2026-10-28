@@ -20,10 +20,10 @@ func (m *Manager) Touch(id string) {
 }
 
 // idleLocked is how long the browser has gone unused. A browser with an
-// agent connected, or one that is starting, stopping or with a person
-// during a handoff, is never idle.
+// agent connected, someone in live view, or one that is starting,
+// stopping or with a person during a handoff, is never idle.
 func (l *live) idleLocked(now time.Time) time.Duration {
-	if len(l.conns) > 0 || l.sess.State != Running {
+	if len(l.conns) > 0 || l.viewers > 0 || l.human || l.sess.State != Running {
 		return 0
 	}
 	return now.Sub(l.lastActivity)

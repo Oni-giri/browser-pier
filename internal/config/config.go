@@ -45,6 +45,13 @@ type Config struct {
 	// time_zone) browsers use to find their exit location, through their
 	// proxy (BROWSERPIER_GEOIP_URL; "off" turns it off).
 	GeoIPURL string
+	// WebRTCPort is the one UDP port (and TCP port, as a fallback) live
+	// views use (BROWSERPIER_WEBRTC_PORT).
+	WebRTCPort int
+	// WebRTCIPs are the addresses advertised to live viewers: a VPS's
+	// public IP or the Tailscale IP (BROWSERPIER_WEBRTC_IPS, comma
+	// separated). Empty advertises every local address.
+	WebRTCIPs []string
 	// RAMLimitPercent caps the memory all browsers may use together, as a
 	// share of the host's (BROWSERPIER_RAM_LIMIT_PERCENT, default 70; 0 for
 	// no cap). Past it, the longest-idle unused browser is stopped to make
@@ -131,6 +138,19 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		c.GeoIPURL = ""
 	} else if u, err := url.Parse(c.GeoIPURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return Config{}, fmt.Errorf("BROWSERPIER_GEOIP_URL: want an http(s) URL or off, got %q", c.GeoIPURL)
+	}
+	rtcPort := get("BROWSERPIER_WEBRTC_PORT", "7438")
+	if c.WebRTCPort, err = strconv.Atoi(rtcPort); err != nil || c.WebRTCPort < 1 || c.WebRTCPort > 65535 {
+		return Config{}, fmt.Errorf("BROWSERPIER_WEBRTC_PORT: want a port number, got %q", rtcPort)
+	}
+	for _, ip := range strings.Split(get("BROWSERPIER_WEBRTC_IPS", ""), ",") {
+		if ip = strings.TrimSpace(ip); ip == "" {
+			continue
+		}
+		if net.ParseIP(ip) == nil {
+			return Config{}, fmt.Errorf("BROWSERPIER_WEBRTC_IPS: %q is not an IP address", ip)
+		}
+		c.WebRTCIPs = append(c.WebRTCIPs, ip)
 	}
 	ram := get("BROWSERPIER_RAM_LIMIT_PERCENT", "70")
 	if c.RAMLimitPercent, err = strconv.Atoi(strings.TrimSuffix(ram, "%")); err != nil || c.RAMLimitPercent < 0 || c.RAMLimitPercent > 100 {

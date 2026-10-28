@@ -129,6 +129,12 @@ type live struct {
 	conns map[*conn]struct{}
 	// lastActivity is when an agent or person last used the browser.
 	lastActivity time.Time
+	// lastAgentInput is when an agent last clicked or typed.
+	lastAgentInput time.Time
+	// human is set while a person has control from the live view.
+	human bool
+	// viewers counts open live views.
+	viewers int
 }
 
 // conn is one agent connection to a browser; cancelling it closes it.
@@ -730,6 +736,7 @@ func (l *live) snapshotLocked() Session {
 		}
 	}
 	sort.Strings(s.InUseBy)
+	s.HumanControl, s.Viewers = l.human, l.viewers
 	return s
 }
 
@@ -744,6 +751,9 @@ func (m *Manager) Attach(ctx context.Context, id, tokenID, agent string) (contex
 	l := m.findLocked(id)
 	if l == nil || l.sess.State != Running {
 		return nil, nil, ErrNotRunning
+	}
+	if l.human {
+		return nil, nil, ErrHumanDriving
 	}
 	cctx, cancel := context.WithCancel(ctx)
 	c := &conn{tokenID: tokenID, agent: agent, cancel: cancel}
