@@ -171,8 +171,7 @@ func (f *forwarder) splice(client, up net.Conn) {
 	wg.Add(2)
 	copyCount := func(dst, src net.Conn, n *atomic.Int64) {
 		defer wg.Done()
-		c, _ := io.Copy(dst, src)
-		n.Add(c)
+		_, _ = io.Copy(counter{dst, n}, src)
 		// Unblock the other direction.
 		_ = dst.Close()
 		_ = src.Close()
@@ -328,6 +327,19 @@ func socks5Connect(conn net.Conn, addr string, user *url.Userinfo) error {
 	}
 	_, err = io.ReadFull(conn, make([]byte, skip+2))
 	return err
+}
+
+// counter counts bytes as they pass, so a long-lived tunnel shows its
+// traffic before it closes.
+type counter struct {
+	w io.Writer
+	n *atomic.Int64
+}
+
+func (c counter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n.Add(int64(n))
+	return n, err
 }
 
 // stats serves the traffic counters on the control socket.

@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/browsertest"
 )
@@ -90,8 +91,12 @@ func TestForwarderThroughUpstreams(t *testing.T) {
 			if got := up.Targets(); len(got) != 1 || got[0] != "localhost:"+strconv.Itoa(port) {
 				t.Fatalf("upstream saw %v", got)
 			}
-			if f.up.Load() == 0 || f.down.Load() == 0 {
-				t.Fatalf("traffic not counted: %d up, %d down", f.up.Load(), f.down.Load())
+			deadline := time.Now().Add(5 * time.Second)
+			for f.up.Load() == 0 || f.down.Load() == 0 {
+				if time.Now().After(deadline) {
+					t.Fatalf("traffic not counted: %d up, %d down", f.up.Load(), f.down.Load())
+				}
+				time.Sleep(10 * time.Millisecond)
 			}
 
 			bad := startForwarder(t, name+"://user:wrong@"+up.Addr)
