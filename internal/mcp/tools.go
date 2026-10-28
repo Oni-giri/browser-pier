@@ -1,0 +1,393 @@
+package mcp
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"image/png"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/Oni-giri/browser-pier/internal/fence"
+)
+
+// Screenshots go to agents within this size: what models see best, and
+// what costs them the fewest tokens.
+const maxShotW, maxShotH = 1280, 720
+
+func (s *Server) addTools(srv *sdk.Server) {
+	sdk.AddTool(srv, &sdk.Tool{Name: "list_profiles", Description: "List the browser profiles this token can use, with whether each is running."}, s.listProfiles)
+	sdk.AddTool(srv, &sdk.Tool{Name: "start_browser", Description: "Start a profile's browser, or attach to it if it's already running. Returns the session_id the other tools take."}, s.startBrowser)
+	sdk.AddTool(srv, &sdk.Tool{Name: "stop_browser", Description: "Stop a browser to free its memory. Cookies and logins are kept for next time."}, s.stopBrowser)
+	sdk.AddTool(srv, &sdk.Tool{Name: "screenshot", Description: "See the browser's screen (Visual mode). Other tools take coordinates in this screenshot's pixels."}, s.screenshot)
+	sdk.AddTool(srv, &sdk.Tool{Name: "click", Description: "Click at a point of the last screenshot (Visual mode)."}, s.click)
+	sdk.AddTool(srv, &sdk.Tool{Name: "type_text", Description: "Type text into whatever has focus, as a keyboard would (Visual mode)."}, s.typeText)
+	sdk.AddTool(srv, &sdk.Tool{Name: "press_keys", Description: "Press keys or combinations, such as Return, Tab, ctrl+a or ctrl+shift+t (Visual mode)."}, s.pressKeys)
+	sdk.AddTool(srv, &sdk.Tool{Name: "scroll", Description: "Scroll at a point by whole notches: positive down or right, negative up or left (Visual mode)."}, s.scroll)
+	sdk.AddTool(srv, &sdk.Tool{Name: "drag", Description: "Drag from one point to another with the mouse button held (Visual mode)."}, s.drag)
+	sdk.AddTool(srv, &sdk.Tool{Name: "wait", Description: "Wait for the page, up to 10 seconds."}, s.wait)
+	sdk.AddTool(srv, &sdk.Tool{Name: "zoom", Description: "See a region of the last screenshot at the screen's full resolution, to read small text."}, s.zoom)
+	sdk.AddTool(srv, &sdk.Tool{Name: "list_files", Description: "List the files the profile's browser downloaded, newest first."}, s.listFiles)
+	s.addHandoffTools(srv)
+}
+
+// text is a result of one text block.
+func text(format string, args ...any) *sdk.CallToolResult {
+	return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: fmt.Sprintf(format, args...)}}}
+}
+
+type noArgs struct{}
+
+func (s *Server) listProfiles(ctx context.Context, req *sdk.CallToolRequest, _ noArgs) (*sdk.CallToolResult, any, error) {
+	var out struct {
+		Profiles []struct {
+			Name        string `json:"name"`
+			DefaultMode string `json:"default_mode"`
+			Status      string `json:"status"`
+			SessionID   string `json:"session_id"`
+		} `json:"profiles"`
+	}
+	if err := s.callJSON(ctx, req.Extra, "GET", "/api/profiles", nil, &out); err != nil {
+		return nil, nil, err
+	}
+	if len(out.Profiles) == 0 {
+		return text("No profiles yet. A person creates them in BrowserPier's web UI and logs in once."), nil, nil
+	}
+	var b strings.Builder
+	for _, p := range out.Profiles {
+		fmt.Fprintf(&b, "%s: %s, %s mode", p.Name, p.Status, p.DefaultMode)
+		if p.SessionID != "" {
+			fmt.Fprintf(&b, ", session_id %s", p.SessionID)
+		}
+		b.WriteByte('\n')
+	}
+	return text("%s", b.String()), nil, nil
+}
+
+type startArgs struct {
+	Profile string `json:"profile" jsonschema:"the profile's name"`
+	Mode    string `json:"mode,omitempty" jsonschema:"visual (screenshots and clicks) or api (CDP); default: the profile's own"`
+}
+
+type sessionOut struct {
+	ID          string   `json:"id"`
+	Profile     string   `json:"profile"`
+	Mode        string   `json:"mode"`
+	State       string   `json:"state"`
+	Attached    bool     `json:"attached"`
+	CDPURL      string   `json:"cdp_url"`
+	LiveViewURL string   `json:"live_view_url"`
+	InUseBy     []string `json:"in_use_by"`
+}
+
+func (s *Server) startBrowser(ctx context.Context, req *sdk.CallToolRequest, in startArgs) (*sdk.CallToolResult, any, error) {
+	var out sessionOut
+	if err := s.callJSON(ctx, req.Extra, "POST", "/api/sessions", map[string]string{"profile": in.Profile, "mode": in.Mode}, &out); err != nil {
+		return nil, nil, err
+	}
+	var b strings.Builder
+	verb := "Started"
+	if out.Attached {
+		verb = "Attached to"
+	}
+	fmt.Fprintf(&b, "%s %s's browser. session_id: %s (%s mode).\n", verb, out.Profile, out.ID, out.Mode)
+	if out.Mode == "api" {
+		fmt.Fprintf(&b, "CDP: %s (send your token as an Authorization: Bearer header).\n", out.CDPURL)
+	} else {
+		b.WriteString("Take a screenshot to see it.\n")
+	}
+	if len(out.InUseBy) > 0 {
+		fmt.Fprintf(&b, "Also in use by: %s.\n", strings.Join(out.InUseBy, ", "))
+	}
+	fmt.Fprintf(&b, "A person can watch at %s.", out.LiveViewURL)
+	return text("%s", b.String()), nil, nil
+}
+
+type sessionArgs struct {
+	SessionID string `json:"session_id" jsonschema:"from start_browser"`
+}
+
+func (s *Server) stopBrowser(ctx context.Context, req *sdk.CallToolRequest, in sessionArgs) (*sdk.CallToolResult, any, error) {
+	if err := s.callJSON(ctx, req.Extra, "DELETE", "/api/sessions/"+url.PathEscape(in.SessionID), nil, nil); err != nil {
+		return nil, nil, err
+	}
+	s.forgetScreen(in.SessionID)
+	return text("Stopped. Its cookies and logins are kept."), nil, nil
+}
+
+// screen is a session's screen size, and how screenshots shrink it.
+type screen struct{ w, h int }
+
+// shot is the size screenshots are scaled to: the whole screen, within
+// maxShotW × maxShotH.
+func (sc screen) shot() (int, int) {
+	if sc.w <= maxShotW && sc.h <= maxShotH {
+		return sc.w, sc.h
+	}
+	scale := min(float64(maxShotW)/float64(sc.w), float64(maxShotH)/float64(sc.h))
+	return max(1, int(float64(sc.w)*scale)), max(1, int(float64(sc.h)*scale))
+}
+
+// toScreen turns a point of a screenshot into a point of the screen.
+func (sc screen) toScreen(x, y int) (int, int) {
+	sw, sh := sc.shot()
+	return min(x*sc.w/sw, sc.w-1), min(y*sc.h/sh, sc.h-1)
+}
+
+func (s *Server) forgetScreen(id string) {
+	s.screensMu.Lock()
+	delete(s.screens, id)
+	s.screensMu.Unlock()
+}
+
+// screenOf is the session's screen size, asked once.
+func (s *Server) screenOf(ctx context.Context, extra *sdk.RequestExtra, id string) (screen, error) {
+	s.screensMu.Lock()
+	sc, ok := s.screens[id]
+	s.screensMu.Unlock()
+	if ok {
+		return sc, nil
+	}
+	r, err := s.call(ctx, extra, "GET", "/api/sessions/"+url.PathEscape(id)+"/screenshot?width=16", nil)
+	if err != nil {
+		return screen{}, err
+	}
+	if !r.ok() {
+		return screen{}, toolError(r.errorText())
+	}
+	return s.rememberScreen(id, r)
+}
+
+func (s *Server) rememberScreen(id string, r apiReply) (screen, error) {
+	w, _ := strconv.Atoi(r.header.Get("X-Screen-Width"))
+	h, _ := strconv.Atoi(r.header.Get("X-Screen-Height"))
+	if w <= 0 || h <= 0 {
+		return screen{}, fmt.Errorf("the browser didn't say its screen size")
+	}
+	sc := screen{w, h}
+	s.screensMu.Lock()
+	s.screens[id] = sc
+	s.screensMu.Unlock()
+	return sc, nil
+}
+
+// shotResult is a screenshot for the agent, saying what its pixels are.
+func shotResult(png []byte, sc screen, note string) *sdk.CallToolResult {
+	sw, sh := sc.shot()
+	msg := fmt.Sprintf("Screenshot, %d×%d. Give coordinates in these pixels.", sw, sh)
+	if note != "" {
+		msg = note + " " + msg
+	}
+	return &sdk.CallToolResult{Content: []sdk.Content{
+		&sdk.TextContent{Text: msg},
+		&sdk.ImageContent{Data: png, MIMEType: "image/png"},
+	}}
+}
+
+func (s *Server) screenshot(ctx context.Context, req *sdk.CallToolRequest, in sessionArgs) (*sdk.CallToolResult, any, error) {
+	sc, err := s.screenOf(ctx, req.Extra, in.SessionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	sw, _ := sc.shot()
+	r, err := s.call(ctx, req.Extra, "GET", "/api/sessions/"+url.PathEscape(in.SessionID)+"/screenshot?width="+strconv.Itoa(sw), nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !r.ok() {
+		return nil, nil, toolError(r.errorText())
+	}
+	if sc, err = s.rememberScreen(in.SessionID, r); err != nil {
+		return nil, nil, err
+	}
+	return shotResult(r.body, sc, ""), nil, nil
+}
+
+// act runs a Visual-mode action through the API's /computer, in screen
+// pixels, returning a screenshot after it if asked.
+func (s *Server) act(ctx context.Context, extra *sdk.RequestExtra, id string, sc screen, action map[string]any, shot bool, done string) (*sdk.CallToolResult, any, error) {
+	if shot {
+		sw, _ := sc.shot()
+		action["screenshot"] = true
+		action["width"] = sw
+	}
+	r, err := s.call(ctx, extra, "POST", "/api/sessions/"+url.PathEscape(id)+"/computer", action)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !r.ok() {
+		return nil, nil, toolError(r.errorText())
+	}
+	if shot && strings.HasPrefix(r.header.Get("Content-Type"), "image/") {
+		return shotResult(r.body, sc, done), nil, nil
+	}
+	return text("%s", done), nil, nil
+}
+
+type pointArgs struct {
+	SessionID  string `json:"session_id" jsonschema:"from start_browser"`
+	X          int    `json:"x" jsonschema:"in the last screenshot's pixels"`
+	Y          int    `json:"y" jsonschema:"in the last screenshot's pixels"`
+	Screenshot bool   `json:"screenshot,omitempty" jsonschema:"return a screenshot after"`
+}
+
+type clickArgs struct {
+	pointArgs
+	Button string `json:"button,omitempty" jsonschema:"left (default), right or middle"`
+	Double bool   `json:"double,omitempty" jsonschema:"double-click"`
+}
+
+func (s *Server) click(ctx context.Context, req *sdk.CallToolRequest, in clickArgs) (*sdk.CallToolResult, any, error) {
+	sc, err := s.screenOf(ctx, req.Extra, in.SessionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	x, y := sc.toScreen(in.X, in.Y)
+	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "click", "x": x, "y": y, "button": in.Button, "double": in.Double}, in.Screenshot, "Clicked.")
+}
+
+type typeArgs struct {
+	SessionID  string `json:"session_id" jsonschema:"from start_browser"`
+	Text       string `json:"text" jsonschema:"what to type; use press_keys for Return, Tab and shortcuts"`
+	Screenshot bool   `json:"screenshot,omitempty" jsonschema:"return a screenshot after"`
+}
+
+func (s *Server) typeText(ctx context.Context, req *sdk.CallToolRequest, in typeArgs) (*sdk.CallToolResult, any, error) {
+	sc, err := s.screenOf(ctx, req.Extra, in.SessionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "type", "text": in.Text}, in.Screenshot, "Typed.")
+}
+
+type keysArgs struct {
+	SessionID  string `json:"session_id" jsonschema:"from start_browser"`
+	Keys       string `json:"keys" jsonschema:"a key or combination, or several separated by spaces: Return, Tab, Escape, ctrl+a, ctrl+shift+t"`
+	Screenshot bool   `json:"screenshot,omitempty" jsonschema:"return a screenshot after"`
+}
+
+func (s *Server) pressKeys(ctx context.Context, req *sdk.CallToolRequest, in keysArgs) (*sdk.CallToolResult, any, error) {
+	sc, err := s.screenOf(ctx, req.Extra, in.SessionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "key", "keys": strings.Fields(in.Keys)}, in.Screenshot, "Pressed "+in.Keys+".")
+}
+
+type scrollArgs struct {
+	pointArgs
+	Down  int `json:"down,omitempty" jsonschema:"notches to scroll down; negative scrolls up"`
+	Right int `json:"right,omitempty" jsonschema:"notches to scroll right; negative scrolls left"`
+}
+
+func (s *Server) scroll(ctx context.Context, req *sdk.CallToolRequest, in scrollArgs) (*sdk.CallToolResult, any, error) {
+	sc, err := s.screenOf(ctx, req.Extra, in.SessionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	x, y := sc.toScreen(in.X, in.Y)
+	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "scroll", "x": x, "y": y, "dx": in.Right, "dy": in.Down}, in.Screenshot, "Scrolled.")
+}
+
+type dragArgs struct {
+	SessionID  string `json:"session_id" jsonschema:"from start_browser"`
+	FromX      int    `json:"from_x" jsonschema:"in the last screenshot's pixels"`
+	FromY      int    `json:"from_y"`
+	ToX        int    `json:"to_x"`
+	ToY        int    `json:"to_y"`
+	Screenshot bool   `json:"screenshot,omitempty" jsonschema:"return a screenshot after"`
+}
+
+func (s *Server) drag(ctx context.Context, req *sdk.CallToolRequest, in dragArgs) (*sdk.CallToolResult, any, error) {
+	sc, err := s.screenOf(ctx, req.Extra, in.SessionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	fx, fy := sc.toScreen(in.FromX, in.FromY)
+	tx, ty := sc.toScreen(in.ToX, in.ToY)
+	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "drag",
+		"from": map[string]int{"x": fx, "y": fy}, "to": map[string]int{"x": tx, "y": ty}}, in.Screenshot, "Dragged.")
+}
+
+type waitArgs struct {
+	SessionID  string  `json:"session_id" jsonschema:"from start_browser"`
+	Seconds    float64 `json:"seconds" jsonschema:"up to 10"`
+	Screenshot bool    `json:"screenshot,omitempty" jsonschema:"return a screenshot after"`
+}
+
+func (s *Server) wait(ctx context.Context, req *sdk.CallToolRequest, in waitArgs) (*sdk.CallToolResult, any, error) {
+	sc, err := s.screenOf(ctx, req.Extra, in.SessionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	ms := int(min(max(in.Seconds, 0), 10) * 1000)
+	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "wait", "ms": ms}, in.Screenshot,
+		fmt.Sprintf("Waited %s.", time.Duration(ms)*time.Millisecond))
+}
+
+type zoomArgs struct {
+	SessionID string `json:"session_id" jsonschema:"from start_browser"`
+	X         int    `json:"x" jsonschema:"the region's left edge, in the last screenshot's pixels"`
+	Y         int    `json:"y" jsonschema:"the region's top edge"`
+	Width     int    `json:"width" jsonschema:"the region's width"`
+	Height    int    `json:"height" jsonschema:"the region's height"`
+}
+
+func (s *Server) zoom(ctx context.Context, req *sdk.CallToolRequest, in zoomArgs) (*sdk.CallToolResult, any, error) {
+	sc, err := s.screenOf(ctx, req.Extra, in.SessionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if in.Width <= 0 || in.Height <= 0 {
+		return nil, nil, toolError("give the region a width and a height")
+	}
+	x, y := sc.toScreen(in.X, in.Y)
+	x2, y2 := sc.toScreen(in.X+in.Width, in.Y+in.Height)
+	r, err := s.call(ctx, req.Extra, "POST", "/api/sessions/"+url.PathEscape(in.SessionID)+"/computer",
+		map[string]any{"action": "zoom", "x": x, "y": y, "w": max(1, x2-x), "h": max(1, y2-y)})
+	if err != nil {
+		return nil, nil, err
+	}
+	if !r.ok() {
+		return nil, nil, toolError(r.errorText())
+	}
+	msg := "The region at full resolution. Coordinates for other tools are still in the screenshot's pixels."
+	if cfg, err := png.DecodeConfig(bytes.NewReader(r.body)); err == nil {
+		msg = fmt.Sprintf("The region at full resolution, %d×%d. Coordinates for other tools are still in the screenshot's pixels.", cfg.Width, cfg.Height)
+	}
+	return &sdk.CallToolResult{Content: []sdk.Content{
+		&sdk.TextContent{Text: msg},
+		&sdk.ImageContent{Data: r.body, MIMEType: "image/png"},
+	}}, nil, nil
+}
+
+type profileArgs struct {
+	Profile string `json:"profile" jsonschema:"the profile's name"`
+}
+
+func (s *Server) listFiles(ctx context.Context, req *sdk.CallToolRequest, in profileArgs) (*sdk.CallToolResult, any, error) {
+	var out struct {
+		Files []struct {
+			Name     string    `json:"name"`
+			Folder   string    `json:"folder"`
+			Size     int64     `json:"size"`
+			Modified time.Time `json:"modified"`
+		} `json:"files"`
+	}
+	if err := s.callJSON(ctx, req.Extra, "GET", "/api/profiles/"+url.PathEscape(in.Profile)+"/files", nil, &out); err != nil {
+		return nil, nil, err
+	}
+	if len(out.Files) == 0 {
+		return text("No files."), nil, nil
+	}
+	// File names come from the pages that offered the downloads.
+	var b strings.Builder
+	for _, f := range out.Files {
+		fmt.Fprintf(&b, "%s/%s (%d bytes, %s)\n", f.Folder, f.Name, f.Size, f.Modified.UTC().Format(time.RFC3339))
+	}
+	return text("%s\nFetch one with GET /api/profiles/%s/files/{name} and your token.", fence.Wrap("downloaded file names", b.String()), in.Profile), nil, nil
+}
