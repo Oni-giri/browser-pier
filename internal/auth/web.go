@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -38,13 +39,12 @@ type Web struct {
 	log    *slog.Logger
 	opts   WebOptions
 
-	loginIP   *Lockout // per client
-	loginAll  *Lockout // counts failures from everywhere; past its limit, attempts are throttled
-	slow      chan struct{}
-	slowDelay time.Duration
-	setup     *Lockout
-	badToken  *Lockout
-	pages     map[string]*template.Template
+	loginIP  *Lockout  // per client
+	backstop *backstop // failures from everywhere; past a limit, sign-ins are slowed
+	slow     chan struct{}
+	setup    *Lockout
+	badToken *Lockout
+	pages    map[string]*template.Template
 }
 
 //go:embed pages.html
@@ -53,13 +53,12 @@ var pagesHTML string
 func NewWeb(admin *Admin, tokens *Tokens, log *slog.Logger, opts WebOptions) *Web {
 	w := &Web{
 		admin: admin, tokens: tokens, log: log, opts: opts,
-		loginIP:   NewLockout(5, 5*time.Minute, 5*time.Minute),
-		loginAll:  NewLockout(20, 5*time.Minute, 5*time.Minute),
-		setup:     NewLockout(10, 5*time.Minute, 5*time.Minute),
-		badToken:  NewLockout(20, 5*time.Minute, 5*time.Minute),
-		slow:      make(chan struct{}, 1),
-		slowDelay: 2 * time.Second,
-		pages:     map[string]*template.Template{},
+		loginIP:  NewLockout(5, 5*time.Minute, 5*time.Minute),
+		backstop: &backstop{window: 15 * time.Minute, free: 20, base: 2 * time.Second, max: 30 * time.Second, now: time.Now},
+		setup:    NewLockout(10, 5*time.Minute, 5*time.Minute),
+		badToken: NewLockout(20, 5*time.Minute, 5*time.Minute),
+		slow:     make(chan struct{}, 1),
+		pages:    map[string]*template.Template{},
 	}
 	base := template.Must(template.New("").Parse(pagesHTML))
 	for _, name := range []string{"login", "setup"} {
@@ -321,19 +320,21 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 		w.locked(rw, d, wait)
 		return
 	}
-	all, _ := w.loginAll.Begin("all")
-	if all == nil && !w.throttle(r.Context()) {
-		// Many failures from everywhere: every attempt now waits its turn
-		// instead of being refused, so an attacker can't lock the owner out.
-		mine.Cancel()
-		return
+	// After many failures from everywhere, sign-ins go one at a time, each
+	// after a delay that grows with the failures, rather than being
+	// refused: an attacker spread over many addresses can't lock the owner
+	// out, and gets a few thousand guesses a day at most.
+	if d := w.backstop.delay(); d > 0 {
+		release, ok := w.throttle(r.Context(), d)
+		if !ok {
+			mine.Cancel()
+			return
+		}
+		defer release()
 	}
 	ok, err := w.admin.CheckPassword(r.Context(), r.PostFormValue("password"))
 	if err != nil {
 		mine.Cancel()
-		if all != nil {
-			all.Cancel()
-		}
 		w.log.Error("checking the admin password", "err", err)
 		d.Error = "Something went wrong. Try again."
 		w.render(rw, http.StatusInternalServerError, "login", d)
@@ -341,9 +342,7 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		left := mine.Fail()
-		if all != nil {
-			all.Fail()
-		}
+		w.backstop.fail()
 		w.log.Warn("admin sign-in failed", "ip", ip, "tries_left", left)
 		if left == 0 {
 			w.locked(rw, d, 5*time.Minute)
@@ -354,31 +353,64 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mine.Succeed()
-	if all != nil {
-		all.Cancel()
-	}
 	w.signIn(rw, r, d.Remember)
 	w.log.Info("admin signed in", "ip", ip, "remember", d.Remember)
 	http.Redirect(rw, r, d.Next, http.StatusSeeOther)
 }
 
-// throttle makes the caller wait its turn: one sign-in attempt per
-// slowDelay across all clients. It returns false if the client gave up.
-func (w *Web) throttle(ctx context.Context) bool {
+// throttle waits for the one sign-in slot and then for d. The caller
+// holds the slot, through its password check, until it calls release.
+// It returns false if the client gave up.
+func (w *Web) throttle(ctx context.Context, d time.Duration) (release func(), ok bool) {
 	select {
 	case w.slow <- struct{}{}:
 	case <-ctx.Done():
-		return false
+		return nil, false
 	}
-	defer func() { <-w.slow }()
-	t := time.NewTimer(w.slowDelay)
+	release = func() { <-w.slow }
+	t := time.NewTimer(d)
 	defer t.Stop()
 	select {
 	case <-t.C:
-		return true
+		return release, true
 	case <-ctx.Done():
-		return false
+		release()
+		return nil, false
 	}
+}
+
+// backstop counts sign-in failures from every address. Past free
+// failures within window, each attempt is delayed by base, doubling with
+// every further free failures, up to max.
+type backstop struct {
+	window    time.Duration
+	free      int
+	base, max time.Duration
+	now       func() time.Time
+	mu        sync.Mutex
+	fails     []time.Time
+}
+
+func (b *backstop) fail() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := b.now()
+	b.fails = append(prune(b.fails, now.Add(-b.window)), now)
+}
+
+func (b *backstop) delay() time.Duration {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.fails = prune(b.fails, b.now().Add(-b.window))
+	over := len(b.fails) - b.free
+	if over < 0 {
+		return 0
+	}
+	d := b.base
+	for i := 0; i < over/b.free && d < b.max; i++ {
+		d *= 2
+	}
+	return min(d, b.max)
 }
 
 func plural(n int, one, many string) string {

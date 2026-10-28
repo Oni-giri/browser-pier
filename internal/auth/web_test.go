@@ -345,7 +345,7 @@ func TestHTMXGetsARedirectHeader(t *testing.T) {
 func TestGlobalBackstopThrottlesButNeverLocksTheOwnerOut(t *testing.T) {
 	_, proxies, _ := net.ParseCIDR("127.0.0.0/8")
 	f := newWebFixture(t, "the-admin-password", WebOptions{TrustedProxies: []*net.IPNet{proxies}})
-	f.web.slowDelay = 50 * time.Millisecond
+	f.web.backstop.base, f.web.backstop.max = 50*time.Millisecond, 200*time.Millisecond
 	from := func(ip, password string) (reply, string) {
 		req, _ := http.NewRequest(http.MethodPost, f.srv.URL+"/login", strings.NewReader(url.Values{"password": {password}}.Encode()))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -363,5 +363,27 @@ func TestGlobalBackstopThrottlesButNeverLocksTheOwnerOut(t *testing.T) {
 	}
 	if time.Since(start) < 50*time.Millisecond {
 		t.Fatal("attempts past the backstop weren't slowed")
+	}
+}
+
+func TestBackstopDelayGrows(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	b := &backstop{window: 15 * time.Minute, free: 20, base: 2 * time.Second, max: 30 * time.Second, now: func() time.Time { return now }}
+	at := func(n int) time.Duration {
+		b.fails = nil
+		for range n {
+			b.fail()
+		}
+		return b.delay()
+	}
+	for n, want := range map[int]time.Duration{0: 0, 19: 0, 20: 2 * time.Second, 39: 2 * time.Second, 40: 4 * time.Second, 60: 8 * time.Second, 100: 30 * time.Second, 1000: 30 * time.Second} {
+		if got := at(n); got != want {
+			t.Errorf("after %d failures the delay is %s, want %s", n, got, want)
+		}
+	}
+	at(100)
+	now = now.Add(16 * time.Minute)
+	if d := b.delay(); d != 0 {
+		t.Fatalf("delay %s after the window passed", d)
 	}
 }

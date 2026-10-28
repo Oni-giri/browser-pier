@@ -111,7 +111,7 @@ Self-hosted, persistent browsers for AI agents. Agents start a browser when they
   - The environment variable wins at every start, so changing it is also how to reset a forgotten password; it signs out every browser. The UI then can't change the password.
   - The setup page asks for a one-time code that the orchestrator prints in its log, so whoever first reaches a fresh public instance can't claim it. It disappears once a password is set.
   - Optional "keep me signed in for 30 days"; otherwise the session ends with the browser, and after a day at most.
-  - A 5-minute lockout after 5 failures from one address in 5 minutes. Past 20 failures from anywhere in 5 minutes, every attempt is slowed to one every 2 seconds rather than refused, so an attacker spread over many addresses can't lock the owner out. A lockout never signs out existing sessions.
+  - A 5-minute lockout after 5 failures from one address in 5 minutes. Past 20 failures from anywhere in 15 minutes, sign-ins go one at a time, each after a delay that starts at 2 seconds and doubles with every 20 more failures, up to 30 seconds. They are slowed rather than refused, so an attacker spread over many addresses can't lock the owner out. A lockout never signs out existing sessions.
   - Cookies are HTTP-only and `SameSite=Lax`, and `Secure` whenever BrowserPier is served over HTTPS (or `BROWSERPIER_PUBLIC_URL` is https). Private plain-HTTP setups (Umbrel, Tailscale) drop `Secure`, because browsers refuse a Secure cookie there.
   - Each sign-in gets a fresh session; changing the password signs out every other browser. Cross-site form posts are refused.
 - **The cookie and the token never mix:** the cookie authenticates the UI only, agent tokens the API and MCP only.
