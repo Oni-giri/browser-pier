@@ -382,6 +382,18 @@ func TestParallelWrongPINsStopAtFive(t *testing.T) {
 	}
 }
 
+func TestWaitSeesAFinishJustBeforeItListens(t *testing.T) {
+	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
+	ctx := context.Background()
+	h, _ := f.open("")
+	f.svc.beforeListen = func() { _, _ = f.svc.Finish(ctx, h, Done, "") }
+	start := time.Now()
+	got, err := f.svc.Wait(ctx, h.ID, 10*time.Second)
+	if err != nil || got.Status != Done || time.Since(start) > 2*time.Second {
+		t.Fatalf("Wait: %s, %v after %s", got.Status, err, time.Since(start))
+	}
+}
+
 func TestParallelRightPINsDontCancel(t *testing.T) {
 	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
 	h, token := f.open("")

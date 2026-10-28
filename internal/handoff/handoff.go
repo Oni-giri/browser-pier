@@ -98,6 +98,9 @@ type Service struct {
 	m   *sessions.Manager
 	log *slog.Logger
 	now func() time.Time
+	// beforeListen, if set, runs in Wait between its first read and
+	// registering to be woken (tests).
+	beforeListen func()
 
 	mu       sync.Mutex
 	waiters  map[string][]chan struct{}
@@ -445,6 +448,9 @@ func (s *Service) Wait(ctx context.Context, id string, wait time.Duration) (Hand
 	if err != nil || h.Status.Final() || wait <= 0 {
 		return h, err
 	}
+	if s.beforeListen != nil {
+		s.beforeListen()
+	}
 	ch := make(chan struct{})
 	s.mu.Lock()
 	s.waiters[id] = append(s.waiters[id], ch)
@@ -460,6 +466,10 @@ func (s *Service) Wait(ctx context.Context, id string, wait time.Duration) (Hand
 		}
 		s.mu.Unlock()
 	}()
+	// It may have ended before we listened, waking nobody: read it again.
+	if h, err = s.Get(ctx, id); err != nil || h.Status.Final() {
+		return h, err
+	}
 	// Wake by the expiry too, so a waiter learns of it without polling.
 	until := time.Until(h.ExpiresAt)
 	t := time.NewTimer(min(wait, max(until, 0)+time.Second))
