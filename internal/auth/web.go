@@ -17,8 +17,15 @@ import (
 	"time"
 )
 
-// CookieName is the admin session cookie.
-const CookieName = "bp_session"
+// CookieName is the admin session cookie; DeviceCookie marks a browser
+// that has signed in before.
+const (
+	CookieName   = "bp_session"
+	DeviceCookie = "bp_device"
+)
+
+// queueLimit is the longest a sign-in waits for its turn under the backstop.
+const queueLimit = time.Minute
 
 // WebOptions say how requests reach BrowserPier.
 type WebOptions struct {
@@ -320,17 +327,25 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 		w.locked(rw, d, wait)
 		return
 	}
-	// After many failures from everywhere, sign-ins go one at a time, each
-	// after a delay that grows with the failures, rather than being
-	// refused: an attacker spread over many addresses can't lock the owner
-	// out, and gets a few thousand guesses a day at most.
-	if d := w.backstop.delay(); d > 0 {
-		release, ok := w.throttle(r.Context(), d)
-		if !ok {
-			mine.Cancel()
-			return
+	// After many failures from everywhere, sign-ins from unknown devices go
+	// one at a time, each after a delay that grows with the failures: an
+	// attacker spread over many addresses gets a few thousand guesses a day
+	// at most, and the owner's known devices aren't slowed at all.
+	var global *backstopAttempt
+	if c, err := r.Cookie(DeviceCookie); err != nil || !w.admin.KnownDevice(r.Context(), c.Value) {
+		var d time.Duration
+		global, d = w.backstop.begin()
+		defer global.end()
+		if d > 0 {
+			release, ok := w.throttle(r.Context(), d)
+			if !ok {
+				mine.Cancel()
+				retryAfter(rw, queueLimit)
+				w.busy(rw, pageData{Title: "Sign in", Next: safeNext(r.PostFormValue("next")), EnvManaged: w.admin.EnvManaged()})
+				return
+			}
+			defer release()
 		}
-		defer release()
 	}
 	ok, err := w.admin.CheckPassword(r.Context(), r.PostFormValue("password"))
 	if err != nil {
@@ -342,7 +357,9 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		left := mine.Fail()
-		w.backstop.fail()
+		if global != nil {
+			global.fail()
+		}
 		w.log.Warn("admin sign-in failed", "ip", ip, "tries_left", left)
 		if left == 0 {
 			w.locked(rw, d, 5*time.Minute)
@@ -358,12 +375,16 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 	http.Redirect(rw, r, d.Next, http.StatusSeeOther)
 }
 
-// throttle waits for the one sign-in slot and then for d. The caller
-// holds the slot, through its password check, until it calls release.
-// It returns false if the client gave up.
+// throttle waits, at most queueLimit, for the one sign-in slot and then
+// for d. The caller holds the slot through its password check, until it
+// calls release. It returns false if the wait ran out or the client gave up.
 func (w *Web) throttle(ctx context.Context, d time.Duration) (release func(), ok bool) {
+	queue := time.NewTimer(queueLimit)
+	defer queue.Stop()
 	select {
 	case w.slow <- struct{}{}:
+	case <-queue.C:
+		return nil, false
 	case <-ctx.Done():
 		return nil, false
 	}
@@ -379,9 +400,14 @@ func (w *Web) throttle(ctx context.Context, d time.Duration) (release func(), ok
 	}
 }
 
-// backstop counts sign-in failures from every address. Past free
-// failures within window, each attempt is delayed by base, doubling with
-// every further free failures, up to max.
+func (w *Web) busy(rw http.ResponseWriter, d pageData) {
+	d.Error = "Too many sign-in attempts right now. Try again in a minute."
+	w.render(rw, http.StatusTooManyRequests, "login", d)
+}
+
+// backstop counts sign-in failures from every address, and attempts in
+// flight. Past free of them within window, each attempt is delayed by
+// base, doubling with every further free, up to max.
 type backstop struct {
 	window    time.Duration
 	free      int
@@ -389,20 +415,49 @@ type backstop struct {
 	now       func() time.Time
 	mu        sync.Mutex
 	fails     []time.Time
+	pending   int
 }
 
-func (b *backstop) fail() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	now := b.now()
-	b.fails = append(prune(b.fails, now.Add(-b.window)), now)
+type backstopAttempt struct {
+	b    *backstop
+	done bool
 }
 
-func (b *backstop) delay() time.Duration {
+// begin counts an attempt from the start, so parallel requests can't all
+// see a zero delay before any of them has failed.
+func (b *backstop) begin() (*backstopAttempt, time.Duration) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.fails = prune(b.fails, b.now().Add(-b.window))
-	over := len(b.fails) - b.free
+	d := b.delayLocked(len(b.fails) + b.pending)
+	b.pending++
+	return &backstopAttempt{b: b}, d
+}
+
+func (t *backstopAttempt) fail() {
+	t.b.mu.Lock()
+	defer t.b.mu.Unlock()
+	now := t.b.now()
+	t.b.fails = append(prune(t.b.fails, now.Add(-t.b.window)), now)
+	t.finishLocked()
+}
+
+// end finishes the attempt if fail didn't.
+func (t *backstopAttempt) end() {
+	t.b.mu.Lock()
+	defer t.b.mu.Unlock()
+	t.finishLocked()
+}
+
+func (t *backstopAttempt) finishLocked() {
+	if !t.done {
+		t.done = true
+		t.b.pending--
+	}
+}
+
+func (b *backstop) delayLocked(n int) time.Duration {
+	over := n - b.free
 	if over < 0 {
 		return 0
 	}
@@ -451,6 +506,13 @@ func (w *Web) signIn(rw http.ResponseWriter, r *http.Request, remember bool) {
 		c.Expires = s.ExpiresAt
 	}
 	http.SetCookie(rw, c)
+	if device, err := w.admin.NewDeviceToken(r.Context()); err == nil {
+		//nolint:gosec // as above
+		http.SetCookie(rw, &http.Cookie{
+			Name: DeviceCookie, Value: device, Path: "/login", HttpOnly: true,
+			Secure: c.Secure, SameSite: http.SameSiteLaxMode, Expires: time.Now().Add(DeviceTTL),
+		})
+	}
 }
 
 func (w *Web) logout(rw http.ResponseWriter, r *http.Request) {

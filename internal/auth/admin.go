@@ -2,12 +2,16 @@ package auth
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"log/slog"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -156,12 +160,61 @@ func (a *Admin) ChangePassword(ctx context.Context, current, next, keepCookie st
 	return a.EndOtherSessions(ctx, keepCookie)
 }
 
+// storePassword sets the password and rotates the device key, so devices
+// that signed in with the old password are no longer trusted.
 func (a *Admin) storePassword(ctx context.Context, password string) error {
 	h, err := HashSecret(password)
 	if err != nil {
 		return err
 	}
-	return a.setSetting(ctx, "admin_password_hash", h)
+	if err := a.setSetting(ctx, "admin_password_hash", h); err != nil {
+		return err
+	}
+	return a.setSetting(ctx, "device_key", randomString(32))
+}
+
+// DeviceTTL is how long a device that signed in stays known.
+const DeviceTTL = 365 * 24 * time.Hour
+
+// NewDeviceToken marks a browser that just signed in as known. Known
+// devices skip the global sign-in throttle, so an attack from elsewhere
+// never slows the owner's usual browsers (OWASP's "device cookie").
+func (a *Admin) NewDeviceToken(ctx context.Context) (string, error) {
+	key, err := a.setting(ctx, "device_key")
+	if err != nil {
+		return "", err
+	}
+	id := randomString(16) + "." + strconv.FormatInt(a.now().Add(DeviceTTL).Unix(), 10)
+	return id + "." + deviceMAC(key, id), nil
+}
+
+// KnownDevice reports whether v came from NewDeviceToken, under the
+// current password, and hasn't expired.
+func (a *Admin) KnownDevice(ctx context.Context, v string) bool {
+	i := strings.LastIndexByte(v, '.')
+	if i < 0 {
+		return false
+	}
+	id, mac := v[:i], v[i+1:]
+	_, exp, ok := strings.Cut(id, ".")
+	if !ok {
+		return false
+	}
+	until, err := strconv.ParseInt(exp, 10, 64)
+	if err != nil || a.now().Unix() >= until {
+		return false
+	}
+	key, err := a.setting(ctx, "device_key")
+	if err != nil || key == "" {
+		return false
+	}
+	return hmac.Equal([]byte(mac), []byte(deviceMAC(key, id)))
+}
+
+func deviceMAC(key, id string) string {
+	m := hmac.New(sha256.New, []byte(key))
+	m.Write([]byte(id))
+	return hex.EncodeToString(m.Sum(nil))
 }
 
 // verify runs argon2 with at most two in flight, so a flood of logins

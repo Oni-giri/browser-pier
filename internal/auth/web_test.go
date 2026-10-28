@@ -370,11 +370,14 @@ func TestBackstopDelayGrows(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	b := &backstop{window: 15 * time.Minute, free: 20, base: 2 * time.Second, max: 30 * time.Second, now: func() time.Time { return now }}
 	at := func(n int) time.Duration {
-		b.fails = nil
+		b.fails, b.pending = nil, 0
 		for range n {
-			b.fail()
+			a, _ := b.begin()
+			a.fail()
 		}
-		return b.delay()
+		a, d := b.begin()
+		a.end()
+		return d
 	}
 	for n, want := range map[int]time.Duration{0: 0, 19: 0, 20: 2 * time.Second, 39: 2 * time.Second, 40: 4 * time.Second, 60: 8 * time.Second, 100: 30 * time.Second, 1000: 30 * time.Second} {
 		if got := at(n); got != want {
@@ -383,7 +386,78 @@ func TestBackstopDelayGrows(t *testing.T) {
 	}
 	at(100)
 	now = now.Add(16 * time.Minute)
-	if d := b.delay(); d != 0 {
+	if a, d := b.begin(); d != 0 {
 		t.Fatalf("delay %s after the window passed", d)
+	} else {
+		a.end()
 	}
+
+	// Attempts in flight count, so a burst can't all see no delay.
+	b.fails, b.pending = nil, 0
+	var last time.Duration
+	for range 25 {
+		_, last = b.begin()
+	}
+	if last == 0 {
+		t.Fatal("25 parallel attempts all got through with no delay")
+	}
+}
+
+func TestKnownDeviceSkipsTheBackstop(t *testing.T) {
+	f := newWebFixture(t, "the-admin-password", WebOptions{})
+	f.web.backstop.base, f.web.backstop.max = time.Hour, time.Hour // anyone throttled would hang
+	owner := f.browser()
+	if resp, _ := f.post(owner, "/login", url.Values{"password": {"the-admin-password"}}); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("first sign-in %d", resp.StatusCode)
+	}
+	// An attack trips the backstop.
+	for range 30 {
+		a, _ := f.web.backstop.begin()
+		a.fail()
+	}
+	f.post(owner, "/logout", nil)
+	done := make(chan reply, 1)
+	go func() {
+		resp, _ := f.post(owner, "/login", url.Values{"password": {"the-admin-password"}})
+		done <- resp
+	}()
+	select {
+	case resp := <-done:
+		if resp.StatusCode != http.StatusSeeOther {
+			t.Fatalf("known device sign-in %d", resp.StatusCode)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a known device was throttled")
+	}
+
+	// The device cookie stops counting once the password changes.
+	ctx := context.Background()
+	dev := ""
+	for _, c := range owner.Jar.Cookies(mustURL(f.srv.URL + "/login")) {
+		if c.Name == DeviceCookie {
+			dev = c.Value
+		}
+	}
+	if !f.admin.KnownDevice(ctx, dev) {
+		t.Fatal("device cookie not recognised")
+	}
+	if err := f.admin.storePassword(ctx, "a-new-password"); err != nil {
+		t.Fatal(err)
+	}
+	if f.admin.KnownDevice(ctx, dev) {
+		t.Fatal("device cookie still known after a password change")
+	}
+	for _, bad := range []string{"", "x", dev + "0", strings.Replace(dev, ".", "", 1)} {
+		if f.admin.KnownDevice(ctx, bad) {
+			t.Errorf("KnownDevice(%q)", bad)
+		}
+	}
+}
+
+func mustURL(s string) *url.URL {
+	u, err := url.Parse(s)
+	if err != nil {
+		panic(err)
+	}
+	return u
 }
