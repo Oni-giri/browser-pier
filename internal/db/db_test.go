@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -71,5 +72,24 @@ func TestRefusesNewerSchema(t *testing.T) {
 	_ = d.Close()
 	if _, err := Open(ctx, path); err == nil || !strings.Contains(err.Error(), "newer") {
 		t.Fatalf("Open = %v, want a newer-schema error", err)
+	}
+}
+
+func TestOpenKeepsOddCharactersInThePath(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"bp?x", "bp#x", "bp%41x", "bp x"} {
+		dir := filepath.Join(t.TempDir(), name)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, "browserpier.db")
+		d, err := Open(ctx, path)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		_ = d.Close()
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("%s: the database isn't where it was asked to be: %v", name, err)
+		}
 	}
 }

@@ -26,11 +26,13 @@ type fakeRuntime struct {
 	exitOnStart *int // exit at once with this status
 	unhealthy   bool // never answer on the socket
 	stopStatus  int
+	stopErr     error // Stop fails with this, leaving the container running
 	lastLog     string
 }
 
 type fakeContainer struct {
 	id, state string
+	foreign   bool // not created by BrowserPier
 	spec      docker.BrowserSpec
 	exited    chan struct{}
 	status    int
@@ -108,6 +110,9 @@ func (f *fakeRuntime) Stop(_ context.Context, id string) error {
 		return errors.New("no such container")
 	}
 	f.stops++
+	if f.stopErr != nil {
+		return f.stopErr
+	}
 	f.exitLocked(c, f.stopStatus)
 	return nil
 }
@@ -147,11 +152,32 @@ func (f *fakeRuntime) Remove(_ context.Context, idOrName string) error {
 	return nil
 }
 
+func (f *fakeRuntime) RemoveStale(_ context.Context, name, profile string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for id, c := range f.containers {
+		if c.spec.Name != name {
+			continue
+		}
+		if c.foreign || c.spec.Profile != profile {
+			return fmt.Errorf("another container is already named %s", name)
+		}
+		if c.state == "running" {
+			return errors.New("still running")
+		}
+		delete(f.containers, id)
+	}
+	return nil
+}
+
 func (f *fakeRuntime) List(context.Context) ([]docker.Container, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []docker.Container
 	for _, c := range f.containers {
+		if c.foreign {
+			continue // List filters on BrowserPier's label
+		}
 		out = append(out, docker.Container{ID: c.id, Name: c.spec.Name, Profile: c.spec.Profile, Session: c.spec.Session, State: c.state})
 	}
 	return out, nil
