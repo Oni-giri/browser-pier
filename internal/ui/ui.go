@@ -51,6 +51,10 @@ type UI struct {
 	// admin is signed in, but a borrowed laptop shouldn't be able to guess.
 	pinTries *auth.Lockout
 
+	// prevMu also serialises screenshots: one at a time is plenty.
+	prevMu   sync.Mutex
+	previews map[string]cachedPreview
+
 	memMu   sync.Mutex
 	mem     sessions.MemoryReport
 	memAt   time.Time
@@ -58,7 +62,7 @@ type UI struct {
 }
 
 func New(m *sessions.Manager, web *auth.Web, handoffs *handoff.Service, st *settings.Store, log *slog.Logger, o Options) *UI {
-	u := &UI{m: m, web: web, handoffs: handoffs, settings: st, log: log, o: o, pages: map[string]*template.Template{},
+	u := &UI{m: m, web: web, handoffs: handoffs, settings: st, log: log, o: o, pages: map[string]*template.Template{}, previews: map[string]cachedPreview{},
 		pinTries: auth.NewLockout(5, 15*time.Minute, 15*time.Minute)}
 	base := template.Must(template.New("").Funcs(funcs).ParseFS(embedded, "templates/layout.html", "templates/parts.html"))
 	for _, page := range []string{"overview", "profiles", "profile", "profile-form", "agents", "settings"} {

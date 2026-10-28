@@ -381,9 +381,10 @@ func (a *API) stopSession(w http.ResponseWriter, r *http.Request) {
 	}
 	tok, _ := auth.TokenFromContext(r.Context())
 	// Noted first: the log goes with the session once it has stopped.
-	a.m.Note(s.ID, tok.Name, "Stopped the browser")
+	a.m.Note(s.ID, tok.Name, "Stopping the browser")
 	stopped, err := a.m.Stop(r.Context(), s.ID)
 	if err != nil {
+		a.m.Note(s.ID, tok.Name, "Couldn't stop the browser") // still live, so still logged
 		if errors.Is(err, sessions.ErrClosed) {
 			writeError(w, http.StatusServiceUnavailable, "BrowserPier is shutting down")
 			return

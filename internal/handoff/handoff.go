@@ -297,7 +297,7 @@ func (s *Service) Pending(ctx context.Context) ([]Handoff, error) {
 }
 
 // Stats counts the handoffs asked for since a time, and the median time
-// people took to hand back the ones they finished.
+// people took to answer the ones they did (done or can't).
 func (s *Service) Stats(ctx context.Context, since time.Time) (count int, median time.Duration, err error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT status, finished_at - created_at FROM handoffs WHERE created_at >= ?`, since.UnixMilli())
 	if err != nil {
@@ -312,16 +312,20 @@ func (s *Service) Stats(ctx context.Context, since time.Time) (count int, median
 			return 0, 0, err
 		}
 		count++
-		if status == Done {
+		if status == Done || status == Cant { // a person answered
 			took = append(took, ms)
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return 0, 0, err
 	}
-	if len(took) > 0 {
+	if n := len(took); n > 0 {
 		slices.Sort(took)
-		median = time.Duration(took[len(took)/2]) * time.Millisecond
+		mid := took[n/2]
+		if n%2 == 0 {
+			mid = took[n/2-1] + (took[n/2]-took[n/2-1])/2
+		}
+		median = time.Duration(mid) * time.Millisecond
 	}
 	return count, median, nil
 }

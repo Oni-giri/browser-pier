@@ -233,15 +233,41 @@ func group(key string) string {
 // doesn't count as use, so a page left open doesn't keep browsers alive.
 func (u *UI) preview(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	png, err := u.m.Screenshot(r.Context(), name, 640)
+	png, err := u.previewPNG(r.Context(), name)
 	if err != nil {
 		http.Error(w, "no preview", http.StatusNotFound)
 		return
 	}
 	w.Header().Set("Content-Type", "image/png")
-	w.Header().Set("Cache-Control", "private, max-age=10")
+	// Not kept by the browser: it shows a logged-in page, and the admin
+	// may sign out. The server keeps it a few seconds instead.
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	_, _ = w.Write(png) //nolint:gosec // served as image/png with nosniff
+}
+
+// previewPNG is a running browser's screenshot for its card, taken at most
+// every few seconds however many pages ask.
+func (u *UI) previewPNG(ctx context.Context, profile string) ([]byte, error) {
+	u.prevMu.Lock()
+	defer u.prevMu.Unlock()
+	if p, ok := u.previews[profile]; ok && time.Since(p.at) < 8*time.Second {
+		return p.png, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	png, err := u.m.Screenshot(ctx, profile, 640)
+	if err != nil {
+		delete(u.previews, profile)
+		return nil, err
+	}
+	u.previews[profile] = cachedPreview{png: png, at: time.Now()}
+	return png, nil
+}
+
+type cachedPreview struct {
+	png []byte
+	at  time.Time
 }
 
 func (u *UI) startProfile(w http.ResponseWriter, r *http.Request) {

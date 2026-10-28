@@ -19,9 +19,18 @@ func TestLastSessions(t *testing.T) {
 	if err != nil || last["google"].ID != first.ID || last["google"].State != Stopped {
 		t.Fatalf("after a stop: %+v, %v", last, err)
 	}
+	if one, err := f.m.LastSession(ctx, "google"); err != nil || one.ID != first.ID {
+		t.Fatalf("LastSession after a stop: %+v, %v", one, err)
+	}
 	second := f.start(f.m)
 	last, _ = f.m.LastSessions(ctx)
 	if last["google"].ID != second.ID || last["google"].State != Running {
 		t.Fatalf("while running again: %+v", last["google"])
+	}
+	if one, _ := f.m.LastSession(ctx, "google"); one.ID != second.ID {
+		t.Fatalf("LastSession while running: %+v", one)
+	}
+	if one, err := f.m.LastSession(ctx, "nope"); err != nil || one.ID != "" {
+		t.Fatalf("LastSession of a profile that never ran: %+v, %v", one, err)
 	}
 }

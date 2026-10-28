@@ -32,7 +32,7 @@ func (u *UI) profileData(ctx context.Context, r *http.Request, name string) (pro
 	if err != nil {
 		return profilePageData{}, false
 	}
-	last, err := u.m.LastSessions(ctx)
+	last, err := u.m.LastSession(ctx, name)
 	if err != nil {
 		u.log.Warn("reading sessions", "err", err)
 	}
@@ -43,12 +43,12 @@ func (u *UI) profileData(ctx context.Context, r *http.Request, name string) (pro
 		}
 	}
 	mem := map[string]int64{}
-	if s := last[name]; s.State.Live() {
+	if last.State.Live() {
 		for _, b := range u.memory(ctx).Browsers {
 			mem[b.Profile] = b.Bytes
 		}
 	}
-	d := profilePageData{profileView: u.view(r, p, last[name], asks, mem)}
+	d := profilePageData{profileView: u.view(r, p, last, asks, mem)}
 	if d.Live() {
 		d.Log = u.m.Activity(d.Session.ID)
 	}

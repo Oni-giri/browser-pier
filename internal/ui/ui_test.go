@@ -301,7 +301,7 @@ func TestPreviewDoesNotCountAsUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := f.get("/profiles/google/preview.png")
-	if r.code != http.StatusOK || r.header.Get("Content-Type") != "image/png" {
+	if r.code != http.StatusOK || r.header.Get("Content-Type") != "image/png" || r.header.Get("Cache-Control") != "no-store" {
 		t.Fatalf("preview: %d %v", r.code, r.header)
 	}
 	if got := f.m.Activity(s.ID); len(got) != 0 {

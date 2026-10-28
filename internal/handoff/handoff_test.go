@@ -593,6 +593,18 @@ func TestPendingAndStats(t *testing.T) {
 	if err != nil || n != 2 || median < 47*time.Second || median > 49*time.Second {
 		t.Fatalf("stats: %d, %s, %v", n, median, err)
 	}
+	// "Can't do this" is an answer too; with two answers, the median is
+	// their mean.
+	f.svc.now = time.Now
+	h3, _ := f.open("")
+	f.svc.now = func() time.Time { return h3.CreatedAt.Add(60 * time.Second) }
+	if _, err := f.svc.Finish(ctx, h3, Cant, ""); err != nil {
+		t.Fatal(err)
+	}
+	n, median, _ = f.svc.Stats(ctx, start.Add(-time.Minute))
+	if n != 3 || median < 53*time.Second || median > 55*time.Second {
+		t.Fatalf("stats with a can't: %d, %s", n, median)
+	}
 }
 
 func TestHandoffCookieFollowsCookieSecure(t *testing.T) {
