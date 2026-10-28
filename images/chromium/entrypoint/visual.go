@@ -103,7 +103,9 @@ func (v *visual) clickArgs(c clickRequest) ([]string, error) {
 	if !ok {
 		return nil, fmt.Errorf("button %q: want left, middle or right", c.Button)
 	}
-	args := []string{"mousemove", "--sync", strconv.Itoa(c.X), strconv.Itoa(c.Y), "click"}
+	// No --sync on the moves here: the X server takes events in order
+	// anyway, and --sync to where the pointer already is stalls 15 s.
+	args := []string{"mousemove", strconv.Itoa(c.X), strconv.Itoa(c.Y), "click"}
 	if c.Double {
 		args = append(args, "--repeat", "2", "--delay", "80")
 	}
@@ -164,7 +166,7 @@ func (v *visual) scrollArgs(s scrollRequest) ([]string, error) {
 	if s.DX == 0 && s.DY == 0 {
 		return nil, errors.New("dx, dy: want a number of notches to scroll")
 	}
-	args := []string{"mousemove", "--sync", strconv.Itoa(s.X), strconv.Itoa(s.Y)}
+	args := []string{"mousemove", strconv.Itoa(s.X), strconv.Itoa(s.Y)}
 	steps := func(n int, neg, pos string) {
 		b := pos
 		if n < 0 {
@@ -290,7 +292,7 @@ func (v *visual) dragArgs(d dragRequest) ([]string, error) {
 	if !ok {
 		return nil, fmt.Errorf("button %q: want left, middle or right", d.Button)
 	}
-	move := func(x, y int) []string { return []string{"mousemove", "--sync", strconv.Itoa(x), strconv.Itoa(y)} }
+	move := func(x, y int) []string { return []string{"mousemove", strconv.Itoa(x), strconv.Itoa(y)} }
 	args := append(move(d.From.X, d.From.Y), "sleep", "0.05", "mousedown", b)
 	for i := 1; i <= dragSteps; i++ {
 		x := d.From.X + (d.To.X-d.From.X)*i/dragSteps

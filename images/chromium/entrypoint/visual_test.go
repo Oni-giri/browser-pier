@@ -66,11 +66,11 @@ func TestClick(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("click: %d %s", rec.Code, rec.Body)
 	}
-	if c := (*calls)[0]; c.name != "xdotool" || strings.Join(c.args, " ") != "mousemove --sync 40 50 click 1" {
+	if c := (*calls)[0]; c.name != "xdotool" || strings.Join(c.args, " ") != "mousemove 40 50 click 1" {
 		t.Fatalf("call %+v", c)
 	}
 	serveVisual(v, http.MethodPost, "/input/click", `{"x": 1, "y": 2, "button": "right", "double": true}`)
-	if got := strings.Join((*calls)[1].args, " "); got != "mousemove --sync 1 2 click --repeat 2 --delay 80 3" {
+	if got := strings.Join((*calls)[1].args, " "); got != "mousemove 1 2 click --repeat 2 --delay 80 3" {
 		t.Fatalf("args %q", got)
 	}
 	for _, body := range []string{`{"x": 1280, "y": 0}`, `{"x": -1, "y": 0}`, `{"x": 0, "y": 800}`, `{"x": 1, "y": 1, "button": "--help"}`, `{"x": 1, "y": 1, "extra": 1}`, `not json`} {
@@ -103,10 +103,10 @@ func TestType(t *testing.T) {
 func TestScroll(t *testing.T) {
 	v, calls := newTestVisual(false)
 	for body, want := range map[string]string{
-		`{"x": 640, "y": 400, "dy": 3}`:         "mousemove --sync 640 400 click --repeat 3 --delay 30 5",
-		`{"x": 1, "y": 2, "dx": -2, "dy": -1}`:  "mousemove --sync 1 2 click --repeat 1 --delay 30 4 click --repeat 2 --delay 30 6",
-		`{"x": 1, "y": 2, "dx": 99}`:            "mousemove --sync 1 2 click --repeat 20 --delay 30 7",
-		`{"x": 1279, "y": 799, "dy": -1000000}`: "mousemove --sync 1279 799 click --repeat 20 --delay 30 4",
+		`{"x": 640, "y": 400, "dy": 3}`:         "mousemove 640 400 click --repeat 3 --delay 30 5",
+		`{"x": 1, "y": 2, "dx": -2, "dy": -1}`:  "mousemove 1 2 click --repeat 1 --delay 30 4 click --repeat 2 --delay 30 6",
+		`{"x": 1, "y": 2, "dx": 99}`:            "mousemove 1 2 click --repeat 20 --delay 30 7",
+		`{"x": 1279, "y": 799, "dy": -1000000}`: "mousemove 1279 799 click --repeat 20 --delay 30 4",
 	} {
 		*calls = nil
 		if rec := serveVisual(v, http.MethodPost, "/input/scroll", body); rec.Code != http.StatusNoContent {
@@ -167,15 +167,15 @@ func TestDrag(t *testing.T) {
 		t.Fatalf("drag: %d %s", rec.Code, rec.Body)
 	}
 	got := strings.Join((*calls)[0].args, " ")
-	want := "mousemove --sync 100 200 sleep 0.05 mousedown 1" +
-		" sleep 0.02 mousemove --sync 110 190 sleep 0.02 mousemove --sync 120 180 sleep 0.02 mousemove --sync 130 170" +
-		" sleep 0.02 mousemove --sync 140 160 sleep 0.02 mousemove --sync 150 150 sleep 0.02 mousemove --sync 160 140" +
-		" sleep 0.02 mousemove --sync 170 130 sleep 0.02 mousemove --sync 180 120 sleep 0.05 mouseup 1"
+	want := "mousemove 100 200 sleep 0.05 mousedown 1" +
+		" sleep 0.02 mousemove 110 190 sleep 0.02 mousemove 120 180 sleep 0.02 mousemove 130 170" +
+		" sleep 0.02 mousemove 140 160 sleep 0.02 mousemove 150 150 sleep 0.02 mousemove 160 140" +
+		" sleep 0.02 mousemove 170 130 sleep 0.02 mousemove 180 120 sleep 0.05 mouseup 1"
 	if (*calls)[0].name != "xdotool" || got != want {
 		t.Fatalf("args\n%q\nwant\n%q", got, want)
 	}
 	serveVisual(v, http.MethodPost, "/input/drag", `{"from": {"x": 0, "y": 0}, "to": {"x": 1279, "y": 799}, "button": "right"}`)
-	if got := strings.Join((*calls)[1].args, " "); !strings.Contains(got, "mousedown 3") || !strings.HasSuffix(got, "mousemove --sync 1279 799 sleep 0.05 mouseup 3") {
+	if got := strings.Join((*calls)[1].args, " "); !strings.Contains(got, "mousedown 3") || !strings.HasSuffix(got, "mousemove 1279 799 sleep 0.05 mouseup 3") {
 		t.Fatalf("right drag: %q", got)
 	}
 	*calls = nil
