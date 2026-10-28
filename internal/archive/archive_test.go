@@ -190,3 +190,13 @@ func TestExportAProfileThatNeverRan(t *testing.T) {
 		t.Fatalf("import: %+v, %v", got, err)
 	}
 }
+
+// A crafted deep path is refused at once, not walked level by level.
+func TestImportRefusesDeepPaths(t *testing.T) {
+	deep := "chrome/" + strings.Repeat("d/", 5000)
+	start := time.Now()
+	_, err := Import(crafted(t, []tar.Header{{Name: deep, Typeflag: tar.TypeDir, Mode: 0o700}}, nil), pass, filepath.Join(t.TempDir(), "x"), DefaultLimits)
+	if err == nil || time.Since(start) > 3*time.Second || len(err.Error()) > 200 {
+		t.Fatalf("deep path: %v after %s", err, time.Since(start))
+	}
+}

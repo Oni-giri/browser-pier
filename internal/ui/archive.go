@@ -51,6 +51,13 @@ func (u *UI) exportProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
+	// Fail before the download begins if the folder can't be read: after,
+	// only a cut-off download can say so.
+	if _, err := os.Stat(u.m.Layout().ProfileDir(name)); err != nil && !errors.Is(err, os.ErrNotExist) { //nolint:gosec // an existing profile's name: [a-z0-9-] only
+		u.log.Error("exporting a profile", "profile", name, "err", err)
+		done(w, r, "/profiles", "Couldn't read "+name+"'s folder to export it.", true)
+		return
+	}
 	m := archive.Manifest{Version: u.o.Version, ExportedAt: time.Now().UTC(), Profile: archive.Profile{
 		Name: p.Name, DefaultMode: string(p.DefaultMode), AutoStopMinutes: int(p.AutoStop / time.Minute),
 		Width: p.Width, Height: p.Height, Proxy: p.Proxy, HandoffPolicy: string(p.HandoffPolicy),
@@ -61,11 +68,23 @@ func (u *UI) exportProfile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	u.log.Info("exporting a profile", "profile", name)
-	if err := archive.Export(w, u.m.Layout().ProfileDir(name), m, pass); err != nil {
+	if err := archive.Export(deadlineWriter{w, http.NewResponseController(w)}, u.m.Layout().ProfileDir(name), m, pass); err != nil {
 		u.log.Error("exporting a profile", "profile", name, "err", err)
 		// The download has begun: cut it, so it can't pass for a whole one.
 		panic(http.ErrAbortHandler)
 	}
+}
+
+// deadlineWriter gives each write a minute: a download paused or stalled
+// for longer fails, which ends the export and releases the profile.
+type deadlineWriter struct {
+	w  io.Writer
+	rc *http.ResponseController
+}
+
+func (d deadlineWriter) Write(b []byte) (int, error) {
+	_ = d.rc.SetWriteDeadline(time.Now().Add(time.Minute))
+	return d.w.Write(b)
 }
 
 // importProfile reads an uploaded archive into a new profile. The form's
@@ -91,6 +110,12 @@ func (u *UI) importProfile(w http.ResponseWriter, r *http.Request) {
 		switch part.FormName() {
 		case "name":
 			name = strings.TrimSpace(formValue(part))
+			// Check before reading what may be gigabytes.
+			if _, err := u.m.Profiles().Get(r.Context(), name); name != "" && err == nil {
+				_ = part.Close()
+				done(w, r, "/profiles", "There's already a profile called "+name+". Choose another name.", true)
+				return
+			}
 		case "passphrase":
 			pass = formValue(part)
 		case "archive":
@@ -157,11 +182,14 @@ func (u *UI) importArchive(r io.Reader, name, pass string) (string, string) {
 		}
 		return "", "Couldn't import: " + err.Error()
 	}
-	// The folder becomes the profile's last, so a failure before leaves
-	// no profile without its logins.
+	// The folder becomes the profile's last: renaming first could let a
+	// later profile of the same name adopt these logins. (A crash right
+	// here leaves the profile without them; Reconcile sweeps the folder.)
 	if err := os.Rename(tmp, layout.ProfileDir(name)); err != nil { //nolint:gosec // name passed p.Validate: [a-z0-9-] only
 		_ = os.RemoveAll(tmp)
-		_ = u.m.Profiles().Delete(context.Background(), name)
+		if derr := u.m.Profiles().Delete(context.Background(), name); derr != nil {
+			u.log.Error("removing a half-imported profile", "profile", name, "err", derr)
+		}
 		return "", "Couldn't import: " + err.Error()
 	}
 	u.log.Info("profile imported from the UI", "profile", name, "exported_at", m.ExportedAt)

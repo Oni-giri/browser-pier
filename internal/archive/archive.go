@@ -19,6 +19,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -89,18 +90,12 @@ func Export(w io.Writer, dir string, m Manifest, passphrase string) error {
 	if err := writeManifest(tw, m); err != nil {
 		return err
 	}
-	// A profile never started has no folder yet: its archive is its settings.
-	root, err := os.OpenRoot(dir)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-	case err != nil:
-		return err
-	default:
-		defer func() { _ = root.Close() }()
-		for _, top := range folders {
-			if err := addTree(tw, root, top); err != nil {
-				return err
-			}
+	// Each folder is its own root, so nothing in run/ (proxy credentials)
+	// can be reached through a link. A profile never started has no
+	// folders yet: its archive is its settings.
+	for _, top := range folders {
+		if err := addTree(tw, dir, top); err != nil {
+			return err
 		}
 	}
 	// Closing in order: age's Close writes the last authenticated chunk,
@@ -126,14 +121,20 @@ func writeManifest(tw *tar.Writer, m Manifest) error {
 	return err
 }
 
-func addTree(tw *tar.Writer, root *os.Root, top string) error {
-	if _, err := root.Lstat(top); errors.Is(err, os.ErrNotExist) {
+func addTree(tw *tar.Writer, dir, top string) error {
+	root, err := os.OpenRoot(filepath.Join(dir, top))
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	return fs.WalkDir(root.FS(), top, func(name string, d fs.DirEntry, err error) error {
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	return fs.WalkDir(root.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
+		name := path.Join(top, rel)
 		if skipped[d.Name()] {
 			if d.IsDir() {
 				return fs.SkipDir
@@ -148,16 +149,18 @@ func addTree(tw *tar.Writer, root *os.Root, top string) error {
 			}
 			return tw.WriteHeader(&tar.Header{Name: name + "/", Mode: 0o700, ModTime: info.ModTime(), Typeflag: tar.TypeDir})
 		case d.Type().IsRegular():
-			return addFile(tw, root, name)
+			return addFile(tw, root, rel, name)
 		}
 		return nil // links, sockets, FIFOs, devices
 	})
 }
 
-func addFile(tw *tar.Writer, root *os.Root, name string) error {
-	// O_NONBLOCK: if the entry was swapped for a FIFO since the walk saw
-	// it, opening it doesn't hang; Stat then shows it isn't a file.
-	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+// addFile adds rel (in root) as name. The browser is stopped and held, so
+// nothing swaps entries meanwhile; still, O_NONBLOCK keeps a FIFO from
+// hanging the open, and Stat then shows it isn't a file. (os.Root follows
+// a link that stays inside root; the walk already skipped links.)
+func addFile(tw *tar.Writer, root *os.Root, rel, name string) error {
+	f, err := root.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil // gone since the walk
@@ -240,11 +243,9 @@ func Import(r io.Reader, passphrase, dest string, lim Limits) (Manifest, error) 
 		return m, err
 	}
 	defer func() { _ = root.Close() }()
-	if lim.Chown {
-		if err := root.Lchown(".", lim.UID, lim.GID); err != nil {
-			return m, err
-		}
-	}
+	// dest itself stays the orchestrator's, as a new profile's folder is;
+	// only what's inside goes to the browser's user.
+	made := map[string]bool{}
 	tr := tar.NewReader(gz)
 	var total int64
 	for entries := 0; ; entries++ {
@@ -273,7 +274,7 @@ func Import(r io.Reader, passphrase, dest string, lim Limits) (Manifest, error) 
 		}
 		switch h.Typeflag {
 		case tar.TypeDir:
-			if err := mkdirAll(root, name, lim); err != nil {
+			if err := mkdirAll(root, name, lim, made); err != nil {
 				return m, err
 			}
 		case tar.TypeReg:
@@ -284,7 +285,7 @@ func Import(r io.Reader, passphrase, dest string, lim Limits) (Manifest, error) 
 			if err := haveRoom(dest, h.Size, lim.KeepFree); err != nil {
 				return m, err
 			}
-			if err := writeFile(root, name, tr, h, lim); err != nil {
+			if err := writeFile(root, name, tr, h, lim, made); err != nil {
 				return m, err
 			}
 		default:
@@ -297,9 +298,15 @@ func Import(r io.Reader, passphrase, dest string, lim Limits) (Manifest, error) 
 	return m, nil
 }
 
+// Bounds on an archive path: Chromium's deepest are a dozen levels.
+const maxPathLen, maxPathDepth = 1024, 48
+
 // entryName checks an archive path: relative, clean, inside chrome/ or
-// files/.
+// files/, and not absurdly long or deep.
 func entryName(raw string) (string, error) {
+	if len(raw) > maxPathLen || strings.Count(raw, "/") > maxPathDepth {
+		return "", fmt.Errorf("an archive path is too long or too deep (%.40q…)", raw)
+	}
 	name := strings.TrimSuffix(raw, "/")
 	if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, `\`) || path.Clean(name) != name ||
 		name == ".." || strings.HasPrefix(name, "../") || strings.Contains(name, "/../") {
@@ -312,10 +319,15 @@ func entryName(raw string) (string, error) {
 	return name, nil
 }
 
-func mkdirAll(root *os.Root, name string, lim Limits) error {
+// mkdirAll makes name and its parents, remembering what it made.
+func mkdirAll(root *os.Root, name string, lim Limits, made map[string]bool) error {
 	parts := strings.Split(name, "/")
 	for i := range parts {
 		dir := strings.Join(parts[:i+1], "/")
+		if made[dir] {
+			continue
+		}
+		made[dir] = true
 		if err := root.Mkdir(dir, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
 			return err
 		}
@@ -328,13 +340,14 @@ func mkdirAll(root *os.Root, name string, lim Limits) error {
 	return nil
 }
 
-func writeFile(root *os.Root, name string, r io.Reader, h *tar.Header, lim Limits) error {
+func writeFile(root *os.Root, name string, r io.Reader, h *tar.Header, lim Limits, made map[string]bool) error {
 	if dir := path.Dir(name); dir != "." {
-		if err := mkdirAll(root, dir, lim); err != nil {
+		if err := mkdirAll(root, dir, lim, made); err != nil {
 			return err
 		}
 	}
-	f, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600)
+	// O_EXCL on a tree this import made: nothing is there to follow.
+	f, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}

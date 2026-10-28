@@ -299,6 +299,9 @@ func (a *API) startSession(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, sessions.ErrNoRoom):
 		writeError(w, http.StatusServiceUnavailable, noRoomMessage(err, tok))
 		return
+	case errors.Is(err, sessions.ErrProfileHeld):
+		writeError(w, http.StatusConflict, err.Error())
+		return
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return // the client went away
 	case err != nil:
