@@ -379,11 +379,34 @@ func (s *Service) wake(id string) {
 }
 
 // track remembers a live view opened through a handoff, to close it when
-// the handoff ends.
+// the handoff ends. If the handoff ended while the view was connecting,
+// the view is closed at once.
 func (s *Service) track(id string, v *webrtc.Viewer) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	var status Status
+	err := s.db.QueryRow(`SELECT status FROM handoffs WHERE id = ?`, id).Scan(&status)
+	if err != nil || status.Final() {
+		s.mu.Unlock()
+		v.Close()
+		return
+	}
 	s.viewers[id] = append(s.viewers[id], v)
+	s.mu.Unlock()
+	go func() {
+		<-v.Done()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		list := s.viewers[id]
+		for i, x := range list {
+			if x == v {
+				s.viewers[id] = append(list[:i], list[i+1:]...)
+				break
+			}
+		}
+		if len(s.viewers[id]) == 0 {
+			delete(s.viewers, id)
+		}
+	}()
 }
 
 // Wait returns the handoff once it's over, or as it stands after wait.

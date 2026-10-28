@@ -37,15 +37,16 @@ type Web struct {
 	m    *sessions.Manager
 	log  *slog.Logger
 	pin  *auth.Lockout // per client address, on top of the link's own five tries
-	// pinAll caps wrong handoff PINs across all links and addresses, so
-	// someone holding many links can't spread guesses across them.
-	pinAll *auth.Lockout
+	// pinProfile caps wrong handoff PINs per profile, across its links and
+	// addresses, so someone holding several links can't spread guesses
+	// across them; it doesn't block other profiles' handoffs.
+	pinProfile *auth.Lockout
 }
 
 func NewWeb(svc *Service, web *auth.Web, live *webrtc.Handler, m *sessions.Manager, log *slog.Logger) *Web {
 	return &Web{svc: svc, web: web, live: live, m: m, log: log,
-		pin:    auth.NewLockout(10, 15*time.Minute, 15*time.Minute),
-		pinAll: auth.NewLockout(30, 15*time.Minute, 15*time.Minute)}
+		pin:        auth.NewLockout(10, 15*time.Minute, 15*time.Minute),
+		pinProfile: auth.NewLockout(15, 15*time.Minute, 15*time.Minute)}
 }
 
 // Register adds the handoff routes.
@@ -200,10 +201,10 @@ func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 		w.render(rw, http.StatusTooManyRequests, view{Step: "pin", H: h, Token: token, TriesLeft: MaxPINFailures - h.PINFailures, Error: "Too many wrong PINs from here. Wait a few minutes."})
 		return
 	}
-	all, _ := w.pinAll.Begin("all")
+	all, _ := w.pinProfile.Begin(h.Profile)
 	if all == nil {
 		mine.Cancel()
-		w.log.Warn("handoff PINs locked: too many wrong PINs across all links")
+		w.log.Warn("handoff PINs locked for a profile: too many wrong PINs across its links", "profile", h.Profile)
 		w.render(rw, http.StatusTooManyRequests, view{Step: "pin", H: h, Token: token, TriesLeft: MaxPINFailures - h.PINFailures, Error: "Too many wrong PINs. Wait a few minutes."})
 		return
 	}
