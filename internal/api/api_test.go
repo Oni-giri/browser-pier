@@ -62,7 +62,11 @@ func (b *browser) handler() http.Handler {
 		w.Header().Set("Content-Type", "image/png")
 		w.Header().Set("X-Screen-Width", "1440")
 		w.Header().Set("X-Screen-Height", "900")
-		_, _ = io.WriteString(w, "PNG:"+r.URL.Query().Get("width"))
+		if width := r.URL.Query().Get("width"); width != "" {
+			_, _ = io.WriteString(w, "PNG:"+width)
+			return
+		}
+		_, _ = w.Write(screenPNG) // full size: zoom crops it
 	})
 	input := func(w http.ResponseWriter, r *http.Request) {
 		b.checkLeaks(r)
@@ -76,8 +80,9 @@ func (b *browser) handler() http.Handler {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
-	mux.HandleFunc("POST /input/click", input)
-	mux.HandleFunc("POST /input/type", input)
+	for _, p := range []string{"click", "type", "scroll", "key", "drag"} {
+		mux.HandleFunc("POST /input/"+p, input)
+	}
 	return mux
 }
 
@@ -198,7 +203,7 @@ func TestEveryRouteNeedsAToken(t *testing.T) {
 	for _, r := range [][2]string{
 		{"GET", "/api/profiles"}, {"POST", "/api/profiles"}, {"POST", "/api/sessions"}, {"GET", "/api/sessions"},
 		{"GET", "/api/sessions/x"}, {"DELETE", "/api/sessions/x"}, {"GET", "/api/sessions/x/screenshot"},
-		{"POST", "/api/sessions/x/click"}, {"POST", "/api/sessions/x/type"}, {"GET", "/cdp/google"}, {"GET", "/cdp/google/json/version"},
+		{"POST", "/api/sessions/x/click"}, {"POST", "/api/sessions/x/type"}, {"POST", "/api/sessions/x/computer"}, {"GET", "/cdp/google"}, {"GET", "/cdp/google/json/version"},
 	} {
 		if code := f.call("", r[0], r[1], "{}", nil); code != http.StatusUnauthorized {
 			t.Errorf("%s %s without a token: %d", r[0], r[1], code)

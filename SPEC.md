@@ -202,7 +202,7 @@ All endpoints take `Authorization: Bearer <agent token>`. The same actions are e
 | GET | `/api/sessions/{id}/screenshot` | Visual mode: current screen |
 | POST | `/api/sessions/{id}/click` | Visual mode: OS-level click `{x, y}` |
 | POST | `/api/sessions/{id}/type` | Visual mode: OS-level typing `{text}` |
-| POST | `/api/sessions/{id}/computer` | Visual mode: scroll, key, drag, wait, zoom; optional screenshot per action |
+| POST | `/api/sessions/{id}/computer` | Visual mode: one action `{action, …, screenshot?, width?}`: click, type, scroll, key, drag, wait or zoom |
 | GET | `/api/profiles/{name}/files` | List downloaded files |
 | GET | `/api/profiles/{name}/files/{file}` | Fetch a file (DELETE to remove) |
 | POST | `/api/sessions/{id}/files` | Upload a file into the session |
@@ -218,6 +218,7 @@ Starting a session returns its id, the CDP URL (proxied through the orchestrator
 - **What agents can't change:** an agent creating a profile can't set its proxy (a proxy sees where the browser goes, and an agent can be steered by the pages it reads), and can make its handoff policy stricter than the default but never looser.
 - **CDP:** `/cdp/{profile}` is the browser's WebSocket; `/cdp/{profile}/json/version` and `/json/list` work too, with their URLs pointing back through BrowserPier, so `connectOverCDP("https://…/cdp/{profile}")` works. Clients that can't set headers can pass the token as `?token=`. The token never reaches the browser. The proxy refuses a Visual-mode session (no CDP client may attach to the page) and a browser a person is using during a handoff.
 - **Visual mode:** screenshot, click and type go through the container's X display and xdotool. During a handoff, agents can still take screenshots but not click or type. Coordinates are screen pixels; a screenshot can be scaled down with `?width=`, and the response gives the screen size.
+- **Computer actions:** `/computer` takes one action. `click {x, y, button?, double?}` and `type {text}` work as above; `scroll {x, y, dx?, dy?}` scrolls by whole wheel notches at a point, at most 20 each way; `key {keys}` presses a combination like `"ctrl+l"` or a list of up to 10, each made of X keysym names (`Return`, `Tab`, `a`…, with aliases such as `Enter`, `Esc`, `Cmd`, `PageDown`) joined by `+`; `drag {from: {x, y}, to: {x, y}, button?}` presses, moves in steps and releases. These run through xdotool with the same checks as click, never as an xdotool script. `wait {ms}` pauses up to 10 s. `zoom {x, y, w, h}` returns that region of the screen as a PNG at full resolution, cut off at the screen's edges. With `screenshot: true` any other action answers with the screen afterwards (scaled to `width` if given) instead of 204. During a handoff, wait and zoom still work. The activity log names each action but never typed text: keys that could spell something are logged only as a count.
 - **Tokens without the UI:** `browserpier token create NAME [-profiles a,b]`, `token list` and `token revoke ID` manage tokens from the command line, e.g. through `docker exec`.
 
 ### Files

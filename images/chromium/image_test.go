@@ -107,6 +107,25 @@ func (b *browser) stop() string {
 	return docker(b.t, "inspect", "-f", "{{.State.ExitCode}}", b.name)
 }
 
+// input posts a Visual-mode action to the control socket.
+func (b *browser) input(t *testing.T, path, body string) {
+	t.Helper()
+	start := time.Now()
+	resp, err := b.http.Post("http://control"+path, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("%s %s: %d %s", path, body, resp.StatusCode, msg)
+	}
+	// xdotool's mousemove --sync to where the pointer already was took 15 s.
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("%s %s took %v", path, body, d)
+	}
+}
+
 func (b *browser) page() *browsertest.CDP {
 	b.t.Helper()
 	return browsertest.Page(b.t, b.http)
@@ -288,6 +307,58 @@ func TestBrowserEnvironment(t *testing.T) {
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
+	})
+	// The computer actions, checked the same way: input through xdotool,
+	// the outcome read back over CDP.
+	chromeTop := func() int {
+		h, _ := p.Eval("window.outerHeight - window.innerHeight").(float64)
+		return int(h)
+	}
+	until := func(t *testing.T, what string, cond func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for !cond() {
+			if time.Now().After(deadline) {
+				t.Fatal(what)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	t.Run("visual mode scroll", func(t *testing.T) {
+		p.Navigate(`data:text/html,<body style="margin:0;height:5000px;width:5000px">`)
+		b.input(t, "/input/scroll", `{"x": 640, "y": 400, "dy": 3}`)
+		until(t, "window.scrollY is still 0 after scrolling down", func() bool {
+			y, _ := p.Eval("window.scrollY").(float64)
+			return y > 0
+		})
+		b.input(t, "/input/scroll", `{"x": 640, "y": 400, "dx": 2}`)
+		until(t, "window.scrollX is still 0 after scrolling right", func() bool {
+			x, _ := p.Eval("window.scrollX").(float64)
+			return x > 0
+		})
+	})
+	t.Run("visual mode keys", func(t *testing.T) {
+		p.Navigate(`data:text/html,<input id="box" value="old text" style="position:absolute;left:200px;top:150px;width:300px;height:40px">`)
+		b.input(t, "/input/click", fmt.Sprintf(`{"x": 350, "y": %d}`, chromeTop()+170))
+		b.input(t, "/input/key", `{"keys": "ctrl+a"}`)
+		b.input(t, "/input/type", `{"text": "new pier"}`)
+		b.input(t, "/input/key", `{"keys": ["Left", "Left", "Left", "Left", "backspace"]}`)
+		until(t, "ctrl+a, typing and the arrow keys didn't edit the box", func() bool {
+			return p.Eval("document.getElementById('box').value") == "newpier"
+		})
+	})
+	t.Run("visual mode drag", func(t *testing.T) {
+		// The page records the pointer: press, moves with the button held, release.
+		p.Navigate(`data:text/html,<div id="d" style="position:absolute;left:100px;top:100px;width:600px;height:300px;background:gray"></div>` +
+			`<script>window.got = []; const d = document.getElementById('d');` +
+			` d.onmousedown = e => got.push('down ' + e.clientX + ',' + e.clientY);` +
+			` d.onmousemove = e => { if (e.buttons === 1 && got.at(-1) !== 'move') got.push('move'); };` +
+			` d.onmouseup = e => got.push('up ' + e.clientX + ',' + e.clientY);</script>`)
+		top := chromeTop()
+		b.input(t, "/input/drag", fmt.Sprintf(`{"from": {"x": 150, "y": %d}, "to": {"x": 500, "y": %d}}`, top+150, top+350))
+		until(t, "the page didn't see a press, held moves and a release", func() bool {
+			return p.Eval("got.join(' | ')") == "down 150,150 | move | up 500,350"
+		})
 	})
 	t.Run("screenshot", func(t *testing.T) {
 		for width, want := range map[string][2]int{"": {1280, 800}, "?width=640": {640, 400}} {
