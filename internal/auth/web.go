@@ -24,9 +24,6 @@ const (
 	DeviceCookie = "bp_device"
 )
 
-// queueLimit is the longest a sign-in waits for its turn under the backstop.
-const queueLimit = time.Minute
-
 // WebOptions say how requests reach BrowserPier.
 type WebOptions struct {
 	// TrustedProxies may set X-Forwarded-For and X-Forwarded-Proto.
@@ -46,12 +43,13 @@ type Web struct {
 	log    *slog.Logger
 	opts   WebOptions
 
-	loginIP  *Lockout  // per client
-	backstop *backstop // failures from everywhere; past a limit, sign-ins are slowed
-	slow     chan struct{}
-	setup    *Lockout
-	badToken *Lockout
-	pages    map[string]*template.Template
+	loginIP     *Lockout  // per client
+	backstop    *backstop // failures from everywhere; past a limit, sign-ins are slowed
+	deviceFails *Lockout  // per device cookie; a locked one is treated as unknown
+	slow        chan struct{}
+	setup       *Lockout
+	badToken    *Lockout
+	pages       map[string]*template.Template
 }
 
 //go:embed pages.html
@@ -60,12 +58,13 @@ var pagesHTML string
 func NewWeb(admin *Admin, tokens *Tokens, log *slog.Logger, opts WebOptions) *Web {
 	w := &Web{
 		admin: admin, tokens: tokens, log: log, opts: opts,
-		loginIP:  NewLockout(5, 5*time.Minute, 5*time.Minute),
-		backstop: &backstop{window: 15 * time.Minute, free: 20, base: 2 * time.Second, max: 30 * time.Second, now: time.Now},
-		setup:    NewLockout(10, 5*time.Minute, 5*time.Minute),
-		badToken: NewLockout(20, 5*time.Minute, 5*time.Minute),
-		slow:     make(chan struct{}, 1),
-		pages:    map[string]*template.Template{},
+		loginIP:     NewLockout(5, 5*time.Minute, 5*time.Minute),
+		deviceFails: NewLockout(5, time.Hour, 24*time.Hour),
+		backstop:    &backstop{window: 15 * time.Minute, free: 20, base: 2 * time.Second, max: 30 * time.Second, now: time.Now},
+		setup:       NewLockout(10, 5*time.Minute, 5*time.Minute),
+		badToken:    NewLockout(20, 5*time.Minute, 5*time.Minute),
+		slow:        make(chan struct{}, 1),
+		pages:       map[string]*template.Template{},
 	}
 	base := template.Must(template.New("").Parse(pagesHTML))
 	for _, name := range []string{"login", "setup"} {
@@ -331,17 +330,20 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 	// one at a time, each after a delay that grows with the failures: an
 	// attacker spread over many addresses gets a few thousand guesses a day
 	// at most, and the owner's known devices aren't slowed at all.
+	// A device cookie that keeps failing (stolen, say) stops being trusted.
+	var device *Attempt
+	if c, err := r.Cookie(DeviceCookie); err == nil && w.admin.KnownDevice(r.Context(), c.Value) {
+		device, _ = w.deviceFails.Begin(c.Value)
+	}
 	var global *backstopAttempt
-	if c, err := r.Cookie(DeviceCookie); err != nil || !w.admin.KnownDevice(r.Context(), c.Value) {
+	if device == nil {
 		var d time.Duration
 		global, d = w.backstop.begin()
 		defer global.end()
 		if d > 0 {
 			release, ok := w.throttle(r.Context(), d)
 			if !ok {
-				mine.Cancel()
-				retryAfter(rw, queueLimit)
-				w.busy(rw, pageData{Title: "Sign in", Next: safeNext(r.PostFormValue("next")), EnvManaged: w.admin.EnvManaged()})
+				mine.Cancel() // the client gave up
 				return
 			}
 			defer release()
@@ -350,6 +352,9 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 	ok, err := w.admin.CheckPassword(r.Context(), r.PostFormValue("password"))
 	if err != nil {
 		mine.Cancel()
+		if device != nil {
+			device.Cancel()
+		}
 		w.log.Error("checking the admin password", "err", err)
 		d.Error = "Something went wrong. Try again."
 		w.render(rw, http.StatusInternalServerError, "login", d)
@@ -359,6 +364,9 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 		left := mine.Fail()
 		if global != nil {
 			global.fail()
+		}
+		if device != nil {
+			device.Fail()
 		}
 		w.log.Warn("admin sign-in failed", "ip", ip, "tries_left", left)
 		if left == 0 {
@@ -370,21 +378,20 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mine.Succeed()
+	if device != nil {
+		device.Succeed()
+	}
 	w.signIn(rw, r, d.Remember)
 	w.log.Info("admin signed in", "ip", ip, "remember", d.Remember)
 	http.Redirect(rw, r, d.Next, http.StatusSeeOther)
 }
 
-// throttle waits, at most queueLimit, for the one sign-in slot and then
-// for d. The caller holds the slot through its password check, until it
-// calls release. It returns false if the wait ran out or the client gave up.
+// throttle waits for the one sign-in slot and then for d. The caller
+// holds the slot through its password check, until it calls release. It
+// waits as long as the client does, and returns false if it gives up.
 func (w *Web) throttle(ctx context.Context, d time.Duration) (release func(), ok bool) {
-	queue := time.NewTimer(queueLimit)
-	defer queue.Stop()
 	select {
 	case w.slow <- struct{}{}:
-	case <-queue.C:
-		return nil, false
 	case <-ctx.Done():
 		return nil, false
 	}
@@ -398,11 +405,6 @@ func (w *Web) throttle(ctx context.Context, d time.Duration) (release func(), ok
 		release()
 		return nil, false
 	}
-}
-
-func (w *Web) busy(rw http.ResponseWriter, d pageData) {
-	d.Error = "Too many sign-in attempts right now. Try again in a minute."
-	w.render(rw, http.StatusTooManyRequests, "login", d)
 }
 
 // backstop counts sign-in failures from every address, and attempts in
