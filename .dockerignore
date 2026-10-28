@@ -1,9 +1,9 @@
-.git
-.github
-bin
-data
-design
-images
-umbrel
-deploy
-*.md
+# One allowlist for both images (the orchestrator's Dockerfile and
+# images/chromium/Dockerfile). Podman doesn't read per-Dockerfile ignore files.
+*
+!go.mod
+!go.sum
+!cmd
+!internal
+!images/chromium
+**/*_test.go

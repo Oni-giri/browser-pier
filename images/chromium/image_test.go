@@ -501,6 +501,9 @@ func TestBrowserEnvironment(t *testing.T) {
 	})
 
 	if dir := os.Getenv("BROWSERPIER_TEST_ARTIFACTS"); dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
 		docker(t, "exec", b.name, "gst-launch-1.0", "-q", "ximagesrc", "display-name=:99", "num-buffers=1", "!",
 			"videoconvert", "!", "pngenc", "!", "filesink", "location=/tmp/screenshot.png")
 		docker(t, "cp", b.name+":/tmp/screenshot.png", filepath.Join(dir, "screenshot.png"))
