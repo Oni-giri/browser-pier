@@ -41,6 +41,9 @@ type Config struct {
 	PublicURL string
 	// CookieSecure is auto, always or never (BROWSERPIER_COOKIE_SECURE).
 	CookieSecure string
+	// FilesLimitMB caps each profile's downloads and uploads together, in
+	// MiB (BROWSERPIER_FILES_LIMIT_MB); the oldest go first. 0 is no cap.
+	FilesLimitMB int
 	// TrustedProxies are the networks whose X-Forwarded-For and
 	// X-Forwarded-Proto are believed (BROWSERPIER_TRUSTED_PROXIES: CIDRs,
 	// comma-separated, or "private"). Empty trusts none.
@@ -113,6 +116,10 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	}
 	if c.DataDir == "" {
 		return Config{}, errors.New("BROWSERPIER_DATA_DIR: must not be empty")
+	}
+	limit := get("BROWSERPIER_FILES_LIMIT_MB", "1024")
+	if c.FilesLimitMB, err = strconv.Atoi(limit); err != nil || c.FilesLimitMB < 0 {
+		return Config{}, fmt.Errorf("BROWSERPIER_FILES_LIMIT_MB: want a number of MiB (0 for no cap), got %q", limit)
 	}
 	if c.TrustedProxies, err = parseProxies(get("BROWSERPIER_TRUSTED_PROXIES", "")); err != nil {
 		return Config{}, err

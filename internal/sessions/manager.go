@@ -35,6 +35,7 @@ type Runtime interface {
 //
 //	<data dir>/profiles/<name>/chrome  Chromium's user data dir, mounted at /profile
 //	<data dir>/profiles/<name>/run     the control socket, mounted at /run/browserpier
+//	<data dir>/profiles/<name>/files   downloads/ and uploads/, mounted at /files
 type Layout struct {
 	DataDir     string // absolute, as the orchestrator sees it
 	HostDataDir string // the same folder as the Docker daemon sees it
@@ -57,6 +58,9 @@ func (l Layout) dir(profile string, sub ...string) string {
 func (l Layout) hostDir(profile, sub string) string {
 	return filepath.Join(l.HostDataDir, "profiles", profile, sub)
 }
+
+// FilesDir is a profile's downloads and uploads folder, as the orchestrator sees it.
+func (l Layout) FilesDir(profile string) string { return l.dir(profile, "files") }
 
 // ControlSocket is the path of a profile's control socket, as the orchestrator sees it.
 func (l Layout) ControlSocket(profile string) string { return l.dir(profile, "run", "control.sock") }
@@ -286,6 +290,7 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 		Session:    id,
 		ProfileDir: m.layout.hostDir(p.Name, "chrome"),
 		ControlDir: m.layout.hostDir(p.Name, "run"),
+		FilesDir:   m.layout.hostDir(p.Name, "files"),
 		User:       docker.User(m.layout.UID, m.layout.GID),
 		Screen:     p.Screen(),
 		MountCheck: id,
@@ -312,6 +317,9 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 // so everything in them is touched through os.Root, which won't follow a
 // link out of the folder.
 func (m *Manager) prepare(profile, sessionID string) error {
+	if err := m.prepareFiles(profile); err != nil {
+		return err
+	}
 	for _, sub := range []string{"chrome", "run"} {
 		dir := m.layout.dir(profile, sub)
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -319,6 +327,31 @@ func (m *Manager) prepare(profile, sessionID string) error {
 		}
 		if err := m.writeMarker(dir, sessionID); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// prepareFiles creates files/downloads and files/uploads. The browser
+// can replace either with a symlink, so they are checked through os.Root.
+func (m *Manager) prepareFiles(profile string) error {
+	dir := m.layout.FilesDir(profile)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	for _, sub := range []string{".", "downloads", "uploads"} {
+		if err := root.Mkdir(sub, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+			return err
+		}
+		if os.Getuid() == 0 {
+			if err := root.Lchown(sub, m.layout.UID, m.layout.GID); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

@@ -13,7 +13,7 @@ import (
 func TestBrowserConfigLocksDownTheContainer(t *testing.T) {
 	spec := BrowserSpec{
 		Name: "browserpier-google", Profile: "google", Session: "s1",
-		ProfileDir: "/srv/bp/profiles/google/chrome", ControlDir: "/srv/bp/profiles/google/run",
+		ProfileDir: "/srv/bp/profiles/google/chrome", ControlDir: "/srv/bp/profiles/google/run", FilesDir: "/srv/bp/profiles/google/files",
 		User: "1000:1000", Screen: "1440x900", MountCheck: "s1",
 	}
 	cfg, host := browserConfig("ghcr.io/oni-giri/browser-pier-chromium:1.0.0", `seccomp={"defaultAction":"SCMP_ACT_ERRNO"}`, spec)
@@ -47,7 +47,7 @@ func TestBrowserConfigLocksDownTheContainer(t *testing.T) {
 		t.Fatal("the image's entrypoint must be PID 1")
 	}
 
-	wantMounts := map[string]string{"/profile": spec.ProfileDir, "/run/browserpier": spec.ControlDir}
+	wantMounts := map[string]string{"/profile": spec.ProfileDir, "/run/browserpier": spec.ControlDir, "/files": spec.FilesDir}
 	if len(host.Mounts) != len(wantMounts) || len(host.Binds) != 0 {
 		t.Fatalf("mounts %+v binds %v", host.Mounts, host.Binds)
 	}

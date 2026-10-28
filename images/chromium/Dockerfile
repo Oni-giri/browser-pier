@@ -36,13 +36,14 @@ RUN for el in ximagesrc videoconvert x264enc fdsink; do gst-inspect-1.0 "$el" >/
 # can create, since that uid has no home here. /profile is the profile folder
 # and /run/browserpier holds the control socket.
 RUN useradd --uid 1000 --user-group --create-home --shell /usr/sbin/nologin pier \
- && mkdir -p /profile /run/browserpier /tmp/.X11-unix \
- && chown pier:pier /profile /run/browserpier \
+ && mkdir -p /profile /run/browserpier /files /tmp/.X11-unix \
+ && chown pier:pier /profile /run/browserpier /files \
  && chmod 1777 /tmp/.X11-unix
 
 COPY --from=build /out/entrypoint /usr/local/bin/browserpier-entrypoint
-# Hides the "unsupported command-line flag" bar that --disable-blink-features
-# would otherwise put over every page the human sees.
+# Managed policy: hides the "unsupported command-line flag" bar that
+# --disable-blink-features would put over every page, and sends downloads
+# to /files/downloads without asking, in both modes and without CDP.
 COPY images/chromium/policies.json /etc/chromium/policies/managed/browserpier.json
 
 # Changing REBUILD forces a new image without reinstalling packages (used by the persistence test).
