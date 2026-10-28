@@ -426,6 +426,54 @@ func TestSweepCancelsAHandoffWhoseBrowserStopped(t *testing.T) {
 	}
 }
 
+func TestWrongPINsCountEvenWhenRecordingThemFails(t *testing.T) {
+	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
+	ctx := context.Background()
+	h, _ := f.open("")
+	reserve := func() bool {
+		ok, err := f.svc.ReservePINTry(ctx, h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+
+	// The client went away mid-check: the guess still counts.
+	gone, cancel := context.WithCancel(ctx)
+	cancel()
+	if !reserve() {
+		t.Fatal("first reservation refused")
+	}
+	if _, err := f.svc.PINWrong(gone, h); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := f.svc.Get(ctx, h.ID); got.PINFailures != 1 {
+		t.Fatalf("a wrong PIN from a client that left: %d failures, want 1", got.PINFailures)
+	}
+
+	// The count can't be written: the try stays used up.
+	if _, err := f.svc.db.Exec(`CREATE TRIGGER no_count BEFORE UPDATE OF pin_failures ON handoffs BEGIN SELECT RAISE(FAIL, 'disk on fire'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if !reserve() {
+		t.Fatal("second reservation refused")
+	}
+	if _, err := f.svc.PINWrong(ctx, h); err == nil {
+		t.Fatal("PINWrong didn't report the failed write")
+	}
+	if _, err := f.svc.db.Exec(`DROP TRIGGER no_count`); err != nil {
+		t.Fatal(err)
+	}
+	for i := range MaxPINFailures - 2 {
+		if !reserve() {
+			t.Fatalf("reservation %d of the %d tries left refused", i+1, MaxPINFailures-2)
+		}
+	}
+	if reserve() {
+		t.Fatal("a guess whose count failed to write was given back")
+	}
+}
+
 func TestParallelRightPINsDontCancel(t *testing.T) {
 	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
 	h, token := f.open("")

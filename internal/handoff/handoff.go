@@ -339,13 +339,19 @@ func (s *Service) PINRight(h Handoff) {
 }
 
 // PINWrong ends a check that found a wrong PIN, counts it, and returns how
-// many tries are left, cancelling the link when none are.
+// many tries are left, cancelling the link when none are. It fails
+// closed: the guess is counted even if the client has gone, and if it
+// can't be recorded the check stays reserved, still using up a try.
 func (s *Service) PINWrong(ctx context.Context, h Handoff) (int, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
 	s.mu.Lock()
 	// Count it in the same step as ending the check, so a reservation never
 	// sees it as neither.
 	_, err := s.db.ExecContext(ctx, `UPDATE handoffs SET pin_failures = pin_failures + 1 WHERE id = ? AND status = 'pending'`, h.ID)
-	s.doneChecking(h.ID)
+	if err == nil {
+		s.doneChecking(h.ID)
+	}
 	s.mu.Unlock()
 	if err != nil {
 		return 0, err
