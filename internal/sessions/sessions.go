@@ -55,6 +55,9 @@ type Session struct {
 	Error     string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// InUseBy names the agents connected to the browser right now, by
+	// token name. Only live sessions have any; it isn't stored.
+	InUseBy []string
 }
 
 func newID() string {

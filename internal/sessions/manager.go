@@ -111,6 +111,8 @@ type live struct {
 	failure string
 	// stop is the stop in progress, if any; everyone stopping waits on it.
 	stop *stopAttempt
+	// users counts open connections per agent.
+	users map[string]int
 }
 
 type stopAttempt struct {
@@ -522,7 +524,43 @@ func (m *Manager) update(l *live, change func(*Session)) error {
 func (m *Manager) snapshot(l *live) Session {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return l.sess
+	return l.snapshotLocked()
+}
+
+func (l *live) snapshotLocked() Session {
+	s := l.sess
+	s.InUseBy = nil
+	for agent := range l.users {
+		s.InUseBy = append(s.InUseBy, agent)
+	}
+	sort.Strings(s.InUseBy)
+	return s
+}
+
+// Attach records that agent has a connection open to the session's
+// browser, until release is called. It shows as "In use by", and a
+// browser in use isn't idle.
+func (m *Manager) Attach(id, agent string) (release func(), err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l := m.findLocked(id)
+	if l == nil || !l.sess.State.Live() {
+		return nil, ErrNotRunning
+	}
+	if l.users == nil {
+		l.users = map[string]int{}
+	}
+	l.users[agent]++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			if l.users[agent]--; l.users[agent] <= 0 {
+				delete(l.users, agent)
+			}
+		})
+	}, nil
 }
 
 // stopContainer asks Docker to stop a container without waiting for it; the
@@ -649,7 +687,7 @@ func (m *Manager) Live(profile string) (Session, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if l, ok := m.live[profile]; ok {
-		return l.sess, true
+		return l.snapshotLocked(), true
 	}
 	return Session{}, false
 }
@@ -659,7 +697,7 @@ func (m *Manager) List() []Session {
 	m.mu.Lock()
 	out := make([]Session, 0, len(m.live))
 	for _, l := range m.live {
-		out = append(out, l.sess)
+		out = append(out, l.snapshotLocked())
 	}
 	m.mu.Unlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].Profile < out[j].Profile })

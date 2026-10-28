@@ -601,3 +601,30 @@ func TestReconcileRemovesTombstones(t *testing.T) {
 		t.Fatalf("tombstone still there: %v", err)
 	}
 }
+
+func TestAttachShowsInUseBy(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	r1, err := f.m.Attach(s.ID, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2, _ := f.m.Attach(s.ID, "claude")
+	r3, _ := f.m.Attach(s.ID, "browser-use")
+	if got, _ := f.m.Live("google"); strings.Join(got.InUseBy, ",") != "browser-use,claude" {
+		t.Fatalf("InUseBy = %v", got.InUseBy)
+	}
+	r1()
+	r1() // releasing twice is harmless
+	r3()
+	if got, _ := f.m.Get(context.Background(), s.ID); strings.Join(got.InUseBy, ",") != "claude" {
+		t.Fatalf("InUseBy after release = %v", got.InUseBy)
+	}
+	r2()
+	if got, _ := f.m.Live("google"); len(got.InUseBy) != 0 {
+		t.Fatalf("InUseBy after all released = %v", got.InUseBy)
+	}
+	if _, err := f.m.Attach("nope", "claude"); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("Attach unknown = %v", err)
+	}
+}
