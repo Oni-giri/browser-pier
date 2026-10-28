@@ -461,3 +461,28 @@ func mustURL(s string) *url.URL {
 	}
 	return u
 }
+
+func TestFailingDeviceCookieStopsBeingTrusted(t *testing.T) {
+	f := newWebFixture(t, "the-admin-password", WebOptions{})
+	f.web.loginIP = NewLockout(1000, time.Minute, time.Minute) // isolate the device limit
+	b := f.browser()
+	f.post(b, "/login", url.Values{"password": {"the-admin-password"}})
+	dev := ""
+	for _, c := range b.Jar.Cookies(mustURL(f.srv.URL + "/login")) {
+		if c.Name == DeviceCookie {
+			dev = c.Value
+		}
+	}
+	for range 5 {
+		f.post(b, "/login", url.Values{"password": {"guess"}})
+	}
+	if wait := f.web.deviceFails.Locked(dev); wait == 0 {
+		t.Fatal("a device cookie that failed 5 times is still trusted")
+	}
+	// Its next attempt goes through the backstop like anyone else's.
+	before := len(f.web.backstop.fails)
+	f.post(b, "/login", url.Values{"password": {"guess"}})
+	if len(f.web.backstop.fails) != before+1 {
+		t.Fatal("an untrusted device's failure wasn't counted by the backstop")
+	}
+}
