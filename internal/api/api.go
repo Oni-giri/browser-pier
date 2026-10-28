@@ -57,6 +57,7 @@ func (a *API) Register(mux *http.ServeMux) {
 	mux.Handle("GET /api/sessions/{id}/screenshot", t(a.screenshot))
 	mux.Handle("POST /api/sessions/{id}/click", t(a.input("/input/click")))
 	mux.Handle("POST /api/sessions/{id}/type", t(a.input("/input/type")))
+	mux.Handle("POST /api/sessions/{id}/computer", t(a.computer))
 	mux.Handle("POST /api/sessions/{id}/files", t(a.uploadFile))
 	mux.Handle("GET /api/profiles/{name}/files", t(a.listFiles))
 	mux.Handle("GET /api/profiles/{name}/files/{file}", t(a.getFile))
@@ -427,17 +428,23 @@ func (a *API) screenshot(w http.ResponseWriter, r *http.Request) {
 		target += "?width=" + url.QueryEscape(width)
 	}
 	a.m.Touch(s.ID)
-	resp, err := a.control(r.Context(), s.Profile, http.MethodGet, target, nil)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "screenshot failed: "+err.Error())
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == http.StatusOK {
+	if a.sendScreenshot(w, r, s, target) {
 		tok, _ := auth.TokenFromContext(r.Context())
 		a.m.Note(s.ID, tok.Name, "Took a screenshot")
 	}
+}
+
+// sendScreenshot relays a screenshot from the control socket's target,
+// reporting whether it was one.
+func (a *API) sendScreenshot(w http.ResponseWriter, r *http.Request, s sessions.Session, target string) bool {
+	resp, err := a.control(r.Context(), s.Profile, http.MethodGet, target, nil)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "screenshot failed: "+err.Error())
+		return false
+	}
+	defer func() { _ = resp.Body.Close() }()
 	relay(w, resp, "Content-Type", "X-Screen-Width", "X-Screen-Height")
+	return resp.StatusCode == http.StatusOK
 }
 
 // input forwards a Visual-mode action to the browser's control socket,
@@ -453,31 +460,53 @@ func (a *API) input(path string) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "body too large")
 			return
 		}
-		if err := a.m.AgentInput(s.ID); err != nil {
-			writeError(w, http.StatusConflict, "a person is driving this browser from the live view; wait until they hand it back")
-			return
+		if a.act(w, r, s, path, body) {
+			w.WriteHeader(http.StatusNoContent)
 		}
-		resp, err := a.control(r.Context(), s.Profile, http.MethodPost, path, body)
-		if err != nil {
-			writeError(w, http.StatusBadGateway, "input failed: "+err.Error())
-			return
-		}
-		defer func() { _ = resp.Body.Close() }()
-		if resp.StatusCode != http.StatusNoContent {
-			msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-			writeError(w, resp.StatusCode, strings.TrimSpace(string(msg)))
-			return
-		}
-		tok, _ := auth.TokenFromContext(r.Context())
-		a.m.Note(s.ID, tok.Name, describeInput(path, body))
-		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
-// describeInput puts a click or keystrokes in words for the activity
-// log. Typed text is never included, only its length: it may be a
-// password or a one-time code.
+// act runs one input action through the control socket and logs it, or
+// writes why it didn't run.
+func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, path string, body []byte) bool {
+	if err := a.m.AgentInput(s.ID); err != nil {
+		writeError(w, http.StatusConflict, "a person is driving this browser from the live view; wait until they hand it back")
+		return false
+	}
+	resp, err := a.control(r.Context(), s.Profile, http.MethodPost, path, body)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "input failed: "+err.Error())
+		return false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNoContent {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		writeError(w, resp.StatusCode, strings.TrimSpace(string(msg)))
+		return false
+	}
+	tok, _ := auth.TokenFromContext(r.Context())
+	a.m.Note(s.ID, tok.Name, describeInput(path, body))
+	return true
+}
+
+// describeInput puts an input action in words for the activity log.
+// Typed text is never included, only its length: it may be a password or
+// a one-time code.
 func describeInput(path string, body []byte) string {
+	switch path {
+	case "/input/scroll":
+		var c struct{ X, Y int }
+		_ = json.Unmarshal(body, &c)
+		return fmt.Sprintf("Scrolled at %d, %d", c.X, c.Y)
+	case "/input/key":
+		var k struct{ Keys json.RawMessage }
+		_ = json.Unmarshal(body, &k)
+		return describeKeys(k.Keys)
+	case "/input/drag":
+		var d struct{ From, To struct{ X, Y int } }
+		_ = json.Unmarshal(body, &d)
+		return fmt.Sprintf("Dragged from %d, %d to %d, %d", d.From.X, d.From.Y, d.To.X, d.To.Y)
+	}
 	if path == "/input/type" {
 		var t struct{ Text string }
 		_ = json.Unmarshal(body, &t)
