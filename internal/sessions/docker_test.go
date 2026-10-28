@@ -222,7 +222,7 @@ func TestWrongHostPathFailsLoudly(t *testing.T) {
 	wrong.HostDataDir = elsewhere
 	m := f.manager(wrong)
 	name := f.profile(m)
-	for _, sub := range []string{"chrome", "run"} { // bind mount sources must exist
+	for _, sub := range []string{"chrome", "run", "files"} { // Docker refuses bind sources that don't exist
 		if err := os.MkdirAll(filepath.Join(elsewhere, "profiles", name, sub), 0o700); err != nil {
 			t.Fatal(err)
 		}
