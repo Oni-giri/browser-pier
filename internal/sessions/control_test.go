@@ -37,6 +37,9 @@ func TestTakeAndReleaseControl(t *testing.T) {
 	if got, _ := f.m.Live("google"); !got.HumanControl {
 		t.Fatal("HumanControl not shown")
 	}
+	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrHumanDriving) {
+		t.Fatalf("a second person taking control = %v, want ErrHumanDriving", err)
+	}
 	if err := f.m.HumanInput(s.ID); err != nil {
 		t.Fatal(err)
 	}

@@ -35,7 +35,7 @@
   let queue = [], pendingMove = null, scheduled = false;
   function flush() {
     scheduled = false;
-    if (pendingMove) { queue.unshift(pendingMove); pendingMove = null; }
+    if (pendingMove) { queue.push(pendingMove); pendingMove = null; }
     if (queue.length) { send({ type: "input", events: queue }); queue = []; }
   }
   function push(ev) {
@@ -161,9 +161,11 @@
     if ([...e.key].length === 1) { const cp = e.key.codePointAt(0); return "U" + cp.toString(16).toUpperCase().padStart(4, "0"); }
     return null;
   }
+  // lift sends what's queued, then lets go of every held key and button.
+  function lift() { flush(); send({ type: "lift" }); }
   addEventListener("keydown", (e) => {
     if (!control || !keyboard) return;
-    if (e.key === "Escape") { keyboard = false; render(); say("Keyboard released. Click the screen to send it again."); return; }
+    if (e.key === "Escape") { e.preventDefault(); lift(); keyboard = false; render(); say("Keyboard released. Click the screen to send it again."); return; }
     const k = keysym(e); if (!k) return;
     e.preventDefault(); push({ t: "keydown", k });
   });
@@ -172,7 +174,7 @@
     const k = keysym(e); if (!k) return;
     e.preventDefault(); push({ t: "keyup", k });
   });
-  addEventListener("blur", () => { if (control) send({ type: "lift" }); });
+  addEventListener("blur", () => { if (control) lift(); });
 
   // Phone: tap to click, pinch to zoom, drag to pan when zoomed.
   function applyZoom() { video.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`; }

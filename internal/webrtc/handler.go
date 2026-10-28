@@ -201,8 +201,14 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 	}
 	switch m.Type {
 	case "take":
+		if v.control {
+			say(map[string]any{"type": "control", "on": true})
+			return
+		}
 		err := v.h.m.TakeControl(v.session)
 		switch {
+		case errors.Is(err, sessions.ErrHumanDriving):
+			say(map[string]any{"type": "error", "msg": "Someone else has control."})
 		case err == nil:
 			v.control = true
 			say(map[string]any{"type": "control", "on": true})
