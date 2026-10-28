@@ -2,10 +2,12 @@ package files
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -19,7 +21,7 @@ func setup(t *testing.T, limit int64) (*Store, string) {
 			t.Fatal(err)
 		}
 	}
-	return New(func(p string) string { return filepath.Join(base, p) }, limit), filepath.Join(base, "google")
+	return New(func(p string) string { return filepath.Join(base, p) }, limit, os.Getuid(), os.Getgid()), filepath.Join(base, "google")
 }
 
 func write(t *testing.T, path, content string, age time.Duration) {
@@ -219,5 +221,41 @@ func TestOpenNeverBlocksOnAFIFO(t *testing.T) {
 	}
 	if list, _ := s.List("google"); len(list) != 0 {
 		t.Fatalf("a FIFO was listed: %v", list)
+	}
+}
+
+func TestConcurrentSameNameUploadsKeepBoth(t *testing.T) {
+	s, dir := setup(t, 0)
+	var wg sync.WaitGroup
+	for i := range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, _, err := s.Upload("google", "same.txt", strings.NewReader(fmt.Sprint(i)), 100); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	entries, _ := os.ReadDir(filepath.Join(dir, Uploads))
+	if len(entries) != 10 {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("10 uploads left %d files: %v", len(entries), names)
+	}
+}
+
+func TestUploadOverTheCapFails(t *testing.T) {
+	s, dir := setup(t, 10)
+	if _, _, err := s.Upload("google", "big", strings.NewReader(strings.Repeat("x", 11)), 100); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("an upload bigger than the whole cap: %v", err)
+	}
+	// One that fits alone but not beside a download in progress (never
+	// evicted) is evicted at once: the upload must fail, not report success.
+	write(t, filepath.Join(dir, Downloads, "x.crdownload"), "12345678", 0)
+	if _, _, err := s.Upload("google", "mid", strings.NewReader("abcdef"), 100); !errors.Is(err, ErrOverCap) {
+		t.Fatalf("an upload that can't fit: %v", err)
 	}
 }

@@ -43,7 +43,7 @@ func testHandler(t *testing.T) http.Handler {
 		t.Fatal(err)
 	}
 	t.Cleanup(mgr.Close)
-	return newHandler(web, api.New(mgr, web, files.New(mgr.Layout().FilesDir, 0), log, ""))
+	return newHandler(web, api.New(mgr, web, files.New(mgr.Layout().FilesDir, 0, os.Getuid(), os.Getgid()), log, ""))
 }
 
 func TestHealthz(t *testing.T) {

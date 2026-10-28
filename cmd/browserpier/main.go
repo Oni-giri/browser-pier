@@ -117,13 +117,20 @@ func run(log *slog.Logger) error {
 		PublicURL:      cfg.PublicURL,
 	})
 
-	fileStore := files.New(mgr.Layout().FilesDir, int64(cfg.FilesLimitMB)<<20)
+	fileStore := files.New(mgr.Layout().FilesDir, int64(cfg.FilesLimitMB)<<20, uid, gid)
 	go fileStore.Sweep(ctx, func() []string {
-		var live []string
-		for _, s := range mgr.List() {
-			live = append(live, s.Profile)
+		// Every profile, not only running ones: a cap lowered in the
+		// settings applies to stopped profiles too.
+		all, err := mgr.Profiles().List(ctx)
+		if err != nil {
+			log.Warn("listing profiles for the files cap", "err", err)
+			return nil
 		}
-		return live
+		names := make([]string, 0, len(all))
+		for _, p := range all {
+			names = append(names, p.Name)
+		}
+		return names
 	}, time.Minute, func(profile string, err error) {
 		log.Warn("enforcing the files cap", "profile", profile, "err", err)
 	})
