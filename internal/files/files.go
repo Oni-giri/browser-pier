@@ -15,6 +15,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -137,10 +138,10 @@ func (s *Store) Open(profile, name string) (*os.File, File, error) {
 		return nil, File{}, err
 	}
 	defer func() { _ = root.Close() }()
-	if info, err := root.Lstat(name); err != nil || !info.Mode().IsRegular() {
-		return nil, File{}, ErrNotFound
-	}
-	f, err := root.Open(name)
+	// The browser could swap the file for a FIFO or a link between any
+	// check and the open, so open without following links and without
+	// blocking (a FIFO would wait for a writer), then check what was opened.
+	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, File{}, ErrNotFound
 	}

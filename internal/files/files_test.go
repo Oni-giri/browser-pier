@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -192,5 +193,31 @@ func TestValidName(t *testing.T) {
 		if !ValidName(ok) {
 			t.Errorf("%q rejected", ok)
 		}
+	}
+}
+
+func TestOpenNeverBlocksOnAFIFO(t *testing.T) {
+	s, dir := setup(t, 0)
+	if err := syscall.Mkfifo(filepath.Join(dir, Downloads, "trap"), 0o600); err != nil {
+		t.Skip("no mkfifo:", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		f, _, err := s.Open("google", "trap")
+		if f != nil {
+			_ = f.Close()
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("Open(fifo) = %v, want ErrNotFound", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Open blocked on a FIFO")
+	}
+	if list, _ := s.List("google"); len(list) != 0 {
+		t.Fatalf("a FIFO was listed: %v", list)
 	}
 }
