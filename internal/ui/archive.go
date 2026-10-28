@@ -159,7 +159,7 @@ func (u *UI) importArchive(r io.Reader, name, pass string) (string, string) {
 	}
 	// The folder becomes the profile's last, so a failure before leaves
 	// no profile without its logins.
-	if err := os.Rename(tmp, layout.ProfileDir(name)); err != nil {
+	if err := os.Rename(tmp, layout.ProfileDir(name)); err != nil { //nolint:gosec // name passed p.Validate: [a-z0-9-] only
 		_ = os.RemoveAll(tmp)
 		_ = u.m.Profiles().Delete(context.Background(), name)
 		return "", "Couldn't import: " + err.Error()
