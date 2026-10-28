@@ -161,7 +161,7 @@ details.advanced>summary::after{content:"";width:7px;height:7px;border-right:1.5
 details.advanced[open]>summary::after{transform:rotate(-135deg);margin:4px 4px 0 0}
 details.advanced>summary b{display:block;font-weight:500}
 details.advanced>div{padding:4px 14px 2px;border-top:1px solid var(--line-soft)}
-details.advanced .field:first-child{margin-top:14px}
+details.advanced>div>.field:first-child{margin-top:14px}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 @media (max-width:560px){.two{grid-template-columns:1fr}}
 
@@ -354,3 +354,25 @@ details.reveal[open]>summary{display:none}
 .who b{font-weight:500}
 .card-actions form{display:flex}
 dialog form{margin:0}
+dialog>form,#token-body>form{display:flex;flex-direction:column;max-height:calc(100vh - 48px)}
+dialog .dlg-body{overflow-y:auto;min-height:0}
+dialog .dlg-head,dialog .dlg-foot{flex:none}
+.table .who a{text-decoration:none}
+.table .who a:hover{text-decoration:underline}
+
+/* Sign-in and setup */
+.sign{min-height:100vh;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.25fr);gap:12px;padding:12px;background:var(--surface)}
+.sign-main{display:flex;flex-direction:column;justify-content:space-between;gap:32px;padding:28px}
+.sign-form{width:min(360px,100%);margin:0 auto}
+.sign-form h1{margin:0 0 6px;font-size:26px;font-weight:600;letter-spacing:-.8px}
+.sign-form>p{margin:0 0 24px;color:var(--ink-2)}
+.sign-form label{display:block;font-weight:500;margin:16px 0 8px}
+.sign-form label.check{display:flex;font-weight:400;color:var(--ink-2);margin:16px 0}
+.sign-form .btn{min-height:42px;margin-top:8px}
+.sign-form .input.bad{box-shadow:0 0 0 1px var(--red),0 0 0 4px var(--red-tint)}
+.sign-form .error{margin:8px 0 0;color:var(--red-text);font-size:13px}
+.sign-form code{font-size:13px;background:var(--fill);border-radius:4px;padding:1px 4px}
+.sign-art{border-radius:16px;background-color:var(--bg);background-image:radial-gradient(60% 40% at 55% 0%,rgba(47,107,255,.16),transparent 70%),linear-gradient(var(--line-soft) 1px,transparent 1px),linear-gradient(90deg,var(--line-soft) 1px,transparent 1px);background-size:auto,44px 44px,44px 44px;box-shadow:0 0 0 1px var(--line);display:flex;align-items:center;padding:48px}
+.sign-art h2{margin:0 0 20px;max-width:520px;font-size:40px;line-height:1.1;font-weight:600;letter-spacing:-1.6px}
+.sign-art .checks li{font-size:15px}
+@media (max-width:860px){.sign{grid-template-columns:1fr}.sign-art{display:none}}

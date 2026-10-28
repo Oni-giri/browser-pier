@@ -67,7 +67,7 @@ func (u *UI) settingsData(r *http.Request) (settingsData, error) {
 		d.Mem.Each = 1 << 30
 	}
 	if d.Mem.Host > 0 {
-		d.RAMPercent = int(d.Mem.Limit * 100 / d.Mem.Host)
+		d.RAMPercent = int((d.Mem.Limit*100 + d.Mem.Host/2) / d.Mem.Host)
 	}
 	if !d.RAMFromEnv && st.RAMLimitPercent > 0 {
 		d.RAMPercent = st.RAMLimitPercent

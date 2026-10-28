@@ -299,6 +299,7 @@ var funcs = template.FuncMap{
 	"minutesOf":   func(d time.Duration) int { return int(d / time.Minute) },
 	"screenLabel": func(s string) string { return strings.Replace(s, "x", " × ", 1) },
 	"menuData":    func(v profileView, up bool) menuView { return menuView{v, up} },
+	"span":        func(d overviewData, span string) spanned { return spanned{d, span} },
 	"list":        func(s ...string) []string { return s },
 	"ramBytes":    func(host int64, percent int) int64 { return host * int64(percent) / 100 },
 	"wsURL":       func(base string) string { return "ws" + strings.TrimPrefix(base, "http") },

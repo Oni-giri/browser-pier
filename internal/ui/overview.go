@@ -69,6 +69,12 @@ func (u *UI) memoryView(r *http.Request, views []profileView) memoryView {
 	return mv
 }
 
+// spanned is the overview's data with a cell's grid width.
+type spanned struct {
+	overviewData
+	Span string
+}
+
 func (u *UI) overview(w http.ResponseWriter, r *http.Request) {
 	views, err := u.views(r.Context(), r)
 	if err != nil {

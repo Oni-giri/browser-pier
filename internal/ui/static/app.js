@@ -62,7 +62,8 @@
   function closeMenus() { $$("details.menu[open]").forEach((d) => { d.open = false; }); }
   // A dialog htmx put in #modal goes away when closed.
   document.addEventListener("close", (e) => { if (e.target.parentElement && e.target.parentElement.id === "modal") e.target.remove(); }, true);
-  function openMarked(root) { $$("dialog[data-open]", root).forEach(open); }
+  // A dialog marked data-open opens once, when it arrives.
+  function openMarked() { $$("dialog[data-open]").forEach((d) => { d.removeAttribute("data-open"); open(d); }); }
 
   // Forms say they're busy, so a slow start isn't clicked twice.
   document.addEventListener("submit", (e) => {
@@ -93,7 +94,7 @@
     if (document.hidden || $("details.menu[open]") || $("dialog[open]") || e.target.contains(document.activeElement) && document.activeElement.matches("input, textarea, select")) e.preventDefault();
   });
   document.addEventListener("htmx:afterSwap", (e) => {
-    openMarked(e.target);
+    openMarked();
     // The live view reloads when its browser starts or stops.
     const page = $("[data-profile][data-state]");
     const side = $("[data-side-state]", e.target);
@@ -116,6 +117,12 @@
       const btn = $("[data-key=n]");
       if (btn) { e.preventDefault(); btn.click(); }
     }
+  });
+
+  // Ticking a choice can select the option it belongs to.
+  document.addEventListener("change", (e) => {
+    const sel = e.target.dataset && e.target.dataset.select;
+    if (sel && e.target.checked) { const el = $(sel); if (el) el.checked = true; }
   });
 
   // Code tabs.
@@ -158,5 +165,5 @@
     addEventListener("beforeunload", (e) => { if (!bar.hidden && !tracked.dataset.submitted) e.preventDefault(); });
   }
 
-  openMarked(document);
+  openMarked();
 })();

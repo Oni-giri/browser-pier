@@ -69,11 +69,12 @@
     } else if (s === "starting") { label = "Starting…"; }
     who.textContent = label;
     who.className = "pill " + cls;
-    const agentDriving = !!(status.in_use_by && status.in_use_by.length);
+    // While it waits for help the agent is paused, so a person can always take over.
+    const agentDriving = s === "running" && !!(status.in_use_by && status.in_use_by.length);
     if (takeBtn) {
       takeBtn.textContent = control ? "Hand back" : "Take control";
       if (takeBtn.classList.contains("btn")) takeBtn.classList.toggle("blue", !control);
-      takeBtn.disabled = !dc || dc.readyState !== "open" || (!control && (agentDriving || status.human_control || s !== "running"));
+      takeBtn.disabled = !dc || dc.readyState !== "open" || (!control && (agentDriving || status.human_control || (s !== "running" && s !== "needs_help")));
     }
     typeBtn.hidden = !(control && touch);
     fitBtn.hidden = !touch;

@@ -116,9 +116,8 @@ requests.delete("{{.Base}}/api/sessions/" + s["id"], headers=auth)</pre>
       <fieldset class="field" style="border:0;padding:0;margin:0">
         <legend class="label" style="font-weight:500;margin-bottom:8px">Can use</legend>
         <label class="radio-card"><input type="radio" name="scope" value="all"{{if .All}} checked{{end}}><span><b>All profiles</b><small>Including ones created later. Needed to create profiles.</small></span></label>
-        <label class="radio-card"><input type="radio" name="scope" value="some"{{if not .All}} checked{{end}}><span><b>Only these profiles</b>
-          {{if .Profiles}}<span class="choices" style="margin-top:8px">{{range .Profiles}}<label><input type="checkbox" name="profile" value="{{.}}"{{if index $.Chosen .}} checked{{end}}><span>{{.}}</span></label>{{end}}</span>{{else}}<small>No profiles yet.</small>{{end}}
-        </span></label>
+        <label class="radio-card" style="margin-bottom:0"><input type="radio" name="scope" value="some" id="scope-some"{{if not .All}} checked{{end}}><span><b>Only these profiles</b>{{if not .Profiles}}<small>No profiles yet.</small>{{end}}</span></label>
+        {{if .Profiles}}<div class="choices" style="margin:8px 0 0 40px">{{range .Profiles}}<label><input type="checkbox" name="profile" value="{{.}}" data-select="#scope-some"{{if index $.Chosen .}} checked{{end}}><span>{{.}}</span></label>{{end}}</div>{{end}}
       </fieldset>
     </div>
     <div class="dlg-foot"><button class="btn" type="button" data-close>Cancel</button><button class="btn primary" type="submit">Create token</button></div>

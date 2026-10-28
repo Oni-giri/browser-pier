@@ -18,7 +18,7 @@
   <div class="live">
     <section class="viewer" aria-label="Browser">
       <div class="viewer-bar">
-        <span class="addr">{{with .Ask}}{{.Origin}}{{else}}{{.Name}}{{end}}</span>
+        <span class="addr">{{if and .Ask .Ask.Origin}}{{.Ask.Origin}}{{else}}{{.Name}}{{end}}</span>
         <span class="num">{{.Width}} × {{.Height}}{{if .Preview}} · 30 fps{{end}}</span>
         <button id="type" class="btn small" type="button" hidden>Type</button>
         <button id="fit" class="btn small" type="button" hidden>Fit</button>
@@ -56,7 +56,7 @@
     <div><b>{{.Agent}}</b><div class="caption">asked {{ago .CreatedAt}} · {{.Reason.Label}}</div></div>
   </div>
   <p class="ask">{{.Detail}}</p>
-  <p class="caption" style="margin:0 0 14px">on {{.Origin}} · link expires {{hhmm .ExpiresAt}}</p>
+  <p class="caption" style="margin:0 0 14px">{{with .Origin}}on {{.}} · {{end}}link expires {{hhmm .ExpiresAt}}</p>
   <form method="post" action="/profiles/{{.Profile}}/handback" data-busy="Handing back…">
     <label class="field" style="margin-bottom:10px"><span class="sr-only">Note for the agent</span><input class="input" name="note" maxlength="1000" placeholder="Note for the agent (optional)" autocomplete="off"></label>
     <div class="actions">
