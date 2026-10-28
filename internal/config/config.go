@@ -41,6 +41,10 @@ type Config struct {
 	PublicURL string
 	// CookieSecure is auto, always or never (BROWSERPIER_COOKIE_SECURE).
 	CookieSecure string
+	// GeoIPURL is the echoip-style endpoint (JSON with country_iso and
+	// time_zone) browsers use to find their exit location, through their
+	// proxy (BROWSERPIER_GEOIP_URL; "off" turns it off).
+	GeoIPURL string
 	// FilesLimitMB caps each profile's downloads and uploads together, in
 	// MiB (BROWSERPIER_FILES_LIMIT_MB); the oldest go first. 0 is no cap.
 	FilesLimitMB int
@@ -105,6 +109,7 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		AdminPassword: get("BROWSERPIER_ADMIN_PASSWORD", ""),
 		PublicURL:     get("BROWSERPIER_PUBLIC_URL", ""),
 		CookieSecure:  get("BROWSERPIER_COOKIE_SECURE", "auto"),
+		GeoIPURL:      get("BROWSERPIER_GEOIP_URL", "https://ifconfig.co/json"),
 	}
 
 	_, port, err := net.SplitHostPort(c.Listen)
@@ -116,6 +121,11 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	}
 	if c.DataDir == "" {
 		return Config{}, errors.New("BROWSERPIER_DATA_DIR: must not be empty")
+	}
+	if c.GeoIPURL == "off" {
+		c.GeoIPURL = ""
+	} else if u, err := url.Parse(c.GeoIPURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return Config{}, fmt.Errorf("BROWSERPIER_GEOIP_URL: want an http(s) URL or off, got %q", c.GeoIPURL)
 	}
 	limit := get("BROWSERPIER_FILES_LIMIT_MB", "1024")
 	if c.FilesLimitMB, err = strconv.Atoi(limit); err != nil || c.FilesLimitMB < 0 {

@@ -72,8 +72,8 @@ type Profile struct {
 
 // Location is a browser's exit location as last seen.
 type Location struct {
-	Country   string    // ISO 3166-1 alpha-2
-	TimeZone  string    // IANA
+	Country   string // ISO 3166-1 alpha-2
+	TimeZone  string // IANA
 	IP        string
 	CheckedAt time.Time // zero if never
 }

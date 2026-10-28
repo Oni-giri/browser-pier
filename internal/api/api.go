@@ -64,9 +64,20 @@ type profileJSON struct {
 	Screen          screenJSON `json:"screen"`
 	Proxy           string     `json:"proxy,omitempty"` // password redacted
 	HandoffPolicy   string     `json:"handoff_policy"`
-	Status          string     `json:"status"` // the live session's state, or stopped
-	SessionID       string     `json:"session_id,omitempty"`
-	InUseBy         []string   `json:"in_use_by,omitempty"`
+	TimeZone        string     `json:"time_zone,omitempty"` // set by hand
+	Locale          string     `json:"locale,omitempty"`    // set by hand
+	// Location is where the browser appeared to be when it last started.
+	Location  *locationJSON `json:"location,omitempty"`
+	Status    string        `json:"status"` // the live session's state, or stopped
+	SessionID string        `json:"session_id,omitempty"`
+	InUseBy   []string      `json:"in_use_by,omitempty"`
+}
+
+type locationJSON struct {
+	Country   string    `json:"country"`
+	TimeZone  string    `json:"time_zone"`
+	IP        string    `json:"ip,omitempty"`
+	CheckedAt time.Time `json:"checked_at"`
 }
 
 type screenJSON struct {
@@ -82,7 +93,12 @@ func (a *API) profileOut(p profiles.Profile) profileJSON {
 		Screen:          screenJSON{p.Width, p.Height},
 		Proxy:           redactProxy(p.Proxy),
 		HandoffPolicy:   string(p.HandoffPolicy),
+		TimeZone:        p.TimeZone,
+		Locale:          p.Locale,
 		Status:          string(sessions.Stopped),
+	}
+	if l := p.Location; !l.CheckedAt.IsZero() {
+		out.Location = &locationJSON{Country: l.Country, TimeZone: l.TimeZone, IP: l.IP, CheckedAt: l.CheckedAt}
 	}
 	if s, ok := a.m.Live(p.Name); ok {
 		out.Status, out.SessionID, out.InUseBy = string(s.State), s.ID, s.InUseBy

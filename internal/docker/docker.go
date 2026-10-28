@@ -56,6 +56,8 @@ type BrowserSpec struct {
 	// MountCheck is the value the orchestrator wrote to the marker file in
 	// both folders; the entrypoint refuses to start if it doesn't find it.
 	MountCheck string
+	// Env adds BROWSERPIER_* settings for the entrypoint (location and so on).
+	Env []string
 }
 
 // Container is a browser container as Docker lists it.
@@ -189,10 +191,10 @@ func browserConfig(image, seccompOpt string, spec BrowserSpec) (*container.Confi
 	cfg := &container.Config{
 		Image: image,
 		User:  spec.User,
-		Env: []string{
+		Env: append([]string{
 			"BROWSERPIER_SCREEN=" + spec.Screen,
 			"BROWSERPIER_MOUNT_CHECK=" + spec.MountCheck,
-		},
+		}, spec.Env...),
 		Labels: map[string]string{
 			LabelManaged: "true",
 			LabelProfile: spec.Profile,

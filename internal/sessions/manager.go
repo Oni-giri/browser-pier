@@ -3,8 +3,10 @@ package sessions
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -93,6 +95,7 @@ type Manager struct {
 	log          *slog.Logger
 	readyTimeout time.Duration
 	now          func() time.Time
+	geoURL       string // where browsers look up their exit location; "" for nowhere
 
 	ctx    context.Context // ends with Close
 	cancel context.CancelFunc
@@ -196,6 +199,10 @@ func (m *Manager) wait(ctx context.Context, ch <-chan struct{}) error {
 
 func (m *Manager) Profiles() *profiles.Store { return m.profiles }
 
+// SetGeoURL sets the echoip-style endpoint browsers look up their exit
+// location with ("" turns the lookup off). Call it before Start.
+func (m *Manager) SetGeoURL(u string) { m.geoURL = u }
+
 func (m *Manager) Layout() Layout { return m.layout }
 
 func containerName(profile string) string { return "browserpier-" + profile }
@@ -285,6 +292,10 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 		m.abort(l, "", fmt.Sprintf("preparing the profile folder: %v", err))
 		return
 	}
+	if err := m.writeProxyFile(p); err != nil {
+		m.abort(l, "", fmt.Sprintf("handing over the proxy: %v", err))
+		return
+	}
 	// A container left behind by a crash would hold the name.
 	if err := m.rt.RemoveStale(ctx, containerName(p.Name), p.Name); err != nil {
 		m.abort(l, "", err.Error())
@@ -300,6 +311,13 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 		User:       docker.User(m.layout.UID, m.layout.GID),
 		Screen:     p.Screen(),
 		MountCheck: id,
+		Env: []string{
+			"BROWSERPIER_GEOIP_URL=" + m.geoURL,
+			"BROWSERPIER_GEO_COUNTRY=" + p.Location.Country,
+			"BROWSERPIER_GEO_TZ=" + p.Location.TimeZone,
+			"BROWSERPIER_TZ_OVERRIDE=" + p.TimeZone,
+			"BROWSERPIER_LOCALE_OVERRIDE=" + p.Locale,
+		},
 	})
 	if err != nil {
 		m.abort(l, "", fmt.Sprintf("creating the browser container: %v", err))
@@ -421,6 +439,7 @@ func (m *Manager) awaitReady(l *live, cid string) {
 				m.stopContainer(cid)
 				return
 			}
+			m.recordLocation(sock, m.snapshot(l).Profile)
 			l.markReady()
 			return
 		}
@@ -498,6 +517,92 @@ func (m *Manager) abort(l *live, cid, reason string) {
 	m.end(l, lastLog, func(s *Session) { s.State, s.Error = Failed, reason })
 }
 
+// proxyFile is where the proxy URL waits for the entrypoint, which reads
+// and deletes it before Chromium starts (images/chromium/entrypoint).
+const proxyFile = "proxy.json"
+
+// writeProxyFile hands the profile's proxy, credentials included, to the
+// browser container through its control folder, never its environment.
+func (m *Manager) writeProxyFile(p profiles.Profile) error {
+	root, err := os.OpenRoot(m.layout.dir(p.Name, "run"))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	if err := root.Remove(proxyFile); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if p.Proxy == "" {
+		return nil
+	}
+	b, err := json.Marshal(map[string]string{"url": p.Proxy})
+	if err != nil {
+		return err
+	}
+	f, err := root.OpenFile(proxyFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if os.Getuid() == 0 {
+		if err := f.Chown(m.layout.UID, m.layout.GID); err != nil {
+			_ = f.Close()
+			return err
+		}
+	}
+	_, err = f.Write(b)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+// removeProxyFile deletes the credentials if the browser never read them.
+func (m *Manager) removeProxyFile(profile string) {
+	root, err := os.OpenRoot(m.layout.dir(profile, "run"))
+	if err != nil {
+		return
+	}
+	defer func() { _ = root.Close() }()
+	_ = root.Remove(proxyFile)
+}
+
+// recordLocation saves where the browser found itself, so the next start
+// can keep the same time zone (see the entrypoint's decideGeo).
+func (m *Manager) recordLocation(sock, profile string) {
+	ctx, cancel := context.WithTimeout(m.ctx, 5*time.Second)
+	defer cancel()
+	c := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", sock)
+	}}}
+	defer c.CloseIdleConnections()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://control/geo", nil)
+	resp, err := c.Do(req)
+	if err != nil {
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var g struct {
+		IP       string `json:"ip"`
+		Country  string `json:"country"`
+		TimeZone string `json:"time_zone"`
+		Source   string `json:"source"`
+		Warning  string `json:"warning"`
+	}
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&g) != nil {
+		return
+	}
+	if g.Warning != "" {
+		m.log.Warn("browser location", "profile", profile, "warning", g.Warning)
+	}
+	if g.Source != "lookup" {
+		return
+	}
+	loc := profiles.Location{Country: g.Country, TimeZone: g.TimeZone, IP: g.IP, CheckedAt: m.now()}
+	if err := m.profiles.SetLocation(ctx, profile, loc); err != nil {
+		m.log.Warn("saving the browser's location", "profile", profile, "err", err)
+	}
+}
+
 // cleanup reads a stopped container's last log line and removes it.
 func (m *Manager) cleanup(cid string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -512,7 +617,8 @@ func (m *Manager) cleanup(cid string) string {
 	return lastLog
 }
 
-// end makes the session final and releases its profile. If the final
+// end makes the session final and releases its profile, and makes sure no
+// proxy credentials are left in its control folder. If the final
 // state can't be saved after a few tries, the profile is released anyway:
 // the next Start for it, or the next Reconcile, clears the stale row.
 func (m *Manager) end(l *live, lastLog string, final func(*Session)) {
@@ -522,6 +628,7 @@ func (m *Manager) end(l *live, lastLog string, final func(*Session)) {
 	l.sess.UpdatedAt = m.now()
 	s := l.sess
 	m.mu.Unlock()
+	m.removeProxyFile(s.Profile)
 	for i, backoff := range []time.Duration{0, 200 * time.Millisecond, time.Second} {
 		time.Sleep(backoff)
 		err := updateSession(context.Background(), m.db, s)
