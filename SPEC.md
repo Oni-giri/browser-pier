@@ -179,7 +179,12 @@ Typed so the UI can word the request well, each with a free-text detail:
 
 ### Handoff over MCP
 
-When the agent is an MCP client that supports URL elicitation (such as Claude), the handoff tool asks the client to show the link and pause the tool call until the human hands back. Clients without it fall back to the plain link plus long-poll flow above.
+`request_handoff` opens the handoff, then:
+- **Clients that can open URLs for their user** (URL elicitation, such as Claude) are asked to show the link. The tool call waits for the hand-back, up to 4 minutes at a time, then says it's still pending so the agent calls `wait_for_handoff`.
+  - It works on both the session-based 2025-11-25 protocol and the 2026-07-28 multi-round-trip one.
+  - If the person declines the link in the client, the handoff is withdrawn and the agent has its browser back at once.
+- **Other clients** get the link to pass on themselves, and wait with `wait_for_handoff`.
+- **The same rules as the API apply:** a PIN-policy handoff is refused while no handoff PIN is set.
 
 ---
 
@@ -227,12 +232,22 @@ Downloads land in a per-profile folder. The API lists, fetches and deletes them,
 
 ### MCP tools
 
-- **Explicit handles:** `start` returns a `session_id` and every stateful tool takes it as an argument. Nothing depends on the MCP connection staying open, so several browsers can run in one conversation.
-- **Untrusted content:** every piece of page-derived text returned to an agent (snapshots, markdown, page titles) is handled the same way:
-  - wrapped in an untrusted-content fence that says it is data, not instructions
-  - stripped of invisible Unicode and HTML comments
-  - the values of password and one-time-code fields are redacted
-- **Visual-mode actions:** click, type, scroll, key, drag and wait, each optionally returning a screenshot. Screenshots are downscaled server-side to 1280×720, and a zoom action crops a region at full resolution.
+- **Endpoint:** `/mcp` speaks MCP over streamable HTTP and takes an agent token like the API. Each tool calls the API in-process with the caller's token, so scopes, refusals and the agent log are the API's. An MCP session belongs to the token that opened it.
+- **Tools:**
+  - `list_profiles`, `start_browser`, `stop_browser`
+  - `screenshot`, `click`, `type_text`, `press_keys`, `scroll`, `drag`, `wait`, `zoom`
+  - `list_files`
+  - `request_handoff`, `wait_for_handoff`
+- **Explicit handles:** `start_browser` returns a `session_id` and every stateful tool takes it as an argument. Nothing depends on the MCP connection staying open, so several browsers can run in one conversation.
+- **Untrusted content:** every piece of page-derived text returned to an agent (downloaded file names now; snapshots and markdown in v1.1) is handled the same way:
+  - wrapped in an `<untrusted-content>` fence with a random marker the page can't close early, saying it is data, not instructions
+  - stripped of invisible Unicode (zero-width, bidi, tag characters) and HTML comments
+  - password and one-time-code field values redacted (`internal/fence`)
+- **Visual-mode actions:**
+  - Each action can return a screenshot after it.
+  - Screenshots are downscaled server-side to fit 1280×720 (1440×900 becomes 1152×720). Tools take coordinates in the screenshot's pixels, and BrowserPier scales them to the screen.
+  - `zoom` returns a region at full resolution.
+  - Responses are kept short: one line of text, plus the image where there is one.
 
 ---
 

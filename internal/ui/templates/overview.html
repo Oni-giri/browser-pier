@@ -68,7 +68,7 @@
   </section>
 {{end}}
 {{define "code-cell"}}  <section class="code {{.Span}}" aria-labelledby="code-title" data-tabs>
-    <div class="cell-head"><h2 class="cell-title sr-only" id="code-title">Connect an agent</h2>{{template "code-tabs" (list "CDP" "REST")}}</div>
+    <div class="cell-head"><h2 class="cell-title sr-only" id="code-title">Connect an agent</h2>{{template "code-tabs" (list "CDP" "REST" "MCP")}}</div>
     <pre data-panel="CDP"><span class="c">// Playwright</span>
 const browser = await chromium.connectOverCDP(
   <span class="s">"{{wsURL .Base}}/cdp/{{.CDPExample}}"</span>,
@@ -77,6 +77,10 @@ const browser = await chromium.connectOverCDP(
 curl -X POST {{.Base}}/api/sessions \
   -H "Authorization: Bearer $PIER_TOKEN" \
   -d '{"profile": "{{.CDPExample}}"}'</pre>
+    <pre data-panel="MCP" hidden><span class="c"># Claude Code</span>
+claude mcp add --transport http browserpier \
+  {{.Base}}/mcp \
+  --header "Authorization: Bearer $PIER_TOKEN"</pre>
     <a class="btn light wide" href="/agents" style="margin-top:16px">Quick start →</a>
   </section>
 {{end}}

@@ -40,7 +40,7 @@
     </section>
 
     <section class="code span-8" aria-labelledby="qs-title" data-tabs>
-      <div class="cell-head"><h2 class="cell-title" id="qs-title" style="color:#fff">Quick start</h2>{{template "code-tabs" (list "curl" "Python")}}</div>
+      <div class="cell-head"><h2 class="cell-title" id="qs-title" style="color:#fff">Quick start</h2>{{template "code-tabs" (list "curl" "Python" "MCP")}}</div>
       <pre data-panel="curl"><span class="c"># 1. start (or attach to) a profile's browser</span>
 curl -X POST {{.Base}}/api/sessions \
   -H "Authorization: Bearer $PIER_TOKEN" \
@@ -69,9 +69,23 @@ with sync_playwright() as p:
     page.goto("https://mail.google.com")
 
 requests.delete("{{.Base}}/api/sessions/" + s["id"], headers=auth)</pre>
+      <pre data-panel="MCP" hidden><span class="c"># Claude Code</span>
+claude mcp add --transport http browserpier {{.Base}}/mcp \
+  --header "Authorization: Bearer $PIER_TOKEN"
+
+<span class="c"># any MCP client that speaks streamable HTTP</span>
+{"mcpServers": {"browserpier": {
+  "type": "http",
+  "url": "{{.Base}}/mcp",
+  "headers": {"Authorization": "Bearer ${PIER_TOKEN}"}
+}}}
+
+<span class="c"># tools: start_browser, screenshot, click, type_text, press_keys,
+# scroll, drag, wait, zoom, request_handoff, stop_browser…</span></pre>
     </section>
 
-    <section class="cell span-4" aria-labelledby="ep-title">
+    <div class="span-4 side">
+    <section class="cell" aria-labelledby="ep-title">
       <h2 class="cell-title big" id="ep-title" style="margin-bottom:10px">Endpoints</h2>
       <ul class="endpoints">
         <li><span class="m POST">POST</span><code>/api/sessions</code><span>Start or attach to a browser</span></li>
@@ -84,6 +98,12 @@ requests.delete("{{.Base}}/api/sessions/" + s["id"], headers=auth)</pre>
         <li><span class="m GET">GET</span><code>/api/handoffs/{id}</code><span>Wait for the answer</span></li>
       </ul>
     </section>
+
+    <section class="cell" aria-labelledby="mcp-title">
+      <h2 class="cell-title big" id="mcp-title" style="margin-bottom:6px">MCP</h2>
+      <p class="small" style="margin:0;color:var(--ink-2)">Point Claude or any MCP client at <code>/mcp</code> with a token. Handoffs show up as a link the client opens for you, where it supports that.</p>
+    </section>
+    </div>
   </div>
 </div>
 
