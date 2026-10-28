@@ -93,7 +93,15 @@ func (a *API) createHandoff(w http.ResponseWriter, r *http.Request) {
 	h, token, err := a.handoffs.Create(r.Context(), s.ID, tok.Name, handoff.Reason(in.Reason), in.Detail, profiles.HandoffPolicy(in.Require))
 	switch {
 	case errors.Is(err, handoff.ErrOpen):
-		writeError(w, http.StatusConflict, "a handoff is already open for this browser")
+		msg := "a handoff is already open for this browser"
+		if open, err := a.handoffs.Pending(r.Context()); err == nil {
+			for _, o := range open {
+				if o.SessionID == s.ID {
+					msg += ": " + o.ID + "; wait on it with GET /api/handoffs/" + o.ID + " or withdraw it with DELETE"
+				}
+			}
+		}
+		writeError(w, http.StatusConflict, msg)
 		return
 	case errors.Is(err, handoff.ErrNotRunning), errors.Is(err, sessions.ErrNotRunning):
 		writeError(w, http.StatusConflict, "the session isn't running")
@@ -139,6 +147,10 @@ func (a *API) withdrawHandoff(w http.ResponseWriter, r *http.Request) {
 		note += ": " + in.Note
 	}
 	h, err = a.handoffs.Withdraw(r.Context(), h, note)
+	if errors.Is(err, handoff.ErrInUse) {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
 	if err != nil {
 		a.internal(w, "withdrawing a handoff", err)
 		return

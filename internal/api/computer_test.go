@@ -251,3 +251,17 @@ func TestDescribeKeys(t *testing.T) {
 		}
 	}
 }
+
+// An action that ran isn't reported as failed because the screenshot
+// after it did: the agent would do it again.
+func TestComputerActionStandsWhenItsScreenshotFails(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.all, "github", "visual")
+	f.b.mu.Lock()
+	f.b.noScreen = true
+	f.b.mu.Unlock()
+	r, _ := f.raw(f.all, http.MethodPost, "/api/sessions/"+s.ID+"/computer", strings.NewReader(`{"action": "click", "x": 10, "y": 10, "screenshot": true}`), "application/json")
+	if r.StatusCode != http.StatusNoContent || r.Header.Get("X-Screenshot-Error") == "" {
+		t.Fatalf("click with a failing screenshot: %d %q", r.StatusCode, r.Header.Get("X-Screenshot-Error"))
+	}
+}

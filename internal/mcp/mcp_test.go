@@ -3,6 +3,7 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"image"
 	"image/png"
 	"io"
@@ -151,6 +152,9 @@ func (f *fixture) connect(token, version string, elicit func(*sdk.ElicitRequest)
 	if err != nil {
 		f.t.Fatalf("connect (%s): %v", version, err)
 	}
+	if got := cs.InitializeResult().ProtocolVersion; got != version {
+		f.t.Fatalf("asked for %s, got %s", version, got)
+	}
 	f.t.Cleanup(func() { _ = cs.Close() })
 	return cs
 }
@@ -170,7 +174,9 @@ func call(t *testing.T, cs *sdk.ClientSession, tool string, args map[string]any)
 	return res, b.String()
 }
 
-var versions = []string{"2025-11-25", "2026-07-28"}
+// versions are the protocols the endpoint serves. It is stateful, so a
+// 2026-07-28 client falls back to 2025-11-25.
+var versions = []string{"2025-11-25"}
 
 func TestStartScreenshotStop(t *testing.T) {
 	for _, v := range versions {
@@ -347,11 +353,20 @@ func TestScreenToScreenshotScaling(t *testing.T) {
 	if w, h := (screen{1280, 720}).shot(); w != 1280 || h != 720 {
 		t.Fatalf("a small screen is scaled: %dx%d", w, h)
 	}
+	// A tall screen: the height comes out as the browser computes it.
+	tall := screen{640, 728}
+	if w, h := tall.shot(); w != 632 || h != 728*632/640 {
+		t.Fatalf("tall shot %dx%d", w, h)
+	}
+	// A region's far edge can reach the screen's.
+	if x, y := sc.scale(1152, 720); x != 1440 || y != 900 {
+		t.Fatalf("far edge maps to %d,%d", x, y)
+	}
 }
 
 func TestClickIsScaledToTheScreen(t *testing.T) {
 	f := newFixture(t)
-	cs := f.connect(f.all, versions[1], nil)
+	cs := f.connect(f.all, versions[0], nil)
 	s, _, _ := f.m.Start(context.Background(), "google", "")
 	// The centre of a 1152×720 screenshot is the centre of the 1440×900 screen.
 	_, out := call(t, cs, "click", map[string]any{"session_id": s.ID, "x": 576, "y": 360, "double": true})
@@ -362,5 +377,23 @@ func TestClickIsScaledToTheScreen(t *testing.T) {
 	defer f.mu.Unlock()
 	if len(f.clicks) != 1 || !strings.Contains(f.clicks[0], `"x":720`) || !strings.Contains(f.clicks[0], `"y":450`) || !strings.Contains(f.clicks[0], `"double":true`) {
 		t.Fatalf("the browser was asked to click %v", f.clicks)
+	}
+}
+
+// A client whose link dialog fails still leaves the agent the handoff's
+// ID and link, so the browser isn't stuck for 15 minutes.
+func TestFailedElicitationStillGivesTheLink(t *testing.T) {
+	f := newFixture(t)
+	cs := f.connect(f.all, versions[0], func(*sdk.ElicitRequest) (*sdk.ElicitResult, error) {
+		return nil, errors.New("the dialog was closed")
+	})
+	s, _, _ := f.m.Start(context.Background(), "google", "")
+	res, out := call(t, cs, "request_handoff", map[string]any{"session_id": s.ID, "reason": "captcha", "detail": "Solve the CAPTCHA"})
+	open, _ := f.handoffs.Pending(context.Background())
+	if res.IsError || len(open) != 1 || !strings.Contains(out, "/h/") || !strings.Contains(out, open[0].ID) {
+		t.Fatalf("request_handoff: %s (pending %+v)", out, open)
+	}
+	if _, out := call(t, cs, "cancel_handoff", map[string]any{"handoff_id": open[0].ID}); !strings.Contains(out, "Withdrawn") {
+		t.Fatalf("cancel_handoff: %s", out)
 	}
 }

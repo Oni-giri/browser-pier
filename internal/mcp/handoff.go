@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
-	"strings"
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -41,49 +40,46 @@ type handoffOut struct {
 	Message   string    `json:"message"`
 }
 
-// The elicitation's ID in a multi-round-trip result.
-const elicitKey = "handoff"
-
 // requestHandoff opens a handoff. A client that can open URLs for its user
-// (URL elicitation) shows the link and the call waits for the hand-back;
-// any other gets the link to pass on itself.
+// (URL elicitation) is asked to show the link, and the call waits for the
+// hand-back; any other, or one that doesn't show it, gives the agent the
+// link to pass on itself.
 func (s *Server) requestHandoff(ctx context.Context, req *sdk.CallToolRequest, in handoffArgs) (*sdk.CallToolResult, any, error) {
-	// Second round: the client answered the elicitation.
-	if resp, ok := req.Params.InputResponses[elicitKey]; ok && req.Params.RequestState != "" {
-		id, link, _ := strings.Cut(req.Params.RequestState, " ")
-		if res, ok := resp.(*sdk.ElicitResult); ok && res.Action != "accept" {
-			// Headless clients decline without asking anyone, so the link
-			// stays open for the agent to pass on another way.
-			return text("The link wasn't opened in this app (%s). If the person is elsewhere, send it to them yourself: %s\n"+
-				"It works once, for 15 minutes. Then call wait_for_handoff with handoff_id %s; you're paused until they hand back. "+
-				"If nobody will take it, call cancel_handoff.", res.Action, link, id), nil, nil
-		}
-		return s.waitAndReport(ctx, req, id, inCallWait)
-	}
-
 	var h handoffOut
 	body := map[string]string{"reason": in.Reason, "detail": in.Detail, "require": in.Require}
 	if err := s.callJSON(ctx, req.Extra, "POST", "/api/sessions/"+url.PathEscape(in.SessionID)+"/handoff", body, &h); err != nil {
 		return nil, nil, err
 	}
-	if caps := req.ClientCapabilities(); caps != nil && caps.Elicitation != nil && caps.Elicitation.URL != nil {
-		msg := "Your agent needs you in its browser"
-		if in.Detail != "" {
-			msg += ": " + in.Detail
-		}
-		if h.Origin != "" {
-			msg += " (" + h.Origin + ")"
-		}
-		return &sdk.CallToolResult{
-			InputRequests: sdk.InputRequestMap{elicitKey: &sdk.ElicitParams{
-				Mode: "url", URL: h.URL, ElicitationID: h.ID,
-				Message: msg + ". The link works once, for 15 minutes.",
-			}},
-			RequestState: h.ID + " " + h.URL, // the link, in case the client doesn't show it
-		}, nil, nil
+	fallback := func(why string) (*sdk.CallToolResult, any, error) {
+		return text("%sSend this link to the person through your own channel: %s\n"+
+			"It works once, for 15 minutes. Then call wait_for_handoff with handoff_id %s; you're paused until they hand back. "+
+			"If nobody will take it, call cancel_handoff.", why, h.URL, h.ID), nil, nil
 	}
-	return text("Send this link to the person through your own channel: %s\n"+
-		"It works once, for 15 minutes. handoff_id: %s. Then call wait_for_handoff; you're paused until they hand back.", h.URL, h.ID), nil, nil
+	caps := req.ClientCapabilities()
+	if caps == nil || caps.Elicitation == nil || caps.Elicitation.URL == nil || req.Session == nil {
+		return fallback("")
+	}
+	msg := "Your agent needs you in its browser"
+	if in.Detail != "" {
+		msg += ": " + in.Detail
+	}
+	if h.Origin != "" {
+		msg += " (" + h.Origin + ")"
+	}
+	ectx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	res, err := req.Session.Elicit(ectx, &sdk.ElicitParams{Mode: "url", URL: h.URL, ElicitationID: h.ID,
+		Message: msg + ". The link works once, for 15 minutes."})
+	cancel()
+	switch {
+	case err != nil:
+		// The handoff is open whatever the client did: never leave the
+		// agent without its ID, or the browser waits 15 minutes for nobody.
+		return fallback("Your app couldn't show the link. ")
+	case res.Action != "accept":
+		// Headless clients decline without asking anyone.
+		return fallback("The link wasn't opened in your app (" + res.Action + "). If the person is elsewhere: ")
+	}
+	return s.waitAndReport(ctx, req, h.ID, inCallWait)
 }
 
 type handoffIDArgs struct {

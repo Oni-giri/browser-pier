@@ -162,6 +162,9 @@ func (a *API) computer(w http.ResponseWriter, r *http.Request) {
 }
 
 // done answers an action that ran: with the screen if asked, else 204.
+// The action ran either way, so a screenshot that fails doesn't fail the
+// call (an agent would retry it, clicking or paying twice): it answers
+// 204 with X-Screenshot-Error.
 func (a *API) done(w http.ResponseWriter, r *http.Request, s sessions.Session, c computerRequest) {
 	if !c.Screenshot {
 		w.WriteHeader(http.StatusNoContent)
@@ -171,7 +174,18 @@ func (a *API) done(w http.ResponseWriter, r *http.Request, s sessions.Session, c
 	if c.Width > 0 {
 		target += "?width=" + strconv.Itoa(c.Width)
 	}
-	a.sendScreenshot(w, r, s, target)
+	resp, err := a.control(r.Context(), s.Profile, http.MethodGet, target, nil)
+	if err == nil && resp.StatusCode != http.StatusOK {
+		err = fmt.Errorf("the browser answered %d", resp.StatusCode)
+		_ = resp.Body.Close()
+	}
+	if err != nil {
+		w.Header().Set("X-Screenshot-Error", strings.ReplaceAll(err.Error(), "\n", " "))
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	relay(w, resp, "Content-Type", "X-Screen-Width", "X-Screen-Height")
 }
 
 // zoom answers with a region of the screen at full resolution. The region

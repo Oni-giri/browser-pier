@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -74,6 +75,9 @@ func (s *Server) handler(tokenID string) *sdk.StreamableHTTPHandler {
 	if h, ok := s.handlers[tokenID]; ok {
 		return h
 	}
+	if len(s.handlers) >= 32 {
+		s.pruneLocked()
+	}
 	srv := s.newServer()
 	h := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return srv }, &sdk.StreamableHTTPOptions{
 		SessionTimeout: 30 * time.Minute,
@@ -83,6 +87,15 @@ func (s *Server) handler(tokenID string) *sdk.StreamableHTTPHandler {
 	})
 	s.handlers[tokenID] = h
 	return h
+}
+
+// pruneLocked drops the handlers of revoked tokens.
+func (s *Server) pruneLocked() {
+	for id := range s.handlers {
+		if _, err := s.web.Tokens().Get(context.Background(), id); errors.Is(err, auth.ErrTokenNotFound) {
+			delete(s.handlers, id)
+		}
+	}
 }
 
 const instructions = `BrowserPier runs real, persistent Chromium browsers, one per profile, that stay logged in between runs.

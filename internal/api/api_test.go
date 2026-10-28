@@ -32,6 +32,8 @@ type browser struct {
 	mu     sync.Mutex
 	inputs []string // path and body of each input request
 	leaks  []string // credentials that reached the browser
+	// noScreen makes screenshots fail.
+	noScreen bool
 }
 
 func (b *browser) handler() http.Handler {
@@ -59,6 +61,13 @@ func (b *browser) handler() http.Handler {
 		}
 	})
 	mux.HandleFunc("GET /screenshot", func(w http.ResponseWriter, r *http.Request) {
+		b.mu.Lock()
+		broken := b.noScreen
+		b.mu.Unlock()
+		if broken {
+			http.Error(w, "no display", http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "image/png")
 		w.Header().Set("X-Screen-Width", "1440")
 		w.Header().Set("X-Screen-Height", "900")

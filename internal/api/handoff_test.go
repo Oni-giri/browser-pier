@@ -98,3 +98,30 @@ func TestWithdrawHandoff(t *testing.T) {
 		t.Fatalf("second withdraw: %d %+v", code, got)
 	}
 }
+
+func TestCantWithdrawAHandoffAPersonOpened(t *testing.T) {
+	f := newFixture(t)
+	if err := f.web.Admin().SetPIN(context.Background(), "4821"); err != nil {
+		t.Fatal(err)
+	}
+	s := f.start(f.all, "github", "visual")
+	var h handoffJSON
+	if code := f.call(f.all, http.MethodPost, "/api/sessions/"+s.ID+"/handoff", `{"reason": "sensitive_input"}`, &h); code != http.StatusCreated {
+		t.Fatalf("create: %d", code)
+	}
+	// Asking again names the open one, so an agent that lost its ID can recover.
+	var e struct{ Error string }
+	if code := f.call(f.all, http.MethodPost, "/api/sessions/"+s.ID+"/handoff", `{"reason": "captcha"}`, &e); code != http.StatusConflict || !strings.Contains(e.Error, h.ID) {
+		t.Fatalf("second handoff: %d %s", code, e.Error)
+	}
+	hh, _ := f.handoffs.Get(context.Background(), h.ID)
+	if err := f.handoffs.Unlock(context.Background(), hh, "the person's browser"); err != nil {
+		t.Fatal(err)
+	}
+	if code := f.call(f.all, http.MethodDelete, "/api/handoffs/"+h.ID, "", nil); code != http.StatusConflict {
+		t.Fatalf("withdraw while a person has it: %d", code)
+	}
+	if got, _ := f.handoffs.Get(context.Background(), h.ID); got.Status != "pending" {
+		t.Fatalf("withdrawn anyway: %s", got.Status)
+	}
+}

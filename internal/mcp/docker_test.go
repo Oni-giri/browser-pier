@@ -112,7 +112,7 @@ func TestAgentLogsInThroughMCP(t *testing.T) {
 	site := browsertest.NewSite(t, host)
 
 	f := &fixture{t: t, srv: srv}
-	cs := f.connect(secret, versions[1], func(r *sdk.ElicitRequest) (*sdk.ElicitResult, error) {
+	cs := f.connect(secret, versions[0], func(r *sdk.ElicitRequest) (*sdk.ElicitResult, error) {
 		go func() { // the person hands back
 			time.Sleep(300 * time.Millisecond)
 			if h, err := handoffs.Get(context.Background(), r.Params.ElicitationID); err == nil {

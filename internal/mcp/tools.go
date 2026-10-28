@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"image/png"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -14,6 +15,9 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/fence"
 )
+
+// maxScreens bounds the screen-size cache.
+const maxScreens = 1024
 
 // Screenshots go to agents within this size: what models see best, and
 // what costs them the fewest tokens.
@@ -123,19 +127,35 @@ func (s *Server) stopBrowser(ctx context.Context, req *sdk.CallToolRequest, in s
 type screen struct{ w, h int }
 
 // shot is the size screenshots are scaled to: the whole screen, within
-// maxShotW × maxShotH.
+// maxShotW × maxShotH. The height is worked out as the browser's
+// screenshot does, from the width, so the two agree to the pixel.
 func (sc screen) shot() (int, int) {
 	if sc.w <= maxShotW && sc.h <= maxShotH {
 		return sc.w, sc.h
 	}
-	scale := min(float64(maxShotW)/float64(sc.w), float64(maxShotH)/float64(sc.h))
-	return max(1, int(float64(sc.w)*scale)), max(1, int(float64(sc.h)*scale))
+	sw := min(maxShotW, sc.w*maxShotH/sc.h)
+	return max(1, sw), max(1, sc.h*sw/sc.w)
 }
 
-// toScreen turns a point of a screenshot into a point of the screen.
+// toScreen turns a point of a screenshot into a point on the screen.
 func (sc screen) toScreen(x, y int) (int, int) {
+	x, y = sc.scale(x, y)
+	return min(x, sc.w-1), min(y, sc.h-1)
+}
+
+// scale turns screenshot pixels into screen pixels, without keeping to
+// the screen: for a region's far edge.
+func (sc screen) scale(x, y int) (int, int) {
 	sw, sh := sc.shot()
-	return min(x*sc.w/sw, sc.w-1), min(y*sc.h/sh, sc.h-1)
+	return min(max(x, 0)*sc.w/sw, sc.w), min(max(y, 0)*sc.h/sh, sc.h)
+}
+
+// forgetGone drops a session's screen size once the API says it's gone or
+// stopped (it ended some other way than stop_browser).
+func (s *Server) forgetGone(id string, r apiReply) {
+	if r.status == http.StatusNotFound || r.status == http.StatusConflict {
+		s.forgetScreen(id)
+	}
 }
 
 func (s *Server) forgetScreen(id string) {
@@ -157,6 +177,7 @@ func (s *Server) screenOf(ctx context.Context, extra *sdk.RequestExtra, id strin
 		return screen{}, err
 	}
 	if !r.ok() {
+		s.forgetGone(id, r)
 		return screen{}, toolError(r.errorText())
 	}
 	return s.rememberScreen(id, r)
@@ -170,6 +191,9 @@ func (s *Server) rememberScreen(id string, r apiReply) (screen, error) {
 	}
 	sc := screen{w, h}
 	s.screensMu.Lock()
+	if len(s.screens) >= maxScreens {
+		clear(s.screens) // sessions that ended unseen; sizes are asked again
+	}
 	s.screens[id] = sc
 	s.screensMu.Unlock()
 	return sc, nil
@@ -199,6 +223,7 @@ func (s *Server) screenshot(ctx context.Context, req *sdk.CallToolRequest, in se
 		return nil, nil, err
 	}
 	if !r.ok() {
+		s.forgetGone(in.SessionID, r)
 		return nil, nil, toolError(r.errorText())
 	}
 	if sc, err = s.rememberScreen(in.SessionID, r); err != nil {
@@ -220,10 +245,14 @@ func (s *Server) act(ctx context.Context, extra *sdk.RequestExtra, id string, sc
 		return nil, nil, err
 	}
 	if !r.ok() {
+		s.forgetGone(id, r)
 		return nil, nil, toolError(r.errorText())
 	}
 	if shot && strings.HasPrefix(r.header.Get("Content-Type"), "image/") {
 		return shotResult(r.body, sc, done), nil, nil
+	}
+	if e := r.header.Get("X-Screenshot-Error"); shot && e != "" {
+		return text("%s The screenshot after it failed (%s); take one with screenshot.", done, e), nil, nil
 	}
 	return text("%s", done), nil, nil
 }
@@ -346,7 +375,7 @@ func (s *Server) zoom(ctx context.Context, req *sdk.CallToolRequest, in zoomArgs
 		return nil, nil, toolError("give the region a width and a height")
 	}
 	x, y := sc.toScreen(in.X, in.Y)
-	x2, y2 := sc.toScreen(in.X+in.Width, in.Y+in.Height)
+	x2, y2 := sc.scale(in.X+in.Width, in.Y+in.Height)
 	r, err := s.call(ctx, req.Extra, "POST", "/api/sessions/"+url.PathEscape(in.SessionID)+"/computer",
 		map[string]any{"action": "zoom", "x": x, "y": y, "w": max(1, x2-x), "h": max(1, y2-y)})
 	if err != nil {

@@ -181,8 +181,8 @@ Typed so the UI can word the request well, each with a free-text detail:
 
 `request_handoff` opens the handoff, then:
 - **Clients that can open URLs for their user** (URL elicitation, such as Claude) are asked to show the link. The tool call waits for the hand-back, up to 4 minutes at a time, then says it's still pending so the agent calls `wait_for_handoff`.
-  - It works on both the session-based 2025-11-25 protocol and the 2026-07-28 multi-round-trip one.
-  - If the client declines the link (headless clients, such as `claude -p`, do so without asking anyone), the link stays open and the agent gets it to pass on itself, as below. The agent can call `cancel_handoff` if nobody will take it.
+  - If the client declines the link (headless clients, such as `claude -p`, do so without asking anyone) or fails to show it, the link stays open and the agent gets it to pass on itself, as below. The agent can call `cancel_handoff` if nobody will take it.
+  - The endpoint keeps MCP sessions (the 2025-11-25 protocol), since asking the client to show a link needs one. A client on the session-less 2026-07-28 protocol falls back to it.
 - **Other clients** get the link to pass on themselves, and wait with `wait_for_handoff`.
 - **The same rules as the API apply:** a PIN-policy handoff is refused while no handoff PIN is set.
 
@@ -210,7 +210,7 @@ All endpoints take `Authorization: Bearer <agent token>`. The same actions are e
 | WS | `/cdp/{profile}` | API mode: CDP, proxied and token-checked |
 | POST | `/api/sessions/{id}/handoff` | One-time link for a human: `{reason, detail, require?}` |
 | GET | `/api/handoffs/{id}` | Long-poll for done / can't, plus the human's note |
-| DELETE | `/api/handoffs/{id}` | Withdraw a request the agent no longer needs: `{note?}` |
+| DELETE | `/api/handoffs/{id}` | Withdraw a request the agent no longer needs: `{note?}`. Refused (409) once a person has opened the link. |
 
 Starting a session returns its id, the CDP URL (proxied through the orchestrator) and the live view URL.
 
