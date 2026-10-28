@@ -33,7 +33,7 @@ Agents start a browser when they need one. It keeps its cookies and logins, and 
 
 ## Development
 
-Needs Go (version in `go.mod`), [golangci-lint](https://golangci-lint.run) v2 and Docker.
+Needs Go (version in `go.mod`), [golangci-lint](https://golangci-lint.run) v2 and Docker or rootless Podman.
 
 ```sh
 make build        # bin/browserpier
@@ -49,6 +49,19 @@ Configuration is through `BROWSERPIER_*` environment variables:
 |---|---|---|
 | `BROWSERPIER_LISTEN` | `:7437` | Address the HTTP server binds to |
 | `BROWSERPIER_DATA_DIR` | `./data` (`/data` in the image) | Database and one folder per profile |
+| `BROWSERPIER_HOST_DATA_DIR` | detected | The data dir's path on the Docker host, for bind mounts into browser containers. In a container BrowserPier reads it from its own mounts; set it only if that fails. |
+| `BROWSERPIER_BROWSER_IMAGE` | the image built with this version (`edge` for dev builds) | Browser image. BrowserPier starts containers from this image only. |
+| `BROWSERPIER_USERNS_MODE` | none | `keep-id` under rootless Podman, so browsers write profile files as your user |
+
+BrowserPier talks to Docker through the usual `DOCKER_HOST`. The data dir must be on a volume or bind mount when BrowserPier runs in a container, and it needs the Docker socket.
+
+To run the Docker tests on rootless Podman, start its Docker API and point the tests at it:
+
+```sh
+podman system service --time=0 unix://$XDG_RUNTIME_DIR/podman/podman.sock &
+DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock BROWSERPIER_USERNS_MODE=keep-id \
+  BROWSERPIER_TEST_SITE_HOST=host.docker.internal make test-docker   # with a `docker` → `podman` shim on PATH
+```
 
 CI lints, tests and builds every push and pull request, and publishes the orchestrator image to ghcr.io from `main` (tag `edge`) and from `v*` tags.
 
