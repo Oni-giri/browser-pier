@@ -41,12 +41,17 @@ type Web struct {
 	// addresses, so someone holding several links can't spread guesses
 	// across them; it doesn't block other profiles' handoffs.
 	pinProfile *auth.Lockout
+	// pinAll caps wrong PINs across every profile: the PIN is shared, so
+	// links for many profiles mustn't add up to many guesses at it. Its
+	// limit is higher, so one profile's attacker rarely blocks the rest.
+	pinAll *auth.Lockout
 }
 
 func NewWeb(svc *Service, web *auth.Web, live *webrtc.Handler, m *sessions.Manager, log *slog.Logger) *Web {
 	return &Web{svc: svc, web: web, live: live, m: m, log: log,
 		pin:        auth.NewLockout(10, 15*time.Minute, 15*time.Minute),
-		pinProfile: auth.NewLockout(15, 15*time.Minute, 15*time.Minute)}
+		pinProfile: auth.NewLockout(15, 15*time.Minute, 15*time.Minute),
+		pinAll:     auth.NewLockout(30, 15*time.Minute, 15*time.Minute)}
 }
 
 // Register adds the handoff routes.
@@ -201,13 +206,22 @@ func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 		w.render(rw, http.StatusTooManyRequests, view{Step: "pin", H: h, Token: token, TriesLeft: MaxPINFailures - h.PINFailures, Error: "Too many wrong PINs from here. Wait a few minutes."})
 		return
 	}
-	all, _ := w.pinProfile.Begin(h.Profile)
-	if all == nil {
+	prof, _ := w.pinProfile.Begin(h.Profile)
+	if prof == nil {
 		mine.Cancel()
 		w.log.Warn("handoff PINs locked for a profile: too many wrong PINs across its links", "profile", h.Profile)
 		w.render(rw, http.StatusTooManyRequests, view{Step: "pin", H: h, Token: token, TriesLeft: MaxPINFailures - h.PINFailures, Error: "Too many wrong PINs. Wait a few minutes."})
 		return
 	}
+	glob, _ := w.pinAll.Begin("")
+	if glob == nil {
+		mine.Cancel()
+		prof.Cancel()
+		w.log.Warn("handoff PINs locked everywhere: too many wrong PINs across all profiles")
+		w.render(rw, http.StatusTooManyRequests, view{Step: "pin", H: h, Token: token, TriesLeft: MaxPINFailures - h.PINFailures, Error: "Too many wrong PINs. Wait a few minutes."})
+		return
+	}
+	all := attempts{prof, glob}
 	// Reserve this link's try before checking, so parallel guesses can't
 	// all get in before the count does.
 	reserved, err := w.svc.ReservePINTry(r.Context(), h)
@@ -252,7 +266,7 @@ func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mine.Succeed()
-	all.Cancel()
+	all.Cancel() // a right PIN doesn't clear wrong guesses made at other links
 	_ = w.svc.PINRight(r.Context(), h)
 	if w.unlock(rw, r, h, token) {
 		http.Redirect(rw, r, "/h/"+url.PathEscape(token), http.StatusSeeOther)
@@ -317,4 +331,19 @@ func (w *Web) finish(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.render(rw, http.StatusOK, view{Step: "ended", Ended: string(h.Status), H: h})
+}
+
+// attempts ends several lockout attempts the same way.
+type attempts []*auth.Attempt
+
+func (as attempts) Fail() {
+	for _, a := range as {
+		a.Fail()
+	}
+}
+
+func (as attempts) Cancel() {
+	for _, a := range as {
+		a.Cancel()
+	}
 }

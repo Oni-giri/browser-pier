@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -332,5 +333,65 @@ func TestParallelWrongPINsStopAtFive(t *testing.T) {
 	got, _ := f.svc.Get(context.Background(), h.ID)
 	if got.PINFailures != MaxPINFailures || got.Status != Cancelled {
 		t.Fatalf("after 25 parallel guesses: %d failures, %s", got.PINFailures, got.Status)
+	}
+}
+
+func TestWrongPINsAcrossLinksAndProfilesAreCapped(t *testing.T) {
+	_, local, _ := net.ParseCIDR("127.0.0.0/8")
+	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{TrustedProxies: []*net.IPNet{local}})
+	ctx := context.Background()
+	for _, name := range []string{"github", "bank", "mail"} {
+		p := profiles.New(name)
+		p.HandoffPolicy = profiles.PolicyPIN
+		if _, err := f.m.Profiles().Create(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ip := 0
+	guess := func(token, pin string) reply {
+		ip++ // a new address every time, so only the link, profile and global caps apply
+		return f.do(browser(), "POST", "/h/"+token+"/pin", url.Values{"pin": {pin}},
+			http.Header{"X-Forwarded-For": {"203.0.113." + strconv.Itoa(ip)}})
+	}
+	link := func(profile string) string {
+		s, _, err := f.m.Start(ctx, profile, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, token, err := f.svc.Create(ctx, s.ID, "research-bot", SensitiveInput, "Enter the 2FA code", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+	burn := func(profile string) { // five wrong PINs, which cancel the link
+		token := link(profile)
+		for range MaxPINFailures {
+			if r := guess(token, "0000"); r.code != http.StatusUnauthorized && r.code != http.StatusGone {
+				t.Fatalf("%s: wrong PIN answered %d", profile, r.code)
+			}
+		}
+	}
+
+	// Three links for one profile use up its 15 tries; a fourth link
+	// refuses even the right PIN.
+	for range 3 {
+		burn("google")
+	}
+	if r := guess(link("google"), "4821"); r.code != http.StatusTooManyRequests {
+		t.Fatalf("16th try for one profile: %d", r.code)
+	}
+
+	// The PIN is shared, so 30 wrong tries across profiles lock every
+	// profile's links, even one well under its own cap.
+	for range 2 {
+		burn("github")
+	}
+	if r := guess(link("bank"), "4821"); r.code != http.StatusSeeOther {
+		t.Fatalf("right PIN on another profile at 25 wrong overall: %d", r.code)
+	}
+	burn("mail")
+	if r := guess(link("github"), "4821"); r.code != http.StatusTooManyRequests {
+		t.Fatalf("a try after 30 wrong overall: %d", r.code)
 	}
 }
