@@ -394,6 +394,38 @@ func TestWaitSeesAFinishJustBeforeItListens(t *testing.T) {
 	}
 }
 
+func TestSweepCancelsAHandoffWhoseBrowserStopped(t *testing.T) {
+	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
+	ctx := context.Background()
+	h, _ := f.open("")
+	waited := make(chan Handoff, 1)
+	go func() {
+		got, _ := f.svc.Wait(ctx, h.ID, time.Minute)
+		waited <- got
+	}()
+	for listening := false; !listening; time.Sleep(10 * time.Millisecond) {
+		f.svc.mu.Lock()
+		listening = len(f.svc.waiters[h.ID]) > 0
+		f.svc.mu.Unlock()
+	}
+	if _, err := f.m.Stop(ctx, h.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	f.svc.sweep(ctx)
+	var status Status
+	if err := f.svc.db.QueryRow(`SELECT status FROM handoffs WHERE id = ?`, h.ID).Scan(&status); err != nil || status != Cancelled {
+		t.Fatalf("after a sweep: %s, %v", status, err)
+	}
+	select {
+	case got := <-waited:
+		if got.Status != Cancelled {
+			t.Fatalf("waiter got %s", got.Status)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the long-poll didn't wake when the browser stopped")
+	}
+}
+
 func TestParallelRightPINsDontCancel(t *testing.T) {
 	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
 	h, token := f.open("")

@@ -483,8 +483,9 @@ func (s *Service) Wait(ctx context.Context, id string, wait time.Duration) (Hand
 	return s.Get(ctx, id)
 }
 
-// Sweep expires handoffs left pending past their time, every interval,
-// so their browsers go back to the agents.
+// Sweep checks every pending handoff, every interval: one whose time is
+// up expires and one whose browser stopped is cancelled, so the agents
+// waiting on them hear at once and their browsers go back to them.
 func (s *Service) Sweep(ctx context.Context, every time.Duration) {
 	t := time.NewTicker(every)
 	defer t.Stop()
@@ -493,23 +494,27 @@ func (s *Service) Sweep(ctx context.Context, every time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			rows, err := s.db.QueryContext(ctx, `SELECT id FROM handoffs WHERE status = 'pending' AND expires_at <= ?`, s.now().UnixMilli())
-			if err != nil {
-				continue
-			}
-			var ids []string
-			for rows.Next() {
-				var id string
-				if rows.Scan(&id) == nil {
-					ids = append(ids, id)
-				}
-			}
-			_ = rows.Close()
-			for _, id := range ids {
-				if _, err := s.Get(ctx, id); err != nil {
-					s.log.Warn("expiring a handoff", "handoff", id, "err", fmt.Sprint(err))
-				}
-			}
+			s.sweep(ctx)
+		}
+	}
+}
+
+func (s *Service) sweep(ctx context.Context) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM handoffs WHERE status = 'pending'`)
+	if err != nil {
+		return
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	_ = rows.Close()
+	for _, id := range ids {
+		if _, err := s.Get(ctx, id); err != nil { // Get ends it if it should
+			s.log.Warn("checking a handoff", "handoff", id, "err", fmt.Sprint(err))
 		}
 	}
 }
