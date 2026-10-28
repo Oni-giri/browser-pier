@@ -77,7 +77,7 @@
     fitBtn.hidden = !touch;
     stage.classList.toggle("control", control);
     hint.textContent = control
-      ? (touch ? "Tap to click. Pinch to zoom. Type sends text." : keyboard ? "Your keyboard goes to the browser. Esc releases it." : "Click the screen to send your keyboard to the browser.")
+      ? (touch ? `Tap to click. Pinch to zoom. ${typeBtn.textContent} sends text.` : keyboard ? "Your keyboard goes to the browser. Esc releases it." : "Click the screen to send your keyboard to the browser.")
       : "View only. Take control to use the mouse and keyboard.";
   }
 

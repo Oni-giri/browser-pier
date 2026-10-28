@@ -161,6 +161,10 @@ Self-hosted, persistent browsers for AI agents. Agents start a browser when they
 - On a public instance, "Link only" requires HTTPS and shows a warning when chosen.
 - The handoff prompt names only the page's origin (e.g. `accounts.google.com`), never its path or query. Those are controlled by the page and could be used to word a phishing message.
 - After hand-back, the agent is told the page may have changed and must re-read it before acting.
+- **How "works once" is enforced:** the first browser to pass the policy check gets a cookie only it holds (stored hashed); any other browser is refused, even with the PIN.
+- **What "on a public instance" means:** a "Link only" handoff opened over plain HTTP from an address outside the LAN or Tailscale asks for the PIN instead, and says why.
+- **While the link is open:** the person drives the live view from the start, and the agent is paused: its connections close and its input is refused until hand-back, expiry or cancellation.
+- **If the browser stops:** an open handoff is cancelled.
 
 ### Handoff reasons
 
