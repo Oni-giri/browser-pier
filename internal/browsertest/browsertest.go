@@ -70,6 +70,46 @@ func Page(t *testing.T, control *http.Client) *CDP {
 	return nil
 }
 
+// PageVia connects to the first page target listed at listURL (a
+// /json/list endpoint, such as BrowserPier's /cdp/{profile}/json/list),
+// following the WebSocket URL it gives, with header on both requests.
+func PageVia(t *testing.T, listURL string, header http.Header) *CDP {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, listURL, nil)
+	req.Header = header.Clone()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("%s: %d %s", listURL, resp.StatusCode, b)
+	}
+	var targets []struct{ Type, WebSocketDebuggerURL string }
+	if err := json.NewDecoder(resp.Body).Decode(&targets); err != nil {
+		t.Fatal(err)
+	}
+	for _, tg := range targets {
+		if tg.Type != "page" {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		//nolint:bodyclose // after an upgrade the connection owns the body
+		conn, _, err := websocket.Dial(ctx, tg.WebSocketDebuggerURL, &websocket.DialOptions{HTTPHeader: header})
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn.SetReadLimit(64 << 20)
+		c := &CDP{t: t, conn: conn}
+		t.Cleanup(c.Close)
+		return c
+	}
+	t.Fatalf("no page target in %+v", targets)
+	return nil
+}
+
 func (c *CDP) Close() { _ = c.conn.Close(websocket.StatusNormalClosure, "") }
 
 func (c *CDP) Call(method string, params any) json.RawMessage {

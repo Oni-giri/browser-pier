@@ -38,6 +38,13 @@ func main() {
 		fmt.Println(version)
 		return
 	}
+	if flag.Arg(0) == "token" {
+		if err := tokenCommand(flag.Args()[1:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "browserpier token:", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if err := run(log); err != nil {
