@@ -328,7 +328,9 @@ Designs: the "Browser Orchestrator UI" canvas (private to the author). The UI st
 - **Generic (primary):** `deploy/docker-compose.yml` and `deploy/README.md` (the install guide for a fresh VPS).
   - **The orchestrator container:** runs as the installing user (`PUID`/`PGID`) with the Docker socket's group added, and `./data` bind-mounted (its host path is detected).
   - **Ports:** the app listens on 127.0.0.1:7437 unless `BROWSERPIER_BIND` says otherwise (a Tailscale address, say). Live views use 7438 UDP and TCP.
-  - **HTTPS:** the `https` profile adds Caddy (`caddy reverse-proxy`, no access log) for automatic HTTPS. The guide also covers an existing reverse proxy (WebSockets, long timeouts, no query-string logs).
+  - **HTTPS:** the `https` profile adds Caddy for automatic HTTPS, from the shipped `Caddyfile`: no access log, and `?token=` redacted from its error log. The guide also covers an existing reverse proxy (WebSockets, long timeouts, no query strings in any log).
+  - **Trusted proxies:** the compose network has a fixed subnet (`BROWSERPIER_NET`) with fixed addresses, and only Caddy's is trusted for `X-Forwarded-*`. A proxy on the host is trusted by setting the network's gateway instead.
+  - **Image:** `BROWSERPIER_VERSION` defaults to `edge` until the first release.
   - **Configuration:** through environment variables, where an empty value counts as unset. Without `BROWSERPIER_ADMIN_PASSWORD`, the first-run setup page asks for the code printed in the log.
 - **WebRTC on a server:** advertise the public IP (or the Tailscale IP), open one UDP port with a TCP fallback. Optional TURN (v1.1) for viewers on networks that block UDP.
 - **Umbrel:** an app in the author's community app store, with the manifest plus a compose using Umbrel's app proxy and app password.

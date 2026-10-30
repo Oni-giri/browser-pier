@@ -151,3 +151,14 @@ func TestParseMemTotal(t *testing.T) {
 		t.Fatalf("hostMemory = %d, %v", n, err)
 	}
 }
+
+func TestPrivateDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	privateDir(slog.New(slog.DiscardHandler), dir)
+	if info, _ := os.Stat(dir); info.Mode().Perm() != 0o700 {
+		t.Fatalf("mode %v", info.Mode().Perm())
+	}
+}

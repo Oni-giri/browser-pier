@@ -18,10 +18,12 @@ Over the public internet, use HTTPS: a handoff link opened over plain HTTP from 
 ## Install
 
 ```sh
+umask 077   # .env and ./data hold secrets: yours only
 mkdir browserpier && cd browserpier
 curl -fsSLO https://raw.githubusercontent.com/Oni-giri/browser-pier/main/deploy/docker-compose.yml
+curl -fsSLO https://raw.githubusercontent.com/Oni-giri/browser-pier/main/deploy/Caddyfile
 curl -fsSL  https://raw.githubusercontent.com/Oni-giri/browser-pier/main/deploy/.env.example -o .env
-mkdir -p data
+install -d -m 700 data
 ```
 
 Edit `.env`:
@@ -76,15 +78,9 @@ Still:
 
 ## Behind your own proxy
 
-Proxy everything to `127.0.0.1:7437`, WebSockets included (CDP and the live view use them). Pass the real client address and scheme. Turn off access logs, or at least query strings: agents that can't set headers send their token as `?token=` on `/cdp/…`.
+Proxy everything to `127.0.0.1:7437`, WebSockets included (CDP and the live view use them). Pass the real client address and scheme. Keep query strings out of your logs, error logs included: agents that can't set headers send their token as `?token=` on `/cdp/…`. The shipped `Caddyfile` shows how for Caddy.
 
-Caddy:
-
-```
-pier.example.com {
-	reverse_proxy 127.0.0.1:7437
-}
-```
+Caddy: start from the shipped `Caddyfile`, with `reverse_proxy 127.0.0.1:7437`.
 
 nginx:
 
@@ -109,11 +105,13 @@ server {
 }
 ```
 
-BrowserPier believes `X-Forwarded-For` and `X-Forwarded-Proto` only from `BROWSERPIER_TRUSTED_PROXIES`. That's `private` in the compose file, covering loopback and private networks.
+BrowserPier believes `X-Forwarded-For` and `X-Forwarded-Proto` only from `BROWSERPIER_TRUSTED_PROXIES`. In the compose file that's Caddy's fixed address, `10.247.74.3`. With Docker, a proxy on the host reaches BrowserPier from the compose network's gateway: set `BROWSERPIER_TRUSTED_PROXIES=10.247.74.1` in `.env`. Under rootless Podman, every connection to a published port seems to come from the container's own address, so there's no telling your proxy from anyone else; use the bundled Caddy there.
 
 ## Settings
 
 Set in `.env` and passed through by `docker-compose.yml`. Add any other variable from this list to its `environment:`. An empty value means unset.
+
+Leave `BROWSERPIER_LISTEN` and `BROWSERPIER_WEBRTC_PORT` alone with this compose file: its port mappings and the Caddyfile expect 7437 and 7438. To serve the app on another host port, change only the left side of `7437:7437`. To move the live-view port, set `BROWSERPIER_WEBRTC_PORT` and change both sides of both `7438` mappings, since viewers are told the port BrowserPier listens on.
 
 | Variable | Default | What |
 |---|---|---|
@@ -123,7 +121,9 @@ Set in `.env` and passed through by `docker-compose.yml`. Add any other variable
 | `BROWSERPIER_ADMIN_PASSWORD` | unset | The admin password. It wins over one changed in the UI. |
 | `BROWSERPIER_RAM_LIMIT_PERCENT` | 70 | The share of host memory all browsers may use together. Unset: set in Settings. |
 | `BROWSERPIER_FILES_LIMIT_MB` | 1024 | The cap on each profile's downloads and uploads. |
-| `BROWSERPIER_TRUSTED_PROXIES` | none (`private` in compose) | Proxies whose `X-Forwarded-*` headers are believed. |
+| `BROWSERPIER_TRUSTED_PROXIES` | none (Caddy's `10.247.74.3` in compose) | Proxies whose `X-Forwarded-*` headers are believed: addresses, CIDRs, or `private`. |
+| `BROWSERPIER_NET` | `10.247.74` | The compose network's first three numbers (compose only). |
+| `BROWSERPIER_VERSION` | `edge` | The image tag (compose only): `edge` follows the main branch, a release such as `1.0.0` stays put. |
 | `BROWSERPIER_COOKIE_SECURE` | auto | `always` or `never` to override. |
 | `BROWSERPIER_GEOIP_URL` | `https://ifconfig.co/json` | How browsers find their exit location, to match time zone and language. `off` disables it. |
 | `BROWSERPIER_LISTEN` | `:7437` | The app's address inside the container. |
@@ -139,11 +139,20 @@ docker compose pull && docker compose up -d
 
 Running browsers keep running through an update, and the new orchestrator picks them up.
 
-`./data` holds everything: the database and one folder per profile, with its logins. Back it up like a password manager's vault: anyone with a copy can use those logins. To move one profile, use **Export** on its ⋯ menu instead. That gives an encrypted archive.
+`./data` holds everything: the database and one folder per profile, with its logins. Back it up like a password manager's vault: anyone with a copy can use those logins.
+
+Copy it only while nothing writes to it, or the copy may not open:
+1. In BrowserPier, stop every running browser. `docker compose stop` doesn't: browsers keep running without the orchestrator.
+2. `docker compose stop`, so the database is closed.
+3. Copy `./data`, keeping owners and modes (`sudo tar -cpzf backup.tgz data`).
+4. `docker compose up -d`.
+
+To move one profile, use **Export** on its ⋯ menu instead. That gives an encrypted archive, and works while the rest keep running.
 
 ## If something's wrong
 
 - **"can't reach Docker":** `DOCKER_GID` doesn't match the socket's group.
 - **"the data dir … isn't on a volume or bind mount":** keep the `./data:/data` mount.
 - **Live view never connects:** port 7438 isn't open (UDP, and TCP for the fallback), or `BROWSERPIER_WEBRTC_IPS` isn't the address the viewer reaches.
+- **"Pool overlaps with other one on this address space":** `10.247.74.0/24` is taken on this host. In `.env`, set `BROWSERPIER_NET` to other first three numbers (say `10.247.75`) and `BROWSERPIER_TRUSTED_PROXIES` to match (`10.247.75.3`).
 - **Handoff link says it needs HTTPS:** the phone opened it over plain HTTP from outside your network. Use Caddy, or open it on Tailscale.

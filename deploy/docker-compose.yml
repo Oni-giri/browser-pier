@@ -1,7 +1,7 @@
 # BrowserPier on a plain server. See README.md in this folder.
 #
 #   cp .env.example .env    # then edit it
-#   mkdir -p data
+#   install -d -m 700 data
 #   docker compose up -d                   # behind your own HTTPS proxy, or Tailscale
 #   docker compose --profile https up -d   # with Caddy getting a certificate
 #
@@ -10,7 +10,7 @@
 
 services:
   browserpier:
-    image: ghcr.io/oni-giri/browser-pier:${BROWSERPIER_VERSION:-latest}
+    image: ghcr.io/oni-giri/browser-pier:${BROWSERPIER_VERSION:-edge}
     restart: unless-stopped
     # Your user, so the files in ./data are yours. Browsers run as it too.
     user: "${PUID:-1000}:${PGID:-1000}"
@@ -27,9 +27,13 @@ services:
       BROWSERPIER_WEBRTC_IPS: ${BROWSERPIER_WEBRTC_IPS:-}
       BROWSERPIER_RAM_LIMIT_PERCENT: ${BROWSERPIER_RAM_LIMIT_PERCENT:-}
       BROWSERPIER_ADMIN_PASSWORD: ${BROWSERPIER_ADMIN_PASSWORD:-}
-      # Caddy, or your own proxy on this host, talks to BrowserPier over a
-      # private network; its X-Forwarded-For is believed, no one else's.
-      BROWSERPIER_TRUSTED_PROXIES: ${BROWSERPIER_TRUSTED_PROXIES:-private}
+      # Caddy's X-Forwarded-For is believed, no one else's: its address
+      # below. With your own proxy on this host, set it to the network's
+      # gateway (10.247.74.1) instead; set it empty to believe none.
+      BROWSERPIER_TRUSTED_PROXIES: ${BROWSERPIER_TRUSTED_PROXIES-10.247.74.3}
+    networks:
+      default:
+        ipv4_address: ${BROWSERPIER_NET:-10.247.74}.2
     ports:
       # The app. Only on this machine by default: reach it through Caddy,
       # your own proxy, or set BROWSERPIER_BIND to a Tailscale address.
@@ -43,18 +47,33 @@ services:
     profiles: [https]
     restart: unless-stopped
     # Gets and renews a certificate for the domain, and proxies to
-    # BrowserPier, WebSockets included. It keeps no access log, so
-    # tokens in query strings (?token= for CDP) aren't written down.
-    command: caddy reverse-proxy --from ${BROWSERPIER_DOMAIN:-set-BROWSERPIER_DOMAIN-in-.env} --to browserpier:7437
+    # BrowserPier, WebSockets included. See Caddyfile: no access log, and
+    # tokens in query strings (?token= for CDP) are redacted from errors.
+    environment:
+      BROWSERPIER_DOMAIN: ${BROWSERPIER_DOMAIN:-set-BROWSERPIER_DOMAIN-in-.env}
     ports:
       - "80:80"
       - "443:443"
       - "443:443/udp"
     volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
       - browserpier
+    networks:
+      default:
+        ipv4_address: ${BROWSERPIER_NET:-10.247.74}.3
+
+# A network of its own, with fixed addresses, so BrowserPier can believe
+# Caddy and no one else. If 10.247.74.0/24 clashes with a network you
+# use, set BROWSERPIER_NET to other first three numbers, and
+# BROWSERPIER_TRUSTED_PROXIES to match (….3).
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${BROWSERPIER_NET:-10.247.74}.0/24
 
 volumes:
   caddy_data:
