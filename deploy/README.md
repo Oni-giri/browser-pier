@@ -1,3 +1,149 @@
-# Generic deployment
+# Installing BrowserPier on a server
 
-The docker-compose file (orchestrator plus optional Caddy for HTTPS) and install docs for a plain server. Built in PROJ-19; see SPEC.md §12.
+BrowserPier runs as one container. It starts a browser container per running profile through the host's Docker, from its own browser image. These steps are for a fresh Linux VPS or home server with Docker and the Compose plugin. For Umbrel, see `../umbrel/`.
+
+**You need:**
+- Docker 24 or newer with `docker compose`
+- about 1–2 GB of RAM per browser you'll run at once
+- a few GB of disk for profiles
+
+## Choose how you'll reach it
+
+1. **Tailscale or another VPN (recommended).** BrowserPier is reachable only on your tailnet: nothing but the live-view port faces the internet, and handoff links work from your phone as long as it's on the tailnet. Plain HTTP is fine there; handoff links accept it from private and Tailscale addresses.
+2. **A domain, with Caddy** (`--profile https`). Caddy gets and renews a certificate. Use this to reach BrowserPier from anywhere, phones off your VPN included.
+3. **Your own reverse proxy**, if the server already runs one. See [Behind your own proxy](#behind-your-own-proxy).
+
+Over the public internet, use HTTPS: a handoff link opened over plain HTTP from outside your network asks for nothing and opens nothing.
+
+## Install
+
+```sh
+mkdir browserpier && cd browserpier
+curl -fsSLO https://raw.githubusercontent.com/Oni-giri/browser-pier/main/deploy/docker-compose.yml
+curl -fsSL  https://raw.githubusercontent.com/Oni-giri/browser-pier/main/deploy/.env.example -o .env
+mkdir -p data
+```
+
+Edit `.env`:
+- **`PUID`, `PGID`:** your user (`id -u`, `id -g`). `./data` belongs to it, and the browsers run as it.
+- **`DOCKER_GID`:** the Docker socket's group (`stat -c %g /var/run/docker.sock`).
+- **`BROWSERPIER_PUBLIC_URL`:** how you'll open BrowserPier, e.g. `https://pier.example.com` or `http://100.101.102.103:7437`.
+- **`BROWSERPIER_WEBRTC_IPS`:** the address live viewers reach this server at: its public IP, or its Tailscale IP.
+- **With Caddy:** `BROWSERPIER_DOMAIN`, a DNS name already pointing at this server.
+- **With Tailscale:** `BROWSERPIER_BIND`, the server's Tailscale address (`tailscale ip -4`), so the app listens there.
+
+Then start it:
+
+```sh
+docker compose up -d                   # Tailscale, or your own proxy
+docker compose --profile https up -d   # with Caddy
+```
+
+BrowserPier pulls its browser image the first time a profile starts.
+
+## First run
+
+Unless you set `BROWSERPIER_ADMIN_PASSWORD`, BrowserPier asks you to choose the admin password:
+1. Get the one-time setup code from the log: `docker compose logs browserpier | grep setup_code`.
+2. Open BrowserPier and enter the code and your password. The setup page then disappears.
+
+The code keeps a stranger who reaches a fresh server first from claiming it.
+
+Next:
+- **Settings:** set a **handoff PIN**. Handoff links ask for it by default, and agents can't open one while it's unset.
+- **Agents:** create a token per agent. Tokens can also be managed from the command line: `docker compose exec browserpier browserpier token create NAME`.
+
+## Firewall
+
+| Port | Open to | What |
+|---|---|---|
+| 80, 443 (TCP; 443 UDP too) | everyone | Caddy, if you use it |
+| 7438 UDP and TCP | the people who watch or take over browsers | live views (WebRTC) |
+| 7437 TCP | **nobody on the internet** | the app; Caddy or your proxy reach it locally, Tailscale on the tailnet |
+
+Browser containers publish no ports. They're reached only through BrowserPier, behind its token checks.
+
+## The Docker socket
+
+BrowserPier starts browsers through `/var/run/docker.sock`, and **anything that can use the Docker socket controls the host**. A flaw in BrowserPier could therefore become a way into the server. What limits that:
+- BrowserPier starts containers only from its own browser image. Browsers run without capabilities beyond what Chromium's sandbox needs, with no-new-privileges, seccomp, and no published ports.
+- The orchestrator image is distroless and runs as your user, not root.
+
+Still:
+- Prefer a server or VM that runs nothing more sensitive.
+- Keep BrowserPier behind Tailscale where you can.
+- Keep it up to date.
+
+## Behind your own proxy
+
+Proxy everything to `127.0.0.1:7437`, WebSockets included (CDP and the live view use them). Pass the real client address and scheme. Turn off access logs, or at least query strings: agents that can't set headers send their token as `?token=` on `/cdp/…`.
+
+Caddy:
+
+```
+pier.example.com {
+	reverse_proxy 127.0.0.1:7437
+}
+```
+
+nginx:
+
+```nginx
+server {
+    server_name pier.example.com;
+    listen 443 ssl;
+    # ssl_certificate …
+    access_log off;
+    client_max_body_size 8g;   # profile imports
+    location / {
+        proxy_pass http://127.0.0.1:7437;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 1h;     # long-polls and live views
+        proxy_buffering off;       # exports stream as they're made
+    }
+}
+```
+
+BrowserPier believes `X-Forwarded-For` and `X-Forwarded-Proto` only from `BROWSERPIER_TRUSTED_PROXIES`. That's `private` in the compose file, covering loopback and private networks.
+
+## Settings
+
+Set in `.env` and passed through by `docker-compose.yml`. Add any other variable from this list to its `environment:`. An empty value means unset.
+
+| Variable | Default | What |
+|---|---|---|
+| `BROWSERPIER_PUBLIC_URL` | the address used | How people and agents reach BrowserPier. An https URL makes cookies Secure. |
+| `BROWSERPIER_WEBRTC_IPS` | every local address | Addresses advertised to live viewers. |
+| `BROWSERPIER_WEBRTC_PORT` | 7438 | The live-view port, UDP with TCP as the fallback. |
+| `BROWSERPIER_ADMIN_PASSWORD` | unset | The admin password. It wins over one changed in the UI. |
+| `BROWSERPIER_RAM_LIMIT_PERCENT` | 70 | The share of host memory all browsers may use together. Unset: set in Settings. |
+| `BROWSERPIER_FILES_LIMIT_MB` | 1024 | The cap on each profile's downloads and uploads. |
+| `BROWSERPIER_TRUSTED_PROXIES` | none (`private` in compose) | Proxies whose `X-Forwarded-*` headers are believed. |
+| `BROWSERPIER_COOKIE_SECURE` | auto | `always` or `never` to override. |
+| `BROWSERPIER_GEOIP_URL` | `https://ifconfig.co/json` | How browsers find their exit location, to match time zone and language. `off` disables it. |
+| `BROWSERPIER_LISTEN` | `:7437` | The app's address inside the container. |
+| `BROWSERPIER_BROWSER_IMAGE` | this release's | The browser image. Only BrowserPier's own. |
+| `BROWSERPIER_HOST_DATA_DIR` | detected | The data folder's path on the host, if detection fails. |
+| `BROWSERPIER_USERNS_MODE` | unset | `keep-id` under rootless Podman. |
+
+## Updating and backups
+
+```sh
+docker compose pull && docker compose up -d
+```
+
+Running browsers keep running through an update, and the new orchestrator picks them up.
+
+`./data` holds everything: the database and one folder per profile, with its logins. Back it up like a password manager's vault: anyone with a copy can use those logins. To move one profile, use **Export** on its ⋯ menu instead. That gives an encrypted archive.
+
+## If something's wrong
+
+- **"can't reach Docker":** `DOCKER_GID` doesn't match the socket's group.
+- **"the data dir … isn't on a volume or bind mount":** keep the `./data:/data` mount.
+- **Live view never connects:** port 7438 isn't open (UDP, and TCP for the fallback), or `BROWSERPIER_WEBRTC_IPS` isn't the address the viewer reaches.
+- **Handoff link says it needs HTTPS:** the phone opened it over plain HTTP from outside your network. Use Caddy, or open it on Tailscale.

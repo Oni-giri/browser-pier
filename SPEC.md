@@ -325,7 +325,11 @@ Designs: the "Browser Orchestrator UI" canvas (private to the author). The UI st
 
 ## 12. Deployment and packaging
 
-- **Generic (primary):** a `docker-compose.yml` with the orchestrator and an optional Caddy service for automatic HTTPS, or instructions for an existing reverse proxy. Configured through environment variables, with install docs for a fresh VPS.
+- **Generic (primary):** `deploy/docker-compose.yml` and `deploy/README.md` (the install guide for a fresh VPS).
+  - **The orchestrator container:** runs as the installing user (`PUID`/`PGID`) with the Docker socket's group added, and `./data` bind-mounted (its host path is detected).
+  - **Ports:** the app listens on 127.0.0.1:7437 unless `BROWSERPIER_BIND` says otherwise (a Tailscale address, say). Live views use 7438 UDP and TCP.
+  - **HTTPS:** the `https` profile adds Caddy (`caddy reverse-proxy`, no access log) for automatic HTTPS. The guide also covers an existing reverse proxy (WebSockets, long timeouts, no query-string logs).
+  - **Configuration:** through environment variables, where an empty value counts as unset. Without `BROWSERPIER_ADMIN_PASSWORD`, the first-run setup page asks for the code printed in the log.
 - **WebRTC on a server:** advertise the public IP (or the Tailscale IP), open one UDP port with a TCP fallback. Optional TURN (v1.1) for viewers on networks that block UDP.
 - **Umbrel:** an app in the author's community app store, with the manifest plus a compose using Umbrel's app proxy and app password.
 - Browser containers are started by the orchestrator, not listed in the compose file.
