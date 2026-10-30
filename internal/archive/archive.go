@@ -52,8 +52,8 @@ type Profile struct {
 	Locale          string `json:"locale,omitempty"`
 }
 
-// MinPassphrase is the shortest passphrase an export takes.
-const MinPassphrase = 10
+// MinPassphrase and MaxPassphrase bound an export's passphrase.
+const MinPassphrase, MaxPassphrase = 10, 1024
 
 // folders are what an archive carries from a profile's folder.
 var folders = []string{"chrome", "files"}
@@ -73,8 +73,8 @@ var skipped = map[string]bool{
 // to w. Only regular files and folders are read, through os.Root, so
 // links the browser planted can't take it outside dir.
 func Export(w io.Writer, dir string, m Manifest, passphrase string) error {
-	if len(passphrase) < MinPassphrase {
-		return fmt.Errorf("use a passphrase of at least %d characters", MinPassphrase)
+	if len(passphrase) < MinPassphrase || len(passphrase) > MaxPassphrase {
+		return fmt.Errorf("use a passphrase of %d to %d characters", MinPassphrase, MaxPassphrase)
 	}
 	r, err := age.NewScryptRecipient(passphrase)
 	if err != nil {
@@ -135,7 +135,7 @@ func addTree(tw *tar.Writer, dir, top string) error {
 			return err
 		}
 		name := path.Join(top, rel)
-		if skipped[d.Name()] {
+		if skipped[d.Name()] || strings.HasPrefix(d.Name(), ".upload-") { // an upload still being written
 			if d.IsDir() {
 				return fs.SkipDir
 			}
@@ -245,8 +245,10 @@ func Import(r io.Reader, passphrase, dest string, lim Limits) (Manifest, error) 
 	defer func() { _ = root.Close() }()
 	// dest itself stays the orchestrator's, as a new profile's folder is;
 	// only what's inside goes to the browser's user.
-	made := map[string]bool{}
-	tr := tar.NewReader(gz)
+	im := importer{root: root, dest: dest, lim: lim, made: map[string]bool{}}
+	// The tar stream as a whole is bounded too: the reader consumes PAX
+	// and GNU records itself, which no entry or size count sees.
+	tr := tar.NewReader(&budgetReader{r: gz, left: tarBudget(lim)})
 	var total int64
 	for entries := 0; ; entries++ {
 		h, err := tr.Next()
@@ -274,18 +276,18 @@ func Import(r io.Reader, passphrase, dest string, lim Limits) (Manifest, error) 
 		}
 		switch h.Typeflag {
 		case tar.TypeDir:
-			if err := mkdirAll(root, name, lim, made); err != nil {
+			if err := im.mkdirAll(name); err != nil {
 				return m, err
 			}
 		case tar.TypeReg:
+			if !strings.Contains(name, "/") {
+				return m, fmt.Errorf("%q: not a path an export writes", h.Name) // chrome and files are folders
+			}
 			if h.Size < 0 || total+h.Size > lim.MaxBytes {
 				return m, fmt.Errorf("the archive holds more than %d MiB", lim.MaxBytes>>20)
 			}
 			total += h.Size
-			if err := haveRoom(dest, h.Size, lim.KeepFree); err != nil {
-				return m, err
-			}
-			if err := writeFile(root, name, tr, h, lim, made); err != nil {
+			if err := im.writeFile(name, tr, h); err != nil {
 				return m, err
 			}
 		default:
@@ -319,20 +321,67 @@ func entryName(raw string) (string, error) {
 	return name, nil
 }
 
-// mkdirAll makes name and its parents, remembering what it made.
-func mkdirAll(root *os.Root, name string, lim Limits, made map[string]bool) error {
+// tarBudget is how much decompressed tar an import reads at most: the
+// file contents, the manifest, and per entry its headers, a long path's
+// PAX record and padding.
+func tarBudget(lim Limits) int64 {
+	return lim.MaxBytes + 1<<20 + int64(lim.MaxEntries+2)*4<<10
+}
+
+// budgetReader fails once more than left bytes have been read.
+type budgetReader struct {
+	r    io.Reader
+	left int64
+}
+
+func (b *budgetReader) Read(p []byte) (int, error) {
+	if b.left <= 0 {
+		return 0, errors.New("the archive is larger than its contents allow")
+	}
+	if int64(len(p)) > b.left {
+		p = p[:b.left]
+	}
+	n, err := b.r.Read(p)
+	b.left -= int64(n)
+	return n, err
+}
+
+// importer writes an archive's entries under root, counting every folder
+// and file it creates against the limits: one deep path makes many.
+type importer struct {
+	root  *os.Root
+	dest  string
+	lim   Limits
+	made  map[string]bool // folders made
+	nodes int
+}
+
+// create counts one more folder or file of size bytes, before it's made.
+func (im *importer) create(size int64) error {
+	if im.nodes++; im.nodes > im.lim.MaxEntries {
+		return fmt.Errorf("the archive holds more than %d entries", im.lim.MaxEntries)
+	}
+	return haveRoom(im.dest, size, im.lim.KeepFree)
+}
+
+// mkdirAll makes name and its parents. A name already taken by a file
+// fails: Mkdir's ErrExist is only ever a file, as made has every folder.
+func (im *importer) mkdirAll(name string) error {
 	parts := strings.Split(name, "/")
 	for i := range parts {
 		dir := strings.Join(parts[:i+1], "/")
-		if made[dir] {
+		if im.made[dir] {
 			continue
 		}
-		made[dir] = true
-		if err := root.Mkdir(dir, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		if err := im.create(4 << 10); err != nil {
 			return err
 		}
-		if lim.Chown {
-			if err := root.Lchown(dir, lim.UID, lim.GID); err != nil {
+		if err := im.root.Mkdir(dir, 0o700); err != nil {
+			return err
+		}
+		im.made[dir] = true
+		if im.lim.Chown {
+			if err := im.root.Lchown(dir, im.lim.UID, im.lim.GID); err != nil {
 				return err
 			}
 		}
@@ -340,14 +389,15 @@ func mkdirAll(root *os.Root, name string, lim Limits, made map[string]bool) erro
 	return nil
 }
 
-func writeFile(root *os.Root, name string, r io.Reader, h *tar.Header, lim Limits, made map[string]bool) error {
-	if dir := path.Dir(name); dir != "." {
-		if err := mkdirAll(root, dir, lim, made); err != nil {
-			return err
-		}
+func (im *importer) writeFile(name string, r io.Reader, h *tar.Header) error {
+	if err := im.mkdirAll(path.Dir(name)); err != nil {
+		return err
+	}
+	if err := im.create(h.Size); err != nil {
+		return err
 	}
 	// O_EXCL on a tree this import made: nothing is there to follow.
-	f, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := im.root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}
@@ -358,16 +408,20 @@ func writeFile(root *os.Root, name string, r io.Reader, h *tar.Header, lim Limit
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if lim.Chown {
-		if err := root.Lchown(name, lim.UID, lim.GID); err != nil {
+	if im.lim.Chown {
+		if err := im.root.Lchown(name, im.lim.UID, im.lim.GID); err != nil {
 			return err
 		}
 	}
-	_ = root.Chtimes(name, h.ModTime, h.ModTime)
+	_ = im.root.Chtimes(name, h.ModTime, h.ModTime)
 	return nil
 }
 
-// haveRoom fails before a file would leave less than keepFree on dest's disk.
+// keepInodes are the inodes an import leaves free, on disks that count them.
+const keepInodes = 10_000
+
+// haveRoom fails before a file or folder would leave less than keepFree,
+// or fewer than keepInodes inodes, on dest's disk.
 func haveRoom(dest string, size, keepFree int64) error {
 	var st syscall.Statfs_t
 	if err := syscall.Statfs(dest, &st); err != nil {
@@ -376,6 +430,9 @@ func haveRoom(dest string, size, keepFree int64) error {
 	free := int64(st.Bavail) * int64(st.Bsize) //nolint:gosec // block counts fit in int64
 	if free-size < keepFree {
 		return fmt.Errorf("not enough disk space to import this archive (%d MiB free)", free>>20)
+	}
+	if st.Files > 0 && st.Ffree < keepInodes {
+		return errors.New("not enough free inodes on the disk to import this archive")
 	}
 	return nil
 }
