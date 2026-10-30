@@ -286,9 +286,12 @@ type typeArgs struct {
 }
 
 func (s *Server) typeText(ctx context.Context, req *sdk.CallToolRequest, in typeArgs) (*sdk.CallToolResult, any, error) {
-	sc, err := s.screenOf(ctx, req.Extra, in.SessionID)
-	if err != nil {
-		return nil, nil, err
+	var sc screen
+	if in.Screenshot { // the size only matters for the screenshot after
+		var err error
+		if sc, err = s.screenOf(ctx, req.Extra, in.SessionID); err != nil {
+			return nil, nil, err
+		}
 	}
 	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "type", "text": in.Text}, in.Screenshot, "Typed.")
 }
@@ -300,9 +303,12 @@ type keysArgs struct {
 }
 
 func (s *Server) pressKeys(ctx context.Context, req *sdk.CallToolRequest, in keysArgs) (*sdk.CallToolResult, any, error) {
-	sc, err := s.screenOf(ctx, req.Extra, in.SessionID)
-	if err != nil {
-		return nil, nil, err
+	var sc screen
+	if in.Screenshot { // the size only matters for the screenshot after
+		var err error
+		if sc, err = s.screenOf(ctx, req.Extra, in.SessionID); err != nil {
+			return nil, nil, err
+		}
 	}
 	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "key", "keys": strings.Fields(in.Keys)}, in.Screenshot, "Pressed "+in.Keys+".")
 }
@@ -349,9 +355,12 @@ type waitArgs struct {
 }
 
 func (s *Server) wait(ctx context.Context, req *sdk.CallToolRequest, in waitArgs) (*sdk.CallToolResult, any, error) {
-	sc, err := s.screenOf(ctx, req.Extra, in.SessionID)
-	if err != nil {
-		return nil, nil, err
+	var sc screen
+	if in.Screenshot { // the size only matters for the screenshot after
+		var err error
+		if sc, err = s.screenOf(ctx, req.Extra, in.SessionID); err != nil {
+			return nil, nil, err
+		}
 	}
 	ms := int(min(max(in.Seconds, 0), 10) * 1000)
 	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "wait", "ms": ms}, in.Screenshot,
