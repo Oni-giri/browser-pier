@@ -35,9 +35,9 @@ Visual mode was driven only through the address bar, clicks and screenshots. API
 
 None of these is spoofed, by design (SPEC §10). They come from the container:
 
-- **SwiftShader WebGL renderer.** There's no GPU in the container, so WebGL is software-rendered and says so. It's the one red line on sannysoft, and a known server signal. Giving containers the host's GPU would fix it where there is one (follow-up).
-- **No taskbar.** `screen.availHeight` equals `screen.height`, since Xvfb runs no window manager or panel. It's one of CreepJS's "like headless" hints.
-- **A 0×0 window, sometimes, as a page starts.** In about a third of page loads, in both modes, the page's first script sees `outerWidth` and `outerHeight` as 0, which headless browsers report. It reads normally once the page has loaded. This likely comes from running without a window manager too (follow-up).
+- **SwiftShader WebGL renderer.** There's no GPU in the container, so WebGL is software-rendered and says so. It's the one red line on sannysoft, and a known server signal. Giving containers the host's GPU would fix it where there is one (PROJ-30).
+- **No taskbar.** `screen.availHeight` equals `screen.height`, since Xvfb runs no window manager or panel. It's one of CreepJS's "like headless" hints (PROJ-29).
+- **A 0×0 window, sometimes, as a page starts.** In about a third of page loads, in both modes, the page's first script sees `outerWidth` and `outerHeight` as 0, which headless browsers report. It reads normally once the page has loaded. This likely comes from running without a window manager too (PROJ-29).
 - **No speech voices** (`speechSynthesis.getVoices()` is empty), as on many Linux desktops.
 
 ## API mode, specifically
