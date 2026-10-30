@@ -27,10 +27,10 @@ services:
     environment:
       # The app password shown under Info.
       BROWSERPIER_ADMIN_PASSWORD: ${APP_PASSWORD}
-      # Umbrel's proxy reaches BrowserPier from the app network. Its
-      # X-Forwarded-For and -Proto are believed (other apps on that network
-      # could forge them too; BrowserPier's own checks don't rely on them).
-      BROWSERPIER_TRUSTED_PROXIES: ${NETWORK_IP}/16
+      # Umbrel's proxy (in umbreld, umbrelOS 2.0) reaches BrowserPier from
+      # the app network's gateway: only its X-Forwarded-* are believed, not
+      # other apps' on that network.
+      BROWSERPIER_TRUSTED_PROXIES: ${APP_YAKITORI_BROWSERPIER_PROXY_IP:-}
       # This Umbrel's LAN and Tailscale addresses, for live viewers.
       BROWSERPIER_WEBRTC_IPS: ${APP_YAKITORI_BROWSERPIER_WEBRTC_IPS:-}
     ports:
