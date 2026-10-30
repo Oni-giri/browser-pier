@@ -80,9 +80,35 @@ func TestRoundTrip(t *testing.T) {
 	}
 }
 
+// An upload still being written is left out: it would import as a
+// stray partial file.
+func TestExportSkipsUploadsInProgress(t *testing.T) {
+	dir := profileDir(t)
+	if err := os.MkdirAll(filepath.Join(dir, "files/uploads"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "files/uploads/.upload-123"), []byte("part"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := Export(&buf, dir, Manifest{}, pass); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(t.TempDir(), "x")
+	if _, err := Import(&buf, pass, dest, DefaultLimits); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "files/uploads/.upload-123")); err == nil {
+		t.Fatal("exported an upload in progress")
+	}
+}
+
 func TestExportRefusesAShortPassphrase(t *testing.T) {
 	if err := Export(&bytes.Buffer{}, profileDir(t), Manifest{}, "short"); err == nil {
 		t.Fatal("exported with a short passphrase")
+	}
+	if err := Export(&bytes.Buffer{}, profileDir(t), Manifest{}, strings.Repeat("x", MaxPassphrase+1)); err == nil {
+		t.Fatal("exported with a passphrase no import takes")
 	}
 }
 
@@ -136,6 +162,8 @@ func TestImportRefusesWhatAnExportNeverHolds(t *testing.T) {
 		"fifo":        {Name: "chrome/fifo", Typeflag: tar.TypeFifo},
 		"not clean":   {Name: "chrome//x", Typeflag: tar.TypeReg, Size: 1, Mode: 0o600},
 		"backslashes": {Name: `chrome\..\x`, Typeflag: tar.TypeReg, Size: 1, Mode: 0o600},
+		"chrome file": {Name: "chrome", Typeflag: tar.TypeReg, Size: 1, Mode: 0o600},
+		"files file":  {Name: "files", Typeflag: tar.TypeReg, Size: 1, Mode: 0o600},
 	} {
 		dest := filepath.Join(t.TempDir(), "x")
 		if _, err := Import(crafted(t, []tar.Header{h}, body), pass, dest, DefaultLimits); err == nil {
@@ -164,6 +192,29 @@ func TestImportLimits(t *testing.T) {
 	dest = filepath.Join(t.TempDir(), "y")
 	if _, err := Import(crafted(t, many, nil), pass, dest, lim); err == nil {
 		t.Fatal("over the entry cap")
+	}
+	// One header making many folders counts each of them.
+	dest = filepath.Join(t.TempDir(), "z")
+	if _, err := Import(crafted(t, []tar.Header{{Name: "chrome/a/b/c/", Typeflag: tar.TypeDir, Mode: 0o700}}, nil), pass, dest, lim); err == nil {
+		t.Fatal("one deep folder past the entry cap")
+	}
+	if _, err := os.Stat(filepath.Join(dest, "chrome/a/b/c")); err == nil {
+		t.Fatal("made a folder past the entry cap")
+	}
+}
+
+// PAX records the tar reader consumes itself count against the archive's
+// size, though no entry or file size shows them.
+func TestImportBoundsTarMetadata(t *testing.T) {
+	lim := DefaultLimits
+	lim.MaxBytes, lim.MaxEntries = 1<<10, 2
+	h := tar.Header{Name: "chrome/", Typeflag: tar.TypeDir, Mode: 0o700, Format: tar.FormatPAX,
+		PAXRecords: map[string]string{"BROWSERPIER.pad": strings.Repeat("x", 900<<10)}}
+	h2 := h
+	h2.Name = "files/"
+	_, err := Import(crafted(t, []tar.Header{h, h2}, nil), pass, filepath.Join(t.TempDir(), "x"), lim)
+	if err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("PAX padding past the budget: %v", err)
 	}
 }
 

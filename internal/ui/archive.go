@@ -26,11 +26,6 @@ const maxImport = 8 << 30
 // agent API.
 func (u *UI) exportProfile(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	p, err := u.m.Profiles().Get(r.Context(), name)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
 	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
 	pass := r.PostFormValue("passphrase")
 	switch {
@@ -40,7 +35,12 @@ func (u *UI) exportProfile(w http.ResponseWriter, r *http.Request) {
 	case len(pass) < archive.MinPassphrase:
 		done(w, r, "/profiles", "Use a passphrase of at least 10 characters.", true)
 		return
+	case len(pass) > archive.MaxPassphrase:
+		done(w, r, "/profiles", "Use a passphrase of at most 1024 characters.", true)
+		return
 	}
+	// Held before it's read: a profile deleted meanwhile mustn't export
+	// as its old settings with no logins.
 	release, err := u.m.Hold(name)
 	switch {
 	case errors.Is(err, sessions.ErrProfileBusy):
@@ -51,6 +51,11 @@ func (u *UI) exportProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
+	p, err := u.m.Profiles().Get(r.Context(), name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
 	// Fail before the download begins if the folder can't be read: after,
 	// only a cut-off download can say so.
 	if _, err := os.Stat(u.m.Layout().ProfileDir(name)); err != nil && !errors.Is(err, os.ErrNotExist) { //nolint:gosec // an existing profile's name: [a-z0-9-] only
@@ -117,7 +122,11 @@ func (u *UI) importProfile(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case "passphrase":
-			pass = formValue(part)
+			if pass = formValue(part); len(pass) > archive.MaxPassphrase {
+				_ = part.Close()
+				done(w, r, "/profiles", "That passphrase is longer than an export takes: it's the wrong one.", true)
+				return
+			}
 		case "archive":
 			created, msg := u.importArchive(part, name, pass)
 			_ = part.Close()
@@ -133,8 +142,10 @@ func (u *UI) importProfile(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// formValue reads a small form field, up to a byte past
+// archive.MaxPassphrase so a caller can tell a longer one.
 func formValue(r io.Reader) string {
-	b, _ := io.ReadAll(io.LimitReader(r, 4<<10))
+	b, _ := io.ReadAll(io.LimitReader(r, archive.MaxPassphrase+1))
 	return string(b)
 }
 
