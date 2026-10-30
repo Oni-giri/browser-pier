@@ -1,4 +1,6 @@
-manifestVersion: 1
+# umbrelOS 2.0 or later: its proxy, part of umbreld, is the one whose
+# forwarded client addresses BrowserPier believes.
+manifestVersion: 2.0
 id: yakitori-browserpier
 storage:
   dataRoot: data
