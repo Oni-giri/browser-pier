@@ -31,7 +31,7 @@ type Signals struct {
 	// IntlLocale is Intl's default locale: Chromium's interface language.
 	// A person's browser agrees with Languages[0].
 	IntlLocale string `json:"intlLocale"`
-	Chrome            bool     `json:"chrome"` // window.chrome exists
+	Chrome     bool   `json:"chrome"` // window.chrome exists
 	// OuterWidth and OuterHeight are read as the page's first script runs,
 	// when headless (and pages opened over CDP) report 0; AfterLoad once
 	// it has loaded.
