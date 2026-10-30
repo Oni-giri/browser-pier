@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -123,5 +124,33 @@ func TestCantWithdrawAHandoffAPersonOpened(t *testing.T) {
 	}
 	if got, _ := f.handoffs.Get(context.Background(), h.ID); got.Status != "pending" {
 		t.Fatalf("withdrawn anyway: %s", got.Status)
+	}
+}
+
+// A note sent chunked, with no length, is read all the same.
+func TestWithdrawReadsAChunkedNote(t *testing.T) {
+	f := newFixture(t)
+	if err := f.web.Admin().SetPIN(context.Background(), "4821"); err != nil {
+		t.Fatal(err)
+	}
+	s := f.start(f.all, "github", "visual")
+	var h handoffJSON
+	if code := f.call(f.all, http.MethodPost, "/api/sessions/"+s.ID+"/handoff", `{"reason": "captcha"}`, &h); code != http.StatusCreated {
+		t.Fatalf("create: %d", code)
+	}
+	pr, pw := io.Pipe()
+	go func() {
+		_, _ = io.WriteString(pw, `{"note": "not needed after all"}`)
+		_ = pw.Close()
+	}()
+	req, _ := http.NewRequest(http.MethodDelete, f.srv.URL+"/api/handoffs/"+h.ID, pr)
+	req.Header.Set("Authorization", "Bearer "+f.all)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if got, _ := f.handoffs.Get(context.Background(), h.ID); resp.StatusCode != http.StatusOK || !strings.Contains(got.Note, "not needed after all") {
+		t.Fatalf("withdraw with a chunked note: %d, note %q", resp.StatusCode, got.Note)
 	}
 }

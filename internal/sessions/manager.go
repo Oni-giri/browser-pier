@@ -109,6 +109,8 @@ type Manager struct {
 
 	mu   sync.Mutex
 	live map[string]*live // by profile name
+	// inputsDone is signalled, with mu, when an agent input action ends.
+	inputsDone *sync.Cond
 
 	// admit is held from checking there is room for a new browser to
 	// recording its session, so two starts can't both squeeze in.
@@ -132,6 +134,8 @@ type live struct {
 	lastActivity time.Time
 	// lastAgentInput is when an agent last clicked or typed.
 	lastAgentInput time.Time
+	// inputs counts agent input actions under way (AgentInput leases).
+	inputs int
 	// human is set while a person has control from the live view.
 	human bool
 	// viewers counts open live views.
@@ -163,7 +167,7 @@ func NewManager(db *sql.DB, rt Runtime, layout Layout, log *slog.Logger) (*Manag
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Manager{
+	m := &Manager{
 		db:           db,
 		profiles:     profiles.NewStore(db),
 		rt:           rt,
@@ -174,7 +178,9 @@ func NewManager(db *sql.DB, rt Runtime, layout Layout, log *slog.Logger) (*Manag
 		ctx:          ctx,
 		cancel:       cancel,
 		live:         map[string]*live{},
-	}, nil
+	}
+	m.inputsDone = sync.NewCond(&m.mu)
+	return m, nil
 }
 
 // Close stops tracking sessions. Browsers keep running; Reconcile picks them
@@ -942,6 +948,11 @@ func (m *Manager) SetNeedsHelp(id string, needsHelp bool) (Session, error) {
 			// The agent is paused while a person has the browser: its
 			// connections close, and new ones are refused until hand-back.
 			l.disconnectLocked()
+			// Input already on its way finishes before the person gets
+			// the browser; new input is refused from now on.
+			for l.inputs > 0 {
+				m.inputsDone.Wait()
+			}
 		}
 		if to == Running {
 			l.lastActivity = m.now() // idle time starts at hand-back
