@@ -204,7 +204,27 @@ func run(log *slog.Logger) error {
 			}
 		},
 	})
-	return serve(ctx, ln, newHandler(web, agentAPI, live, handoff.NewWeb(handoffs, web, live, mgr, log), app, log), log)
+	err = serve(ctx, ln, newHandler(web, agentAPI, live, handoff.NewWeb(handoffs, web, live, mgr, log), app, log), log)
+	if cfg.StopBrowsersOnExit {
+		// After serve: no request can start another browser meanwhile.
+		stopBrowsers(mgr, log)
+	}
+	return err
+}
+
+// stopBrowsers stops every browser on the way out; each closes gracefully
+// within its container's stop timeout, all at once.
+func stopBrowsers(mgr *sessions.Manager, log *slog.Logger) {
+	n := len(mgr.List())
+	if n == 0 {
+		return
+	}
+	log.Info("stopping every browser before exiting", "browsers", n)
+	ctx, cancel := context.WithTimeout(context.Background(), docker.StopTimeout+15*time.Second)
+	defer cancel()
+	if err := mgr.StopAll(ctx); err != nil {
+		log.Error("stopping the browsers", "err", err)
+	}
 }
 
 // perBrowser is the memory a new browser is expected to need when

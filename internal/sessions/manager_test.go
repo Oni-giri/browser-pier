@@ -749,3 +749,31 @@ func TestProxyAndLocationHandover(t *testing.T) {
 		t.Fatal("the proxy credentials were left in the control folder")
 	}
 }
+
+// StopAll ends every browser as a clean stop, not a failure, and no new
+// one starts afterwards.
+func TestStopAll(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.m.Profiles().Create(context.Background(), profiles.New("mail")); err != nil {
+		t.Fatal(err)
+	}
+	a := f.start(f.m)
+	b, _, err := f.m.Start(context.Background(), "mail", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.StopAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{a.ID, b.ID} {
+		if got := f.stored(id); got.State != Stopped {
+			t.Fatalf("session %s: %s (%s)", id, got.State, got.Error)
+		}
+	}
+	if f.rt.Count() != 0 {
+		t.Fatal("a browser container is left")
+	}
+	if _, _, err := f.m.Start(context.Background(), "google", ""); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Start after StopAll = %v", err)
+	}
+}

@@ -63,6 +63,10 @@ type Config struct {
 	// FilesLimitMB caps each profile's downloads and uploads together, in
 	// MiB (BROWSERPIER_FILES_LIMIT_MB); the oldest go first. 0 is no cap.
 	FilesLimitMB int
+	// StopBrowsersOnExit stops every browser when the orchestrator stops
+	// (BROWSERPIER_STOP_BROWSERS_ON_EXIT), as Umbrel expects of an app.
+	// Otherwise they keep running for the next one, through an update.
+	StopBrowsersOnExit bool
 	// TrustedProxies are the networks whose X-Forwarded-For and
 	// X-Forwarded-Proto are believed (BROWSERPIER_TRUSTED_PROXIES: CIDRs,
 	// comma-separated, or "private"). Empty trusts none.
@@ -169,6 +173,10 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	limit := get("BROWSERPIER_FILES_LIMIT_MB", "1024")
 	if c.FilesLimitMB, err = strconv.Atoi(limit); err != nil || c.FilesLimitMB < 0 {
 		return Config{}, fmt.Errorf("BROWSERPIER_FILES_LIMIT_MB: want a number of MiB (0 for no cap), got %q", limit)
+	}
+	stopOnExit := get("BROWSERPIER_STOP_BROWSERS_ON_EXIT", "false")
+	if c.StopBrowsersOnExit, err = strconv.ParseBool(stopOnExit); err != nil {
+		return Config{}, fmt.Errorf("BROWSERPIER_STOP_BROWSERS_ON_EXIT: want true or false, got %q", stopOnExit)
 	}
 	if c.TrustedProxies, err = parseProxies(get("BROWSERPIER_TRUSTED_PROXIES", "")); err != nil {
 		return Config{}, err

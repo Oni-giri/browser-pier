@@ -113,6 +113,8 @@ type Manager struct {
 	mu   sync.Mutex
 	live map[string]*live // by profile name
 	held map[string]bool  // profiles whose folder is being exported or imported (Hold)
+	// draining is set by StopAll: no browser starts any more.
+	draining bool
 	// inputsDone is signalled, with mu, when an agent input action ends.
 	inputsDone *sync.Cond
 
@@ -309,6 +311,9 @@ func (m *Manager) hasLive(profile string) bool {
 
 // begin records a new Starting session. m.mu must be held.
 func (m *Manager) begin(ctx context.Context, profile string, mode profiles.Mode) (*live, profiles.Profile, error) {
+	if m.draining {
+		return nil, profiles.Profile{}, ErrClosed
+	}
 	if m.held[profile] {
 		return nil, profiles.Profile{}, ErrProfileHeld
 	}
