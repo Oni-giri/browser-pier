@@ -338,7 +338,7 @@ Designs: the "Browser Orchestrator UI" canvas (private to the author). The UI st
   - **Ports:** Umbrel opens it on **7436** (7437 is taken by another app in Umbrel's store); BrowserPier still listens on 7437 inside. Live views publish 7438 UDP and TCP directly.
   - **Live-view addresses:** `exports.sh` reads the host's own addresses (LAN and Tailscale, not Docker's bridges) when the app starts, since the container can't see them.
   - **Trusted proxies:** only the app network's gateway, which Umbrel's proxy (part of umbreld since umbrelOS 2.0) connects from. Other apps on that network can't forge `X-Forwarded-*`. On older umbrelOS, whose proxy was a container, forwarded headers aren't believed.
-  - **Stopping:** a `pre-stop` hook stops this instance's browsers gracefully, so stopping, updating or uninstalling the app in Umbrel ends its sessions (logins are kept). This differs from the generic install, where browsers keep running through an update.
+  - **Stopping:** with `BROWSERPIER_STOP_BROWSERS_ON_EXIT=true`, BrowserPier stops its browsers on the way out, through the normal stop, once it accepts no more requests. So stopping, updating or uninstalling the app in Umbrel ends its sessions (logins are kept). This differs from the generic install, where browsers keep running through an update. A `post-stop` hook stops any browser left over.
   - The Docker socket mount keeps it out of Umbrel's official store, whose rules forbid it.
 - Browser containers are started by the orchestrator, not listed in the compose file.
 - App data holds the database and one folder per profile.

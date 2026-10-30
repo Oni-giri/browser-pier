@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Stops this BrowserPier's browsers before the app stops (also on restart,
-# update and uninstall): BrowserPier leaves them running when it stops
-# itself. `docker stop` closes Chromium gracefully, so logins are kept.
+# A fallback, after the app stops (also on restart, update and uninstall):
+# BrowserPier stops its browsers itself on the way out
+# (BROWSERPIER_STOP_BROWSERS_ON_EXIT), so this only catches any it didn't,
+# say if it was killed. `docker stop` closes Chromium gracefully, so logins
+# are kept; BrowserPier records those sessions as failed at its next start.
 set -euo pipefail
 
 APP_DIR="${APP_DATA_DIR:-$(readlink -f "$(dirname "${BASH_SOURCE[0]}")/..")}"
@@ -18,6 +20,6 @@ fi
 
 mapfile -t browsers < <(docker ps -q --filter "label=io.browserpier.managed" --filter "label=io.browserpier.instance=${instance}")
 if (( ${#browsers[@]} > 0 )); then
-  echo "BrowserPier: stopping ${#browsers[@]} browser(s)"
+  echo "BrowserPier: stopping ${#browsers[@]} browser(s) left running"
   docker stop "${browsers[@]}" >/dev/null
 fi

@@ -10,12 +10,15 @@
   - It mounts the Docker socket to start browsers, which is why this app can't go in Umbrel's official store.
   - Live views use port 7438, UDP and TCP, published directly.
 - **`exports.sh`:** read on the host when the app starts: the host's LAN and Tailscale addresses, for live viewers, and the Docker socket's group.
-- **`hooks/pre-stop`:** stops this BrowserPier's browsers gracefully whenever Umbrel stops, restarts, updates or uninstalls the app.
+- **Stopping:** with `BROWSERPIER_STOP_BROWSERS_ON_EXIT`, BrowserPier stops its browsers gracefully whenever Umbrel stops, restarts, updates or uninstalls the app. **`hooks/post-stop`** then stops any it missed, if it was killed, say.
 - **`data/`:** the app's data folder: the database and one folder per profile.
 
 ## Publishing
 
-1. Pin the image. `docker-compose.yml` uses `edge` until the first release (PROJ-28). Then set `image:` to `ghcr.io/oni-giri/browser-pier:<version>@sha256:<digest>`, with the multi-arch index digest (`docker buildx imagetools inspect`), and set `version:` in `umbrel-app.yml` to match.
+1. Pin the images. `docker-compose.yml` uses `edge` until the first release (PROJ-28). Then:
+   - set `image:` to `ghcr.io/oni-giri/browser-pier:<version>@sha256:<digest>`, with the multi-arch index digest (`docker buildx imagetools inspect`)
+   - set `BROWSERPIER_BROWSER_IMAGE` to `ghcr.io/oni-giri/browser-pier-chromium:<version>@sha256:<digest>`
+   - set `version:` in `umbrel-app.yml` to match
 2. Copy `yakitori-browserpier/` into the root of the store repository and push.
 3. On the Umbrel: App Store → ⋯ → Community App Stores → add `https://github.com/Oni-giri/yakitoris-app-store`, then install BrowserPier.
 

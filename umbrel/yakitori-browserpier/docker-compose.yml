@@ -10,9 +10,13 @@ services:
       PROXY_AUTH_WHITELIST: "/api/*,/cdp/*,/mcp,/mcp/*,/h/*,/static/*"
 
   web:
-    # TODO(PROJ-28): pin to the first release, as 1.0.0@sha256:…
+    # TODO(PROJ-28): pin to the first release, as 1.0.0@sha256:…, and
+    # BROWSERPIER_BROWSER_IMAGE below to the matching browser image.
     image: ghcr.io/oni-giri/browser-pier:edge
     restart: on-failure
+    # Time to stop every browser gracefully on the way out (each gets 30s,
+    # all at once).
+    stop_grace_period: 1m
     # Umbrel's user, who owns app data; browsers run as it too. BrowserPier
     # makes ./data private to it (0700) at start.
     user: "1000:1000"
@@ -31,6 +35,9 @@ services:
       # the app network's gateway: only its X-Forwarded-* are believed, not
       # other apps' on that network.
       BROWSERPIER_TRUSTED_PROXIES: ${APP_YAKITORI_BROWSERPIER_PROXY_IP:-}
+      # Stopping the app in Umbrel stops its browsers too, each recorded as
+      # a clean stop. hooks/post-stop catches any left over.
+      BROWSERPIER_STOP_BROWSERS_ON_EXIT: "true"
       # This Umbrel's LAN and Tailscale addresses, for live viewers.
       BROWSERPIER_WEBRTC_IPS: ${APP_YAKITORI_BROWSERPIER_WEBRTC_IPS:-}
     ports:
