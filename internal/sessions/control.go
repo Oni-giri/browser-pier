@@ -1,6 +1,9 @@
 package sessions
 
-import "time"
+import (
+	"sync"
+	"time"
+)
 
 // agentQuiet is how long after an agent's last click or keystroke a
 // person can take control: within it, the agent counts as driving.
@@ -8,19 +11,29 @@ const agentQuiet = 5 * time.Second
 
 // AgentInput records an agent's click or keystroke. It fails while a
 // person has control.
-func (m *Manager) AgentInput(id string) error {
+//
+// It is a lease: call done once the browser has answered. A handoff
+// (Needs help) waits for leases to end before the person gets the
+// browser, and refuses new ones, so no agent input lands under them.
+func (m *Manager) AgentInput(id string) (done func(), err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.findLocked(id)
 	if l == nil || (l.sess.State != Running && l.sess.State != NeedsHelp) {
-		return ErrNotRunning
+		return nil, ErrNotRunning
 	}
-	if l.human {
-		return ErrHumanDriving
+	if l.human || l.sess.State == NeedsHelp {
+		return nil, ErrHumanDriving
 	}
 	now := m.now()
 	l.lastActivity, l.lastAgentInput = now, now
-	return nil
+	l.inputs++
+	return sync.OnceFunc(func() {
+		m.mu.Lock()
+		l.inputs--
+		m.inputsDone.Broadcast()
+		m.mu.Unlock()
+	}), nil
 }
 
 // TakeControl gives a person in the live view the mouse and keyboard.

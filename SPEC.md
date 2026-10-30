@@ -241,7 +241,7 @@ Downloads land in a per-profile folder. The API lists, fetches and deletes them,
   - `request_handoff`, `wait_for_handoff`, `cancel_handoff`
 - **Explicit handles:** `start_browser` returns a `session_id` and every stateful tool takes it as an argument. Nothing depends on the MCP connection staying open, so several browsers can run in one conversation.
 - **Untrusted content:** every piece of page-derived text returned to an agent (downloaded file names now; snapshots and markdown in v1.1) is handled the same way:
-  - wrapped in an `<untrusted-content>` fence with a random marker the page can't close early, saying it is data, not instructions
+  - wrapped in an `<untrusted-content-…>` fence whose tag name carries a random marker, so the page can't write the closing tag, saying it is data, not instructions (look-alike tags in the text are defused)
   - stripped of invisible Unicode (zero-width, bidi, tag characters) and HTML comments
   - password and one-time-code field values redacted (`internal/fence`)
 - **Visual-mode actions:**

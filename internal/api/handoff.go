@@ -1,7 +1,10 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -139,8 +142,19 @@ func (a *API) withdrawHandoff(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Note string `json:"note"`
 	}
-	if r.ContentLength > 0 && !readJSON(w, r, &in) {
+	// The note is optional: read whatever body came, chunked or not.
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 8<<10))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "body too large")
 		return
+	}
+	if len(bytes.TrimSpace(raw)) > 0 {
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&in); err != nil || dec.More() {
+			writeError(w, http.StatusBadRequest, `want {"note": "..."} or nothing`)
+			return
+		}
 	}
 	note := "the agent withdrew it"
 	if in.Note != "" {

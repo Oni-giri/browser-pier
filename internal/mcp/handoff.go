@@ -120,7 +120,11 @@ func (s *Server) waitAndReport(ctx context.Context, req *sdk.CallToolRequest, id
 		left := time.Until(deadline)
 		step := min(left, 20*time.Second)
 		var h handoffOut
-		path := "/api/handoffs/" + url.PathEscape(id) + "?wait=" + strconv.Itoa(max(int(step/time.Second), 0))
+		secs := 0
+		if step > 0 {
+			secs = int((step + time.Second - 1) / time.Second) // up: a zero wait would spin
+		}
+		path := "/api/handoffs/" + url.PathEscape(id) + "?wait=" + strconv.Itoa(secs)
 		if err := s.callJSON(ctx, req.Extra, "GET", path, nil, &h); err != nil {
 			return nil, nil, err
 		}
