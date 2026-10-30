@@ -24,6 +24,8 @@ import (
 func TestVisualModeLooksLikeAPerson(t *testing.T) {
 	a := newRealAPI(t)
 	det := browsertest.NewDetector(t, siteHost(t))
+	// Exiting in Germany, so the language checks below aren't en-US's.
+	a.m.SetGeoURL(browsertest.NewSite(t, siteHost(t)).URL + "/geo")
 	name := fmt.Sprintf("b%d", time.Now().UnixNano()%1e9)
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", "browserpier-"+name).Run() })
 	if code := a.do(http.MethodPost, "/api/profiles", fmt.Sprintf(`{"name": %q, "default_mode": "visual"}`, name), nil); code != http.StatusCreated {
@@ -113,6 +115,10 @@ func looksLikeChrome(t *testing.T, s browsertest.Signals) {
 	}
 	if s.WebGLRenderer == "" {
 		t.Errorf("no WebGL: %s", s.WebGLVendor)
+	}
+	// Intl takes Chromium's interface language, which is just "de".
+	if len(s.Languages) == 0 || s.Languages[0] != "de-DE" || !strings.HasPrefix(s.IntlLocale, "de") || s.TimeZone != "Europe/Berlin" {
+		t.Errorf("exiting in Germany: languages %v, Intl %s, time zone %s", s.Languages, s.IntlLocale, s.TimeZone)
 	}
 }
 

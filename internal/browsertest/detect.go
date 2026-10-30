@@ -28,6 +28,9 @@ type Signals struct {
 	Brands            []string `json:"brands"`
 	Plugins           int      `json:"plugins"`
 	Languages         []string `json:"languages"`
+	// IntlLocale is Intl's default locale: Chromium's interface language.
+	// A person's browser agrees with Languages[0].
+	IntlLocale string `json:"intlLocale"`
 	Chrome            bool     `json:"chrome"` // window.chrome exists
 	// OuterWidth and OuterHeight are read as the page's first script runs,
 	// when headless (and pages opened over CDP) report 0; AfterLoad once
@@ -74,6 +77,7 @@ const detectPage = `<!doctype html><title>Detector</title><pre id="out">checking
   s.brands = (navigator.userAgentData?.brands || []).map(b => b.brand);
   s.plugins = navigator.plugins.length;
   s.languages = [...navigator.languages];
+  s.intlLocale = Intl.DateTimeFormat().resolvedOptions().locale;
   s.chrome = typeof window.chrome === 'object' && window.chrome !== null;
   s.outerWidth = outerWidth; s.outerHeight = outerHeight;
   s.screenWidth = screen.width; s.screenHeight = screen.height;
