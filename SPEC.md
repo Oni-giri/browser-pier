@@ -68,13 +68,17 @@ Self-hosted, persistent browsers for AI agents. Agents start a browser when they
 - **Chrome launch setup:**
   - Drop `--enable-automation` and set `--disable-blink-features=AutomationControlled`.
   - `--use-angle=swiftshader --enable-unsafe-swiftshader`, so WebGL works in a container (software rendering on SwiftShader; this combination is checked in CI).
-  - `--webrtc-ip-handling-policy=disable_non_proxied_udp`, so a proxied profile doesn't leak the host IP.
+  - `--webrtc-ip-handling-policy=disable_non_proxied_udp`, so WebRTC sends no UDP, which would go around the forwarder (see Egress) and, behind a proxy, leak the host IP.
   - No component updates, background networking or first-run screens.
   - `--password-store=basic`, so cookies decrypt the same way in every container and logins survive image updates.
 - **Graceful shutdown:** Chrome is closed cleanly and waited on before its container stops, so recent cookie writes are never lost. The entry process runs as PID 1 and handles stop signals itself. On SIGTERM it closes Chrome through CDP's `Browser.close`, not a signal: Chrome's own SIGTERM handler exits before flushing the cookie store, which loses a login made in the last half minute.
-- **Egress:** when a profile has a proxy (HTTP, HTTPS or SOCKS5, with a username and password), a small forwarding proxy in the container adds the credentials (Chrome's `--proxy-server` can't take them) and counts traffic.
-  - Chromium talks SOCKS5 to the forwarder and sends it host names, which go on to the upstream proxy to resolve. Chromium resolves no name itself (`--host-resolver-rules`), DNS-over-HTTPS is off by policy, and there is no DIRECT fallback: if the forwarder or the proxy is down, pages fail rather than going out directly.
+- **Egress:** every connection Chromium makes goes through a small SOCKS5 forwarder in the container (`--proxy-server`, with `--proxy-bypass-list=<-loopback>` so loopback and link-local addresses don't skip it). Chromium resolves no name itself (`--host-resolver-rules`), DNS-over-HTTPS is off by policy, and there is no DIRECT fallback: if the forwarder or the proxy is down, pages fail rather than going out directly.
+  - **The local network is off limits:** pages are untrusted, so the forwarder refuses private addresses (the Docker host through the bridge, its other containers, the LAN; `10/8`, `172.16/12`, `192.168/16`, `100.64/10` where Tailscale lives, `fc00::/7`) and the host's own addresses as `BROWSERPIER_WEBRTC_IPS` gives them. It always refuses loopback, link-local (the cloud metadata endpoint `169.254.169.254`) and addresses that aren't one host. IPv6 addresses that carry an IPv4 one (mapped, NAT64, 6to4) are judged by it.
+  - **Without an upstream proxy** it resolves names itself, refuses a name if any of its addresses is refused, and connects to the addresses it checked, so a second DNS answer can't swap in a private one.
+  - **Opt-in:** a profile can let its pages reach the local network, for a router's admin page, say. Only the admin sets it, in the web UI; agents can't, through the API. Loopback and link-local stay refused.
+  - **With an upstream proxy** (HTTP, HTTPS or SOCKS5, with a username and password), the forwarder adds the credentials (Chrome's `--proxy-server` can't take them) and counts traffic. Host names go on to the upstream proxy to resolve, on its own network, so there only addresses and `localhost` names are checked.
   - The credentials reach the container as a file in its control folder that the entrypoint reads and deletes before Chromium starts, never as an environment variable. The orchestrator removes it when the session ends, in case it was never read.
+  - **Limits:** the forwarder stops pages, not a compromised browser process, which still has the bridge; and the host's public address is only known when the admin sets it. Network-level isolation is PROJ-31 (later).
 - **Time zone and language match the exit:** before Chromium starts, the entrypoint asks where it exits, through the proxy if there is one (`BROWSERPIER_GEOIP_URL`, an echoip-style JSON endpoint; default `https://ifconfig.co/json`, which sees each exit IP; self-host echoip to avoid that). Chromium then runs with the matching `TZ`, `LANGUAGE`/`LANG` and an Accept-Language list a person there would send (e.g. `de-DE,de,en-US,en`).
   - The location is stored on the profile. While the country stays the same, the stored time zone is kept, so a rotating proxy doesn't move a logged-in account between zones. Use sticky proxy sessions where the provider offers them.
   - A profile can set its time zone and language by hand, which wins.
@@ -86,7 +90,7 @@ Self-hosted, persistent browsers for AI agents. Agents start a browser when they
 
 ## 4. Core concepts
 
-- **Profile:** a saved browser identity with its own cookies and logins, named in lowercase (e.g. `google`). Settings: default mode, auto-stop, screen size, optional proxy, handoff policy.
+- **Profile:** a saved browser identity with its own cookies and logins, named in lowercase (e.g. `google`). Settings: default mode, auto-stop, screen size, optional proxy, handoff policy, local network access (off).
 - **Session:** a running browser on one profile.
 - **One session per profile.** Chromium locks its profile, so an agent asking for a profile that is already running attaches to the existing session. Different profiles run in parallel.
 - **Modes:**
@@ -215,7 +219,7 @@ All endpoints take `Authorization: Bearer <agent token>`. The same actions are e
 Starting a session returns its id, the CDP URL (proxied through the orchestrator) and the live view URL.
 
 - **Scopes:** a token sees only the profiles it is scoped to; anything else answers 404, as if it didn't exist. Only a token for all profiles can create one.
-- **What agents can't change:** an agent creating a profile can't set its proxy (a proxy sees where the browser goes, and an agent can be steered by the pages it reads), and can make its handoff policy stricter than the default but never looser.
+- **What agents can't change:** an agent creating a profile can't set its proxy (a proxy sees where the browser goes, and an agent can be steered by the pages it reads) or open the local network to its pages, and can make its handoff policy stricter than the default but never looser.
 - **CDP:** `/cdp/{profile}` is the browser's WebSocket; `/cdp/{profile}/json/version` and `/json/list` work too, with their URLs pointing back through BrowserPier, so `connectOverCDP("https://…/cdp/{profile}")` works. Clients that can't set headers can pass the token as `?token=`. The token never reaches the browser. The proxy refuses a Visual-mode session (no CDP client may attach to the page) and a browser a person is using during a handoff.
 - **Visual mode:** screenshot, click and type go through the container's X display and xdotool. During a handoff, agents can still take screenshots but not click or type. Coordinates are screen pixels; a screenshot can be scaled down with `?width=`, and the response gives the screen size.
 - **Computer actions:** `/computer` takes one action. `click {x, y, button?, double?}` and `type {text}` work as above; `scroll {x, y, dx?, dy?}` scrolls by whole wheel notches at a point, at most 20 each way; `key {keys}` presses a combination like `"ctrl+l"` or a list of up to 10, each made of X keysym names (`Return`, `Tab`, `a`…, with aliases such as `Enter`, `Esc`, `Cmd`, `PageDown`) joined by `+`; `drag {from: {x, y}, to: {x, y}, button?}` presses, moves in steps and releases. These run through xdotool with the same checks as click, never as an xdotool script. `wait {ms}` pauses up to 10 s. `zoom {x, y, w, h}` returns that region of the screen as a PNG at full resolution, cut off at the screen's edges. With `screenshot: true` any other action answers with the screen afterwards (scaled to `width` if given) instead of 204. During a handoff, wait and zoom still work. The activity log names each action but never typed text: keys that could spell something are logged only as a count.
@@ -260,7 +264,7 @@ Designs: the "Browser Orchestrator UI" canvas (private to the author). The UI st
 |---|---|
 | 1 · Login | Admin password, keep signed in, lockout message, help text pointing to where the password lives (Umbrel app Info, or the first-run setup). |
 | 2 · Profiles | All profiles with status, default mode, in use by, memory, activity and auto-stop. Host RAM meter, needs-help badge, ⋯ menu (copy CDP URL, stop, edit, export, delete), stop and delete confirmations, empty state. |
-| 3 · New profile | Name, handoff policy, "start and log in now"; Advanced holds mode, auto-stop, screen size and proxy. |
+| 3 · New profile | Name, handoff policy, "start and log in now"; Advanced holds mode, auto-stop, screen size, proxy and local network access. |
 | 4 · Live view | Streamed browser, take or hand back control, controls locked while the agent drives, connection details, agent activity log, help request. |
 | 5 · API access | Agent tokens (create with scope, shown once, revoke), handoff PIN and rules, quick start, endpoint list, MCP. |
 | 6 · Handoff (phone) | PIN entry, take control on a phone (tap to click, pinch, Type, Fit), note, Done or Can't do this, then expired and finished states. |
@@ -279,7 +283,7 @@ Designs: the "Browser Orchestrator UI" canvas (private to the author). The UI st
 - **Export:** a stopped profile can be exported from Profiles' ⋯ menu, by the admin only (never through the agent API or MCP: an archive is live cookies).
   - **Format:** a gzipped tar encrypted with age and a passphrase of at least 10 characters (`age -d` opens it too). It starts with `manifest.json`: the format version, the BrowserPier version and the profile's settings.
   - **Contents:** the profile's `chrome/` and `files/`, without `run/` (the control socket, and briefly proxy credentials), Chromium's caches and locks, or the mount markers. Only regular files and folders are read, through `os.Root`.
-  - **The proxy:** it comes with the archive, password included, since the archive is a secret anyway.
+  - **The proxy:** it comes with the archive, password included, since the archive is a secret anyway. So does local network access.
   - **Streaming:** the archive is streamed as it's made, with no temporary file. If anything fails midway, the download is cut off, and an age archive cut short doesn't decrypt.
 - **Import:** from Profiles. The archive becomes a new profile under its own name or one you give.
   - **Streaming:** the upload is streamed, never stored whole. It's extracted into a folder of its own, then the profile is created and the folder moved into place last.
@@ -305,7 +309,7 @@ Designs: the "Browser Orchestrator UI" canvas (private to the author). The UI st
 - Visual mode sends real OS-level input through xdotool, not CDP input events. The CDP connection itself is detectable, so in Visual mode no CDP client stays attached to the page.
 - Residential IP: a home server's own connection by default, with an optional per-profile proxy. On a VPS, a residential proxy is close to required for protected sites.
 - Timezone and locale always match the exit IP. Chromium's interface languages are installed, so `Intl` agrees with `navigator.languages`.
-- WebRTC can't leak the host IP when a proxy is set.
+- WebRTC sends no UDP, so it can't leak the host IP behind a proxy.
 - No fingerprint spoofing: each profile keeps one real, consistent fingerprint over time.
 - Persistent, aged profiles with real logins help on their own.
 - **Validation** (PROJ-15): `images/chromium/ANTI-BOT.md` has the results against public detection pages, and the signals that remain (SwiftShader, no taskbar). `TestVisualModeLooksLikeAPerson` checks Visual mode in CI's Docker tests.
@@ -321,6 +325,7 @@ Designs: the "Browser Orchestrator UI" canvas (private to the author). The UI st
 - Tokens, the PIN and the admin password are hashed at rest.
 - Treat profile folders as secrets, since they hold live session cookies. With `password-store=basic`, cookies on disk are effectively readable.
 - Page text returned to agents is fenced and sanitised (see MCP tools), since agents browse untrusted pages.
+- Pages can't reach the local network, the Docker host or a VPS's metadata endpoint through the browser, unless the admin allows a profile the local network (see Egress).
 
 ---
 
@@ -361,6 +366,7 @@ Designs: the "Browser Orchestrator UI" canvas (private to the author). The UI st
 | Deployment | Generic docker-compose first (any VPS), Umbrel app second | The author runs it on Umbrel, but it should work for anyone on a plain server. |
 | Fingerprints | No spoofing; one stable real fingerprint per profile | Spoofing needs CDP on every page, and a changing fingerprint flags logged-in accounts. |
 | Proxies | Per-profile, authenticated, via a forwarding proxy; timezone and locale matched | On a VPS, residential proxies are what makes protected sites usable. |
+| Page egress | Through the forwarder in the container, which refuses private and link-local addresses; a profile can be allowed the local network | The browser shouldn't be a way into the LAN, the host's other apps or a VPS's credentials. Kept in the container for now: `--network none` makes Chromium report itself offline. |
 | Orchestrator ↔ browser container | A Unix socket in a per-profile folder shared with the orchestrator | Nothing listens on a network, so a page or another container can't reach CDP. |
 | Profile storage | Bind-mounted folders in the data dir, not named Docker volumes | One directory to back up or move; export and downloads read files directly. The host path is detected from the orchestrator's own mounts. |
 | Chromium sandbox | On, with a seccomp profile that allows user namespaces | Pages are untrusted; the container is a second boundary, not the only one. |
