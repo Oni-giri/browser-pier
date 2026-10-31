@@ -264,16 +264,18 @@ Downloads land in a per-profile folder. The API lists, fetches and deletes them,
 
 ## 9. Web UI
 
-Designs: the "Browser Orchestrator UI" canvas (private to the author). The UI still says "Browser Pool"; rename it to BrowserPier when building.
+Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes), `design/screens/` (HTML, open with `python3 -m http.server`) and `design/screenshots/`. The editable originals are on the author's private design canvas.
 
 | Screen | What it must do |
 |---|---|
 | 1 · Login | Admin password, keep signed in, lockout message, help text pointing to where the password lives (Umbrel app Info, or the first-run setup). |
-| 2 · Profiles | All profiles with status, default mode, in use by, memory, activity and auto-stop. Host RAM meter, needs-help badge, ⋯ menu (copy CDP URL, stop, edit, export, delete), stop and delete confirmations, empty state. |
-| 3 · New profile | Name, handoff policy, "start and log in now"; Advanced holds mode, auto-stop, screen size, proxy and local network access. |
-| 4 · Live view | Streamed browser, take or hand back control, controls locked while the agent drives, connection details, agent activity log, help request. |
-| 5 · API access | Agent tokens (create with scope, shown once, revoke), handoff PIN and rules, quick start, endpoint list, MCP. |
-| 6 · Handoff (phone) | PIN entry, take control on a phone (tap to click, pinch, Type, Fit), note, Done or Can't do this, then expired and finished states. |
+| 2 · Overview | Summary only, each cell linking to its page: the profile waiting for you (with Take control), memory use against the limit, profiles list, browser hours, connect snippet, agents, handoffs this week. |
+| 3 · Profiles | Grid of profile cards with a live preview per state (default), or a table. Status, mode, agent, memory, activity, auto-stop. ⋯ menu (copy CDP URL, stop, edit, export, delete), stop and delete confirmations, empty state. |
+| 4 · New profile | Centred modal over Profiles: name, handoff policy, "start and log in now"; Advanced holds mode, auto-stop, screen size, proxy and local network access. |
+| 5 · Live view | Streamed browser, take or hand back control, controls locked while the agent drives, connection details, agent activity log, help request. |
+| 6 · Agents | Agent tokens (create with scope, shown once, revoke), handoff link rules, quick start, endpoint list, MCP. |
+| 7 · Settings | Handoff PIN, default handoff policy, memory limit, default auto-stop, default proxy, admin account and sign-out. |
+| 8 · Handoff (phone) | PIN entry, take control on a phone (tap to click, pinch, Type, Fit), note, Done or Can't do this, then expired and finished states. |
 
 ### Settings and what they decide
 
@@ -299,10 +301,11 @@ Designs: the "Browser Orchestrator UI" canvas (private to the author). The UI st
 
 ### Interaction rules
 
-- Needs help is visible from anywhere in the UI: an amber status, sorted to the top, and a header badge with a count.
+- Needs help is visible from anywhere in the UI: an orange status, sorted to the top, and a "N needs you" chip in the shared header.
 - Red is reserved for destruction. Stop is neutral; Delete sits in the ⋯ menu and asks for confirmation, naming what will be erased.
 - Stop warns when an agent is using the browser.
-- Each row has one main action in a fixed position (Help now, Live view, Start, Retry). Everything else is in the ⋯ menu.
+- Each profile has one main action in a fixed position (Take control, Live view, Start, Retry). Everything else is in the ⋯ menu.
+- Take control is blue everywhere; hand back is neutral. Mono type only for things you copy.
 - Browser controls are disabled while the agent drives. While the human drives, the keyboard goes to the browser and Esc releases it.
 - "Stop browser" is the label everywhere. Copy actions confirm with "Copied".
 - Nautical theme in the logo and a few touches of copy; functional labels stay plain.
@@ -398,7 +401,7 @@ Designs: the "Browser Orchestrator UI" canvas (private to the author). The UI st
 - Files: downloads and uploads
 - Per-profile proxies with credentials, timezone and locale matching
 - MCP endpoint with explicit session handles, untrusted-content fencing and Visual-mode actions
-- Web UI (6 screens), encrypted profile export/import
+- Web UI (8 screens, see `design/`), encrypted profile export/import
 - Generic docker-compose with HTTPS (Caddy), first-run setup, Umbrel app
 - Anti-bot validation
 

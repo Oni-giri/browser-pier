@@ -29,7 +29,7 @@ If it isn't connected, use the list below and mention ticket keys in commits.
 | PROJ-9 | Auto-stop on idle + RAM limit |
 | PROJ-8 | WebRTC live view (pion relay, input data channel, JS client) |
 | PROJ-10 | Handoff links (policy, PIN, long-poll, expiry, reasons, origin-only) |
-| PROJ-11 | Web UI (Go templates + htmx, 6 screens) |
+| PROJ-11 | Web UI (Go templates + htmx, 8 screens per `design/`) |
 | PROJ-12 | MCP endpoint (session handles, elicitation, untrusted-content fence, visual tools) |
 | PROJ-13 | Encrypted profile export/import |
 | PROJ-19 | Generic deployment (docker-compose, Caddy HTTPS, first-run setup, install docs) |
