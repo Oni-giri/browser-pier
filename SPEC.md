@@ -108,12 +108,17 @@ Self-hosted, persistent browsers for AI agents. Agents start a browser when they
 - **Admin password** for the web UI:
   - On Umbrel, it's the app password shown in the app's Info.
   - Elsewhere, it's set on a first-run setup page or through `BROWSERPIER_ADMIN_PASSWORD`.
-  - Optional "keep me signed in for 30 days".
-  - A 5-minute lockout after repeated failures.
-  - Cookies are secure-only and HTTP-only.
-- **Rate limits** on login, handoff PIN and token endpoints, with failed attempts logged.
-- **Agent tokens** for the API and MCP, never the admin password. Created in the UI with a name and a scope, shown once, hashed at rest, and revocable one at a time.
-- **Handoff PIN:** 4–6 digits, separate from the admin password, set by the human, hashed. Agents never see it.
+  - The environment variable wins at every start, so changing it is also how to reset a forgotten password; it signs out every browser. The UI then can't change the password.
+  - The setup page asks for a one-time code that the orchestrator prints in its log, so whoever first reaches a fresh public instance can't claim it. It disappears once a password is set.
+  - Optional "keep me signed in for 30 days"; otherwise the session ends with the browser, and after a day at most.
+  - A 5-minute lockout after 5 failures from one address in 5 minutes. Past 20 failures (and attempts in flight) from anywhere in 15 minutes, sign-ins from unknown devices go one at a time, each after a delay that starts at 2 seconds and doubles with every 20 more failures, up to 30 seconds. Browsers that have signed in before carry a signed device cookie (valid a year, voided by a password change, distrusted after 5 failures) and skip this, so an attack from elsewhere never slows the owner's usual devices. A lockout never signs out existing sessions.
+  - Cookies are HTTP-only and `SameSite=Lax`, and `Secure` whenever BrowserPier is served over HTTPS (or `BROWSERPIER_PUBLIC_URL` is https). Private plain-HTTP setups (Umbrel, Tailscale) drop `Secure`, because browsers refuse a Secure cookie there.
+  - Each sign-in gets a fresh session; changing the password signs out every other browser. Cross-site form posts are refused.
+- **The cookie and the token never mix:** the cookie authenticates the UI only, agent tokens the API and MCP only.
+- **Client addresses:** `X-Forwarded-For` and `X-Forwarded-Proto` are believed only from `BROWSERPIER_TRUSTED_PROXIES` (CIDRs, or `private`); none by default. The shipped compose files set it for their proxy.
+- **Rate limits** on login, setup, handoff PIN and token endpoints, with failed attempts logged (address and outcome, never the secret).
+- **Agent tokens** for the API and MCP, never the admin password. Created in the UI with a name and a scope, shown once, hashed at rest (SHA-256 of 256 random bits, prefixed `bp_live_`), and revocable one at a time. A token scoped to a list loses a profile when it is deleted.
+- **Handoff PIN:** 4–6 digits, separate from the admin password, set by the human, hashed (argon2id, like the admin password). Agents never see it. A short PIN's hash can be cracked offline in seconds, so the attempt limits, not the hash, are what protect it.
 
 ---
 

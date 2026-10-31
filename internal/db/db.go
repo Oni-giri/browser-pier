@@ -39,6 +39,37 @@ var migrations = []string{
 	-- One live session per profile, enforced by the database as well as the code.
 	CREATE UNIQUE INDEX sessions_one_live ON sessions(profile)
 		WHERE state IN ('starting', 'running', 'needs_help', 'stopping');`,
+
+	`CREATE TABLE settings (
+		key   TEXT PRIMARY KEY,
+		value TEXT NOT NULL
+	);
+	-- Agent tokens are stored as the SHA-256 of the token, never the token.
+	CREATE TABLE agent_tokens (
+		id           TEXT PRIMARY KEY,
+		name         TEXT NOT NULL,
+		hash         TEXT NOT NULL UNIQUE,
+		hint         TEXT NOT NULL,
+		all_profiles INTEGER NOT NULL,
+		created_at   INTEGER NOT NULL,
+		last_used_at INTEGER NOT NULL DEFAULT 0
+	);
+	-- A token scoped to a list loses a profile when the profile is deleted, so
+	-- a new profile with the same name isn't reachable by an old token.
+	CREATE TABLE agent_token_profiles (
+		token_id TEXT NOT NULL REFERENCES agent_tokens(id) ON DELETE CASCADE,
+		profile  TEXT NOT NULL REFERENCES profiles(name) ON DELETE CASCADE,
+		PRIMARY KEY (token_id, profile)
+	);
+	-- Signed-in browsers, by the SHA-256 of their cookie.
+	CREATE TABLE admin_sessions (
+		hash         TEXT PRIMARY KEY,
+		created_at   INTEGER NOT NULL,
+		expires_at   INTEGER NOT NULL,
+		last_seen_at INTEGER NOT NULL,
+		remember     INTEGER NOT NULL,
+		user_agent   TEXT NOT NULL DEFAULT ''
+	);`,
 }
 
 // Open opens (creating if needed) the database at path and migrates it.
