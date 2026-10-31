@@ -56,6 +56,7 @@ Configuration is through `BROWSERPIER_*` environment variables:
 | `BROWSERPIER_PUBLIC_URL` | none | How people reach BrowserPier, e.g. `https://pier.example.com`. An https URL makes cookies Secure. |
 | `BROWSERPIER_COOKIE_SECURE` | `auto` | `auto` (Secure when served over HTTPS), `always` or `never` |
 | `BROWSERPIER_GEOIP_URL` | `https://ifconfig.co/json` | Where browsers look up their exit location to match its time zone and language: an [echoip](https://github.com/mpolden/echoip)-style JSON endpoint, which sees each exit IP. `off` turns it off. |
+| `BROWSERPIER_RAM_LIMIT_PERCENT` | `70` | Share of host memory all browsers may use. Past it, the longest-idle browser no agent is using is stopped to make room, or a new one is refused. `0` for no cap. |
 | `BROWSERPIER_FILES_LIMIT_MB` | `1024` | Cap on each profile's downloads and uploads together; the oldest go first. `0` for no cap. |
 | `BROWSERPIER_TRUSTED_PROXIES` | none | Proxies whose `X-Forwarded-For`/`-Proto` are believed: CIDRs, comma-separated, or `private`. Set it only when BrowserPier is reachable through that proxy alone. |
 

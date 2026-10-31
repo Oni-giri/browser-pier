@@ -134,3 +134,16 @@ func TestInstanceIDIsKept(t *testing.T) {
 		t.Fatal("two data dirs share an instance ID")
 	}
 }
+
+func TestParseMemTotal(t *testing.T) {
+	n, err := parseMemTotal("MemTotal:       16303512 kB\nMemFree:  1 kB\n")
+	if err != nil || n != 16303512*1024 {
+		t.Fatalf("parseMemTotal = %d, %v", n, err)
+	}
+	if _, err := parseMemTotal("nothing"); err == nil {
+		t.Fatal("want an error")
+	}
+	if n, err := hostMemory(); err != nil || n <= 0 {
+		t.Fatalf("hostMemory = %d, %v", n, err)
+	}
+}

@@ -74,7 +74,7 @@ Self-hosted, persistent browsers for AI agents. Agents start a browser when they
   - A profile can set its time zone and language by hand, which wins.
   - If the lookup fails, the stored location is used, with a warning. A proxied profile with nothing stored doesn't start: the error says to set the time zone and language by hand. Without a proxy it starts anyway, in UTC and English, with a warning.
 
-**Capacity:** plan for 1–2 GB per running browser. The author's Umbrel has 16 GB; a typical 4–8 GB VPS fits 2–4 browsers. When a new session wouldn't fit under the RAM limit (a setting, default 70% of host RAM), the orchestrator stops the longest-idle browser that no agent is using. If none can be stopped, it refuses with a clear error listing what is running.
+**Capacity:** plan for 1–2 GB per running browser. The author's Umbrel has 16 GB; a typical 4–8 GB VPS fits 2–4 browsers. When a new session wouldn't fit under the RAM limit (a setting, default 70% of host RAM), the orchestrator stops the longest-idle browser that no agent is using. If none can be stopped, it refuses with a clear error listing what is running. Browsers' memory is read from Docker (as `docker stats` counts it), and a new one is expected to need 1 GB. An agent's refusal names only the browsers its token can see; the full list goes to the log. Starting is checked one at a time, so two starts can't both squeeze in.
 
 ---
 
@@ -104,6 +104,9 @@ Self-hosted, persistent browsers for AI agents. Agents start a browser when they
 | Failed | Browser crashed or did not start; last log line shown. | Retry |
 
 - Auto-stop when idle: 5, 10, 15 (default), 30 minutes, or never, set per profile.
+  - **What counts as use:** any agent API call on the session (start or attach, screenshot, click, type, upload).
+  - **In use the whole time:** an open CDP connection, and a browser a person has during a handoff, are never idle.
+  - **Stopping:** an idle browser is stopped gracefully, so its logins are kept.
 - A start takes a few seconds. The UI shows Starting… with a spinner and disables the action until the browser is ready.
 - Stopping never loses logins, because the profile is written continuously and Chrome is closed gracefully.
 

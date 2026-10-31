@@ -45,6 +45,11 @@ type Config struct {
 	// time_zone) browsers use to find their exit location, through their
 	// proxy (BROWSERPIER_GEOIP_URL; "off" turns it off).
 	GeoIPURL string
+	// RAMLimitPercent caps the memory all browsers may use together, as a
+	// share of the host's (BROWSERPIER_RAM_LIMIT_PERCENT, default 70; 0 for
+	// no cap). Past it, the longest-idle unused browser is stopped to make
+	// room, or a new one is refused.
+	RAMLimitPercent int
 	// FilesLimitMB caps each profile's downloads and uploads together, in
 	// MiB (BROWSERPIER_FILES_LIMIT_MB); the oldest go first. 0 is no cap.
 	FilesLimitMB int
@@ -126,6 +131,10 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		c.GeoIPURL = ""
 	} else if u, err := url.Parse(c.GeoIPURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return Config{}, fmt.Errorf("BROWSERPIER_GEOIP_URL: want an http(s) URL or off, got %q", c.GeoIPURL)
+	}
+	ram := get("BROWSERPIER_RAM_LIMIT_PERCENT", "70")
+	if c.RAMLimitPercent, err = strconv.Atoi(strings.TrimSuffix(ram, "%")); err != nil || c.RAMLimitPercent < 0 || c.RAMLimitPercent > 100 {
+		return Config{}, fmt.Errorf("BROWSERPIER_RAM_LIMIT_PERCENT: want 0 to 100, got %q", ram)
 	}
 	limit := get("BROWSERPIER_FILES_LIMIT_MB", "1024")
 	if c.FilesLimitMB, err = strconv.Atoi(limit); err != nil || c.FilesLimitMB < 0 {

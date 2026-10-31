@@ -30,6 +30,8 @@ type FakeRuntime struct {
 	StopStatus  int
 	StopErr     error // Stop fails with this, leaving the container running
 	LastLog     string
+	// Memory is what MemoryUsage reports for every container.
+	Memory int64
 	// Control, if set, serves each started container's control socket
 	// instead of the default, which answers /healthz only.
 	Control http.Handler
@@ -177,6 +179,15 @@ func (f *FakeRuntime) RemoveStale(_ context.Context, name, profile string) error
 		delete(f.Containers, id)
 	}
 	return nil
+}
+
+func (f *FakeRuntime) MemoryUsage(_ context.Context, id string) (int64, error) {
+	f.Mu.Lock()
+	defer f.Mu.Unlock()
+	if _, ok := f.Containers[id]; !ok {
+		return 0, errors.New("no such container")
+	}
+	return f.Memory, nil
 }
 
 func (f *FakeRuntime) List(context.Context) ([]docker.Container, error) {

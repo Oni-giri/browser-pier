@@ -125,6 +125,7 @@ func (a *API) uploadFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "give the file a name: a multipart filename, or ?name=")
 		return
 	}
+	a.m.Touch(s.ID)
 	f, path, err := a.files.Upload(s.Profile, name, body, maxUpload)
 	switch {
 	case errors.Is(err, files.ErrBadName):

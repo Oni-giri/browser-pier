@@ -31,6 +31,7 @@ type Runtime interface {
 	Remove(ctx context.Context, id string) error
 	RemoveStale(ctx context.Context, name, profile string) error
 	List(ctx context.Context) ([]docker.Container, error)
+	MemoryUsage(ctx context.Context, id string) (int64, error)
 }
 
 // Layout is where profile folders live:
@@ -96,6 +97,8 @@ type Manager struct {
 	readyTimeout time.Duration
 	now          func() time.Time
 	geoURL       string // where browsers look up their exit location; "" for nowhere
+	memLimit     int64  // bytes all browsers may use together; 0 for no limit
+	memEach      int64  // what a new browser is expected to take
 
 	ctx    context.Context // ends with Close
 	cancel context.CancelFunc
@@ -105,6 +108,10 @@ type Manager struct {
 
 	mu   sync.Mutex
 	live map[string]*live // by profile name
+
+	// admit is held from checking there is room for a new browser to
+	// recording its session, so two starts can't both squeeze in.
+	admit sync.Mutex
 }
 
 // live is a session with a container, from Starting until it is final.
@@ -120,6 +127,8 @@ type live struct {
 	stop *stopAttempt
 	// conns are the agents' open connections to the browser.
 	conns map[*conn]struct{}
+	// lastActivity is when an agent or person last used the browser.
+	lastActivity time.Time
 }
 
 // conn is one agent connection to a browser; cancelling it closes it.
@@ -134,7 +143,7 @@ type stopAttempt struct {
 }
 
 func newLive(s Session) *live {
-	return &live{sess: s, ready: make(chan struct{}), done: make(chan struct{})}
+	return &live{sess: s, ready: make(chan struct{}), done: make(chan struct{}), lastActivity: time.Now()}
 }
 
 // markReady unblocks everyone waiting for the start to resolve, either way.
@@ -217,30 +226,65 @@ func (m *Manager) Start(ctx context.Context, profile string, mode profiles.Mode)
 	for {
 		m.mu.Lock()
 		l, ok := m.live[profile]
-		if !ok {
-			break // keep the lock
-		}
-		state := l.sess.State
 		m.mu.Unlock()
-		if state == Stopping {
-			if err := m.wait(ctx, l.done); err != nil {
-				return Session{}, false, err
+		if ok {
+			if m.snapshot(l).State == Stopping {
+				if err := m.wait(ctx, l.done); err != nil {
+					return Session{}, false, err
+				}
+				continue
 			}
-			continue
+			return m.awaitStart(ctx, l, true)
 		}
-		return m.awaitStart(ctx, l, true)
+		l, p, again, err := m.admitAndBegin(ctx, profile, mode)
+		if err != nil {
+			return Session{}, false, err
+		}
+		if again {
+			continue // another start got there first: attach to it
+		}
+		if !m.spawn(func() { m.launch(l, p) }) {
+			m.end(l, "", func(s *Session) { s.State, s.Error = Failed, "BrowserPier was shutting down" })
+			return Session{}, false, ErrClosed
+		}
+		return m.awaitStart(ctx, l, false)
 	}
+}
 
-	l, p, err := m.begin(ctx, profile, mode)
-	m.mu.Unlock()
-	if err != nil {
-		return Session{}, false, err
+// admitAndBegin makes room for a new browser and records its session, one
+// start at a time: the admission lock is held from the memory check until
+// the session counts towards memory. again is true if a session for the
+// profile appeared meanwhile, to attach to instead.
+func (m *Manager) admitAndBegin(ctx context.Context, profile string, mode profiles.Mode) (l *live, p profiles.Profile, again bool, err error) {
+	// Check the request before stopping anyone's browser for it.
+	if _, err := m.profiles.Get(ctx, profile); err != nil {
+		return nil, p, false, err
 	}
-	if !m.spawn(func() { m.launch(l, p) }) {
-		m.end(l, "", func(s *Session) { s.State, s.Error = Failed, "BrowserPier was shutting down" })
-		return Session{}, false, ErrClosed
+	if mode != "" && mode != profiles.ModeAPI && mode != profiles.ModeVisual {
+		return nil, p, false, fmt.Errorf("mode %q: want %q or %q", mode, profiles.ModeAPI, profiles.ModeVisual)
 	}
-	return m.awaitStart(ctx, l, false)
+	m.admit.Lock()
+	defer m.admit.Unlock()
+	if m.hasLive(profile) {
+		return nil, p, true, nil
+	}
+	if err := m.makeRoom(ctx); err != nil {
+		return nil, p, false, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.live[profile]; ok {
+		return nil, p, true, nil
+	}
+	l, p, err = m.begin(ctx, profile, mode)
+	return l, p, false, err
+}
+
+func (m *Manager) hasLive(profile string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.live[profile]
+	return ok
 }
 
 // begin records a new Starting session. m.mu must be held.
@@ -267,6 +311,7 @@ func (m *Manager) begin(ctx context.Context, profile string, mode profiles.Mode)
 		return nil, p, err
 	}
 	l := newLive(s)
+	l.lastActivity = now
 	m.live[profile] = l
 	return l, p, nil
 }
@@ -706,12 +751,14 @@ func (m *Manager) Attach(ctx context.Context, id, tokenID, agent string) (contex
 		l.conns = map[*conn]struct{}{}
 	}
 	l.conns[c] = struct{}{}
+	l.lastActivity = m.now()
 	var once sync.Once
 	return cctx, func() {
 		once.Do(func() {
 			cancel()
 			m.mu.Lock()
 			delete(l.conns, c)
+			l.lastActivity = m.now()
 			m.mu.Unlock()
 		})
 	}, nil
@@ -772,6 +819,17 @@ func (m *Manager) stopContainer(cid string) {
 // If Docker fails to stop the container, the session goes back to the
 // state it was in and every caller gets the error.
 func (m *Manager) Stop(ctx context.Context, id string) (Session, error) {
+	return m.stopIf(ctx, id, nil)
+}
+
+// errStillInUse: stopIf found the session no longer met its condition.
+var errStillInUse = errors.New("the browser is in use again")
+
+// stopIf is Stop, but only if cond (checked under the lock, in the same
+// step that moves the session to Stopping) holds; otherwise it returns
+// errStillInUse. It closes the race between picking an idle browser and
+// an agent attaching to it.
+func (m *Manager) stopIf(ctx context.Context, id string, cond func(*live) bool) (Session, error) {
 	if m.ctx.Err() != nil {
 		return Session{}, ErrClosed
 	}
@@ -785,6 +843,11 @@ func (m *Manager) Stop(ctx context.Context, id string) (Session, error) {
 	m.mu.Lock()
 	attempt := l.stop
 	if attempt == nil && (l.sess.State == Running || l.sess.State == NeedsHelp) {
+		if cond != nil && !cond(l) {
+			snap := l.snapshotLocked()
+			m.mu.Unlock()
+			return snap, errStillInUse
+		}
 		prev := l.sess.State
 		l.sess.State = Stopping
 		l.sess.UpdatedAt = m.now()
@@ -864,6 +927,9 @@ func (m *Manager) SetNeedsHelp(id string, needsHelp bool) (Session, error) {
 			// The agent is paused while a person has the browser: its
 			// connections close, and new ones are refused until hand-back.
 			l.disconnectLocked()
+		}
+		if to == Running {
+			l.lastActivity = m.now() // idle time starts at hand-back
 		}
 	default:
 		return l.sess, ErrNotRunning
