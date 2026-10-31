@@ -12,6 +12,8 @@ cd "$(dirname "$0")/.."
 case $version in
 v*) echo "give the version without the v: ${version#v}" >&2; exit 1 ;;
 esac
+# X.Y.Z only, as the orchestrator picks its browser image by that form.
+echo "$version" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+' || { echo "not a release version (X.Y.Z): $version" >&2; exit 1; }
 mkdir -p "$out"
 
 sed "s/BROWSERPIER_VERSION:-latest/BROWSERPIER_VERSION:-$version/" deploy/docker-compose.yml >"$out/docker-compose.yml"
