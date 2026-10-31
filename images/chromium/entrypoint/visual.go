@@ -22,18 +22,24 @@ type visual struct {
 	// run runs a command, returning what it wrote to fd 3.
 	run func(ctx context.Context, name string, args ...string) ([]byte, error)
 	mu  sync.Mutex // one input action at a time, so two never interleave
+	// live is the live view's continuous mouse and keyboard.
+	live *liveInput
 }
 
 const maxTypeLen = 2000
 
 func newVisual(width, height int) *visual {
-	return &visual{width: width, height: height, run: runCommand}
+	return &visual{width: width, height: height, run: runCommand, live: newLiveInput(width, height)}
 }
 
 func (v *visual) register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /screenshot", v.screenshot)
 	mux.HandleFunc("POST /input/click", v.click)
 	mux.HandleFunc("POST /input/type", v.typeText)
+	if v.live != nil {
+		mux.HandleFunc("POST /input/events", v.live.events)
+		mux.HandleFunc("POST /input/release", v.live.release)
+	}
 }
 
 // screenshotArgs captures one frame as PNG to fd 3, scaled to width (and

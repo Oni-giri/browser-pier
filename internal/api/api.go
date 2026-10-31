@@ -423,7 +423,10 @@ func (a *API) input(path string) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "body too large")
 			return
 		}
-		a.m.Touch(s.ID)
+		if err := a.m.AgentInput(s.ID); err != nil {
+			writeError(w, http.StatusConflict, "a person is driving this browser from the live view; wait until they hand it back")
+			return
+		}
 		resp, err := a.control(r.Context(), s.Profile, http.MethodPost, path, body)
 		if err != nil {
 			writeError(w, http.StatusBadGateway, "input failed: "+err.Error())

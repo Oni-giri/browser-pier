@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>BrowserPier · {{.Profile}}</title>
+<style>
+:root{--bg:#FAFAFA;--surface:#FFF;--ink:#09090B;--ink2:#52525B;--ink3:#71717A;--line:#E4E4E7;--blue:#2F6BFF;--green:#15803D;--greent:#ECFDF3;--orange:#C2410C;--oranget:#FFF1EB;--fill:#F4F4F5}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;display:flex;flex-direction:column;background:var(--bg);color:var(--ink);font:14px/1.5 Geist,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+header{display:flex;align-items:center;gap:10px;padding:10px 16px;background:var(--surface);box-shadow:0 1px 0 var(--line);flex-wrap:wrap}
+.name{font-weight:600}
+.pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:2px 10px;font-size:12px;font-weight:500;background:var(--fill);color:var(--ink2)}
+.pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.pill.you{background:#EEF3FF;color:#1D4ED8}.pill.agent{background:var(--greent);color:var(--green)}.pill.help{background:var(--oranget);color:var(--orange)}
+.spacer{flex:1}
+button{height:32px;padding:0 12px;border:0;border-radius:8px;font:inherit;font-weight:500;cursor:pointer;background:var(--surface);color:var(--ink);box-shadow:0 0 0 1px var(--line)}
+button.primary{background:var(--blue);color:#fff;box-shadow:none}
+button:disabled{opacity:.5;cursor:default}
+#stage{flex:1;position:relative;overflow:hidden;background:#18181B;touch-action:none}
+#screen{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;transform-origin:0 0;outline:none}
+#stage.control #screen{cursor:default}
+#note{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);background:rgba(9,9,11,.8);color:#fff;border-radius:8px;padding:6px 12px;font-size:13px;pointer-events:none;opacity:0;transition:opacity .2s}
+#note.show{opacity:1}
+footer{padding:6px 16px;font-size:12px;color:var(--ink3);background:var(--surface);box-shadow:0 -1px 0 var(--line)}
+</style>
+</head>
+<body data-profile="{{.Profile}}">
+<header>
+  <span class="name">{{.Profile}}</span>
+  <span id="who" class="pill">Connecting…</span>
+  <span class="spacer"></span>
+  <button id="type" type="button" hidden>Type</button>
+  <button id="fit" type="button" hidden>Fit</button>
+  <button id="take" type="button" class="primary" disabled>Take control</button>
+</header>
+<div id="stage"><video id="screen" autoplay playsinline muted tabindex="0"></video><div id="note" role="status"></div></div>
+<footer id="hint">View only. Take control to use the mouse and keyboard.</footer>
+<script src="/static/live.js"></script>
+</body>
+</html>

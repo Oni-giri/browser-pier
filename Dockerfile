@@ -17,5 +17,6 @@ COPY --from=build /out/browserpier /usr/local/bin/browserpier
 COPY --from=build --chown=nonroot:nonroot /out/data /data
 ENV BROWSERPIER_DATA_DIR=/data
 VOLUME /data
-EXPOSE 7437
+# 7437 the app; 7438 live views (WebRTC), UDP with TCP as the fallback
+EXPOSE 7437/tcp 7438/tcp 7438/udp
 ENTRYPOINT ["/usr/local/bin/browserpier"]

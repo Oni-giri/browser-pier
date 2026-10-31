@@ -61,6 +61,8 @@ func TestLoadRejectsBadValues(t *testing.T) {
 		"short password":      {"BROWSERPIER_ADMIN_PASSWORD": "short"},
 		"bad files limit":     {"BROWSERPIER_FILES_LIMIT_MB": "-1"},
 		"bad ram limit":       {"BROWSERPIER_RAM_LIMIT_PERCENT": "150"},
+		"bad webrtc port":     {"BROWSERPIER_WEBRTC_PORT": "0"},
+		"bad webrtc ip":       {"BROWSERPIER_WEBRTC_IPS": "pier.example"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := load(env(vars)); err == nil {
@@ -93,7 +95,7 @@ func TestTrustedProxies(t *testing.T) {
 			t.Errorf("%s trusted", ip)
 		}
 	}
-	if c, _ := load(env(nil)); len(c.TrustedProxies) != 0 || c.CookieSecure != "auto" || c.FilesLimitMB != 1024 || c.RAMLimitPercent != 70 {
+	if c, _ := load(env(nil)); len(c.TrustedProxies) != 0 || c.CookieSecure != "auto" || c.FilesLimitMB != 1024 || c.RAMLimitPercent != 70 || c.WebRTCPort != 7438 {
 		t.Fatalf("defaults: %d trusted proxies, cookie %q", len(c.TrustedProxies), c.CookieSecure)
 	}
 }

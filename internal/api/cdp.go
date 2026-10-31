@@ -65,6 +65,9 @@ func (a *API) cdp(w http.ResponseWriter, r *http.Request) {
 	case s.State == sessions.NeedsHelp:
 		writeError(w, http.StatusConflict, "a person has control of this browser; wait for the handoff to finish")
 		return
+	case s.HumanControl:
+		writeError(w, http.StatusConflict, "a person is driving this browser from the live view; wait until they hand it back")
+		return
 	case s.State != sessions.Running:
 		writeError(w, http.StatusConflict, "the session is "+string(s.State)+", not running")
 		return
@@ -96,6 +99,10 @@ func (a *API) cdp(w http.ResponseWriter, r *http.Request) {
 	// ends if a person takes over, the session ends or the token is
 	// revoked; the proxy then closes the connection.
 	ctx, release, err := a.m.Attach(r.Context(), s.ID, tok.ID, tok.Name)
+	if errors.Is(err, sessions.ErrHumanDriving) {
+		writeError(w, http.StatusConflict, "a person is driving this browser from the live view; wait until they hand it back")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusConflict, "the session isn't running (it may have stopped, or a person has it)")
 		return

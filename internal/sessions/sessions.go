@@ -40,6 +40,11 @@ var (
 	ErrNotRunning  = errors.New("the session isn't running")
 	ErrStartFailed = errors.New("the browser failed to start")
 	ErrClosed      = errors.New("the session manager is closed")
+	// ErrAgentDriving: a person can't take control while an agent is
+	// connected or has just sent input.
+	ErrAgentDriving = errors.New("an agent is driving this browser")
+	// ErrHumanDriving: an agent can't act while a person has control.
+	ErrHumanDriving = errors.New("a person is driving this browser")
 )
 
 // Session is one run of a profile's browser.
@@ -58,6 +63,11 @@ type Session struct {
 	// InUseBy names the agents connected to the browser right now, by
 	// token name. Only live sessions have any; it isn't stored.
 	InUseBy []string
+	// HumanControl is set while a person drives the browser from the live
+	// view; agents can only watch meanwhile. Not stored.
+	HumanControl bool
+	// Viewers counts open live views. Not stored.
+	Viewers int
 }
 
 func newID() string {
