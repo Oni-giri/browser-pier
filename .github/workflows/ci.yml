@@ -43,22 +43,53 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: false
-          cache-from: type=gha
+          cache-from: type=gha,scope=browser-pier
+
+  # Builds the browser image (amd64) and runs the tests that need Docker
+  # against it: login persistence across stop, start and rebuild, sandbox,
+  # WebGL, window placement, xdotool and the H.264 stream.
+  chromium:
+    needs: go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: mkdir -p "$RUNNER_TEMP/artifacts"
+      - run: make test-docker
+        env:
+          BROWSERPIER_TEST_ARTIFACTS: ${{ runner.temp }}/artifacts
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: chromium-screenshot
+          path: ${{ runner.temp }}/artifacts
+          if-no-files-found: ignore
 
   # Only pushes to main and v* tags get packages: write, and publish to ghcr.io.
   publish:
     if: github.event_name == 'push'
-    needs: go
+    needs: [go, chromium]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    strategy:
+      matrix:
+        include:
+          - name: browser-pier
+            dockerfile: Dockerfile
+          - name: browser-pier-chromium
+            dockerfile: images/chromium/Dockerfile
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - id: version
         run: echo "version=$(git describe --tags --always)" >> "$GITHUB_OUTPUT"
+      # The browser image installs packages for each platform, so arm64 needs emulation.
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
@@ -68,7 +99,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: ghcr.io/oni-giri/browser-pier
+          images: ghcr.io/oni-giri/${{ matrix.name }}
           tags: |
             type=edge,branch=main
             type=semver,pattern={{version}}
@@ -77,10 +108,11 @@ jobs:
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
+          file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: VERSION=${{ steps.version.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
