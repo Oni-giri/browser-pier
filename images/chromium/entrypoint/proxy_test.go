@@ -52,13 +52,13 @@ func socksGet(t *testing.T, fwdAddr, host string, port int) (string, error) {
 	return string(b), nil
 }
 
-func startForwarder(t *testing.T, upstream string, localNetwork bool) *forwarder {
+func startForwarder(t *testing.T, upstream string, policy egressPolicy) *forwarder {
 	t.Helper()
 	var u *url.URL
 	if upstream != "" {
 		u, _ = url.Parse(upstream)
 	}
-	f, err := newForwarder(u, localNetwork, slog.New(slog.DiscardHandler))
+	f, err := newForwarder(u, policy, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestForwarderThroughUpstreams(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			up := mk(t, "user", "p@ss:word")
 			up.Alias("origin.test", "127.0.0.1")
-			f := startForwarder(t, name+"://user:"+url.QueryEscape("p@ss:word")+"@"+up.Addr, false)
+			f := startForwarder(t, name+"://user:"+url.QueryEscape("p@ss:word")+"@"+up.Addr, egressPolicy{})
 			body, err := socksGet(t, fwdAddrs[f], "origin.test", port)
 			if err != nil || body != "hello" {
 				t.Fatalf("through the forwarder: %q, %v", body, err)
@@ -103,7 +103,7 @@ func TestForwarderThroughUpstreams(t *testing.T) {
 				time.Sleep(10 * time.Millisecond)
 			}
 
-			bad := startForwarder(t, name+"://user:wrong@"+up.Addr, false)
+			bad := startForwarder(t, name+"://user:wrong@"+up.Addr, egressPolicy{})
 			if _, err := socksGet(t, fwdAddrs[bad], "origin.test", port); err == nil {
 				t.Fatal("wrong upstream credentials still got through")
 			}
@@ -131,7 +131,7 @@ func TestReadProxyFileDeletesIt(t *testing.T) {
 	}
 	for _, bad := range []string{"ftp://x:1", "http://noport"} {
 		u, _ := url.Parse(bad)
-		if _, err := newForwarder(u, false, slog.New(slog.DiscardHandler)); err == nil {
+		if _, err := newForwarder(u, egressPolicy{}, slog.New(slog.DiscardHandler)); err == nil {
 			t.Errorf("newForwarder(%s) accepted", bad)
 		}
 	}

@@ -14,7 +14,7 @@ import (
 	"testing"
 )
 
-func TestAllowedDest(t *testing.T) {
+func TestEgressPolicy(t *testing.T) {
 	for _, c := range []struct {
 		ip           string
 		plain, local bool // allowed without and with the local-network opt-in
@@ -47,12 +47,23 @@ func TestAllowedDest(t *testing.T) {
 		{"64:ff9b::a9fe:a9fe", false, false}, // NAT64 for 169.254.169.254
 		{"64:ff9b::c0a8:101", false, true},   // and for 192.168.1.1
 		{"64:ff9b::808:808", true, true},
+		{"2002:a9fe:a9fe::1", false, false}, // 6to4 for 169.254.169.254
+		{"2002:c0a8:101::1", false, true},   // and for 192.168.1.1
+		{"2002:808:808::1", true, true},
+		{"::127.0.0.1", false, false},                          // IPv4-compatible
+		{"2001:0:4136:e378:8000:63bf:3fff:fdd2", false, false}, // Teredo
+		{"64:ff9b:1::a9fe:a9fe", false, false},                 // local-use NAT64
+		// The host's own public address, as the admin gave it.
+		{"51.68.126.210", false, true},
+		{"::ffff:51.68.126.210", false, true},
+		{"51.68.126.211", true, true},
 	} {
 		ip := netip.MustParseAddr(c.ip)
-		if got := allowedDest(ip, false); got != c.plain {
+		host := []netip.Addr{netip.MustParseAddr("51.68.126.210")}
+		if got := (egressPolicy{host: host}).allows(ip); got != c.plain {
 			t.Errorf("%s: allowed %t, want %t", c.ip, got, c.plain)
 		}
-		if got := allowedDest(ip, true); got != c.local {
+		if got := (egressPolicy{localNetwork: true, host: host}).allows(ip); got != c.local {
 			t.Errorf("%s with the local network: allowed %t, want %t", c.ip, got, c.local)
 		}
 	}
@@ -87,7 +98,7 @@ func TestForwarderRefusesTheLocalNetwork(t *testing.T) {
 		"mixed.test": {"93.184.215.14", "10.0.0.5"},
 	})
 
-	f := startForwarder(t, "", false)
+	f := startForwarder(t, "", egressPolicy{})
 	f.lookup = dns
 	for _, host := range []string{"127.0.0.1", "localhost", "app.localhost", "LOCALHOST.", "169.254.169.254", "lan.test", "metadata.test", "mixed.test", "172.17.0.1"} {
 		if _, err := socksGet(t, fwdAddrs[f], host, port); err == nil {
@@ -103,7 +114,7 @@ func TestForwarderRefusesTheLocalNetwork(t *testing.T) {
 	}
 
 	// With the opt-in the LAN is reachable; loopback and metadata still aren't.
-	lan := startForwarder(t, "", true)
+	lan := startForwarder(t, "", egressPolicy{localNetwork: true})
 	lan.lookup = dns
 	for _, host := range []string{"127.0.0.1", "localhost", "metadata.test", "169.254.169.254"} {
 		if _, err := socksGet(t, fwdAddrs[lan], host, port); err == nil {
@@ -127,7 +138,7 @@ func TestForwarderConnectsToTheAddressItChecked(t *testing.T) {
 
 	// The test origin is on loopback, which pages never reach; stand in a
 	// public address for it, and see the forwarder dial what it checked.
-	f := startForwarder(t, "", false)
+	f := startForwarder(t, "", egressPolicy{})
 	f.lookup = fakeDNS(map[string][]string{"public.test": {"93.184.215.14"}})
 	var dialed []string
 	f.dialer.ControlContext = func(_ context.Context, _, addr string, _ syscall.RawConn) error {

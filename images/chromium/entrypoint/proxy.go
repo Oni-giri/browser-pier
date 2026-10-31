@@ -34,16 +34,16 @@ const forwarderAddr = "127.0.0.1:1080"
 // Without one, the forwarder resolves names itself, checks every address
 // and connects to the ones it checked.
 type forwarder struct {
-	upstream     *url.URL // nil: connect directly
-	localNetwork bool     // the profile may reach the local network
-	dialer       net.Dialer
-	lookup       func(ctx context.Context, host string) ([]netip.Addr, error)
-	up, down     atomic.Int64 // bytes sent and received
-	refused      atomic.Int64 // connections refused by the policy
-	log          *slog.Logger
+	upstream *url.URL // nil: connect directly
+	policy   egressPolicy
+	dialer   net.Dialer
+	lookup   func(ctx context.Context, host string) ([]netip.Addr, error)
+	up, down atomic.Int64 // bytes sent and received
+	refused  atomic.Int64 // connections refused by the policy
+	log      *slog.Logger
 }
 
-func newForwarder(upstream *url.URL, localNetwork bool, log *slog.Logger) (*forwarder, error) {
+func newForwarder(upstream *url.URL, policy egressPolicy, log *slog.Logger) (*forwarder, error) {
 	if upstream != nil {
 		switch upstream.Scheme {
 		case "http", "https", "socks5":
@@ -55,7 +55,7 @@ func newForwarder(upstream *url.URL, localNetwork bool, log *slog.Logger) (*forw
 		}
 	}
 	return &forwarder{
-		upstream: upstream, localNetwork: localNetwork, dialer: net.Dialer{Timeout: 15 * time.Second}, log: log,
+		upstream: upstream, policy: policy, dialer: net.Dialer{Timeout: 15 * time.Second}, log: log,
 		lookup: func(ctx context.Context, host string) ([]netip.Addr, error) {
 			return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 		},
@@ -211,7 +211,7 @@ func (f *forwarder) dial(ctx context.Context, addr string) (net.Conn, error) {
 		return nil, err
 	}
 	if ip, err := netip.ParseAddr(host); err == nil {
-		if !allowedDest(ip, f.localNetwork) {
+		if !f.policy.allows(ip) {
 			return nil, fmt.Errorf("%w: %s", errRefused, host)
 		}
 		return f.connect(ctx, addr)
@@ -220,7 +220,9 @@ func (f *forwarder) dial(ctx context.Context, addr string) (net.Conn, error) {
 		return nil, fmt.Errorf("%w: %s", errRefused, host)
 	}
 	if f.upstream != nil {
-		// The upstream resolves the name, on its own network.
+		// The upstream resolves the name, on its own network, which is
+		// what the profile's proxy is for. Looking it up here to check it
+		// would send the lookup around the proxy.
 		return f.connect(ctx, addr)
 	}
 	ips, err := f.lookup(ctx, host)
@@ -228,7 +230,7 @@ func (f *forwarder) dial(ctx context.Context, addr string) (net.Conn, error) {
 		return nil, err
 	}
 	for _, ip := range ips {
-		if !allowedDest(ip, f.localNetwork) {
+		if !f.policy.allows(ip) {
 			return nil, fmt.Errorf("%w: %s is %s", errRefused, host, ip)
 		}
 	}

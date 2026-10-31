@@ -60,7 +60,7 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	fwd, err := newForwarder(upstream, cfg.LocalNetwork, log)
+	fwd, err := newForwarder(upstream, egressPolicy{localNetwork: cfg.LocalNetwork, host: cfg.HostIPs}, log)
 	if err != nil {
 		return err
 	}

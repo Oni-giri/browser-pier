@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +38,9 @@ type config struct {
 	// LocalNetwork (BROWSERPIER_LOCAL_NETWORK) lets pages reach private
 	// addresses: the LAN, the Docker host. Off by default.
 	LocalNetwork bool
+	// HostIPs (BROWSERPIER_HOST_IPS, comma separated) are the Docker
+	// host's own addresses, which count as the local network.
+	HostIPs []netip.Addr
 }
 
 func loadConfig(lookup func(string) (string, bool)) (config, error) {
@@ -70,6 +74,16 @@ func loadConfig(lookup func(string) (string, bool)) (config, error) {
 	var err error
 	if c.LocalNetwork, err = strconv.ParseBool(get("BROWSERPIER_LOCAL_NETWORK", "false")); err != nil {
 		return config{}, fmt.Errorf("BROWSERPIER_LOCAL_NETWORK: want true or false, got %q", get("BROWSERPIER_LOCAL_NETWORK", ""))
+	}
+	for _, s := range strings.Split(get("BROWSERPIER_HOST_IPS", ""), ",") {
+		if s = strings.TrimSpace(s); s == "" {
+			continue
+		}
+		ip, err := netip.ParseAddr(s)
+		if err != nil {
+			return config{}, fmt.Errorf("BROWSERPIER_HOST_IPS: %q is not an IP address", s)
+		}
+		c.HostIPs = append(c.HostIPs, ip)
 	}
 	if c.StopTimeout, err = time.ParseDuration(get("BROWSERPIER_STOP_TIMEOUT", "20s")); err != nil || c.StopTimeout <= 0 {
 		return config{}, fmt.Errorf("BROWSERPIER_STOP_TIMEOUT: want a positive duration such as 20s, got %q", get("BROWSERPIER_STOP_TIMEOUT", ""))
