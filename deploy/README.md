@@ -78,7 +78,7 @@ Still:
 
 ## Behind your own proxy
 
-Proxy everything to `127.0.0.1:7437`, WebSockets included (CDP and the live view use them). Pass the real client address and scheme. Keep query strings out of your logs, error logs included: agents that can't set headers send their token as `?token=` on `/cdp/…`. The shipped `Caddyfile` shows how for Caddy.
+Proxy everything to `127.0.0.1:7437`, WebSockets included (CDP and the live view use them). Pass the real client address and scheme. Keep query strings out of your logs, error logs included: agents that can't set headers connect to `/cdp/…` with a `?ticket=`. A ticket is single-use and lasts a minute, but there's no reason to log it. The shipped `Caddyfile` shows how for Caddy.
 
 Caddy: start from the shipped `Caddyfile`, with `reverse_proxy 127.0.0.1:7437`.
 

@@ -2,13 +2,14 @@
 # BROWSERPIER_DOMAIN, and everything proxied to BrowserPier.
 {
 	# Caddy's error log records each failed request's URI. Agents that
-	# can't set headers send their token as ?token= on /cdp/…: keep it out.
+	# can't set headers connect to /cdp/… with ?ticket=: keep it out, even
+	# though a ticket is single-use and lasts a minute.
 	log default {
 		format filter {
 			wrap json
 			fields {
 				request>uri query {
-					replace token REDACTED
+					replace ticket REDACTED
 				}
 			}
 		}

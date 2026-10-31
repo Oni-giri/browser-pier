@@ -100,7 +100,7 @@ func (s *Server) startBrowser(ctx context.Context, req *sdk.CallToolRequest, in 
 	}
 	fmt.Fprintf(&b, "%s %s's browser. session_id: %s (%s mode).\n", verb, out.Profile, out.ID, out.Mode)
 	if out.Mode == "api" {
-		fmt.Fprintf(&b, "CDP: %s (send your token as an Authorization: Bearer header).\n", out.CDPURL)
+		fmt.Fprintf(&b, "CDP: %s (send your token as an Authorization: Bearer header; a client that can't set headers connects to the cdp_url from POST /api/sessions/%s/cdp-ticket instead).\n", out.CDPURL, out.ID)
 	} else {
 		b.WriteString("Take a screenshot to see it.\n")
 	}
