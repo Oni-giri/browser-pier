@@ -34,6 +34,8 @@ func TestEgressPolicy(t *testing.T) {
 		{"127.8.9.10", false, false},
 		{"::1", false, false},
 		{"169.254.169.254", false, false},
+		{"fd00:ec2::254", false, false},
+		{"100.100.100.200", false, false},
 		{"fe80::1", false, false},
 		{"fe80::1%eth0", false, false},
 		{"0.0.0.0", false, false},

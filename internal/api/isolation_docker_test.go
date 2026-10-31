@@ -89,6 +89,7 @@ func TestPagesCantReachTheLocalNetwork(t *testing.T) {
 		t.Error("with the local network allowed, the test site wasn't reached")
 	}
 	refusedTo(t, p, sock, "http://169.254.169.254/latest/meta-data/")
+	refusedTo(t, p, sock, "http://[fd00:ec2::254]/latest/meta-data/")
 	refusedTo(t, p, sock, "http://localhost:9222/json/version")
 }
 

@@ -13,10 +13,12 @@ import (
 var (
 	// alwaysBlocked are never reachable, whatever the profile allows: the
 	// container's own loopback (CDP listens there), link-local (the cloud
-	// metadata endpoint 169.254.169.254 among it), and addresses that
-	// aren't a single host.
+	// metadata endpoint 169.254.169.254 among it), the metadata endpoints
+	// that sit inside the local ranges, and addresses that aren't a single
+	// host.
 	alwaysBlocked = prefixes(
 		"0.0.0.0/8", "127.0.0.0/8", "169.254.0.0/16", "192.0.0.0/24",
+		"fd00:ec2::254/128", "100.100.100.200/32", // AWS over IPv6, Alibaba Cloud
 		"198.18.0.0/15", "224.0.0.0/4", "240.0.0.0/4",
 		"::/96", "::1/128", "fe80::/10", "fec0::/10", "ff00::/8", "100::/64",
 		// IPv6 that hides an IPv4 address we can't check: Teredo, and
