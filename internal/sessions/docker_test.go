@@ -91,6 +91,8 @@ func (f *realFixture) profile(m *Manager) string {
 	f.t.Helper()
 	p := profiles.New(fmt.Sprintf("t%d", time.Now().UnixNano()%1e9))
 	p.Width, p.Height = 1280, 800
+	// The test sites are on the Docker host: the local network.
+	p.LocalNetwork = true
 	if _, err := m.Profiles().Create(context.Background(), p); err != nil {
 		f.t.Fatal(err)
 	}
@@ -210,7 +212,7 @@ func TestLoginSurvivesExportAndImport(t *testing.T) {
 		t.Fatal(err)
 	}
 	cp := profiles.New(copyName)
-	cp.Width, cp.Height = 1280, 800
+	cp.Width, cp.Height, cp.LocalNetwork = 1280, 800, true
 	if _, err := m.Profiles().Create(context.Background(), cp); err != nil {
 		t.Fatal(err)
 	}

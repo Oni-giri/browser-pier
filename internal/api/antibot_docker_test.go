@@ -31,6 +31,7 @@ func TestVisualModeLooksLikeAPerson(t *testing.T) {
 	if code := a.do(http.MethodPost, "/api/profiles", fmt.Sprintf(`{"name": %q, "default_mode": "visual"}`, name), nil); code != http.StatusCreated {
 		t.Fatalf("create profile: %d", code)
 	}
+	a.allowLocalNetwork(t, name)
 
 	var s sessionJSON
 	if code := a.do(http.MethodPost, "/api/sessions", fmt.Sprintf(`{"profile": %q}`, name), &s); code != http.StatusCreated || s.Mode != "visual" {

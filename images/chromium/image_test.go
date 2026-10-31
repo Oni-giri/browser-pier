@@ -72,6 +72,8 @@ func startBrowser(t *testing.T, image, volume string) *browser {
 		"--shm-size=1g",
 		"--add-host=host.docker.internal:host-gateway",
 		"-e", "BROWSERPIER_SCREEN=1280x800",
+		// The test sites are on the Docker host: the local network.
+		"-e", "BROWSERPIER_LOCAL_NETWORK=true",
 		"-v", volume+":/profile",
 		"-v", sockDir+":/run/browserpier",
 		image)
