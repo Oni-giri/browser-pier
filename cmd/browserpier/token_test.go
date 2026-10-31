@@ -36,3 +36,14 @@ func TestTokenCommand(t *testing.T) {
 		}
 	}
 }
+
+func TestPinCommand(t *testing.T) {
+	t.Setenv("BROWSERPIER_DATA_DIR", t.TempDir())
+	var out bytes.Buffer
+	if err := pinCommand(strings.NewReader("482113\n"), &out); err != nil || !strings.Contains(out.String(), "set") {
+		t.Fatalf("pin = %v, %q", err, out.String())
+	}
+	if err := pinCommand(strings.NewReader("12\n"), &out); err == nil {
+		t.Fatal("a 2-digit PIN was accepted")
+	}
+}

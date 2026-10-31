@@ -3,6 +3,10 @@
 "use strict";
 (() => {
   const profile = document.body.dataset.profile;
+  // A handoff page points these at its own endpoints; its offer answers
+  // with control from the start.
+  const offerURL = document.body.dataset.offer || `/live/${encodeURIComponent(profile)}/offer`;
+  const statusURL = document.body.dataset.status || `/live/${encodeURIComponent(profile)}/status`;
   const video = document.getElementById("screen");
   const stage = document.getElementById("stage");
   const who = document.getElementById("who");
@@ -65,19 +69,21 @@
     who.textContent = label;
     who.className = "pill " + cls;
     const agentDriving = !!(status.in_use_by && status.in_use_by.length);
-    takeBtn.textContent = control ? "Hand back" : "Take control";
-    takeBtn.disabled = !dc || dc.readyState !== "open" || (!control && (agentDriving || status.human_control || s !== "running"));
+    if (takeBtn) {
+      takeBtn.textContent = control ? "Hand back" : "Take control";
+      takeBtn.disabled = !dc || dc.readyState !== "open" || (!control && (agentDriving || status.human_control || s !== "running"));
+    }
     typeBtn.hidden = !(control && touch);
     fitBtn.hidden = !touch;
     stage.classList.toggle("control", control);
     hint.textContent = control
-      ? (touch ? "Tap to click. Pinch to zoom. Type sends text." : keyboard ? "Your keyboard goes to the browser. Esc releases it." : "Click the screen to send your keyboard to the browser.")
+      ? (touch ? `Tap to click. Pinch to zoom. ${typeBtn.textContent} sends text.` : keyboard ? "Your keyboard goes to the browser. Esc releases it." : "Click the screen to send your keyboard to the browser.")
       : "View only. Take control to use the mouse and keyboard.";
   }
 
   async function poll() {
     try {
-      const r = await fetch(`/live/${encodeURIComponent(profile)}/status`, { cache: "no-store" });
+      const r = await fetch(statusURL, { cache: "no-store" });
       if (r.redirected || r.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname); return; }
       status = await r.json();
     } catch (_) { /* keep the last status */ }
@@ -111,15 +117,16 @@
       pc.onicegatheringstatechange = () => pc.iceGatheringState === "complete" && done();
       setTimeout(done, 3000);
     });
-    const r = await fetch(`/live/${encodeURIComponent(profile)}/offer`, {
+    const r = await fetch(offerURL, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sdp: pc.localDescription.sdp }),
     });
     if (!r.ok) { who.textContent = (await r.text()).trim() || "Couldn't connect"; return; }
-    const { sdp } = await r.json();
-    await pc.setRemoteDescription({ type: "answer", sdp });
+    const answer = await r.json();
+    await pc.setRemoteDescription({ type: "answer", sdp: answer.sdp });
+    if (answer.control) { control = true; keyboard = !touch; status.human_control = true; render(); }
   }
 
-  takeBtn.onclick = () => send({ type: control ? "release" : "take" });
+  if (takeBtn) takeBtn.onclick = () => send({ type: control ? "release" : "take" });
   typeBtn.onclick = () => { const text = prompt("Type into the browser"); if (text) send({ type: "text", text }); };
   fitBtn.onclick = () => { zoom = 1; panX = panY = 0; applyZoom(); };
 

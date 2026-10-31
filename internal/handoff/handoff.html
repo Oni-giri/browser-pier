@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>BrowserPier · Handoff</title>
+<style>
+:root{--bg:#FAFAFA;--surface:#FFF;--ink:#09090B;--ink2:#52525B;--ink3:#71717A;--line:#E4E4E7;--blue:#2F6BFF;--red:#DC2626;--redtext:#B91C1C;--green:#15803D;--orange:#C2410C;--oranget:#FFF1EB;--fill:#F4F4F5}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;display:flex;flex-direction:column;background:var(--bg);color:var(--ink);font:15px/1.5 Geist,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+header{display:flex;align-items:center;gap:8px;padding:10px 16px;background:var(--surface);box-shadow:0 1px 0 var(--line)}
+.brand{font-weight:600}.spacer{flex:1}
+.timer{font-variant-numeric:tabular-nums;color:var(--ink2);font-size:13px}
+.card{background:var(--surface);border-radius:16px;box-shadow:0 0 0 1px var(--line),0 1px 2px rgba(9,9,11,.04);padding:18px;margin:16px;max-width:520px;width:calc(100% - 32px);align-self:center}
+h1{font-size:20px;font-weight:600;letter-spacing:-.4px;margin:0 0 4px}
+.sub{color:var(--ink2);margin:0 0 12px;font-size:14px}
+.origin{font-family:"Geist Mono",ui-monospace,monospace;font-size:13px;background:var(--fill);border-radius:4px;padding:1px 5px}
+.chip{display:inline-block;border-radius:999px;padding:2px 10px;font-size:12px;font-weight:500;background:var(--oranget);color:var(--orange)}
+.detail{margin:10px 0 0}
+label{display:block;font-weight:500;margin:14px 0 6px}
+input[type=password],textarea{width:100%;border:0;border-radius:8px;padding:8px 10px;background:var(--surface);box-shadow:0 0 0 1px var(--line);font:inherit}
+input[type=password]{height:44px;font-size:22px;letter-spacing:8px;text-align:center}
+input:focus,textarea:focus{outline:none;box-shadow:0 0 0 1px var(--blue),0 0 0 4px rgba(47,107,255,.18)}
+.error{color:var(--redtext);margin:8px 0 0;font-size:14px}
+.muted{color:var(--ink3);font-size:13px}
+button,.button{display:inline-flex;align-items:center;justify-content:center;height:40px;padding:0 14px;border:0;border-radius:8px;font:inherit;font-weight:500;cursor:pointer;background:var(--surface);color:var(--ink);box-shadow:0 0 0 1px var(--line);text-decoration:none}
+button.primary{background:var(--ink);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.12)}
+.row{display:flex;gap:8px;margin-top:12px}.row>*{flex:1}
+#stage{position:relative;overflow:hidden;background:#18181B;touch-action:none;height:56vh;min-height:280px}
+#screen{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;transform-origin:0 0;outline:none}
+#note{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);background:rgba(9,9,11,.8);color:#fff;border-radius:8px;padding:6px 12px;font-size:13px;pointer-events:none;opacity:0;transition:opacity .2s}
+#note.show{opacity:1}
+.tools{display:flex;gap:8px;align-items:center;padding:8px 16px;background:var(--surface);box-shadow:0 1px 0 var(--line)}
+.pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:2px 10px;font-size:12px;font-weight:500;background:#EEF3FF;color:#1D4ED8}
+.end{text-align:center;padding:32px 18px}
+.end h1{margin-bottom:8px}
+</style>
+</head>
+<body{{if eq .Step "control"}} data-profile="{{.H.Profile}}" data-offer="/h/{{.Token}}/offer" data-status="/h/{{.Token}}/status" data-expires="{{.ExpiresMs}}"{{else if .Token}} data-expires="{{.ExpiresMs}}"{{end}}>
+<header><span class="brand">BrowserPier</span><span class="spacer"></span>{{if or (eq .Step "pin") (eq .Step "control")}}<span class="timer" id="timer"></span>{{end}}</header>
+
+{{if eq .Step "pin"}}
+<div class="card">
+  <h1>{{.H.Agent}} needs you</h1>
+  <p class="sub">{{.H.Profile}}{{if .H.Origin}} · <span class="origin">{{.H.Origin}}</span>{{end}}</p>
+  <span class="chip">{{.Reason}}</span>
+  {{if .H.Detail}}<p class="detail">{{.H.Detail}}</p>{{end}}
+  <form method="post" action="/h/{{.Token}}/pin">
+    <label for="pin">Your handoff PIN</label>
+    <input id="pin" name="pin" type="password" inputmode="numeric" autocomplete="off" pattern="[0-9]*" maxlength="6" required autofocus>
+    {{if .Error}}<p class="error" role="alert">{{.Error}} {{.TriesLeft}} {{if eq .TriesLeft 1}}try{{else}}tries{{end}} left before this link is cancelled.</p>{{end}}
+    <p class="muted">The agent never sees your PIN.</p>
+    <button class="primary" type="submit" style="width:100%;margin-top:8px">Unlock and take control</button>
+  </form>
+</div>
+{{else if eq .Step "control"}}
+<div class="tools"><span id="who" class="pill">You're driving</span><span class="spacer"></span><button id="type" type="button" hidden>Keyboard</button><button id="fit" type="button" hidden>Fit</button></div>
+<div id="stage"><video id="screen" autoplay playsinline muted tabindex="0"></video><div id="note" role="status"></div></div>
+<p id="hint" class="muted" style="margin:6px 16px"></p>
+<div class="card">
+  <p class="sub" style="margin:0">{{.H.Agent}} on {{.H.Profile}}{{if .H.Origin}} · <span class="origin">{{.H.Origin}}</span>{{end}}</p>
+  {{if .H.Detail}}<p class="detail" style="margin-top:4px">{{.H.Detail}}</p>{{end}}
+  <form method="post" action="/h/{{.Token}}/finish" id="finish">
+    <label for="msg">Note for the agent · optional</label>
+    <textarea id="msg" name="note" rows="2" maxlength="1000"></textarea>
+    <div class="row">
+      <button type="submit" name="status" value="cant">Can’t do this</button>
+      <button type="submit" name="status" value="done" class="primary">Done, hand back</button>
+    </div>
+  </form>
+</div>
+<script src="/static/live.js"></script>
+{{else if eq .Step "other"}}
+<div class="card end"><h1>This link is open on another device</h1><p class="sub">Handoff links work once, in one browser.</p></div>
+{{else}}
+<div class="card end">
+  {{if eq .Ended "done"}}<h1>Handed back</h1><p class="sub">{{.H.Agent}} has your note and is carrying on. This link no longer works.</p>
+  {{else if eq .Ended "cant"}}<h1>Told the agent you couldn’t</h1><p class="sub">{{.H.Agent}} will stop this task and report back. This link no longer works.</p>
+  {{else if eq .Ended "cancelled"}}<h1>This link was cancelled</h1><p class="sub">{{if .H.Note}}{{.H.Note}}. {{end}}The agent has been told.</p>
+  {{else if eq .Ended "insecure"}}<h1>This link needs HTTPS</h1><p class="sub">It was opened over plain HTTP from outside your network, where a PIN or password would travel in the clear. Open BrowserPier over HTTPS, or from your LAN or Tailscale.</p>
+  {{else if eq .Ended "expired"}}<h1>This link has expired</h1><p class="sub">Handoff links last 15 minutes and work once. You can still help from the full app.</p><a class="button" href="/login">Sign in to BrowserPier</a>
+  {{else}}<h1>This link doesn’t work</h1><p class="sub">It may have been mistyped, or already used.</p><a class="button" href="/login">Sign in to BrowserPier</a>{{end}}
+</div>
+{{end}}
+<script src="/static/handoff.js"></script>
+</body>
+</html>

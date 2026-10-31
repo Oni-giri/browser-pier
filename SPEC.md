@@ -157,10 +157,16 @@ Self-hosted, persistent browsers for AI agents. Agents start a browser when they
 - An agent can raise the level for one handoff, never lower it. Agents browse untrusted pages and can be manipulated through prompt injection, so a lower level asked for by an agent is ignored.
 - A link lasts 15 minutes, works once and gives control of that one browser only. It dies as soon as the human hands back.
 - Five wrong PIN attempts cancel the link, and the agent is told.
+- A handoff that needs the PIN is refused (409) while no handoff PIN is set; the agent can ask for `require=signin` instead.
+- Wrong PINs are also capped per address (10), per profile across its links (15) and across all profiles (30), each over 15 minutes, since the PIN is shared.
 - An expired link sends the human to the normal sign-in.
 - On a public instance, "Link only" requires HTTPS and shows a warning when chosen.
 - The handoff prompt names only the page's origin (e.g. `accounts.google.com`), never its path or query. Those are controlled by the page and could be used to word a phishing message.
 - After hand-back, the agent is told the page may have changed and must re-read it before acting.
+- **How "works once" is enforced:** the first browser to pass the policy check gets a cookie only it holds (stored hashed); any other browser is refused, even with the PIN.
+- **Handoff links only work over HTTPS, except from private addresses** (the LAN, Tailscale): opened over plain HTTP from outside, a link asks for no PIN or password and opens nothing, and says it needs HTTPS.
+- **While the link is open:** the person drives the live view from the start, and the agent is paused: its connections close and its input is refused until hand-back, expiry or cancellation.
+- **If the browser stops:** an open handoff is cancelled.
 
 ### Handoff reasons
 

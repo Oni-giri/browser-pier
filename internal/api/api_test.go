@@ -20,6 +20,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/db"
 	"github.com/Oni-giri/browser-pier/internal/files"
+	"github.com/Oni-giri/browser-pier/internal/handoff"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/sessions/sessionstest"
@@ -104,6 +105,7 @@ type fixture struct {
 	tokens   *auth.Tokens
 	profiles *profiles.Store
 	web      *auth.Web
+	handoffs *handoff.Service
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -148,7 +150,10 @@ func newFixture(t *testing.T) *fixture {
 	web := auth.NewWeb(admin, f.tokens, log, auth.WebOptions{CookieSecure: "auto"})
 	f.web = web
 	mux := http.NewServeMux()
-	New(f.m, web, files.New(f.m.Layout().FilesDir, 1<<20, os.Getuid(), os.Getgid()), log, "").Register(mux)
+	a := New(f.m, web, files.New(f.m.Layout().FilesDir, 1<<20, os.Getuid(), os.Getgid()), log, "")
+	f.handoffs = handoff.New(d, f.m, log)
+	a.SetHandoffs(f.handoffs)
+	a.Register(mux)
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	return f

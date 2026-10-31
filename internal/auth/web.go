@@ -81,6 +81,19 @@ func NewWeb(admin *Admin, tokens *Tokens, log *slog.Logger, opts WebOptions) *We
 	return w
 }
 
+// SignedIn reports whether the request comes from a signed-in browser.
+func (w *Web) SignedIn(r *http.Request) bool {
+	c, err := r.Cookie(CookieName)
+	if err != nil {
+		return false
+	}
+	_, err = w.admin.Session(r.Context(), c.Value)
+	return err == nil
+}
+
+// Admin is the admin account behind the sign-in, for the handoff PIN.
+func (w *Web) Admin() *Admin { return w.admin }
+
 // Tokens is the agent token store the middleware checks against.
 func (w *Web) Tokens() *Tokens { return w.tokens }
 
@@ -237,7 +250,10 @@ func (w *Web) IsHTTPS(r *http.Request) bool {
 	return w.trusted(remoteIP(r)) && strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
 }
 
-func (w *Web) secureCookie(r *http.Request) bool {
+// SecureCookie reports whether a cookie set on this request should be
+// Secure: per CookieSecure, or under "auto" when served over HTTPS or
+// the public URL is https.
+func (w *Web) SecureCookie(r *http.Request) bool {
 	switch w.opts.CookieSecure {
 	case "always":
 		return true
@@ -531,7 +547,7 @@ func (w *Web) setCookies(rw http.ResponseWriter, r *http.Request, value string, 
 		Value:    value,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   w.secureCookie(r),
+		Secure:   w.SecureCookie(r),
 		SameSite: http.SameSiteLaxMode,
 	}
 	if s.Remember {
@@ -554,7 +570,7 @@ func (w *Web) logout(rw http.ResponseWriter, r *http.Request) {
 		}
 	}
 	//nolint:gosec // as in signIn
-	http.SetCookie(rw, &http.Cookie{Name: CookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: w.secureCookie(r), SameSite: http.SameSiteLaxMode})
+	http.SetCookie(rw, &http.Cookie{Name: CookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: w.SecureCookie(r), SameSite: http.SameSiteLaxMode})
 	http.Redirect(rw, r, "/login", http.StatusSeeOther)
 }
 
