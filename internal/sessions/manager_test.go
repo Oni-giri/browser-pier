@@ -443,6 +443,34 @@ func TestReconcileFailsIfAnOldBrowserWontStop(t *testing.T) {
 	}
 }
 
+// One the old version was already stopping when it went down is waited
+// for too, not stopped in the background.
+func TestReconcileFailsIfAnOldStoppingBrowserWontStop(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	old := f.start(f.m)
+	f.m.Close()
+	if _, err := f.m.db.ExecContext(ctx, `UPDATE sessions SET state = ? WHERE id = ?`, Stopping, old.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.rt.Mu.Lock()
+	f.rt.Containers[old.ContainerID].Version = ""
+	f.rt.StopErr = errors.New("docker is stuck")
+	f.rt.Mu.Unlock()
+	if err := f.manager().Reconcile(ctx); err == nil || !strings.Contains(err.Error(), "docker is stuck") {
+		t.Fatalf("Reconcile = %v", err)
+	}
+
+	// Once Docker stops it, the session ends.
+	f.rt.Mu.Lock()
+	f.rt.StopErr = nil
+	f.rt.Mu.Unlock()
+	if err := f.manager().Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the session to end", func() bool { return f.stored(old.ID).State == Stopped })
+}
+
 func TestDeleteProfile(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()

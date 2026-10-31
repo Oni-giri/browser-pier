@@ -33,8 +33,8 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 
 	// Browsers an older BrowserPier started (docker.Spec) are stopped
 	// before anything attaches to them: running ones by session, starting
-	// ones by container.
-	var outdated []string
+	// and already stopping ones by container.
+	var outdated, outdatedStopping []string
 	type starting struct {
 		l   *live
 		cid string
@@ -76,7 +76,12 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			m.spawn(func() { m.awaitReady(l, cid) })
 		case Stopping:
 			l.markReady()
-			m.stopContainer(c.ID)
+			if c.Spec != docker.Spec {
+				// Waited for below; the watcher ends the session.
+				outdatedStopping = append(outdatedStopping, c.ID)
+			} else {
+				m.stopContainer(c.ID)
+			}
 		default:
 			l.markReady()
 		}
@@ -86,7 +91,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	// They lack what BrowserPier has added since, such as the egress
 	// filter, so they don't run on under this one. If one won't stop,
 	// BrowserPier doesn't start either; the next start tries again.
-	errs := make([]error, len(outdated)+len(outdatedStarting))
+	errs := make([]error, len(outdated)+len(outdatedStarting)+len(outdatedStopping))
 	var old sync.WaitGroup
 	for i, id := range outdated {
 		m.log.Info("stopping a browser an older BrowserPier started", "session", id)
@@ -109,6 +114,15 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 				return
 			}
 			m.abort(o.l, o.cid, "BrowserPier was updated before the browser started")
+		})
+	}
+	for i, cid := range outdatedStopping {
+		old.Go(func() {
+			ctx, cancel := context.WithTimeout(m.ctx, stopTimeout+30*time.Second)
+			defer cancel()
+			if err := m.rt.Stop(ctx, cid); err != nil {
+				errs[len(outdated)+len(outdatedStarting)+i] = fmt.Errorf("stopping container %s, which an older BrowserPier started: %w", cid, err)
+			}
 		})
 	}
 	old.Wait()
