@@ -108,8 +108,14 @@ func Load() (Config, error) {
 }
 
 func load(lookup func(string) (string, bool)) (Config, error) {
+	// An empty variable counts as unset: compose files pass optional
+	// settings through as empty strings.
+	set := func(key string) (string, bool) {
+		v, ok := lookup(key)
+		return v, ok && v != ""
+	}
 	get := func(key, def string) string {
-		if v, ok := lookup(key); ok {
+		if v, ok := set(key); ok {
 			return v
 		}
 		return def
@@ -156,7 +162,7 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		c.WebRTCIPs = append(c.WebRTCIPs, ip)
 	}
 	ram := get("BROWSERPIER_RAM_LIMIT_PERCENT", "70")
-	_, c.RAMLimitFromEnv = lookup("BROWSERPIER_RAM_LIMIT_PERCENT")
+	_, c.RAMLimitFromEnv = set("BROWSERPIER_RAM_LIMIT_PERCENT")
 	if c.RAMLimitPercent, err = strconv.Atoi(strings.TrimSuffix(ram, "%")); err != nil || c.RAMLimitPercent < 0 || c.RAMLimitPercent > 100 {
 		return Config{}, fmt.Errorf("BROWSERPIER_RAM_LIMIT_PERCENT: want 0 to 100, got %q", ram)
 	}

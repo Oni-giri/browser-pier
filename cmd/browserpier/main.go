@@ -84,6 +84,7 @@ func run(log *slog.Logger) error {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return err
 	}
+	privateDir(log, dataDir)
 	database, err := db.Open(ctx, filepath.Join(dataDir, "browserpier.db"))
 	if err != nil {
 		return err
@@ -249,6 +250,21 @@ func instanceID(dataDir string) (string, error) {
 	}
 	id := hex.EncodeToString(b)
 	return id, os.WriteFile(path, []byte(id+"\n"), 0o600)
+}
+
+// privateDir makes the data dir its owner's only: it holds the database,
+// with proxy credentials, and every profile's logins. A bind mount made
+// with a loose umask is tightened; one this user can't chmod is left be.
+func privateDir(log *slog.Logger, dir string) {
+	info, err := os.Stat(dir)
+	if err != nil || info.Mode().Perm()&0o077 == 0 {
+		return
+	}
+	if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // a folder: 0700 is its owner only
+		log.Warn("the data dir can be read by other users of this machine", "dir", dir, "err", err)
+		return
+	}
+	log.Info("made the data dir private to its owner", "dir", dir)
 }
 
 // defaultBrowserImage is the browser image built alongside this version:

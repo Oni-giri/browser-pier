@@ -52,8 +52,6 @@ func TestLoadRejectsBadValues(t *testing.T) {
 		"listen without port": {"BROWSERPIER_LISTEN": "localhost"},
 		"listen bad port":     {"BROWSERPIER_LISTEN": ":http-ish"},
 		"listen port range":   {"BROWSERPIER_LISTEN": ":70000"},
-		"empty listen":        {"BROWSERPIER_LISTEN": ""},
-		"empty data dir":      {"BROWSERPIER_DATA_DIR": ""},
 		"relative host dir":   {"BROWSERPIER_HOST_DATA_DIR": "data"},
 		"bad proxy":           {"BROWSERPIER_TRUSTED_PROXIES": "10.0.0.0/33"},
 		"bad cookie mode":     {"BROWSERPIER_COOKIE_SECURE": "yes"},
@@ -104,5 +102,16 @@ func TestBadPasswordErrorHidesIt(t *testing.T) {
 	_, err := load(env(map[string]string{"BROWSERPIER_ADMIN_PASSWORD": "s3cr"}))
 	if err == nil || strings.Contains(err.Error(), "s3cr") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// Compose passes optional settings through as empty strings: they mean unset.
+func TestEmptyMeansUnset(t *testing.T) {
+	c, err := load(env(map[string]string{"BROWSERPIER_RAM_LIMIT_PERCENT": "", "BROWSERPIER_LISTEN": "", "BROWSERPIER_ADMIN_PASSWORD": ""}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.RAMLimitPercent != 70 || c.RAMLimitFromEnv || c.Listen != DefaultListen || c.AdminPassword != "" {
+		t.Fatalf("%+v", c)
 	}
 }

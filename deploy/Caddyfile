@@ -1,0 +1,21 @@
+# Caddy for docker-compose.yml's https profile: a certificate for
+# BROWSERPIER_DOMAIN, and everything proxied to BrowserPier.
+{
+	# Caddy's error log records each failed request's URI. Agents that
+	# can't set headers send their token as ?token= on /cdp/…: keep it out.
+	log default {
+		format filter {
+			wrap json
+			fields {
+				request>uri query {
+					replace token REDACTED
+				}
+			}
+		}
+	}
+}
+
+# No access log: none is configured here.
+{$BROWSERPIER_DOMAIN} {
+	reverse_proxy browserpier:7437
+}
