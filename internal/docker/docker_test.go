@@ -1,0 +1,155 @@
+package docker
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/system"
+)
+
+func TestBrowserConfigLocksDownTheContainer(t *testing.T) {
+	spec := BrowserSpec{
+		Name: "browserpier-google", Profile: "google", Session: "s1",
+		ProfileDir: "/srv/bp/profiles/google/chrome", ControlDir: "/srv/bp/profiles/google/run",
+		User: "1000:1000", Screen: "1440x900", MountCheck: "s1",
+	}
+	cfg, host := browserConfig("ghcr.io/oni-giri/browser-pier-chromium:1.0.0", `seccomp={"defaultAction":"SCMP_ACT_ERRNO"}`, spec)
+
+	if cfg.Image != "ghcr.io/oni-giri/browser-pier-chromium:1.0.0" || cfg.User != "1000:1000" {
+		t.Fatalf("image %q, user %q", cfg.Image, cfg.User)
+	}
+	if len(cfg.ExposedPorts) != 0 || len(host.PortBindings) != 0 || host.PublishAllPorts {
+		t.Fatal("a browser container must publish no ports")
+	}
+	if host.NetworkMode.IsHost() || host.Privileged || host.PidMode.IsHost() || host.IpcMode.IsHost() {
+		t.Fatal("the browser container must not share host namespaces or run privileged")
+	}
+	if len(host.CapAdd) != 1 || host.CapAdd[0] != "SYS_CHROOT" || len(host.CapDrop) != 1 || host.CapDrop[0] != "ALL" {
+		t.Fatalf("caps add %v drop %v; want ALL dropped and only SYS_CHROOT (for the sandbox) back", host.CapAdd, host.CapDrop)
+	}
+	opts := strings.Join(host.SecurityOpt, " ")
+	if !strings.Contains(opts, `seccomp={"defaultAction":"SCMP_ACT_ERRNO"}`) || !strings.Contains(opts, "no-new-privileges:true") {
+		t.Fatalf("security opts %v", host.SecurityOpt)
+	}
+	if strings.Contains(opts, "unconfined") {
+		t.Fatalf("security opts %v loosen a default", host.SecurityOpt)
+	}
+	if cfg.StopTimeout == nil || *cfg.StopTimeout < 30 {
+		t.Fatalf("stop timeout %v; the entrypoint needs at least 30 s", cfg.StopTimeout)
+	}
+	if host.ShmSize < 512<<20 {
+		t.Fatalf("shm %d", host.ShmSize)
+	}
+	if host.Init == nil || *host.Init {
+		t.Fatal("the image's entrypoint must be PID 1")
+	}
+
+	wantMounts := map[string]string{"/profile": spec.ProfileDir, "/run/browserpier": spec.ControlDir}
+	if len(host.Mounts) != len(wantMounts) || len(host.Binds) != 0 {
+		t.Fatalf("mounts %+v binds %v", host.Mounts, host.Binds)
+	}
+	for _, m := range host.Mounts {
+		if m.Type != mount.TypeBind || wantMounts[m.Target] != m.Source {
+			t.Fatalf("mount %+v", m)
+		}
+	}
+
+	env := strings.Join(cfg.Env, "\n")
+	for _, want := range []string{"BROWSERPIER_SCREEN=1440x900", "BROWSERPIER_MOUNT_CHECK=s1"} {
+		if !strings.Contains(env, want) {
+			t.Fatalf("env %v lacks %s", cfg.Env, want)
+		}
+	}
+	if cfg.Labels[LabelManaged] != "true" || cfg.Labels[LabelProfile] != "google" || cfg.Labels[LabelSession] != "s1" {
+		t.Fatalf("labels %v", cfg.Labels)
+	}
+}
+
+func TestNewCompactsTheEmbeddedSeccompProfile(t *testing.T) {
+	c, err := New(Options{Image: "img", Instance: "i1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+	if c.seccompOpt != "seccomp="+c.seccomp {
+		t.Fatalf("Docker takes the profile inline; got %.40s…", c.seccompOpt)
+	}
+	if strings.ContainsAny(c.seccomp, "\n\t") || !json.Valid([]byte(c.seccomp)) || !strings.Contains(c.seccomp, `"unshare"`) {
+		t.Fatalf("seccomp profile not compact valid JSON with the sandbox rules: %.80s…", c.seccomp)
+	}
+	if _, err := New(Options{Instance: "i1"}); err == nil {
+		t.Fatal("New must refuse an empty image")
+	}
+	if _, err := New(Options{Image: "img"}); err == nil {
+		t.Fatal("New must refuse an empty instance ID")
+	}
+}
+
+func TestHostPath(t *testing.T) {
+	mounts := []container.MountPoint{
+		{Type: mount.TypeBind, Source: "/home/u/bp", Destination: "/data"},
+		{Type: mount.TypeVolume, Source: "/var/lib/docker/volumes/x/_data", Destination: "/data/profiles"},
+		{Type: mount.TypeTmpfs, Destination: "/tmp"},
+		{Type: mount.TypeBind, Source: "/srv", Destination: "/dat"},
+	}
+	cases := []struct {
+		path, want string
+		ok         bool
+	}{
+		{"/data", "/home/u/bp", true},
+		{"/data/db", "/home/u/bp/db", true},
+		{"/data/profiles/google", "/var/lib/docker/volumes/x/_data/google", true}, // the deepest mount wins
+		{"/database", "", false},                                                  // not under /data despite the prefix
+		{"/tmp/x", "", false},                                                     // tmpfs has no host path
+		{"/elsewhere", "", false},
+	}
+	for _, c := range cases {
+		got, ok := hostPath(mounts, c.path)
+		if got != c.want || ok != c.ok {
+			t.Errorf("hostPath(%q) = %q, %t; want %q, %t", c.path, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+func TestContainerIDFromMountinfo(t *testing.T) {
+	id := strings.Repeat("ab12", 16)
+	docker := "542 520 0:52 / / rw,relatime master:250 - overlay overlay rw\n" +
+		"560 542 8:1 /var/lib/docker/containers/" + id + "/resolv.conf /etc/resolv.conf rw,relatime - ext4 /dev/sda1 rw\n" +
+		"561 542 8:1 /var/lib/docker/containers/" + id + "/hostname /etc/hostname rw,relatime - ext4 /dev/sda1 rw\n"
+	if got := containerIDFromMountinfo(strings.NewReader(docker)); got != id {
+		t.Fatalf("docker: got %q", got)
+	}
+	podman := "700 680 0:40 /containers/storage/overlay-containers/" + id + "/userdata/hostname /etc/hostname rw - tmpfs tmpfs rw\n"
+	if got := containerIDFromMountinfo(strings.NewReader(podman)); got != id {
+		t.Fatalf("podman: got %q", got)
+	}
+	host := "22 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw\n"
+	if got := containerIDFromMountinfo(strings.NewReader(host)); got != "" {
+		t.Fatalf("host: got %q", got)
+	}
+}
+
+func TestLastLine(t *testing.T) {
+	if got := lastLine([]byte("one\ntwo\n\n  \n")); got != "two" {
+		t.Fatalf("got %q", got)
+	}
+	if got := lastLine(nil); got != "" {
+		t.Fatalf("got %q", got)
+	}
+	long := strings.Repeat("é", 400) // 800 bytes
+	if got := lastLine([]byte(long)); len(got) > maxLogLine+len("…") || !strings.HasSuffix(got, "…") {
+		t.Fatalf("long line kept %d bytes", len(got))
+	}
+}
+
+func TestIsPodman(t *testing.T) {
+	if !isPodman([]system.ComponentVersion{{Name: "Podman Engine"}}) {
+		t.Fatal("Podman not recognised")
+	}
+	if isPodman([]system.ComponentVersion{{Name: "Engine"}, {Name: "containerd"}, {Name: "runc"}}) {
+		t.Fatal("Docker taken for Podman")
+	}
+}

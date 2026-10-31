@@ -20,6 +20,9 @@ type config struct {
 	ProfileDir    string        // BROWSERPIER_PROFILE_DIR, Chromium's user data dir
 	ControlSocket string        // BROWSERPIER_CONTROL_SOCKET, the Unix socket the orchestrator connects to
 	StopTimeout   time.Duration // BROWSERPIER_STOP_TIMEOUT, how long Chromium gets to close before it is killed
+	// MountCheck (BROWSERPIER_MOUNT_CHECK), when set, must match the marker
+	// file the orchestrator wrote into both mounted folders.
+	MountCheck string
 }
 
 func loadConfig(lookup func(string) (string, bool)) (config, error) {
@@ -32,6 +35,7 @@ func loadConfig(lookup func(string) (string, bool)) (config, error) {
 	c := config{
 		ProfileDir:    get("BROWSERPIER_PROFILE_DIR", "/profile"),
 		ControlSocket: get("BROWSERPIER_CONTROL_SOCKET", "/run/browserpier/control.sock"),
+		MountCheck:    get("BROWSERPIER_MOUNT_CHECK", ""),
 	}
 
 	screen := get("BROWSERPIER_SCREEN", "1920x1080")

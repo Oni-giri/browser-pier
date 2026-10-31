@@ -14,7 +14,9 @@ The orchestrator starts these containers; nothing else should. Each one needs:
 | What | How | Why |
 |---|---|---|
 | Seccomp profile | `--security-opt seccomp=seccomp.json` (embedded as `chromium.SeccompProfile`) | Chromium's sandbox needs user namespaces, which Docker's default profile blocks. Without it Chromium won't start. |
-| Profile volume | mounted at `/profile` | Chromium's user data dir. A fresh named volume inherits the right owner (uid 1000). |
+| Capabilities | `--cap-drop ALL --cap-add SYS_CHROOT`, `--security-opt no-new-privileges` | The browser runs as a non-root user with no effective capabilities. The sandbox chroots inside its own user namespace, which needs `SYS_CHROOT` in the bounding set; without it the zygote dies at startup. |
+| User | `--user UID:GID` (any non-root uid) | The orchestrator runs it as its own uid so it owns the profile files. `HOME` is `/tmp/home`, created at startup. |
+| Profile folder | mounted at `/profile` | Chromium's user data dir, writable by that user. |
 | Control socket dir | mounted at `/run/browserpier`, shared only with the orchestrator | The entrypoint creates `control.sock` there. |
 | Stop timeout | `docker stop -t 30` (or `StopTimeout` in the API) | The entrypoint closes Chromium on SIGTERM. Docker's default of 10 s is too short to rely on. |
 | Shared memory | `--shm-size=1g` | Under 512 MiB the entrypoint falls back to `--disable-dev-shm-usage`, which is slower. |
@@ -28,6 +30,7 @@ Settings, all optional:
 | `BROWSERPIER_STOP_TIMEOUT` | `20s` | How long Chromium gets to close before it's killed. Keep it under the container's stop timeout. |
 | `BROWSERPIER_PROFILE_DIR` | `/profile` | |
 | `BROWSERPIER_CONTROL_SOCKET` | `/run/browserpier/control.sock` | |
+| `BROWSERPIER_MOUNT_CHECK` | none | When set, both `/profile` and the control socket's folder must hold a `.browserpier-mount` file with this value, or the entrypoint exits 1 before touching the profile. The orchestrator sets it so a wrong host path can't open an empty profile. |
 
 The container exits 0 only after a graceful stop: Chromium closed through CDP's `Browser.close` in time, so the profile is safely on disk. It exits 1 if Chromium crashed, failed to start, had to be killed, or had to be stopped with SIGTERM because CDP didn't answer (which can lose the last few seconds of cookie writes); the last log line says which.
 

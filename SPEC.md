@@ -54,10 +54,11 @@ Self-hosted, persistent browsers for AI agents. Agents start a browser when they
 - **Web UI:** Go templates with htmx for live updates, embedded in the binary, with no JS build step. Live view and handoff use a small vanilla JS WebRTC client.
 - **Browser container**, one per running session: headful Chromium on a virtual display (Xvfb) with no automation flags. It has OS-level input (xdotool) for Visual mode and exposes CDP for API mode. A small sidecar captures the display, encodes H.264 (GStreamer) and sends it to the orchestrator.
 - **Live stream:** WebRTC, served by the orchestrator with pion on a single muxed UDP port (TCP fallback). It relays each container's stream to the viewer and passes mouse and keyboard from the viewer back over a data channel to xdotool. No CDP is involved, so Visual mode stays clean.
-- **Profile volume**, one per profile: mounted as Chromium's user data directory. It outlives every container.
+- **Profile folder**, one per profile: `profiles/<name>/` in the data dir, bind-mounted into the browser container as Chromium's user data directory. It outlives every container, and backing up the data dir backs up every profile. Browser containers run as the orchestrator's own user, so it can read profile files (downloads, export) without a helper container; an orchestrator running as root starts them as uid 1000 instead, since Chromium won't run as root with its sandbox on.
+- **Host path:** bind mounts are resolved by the Docker daemon, so the orchestrator needs its data dir's path on the host. When it runs in a container it reads that from its own container's mounts; `BROWSERPIER_HOST_DATA_DIR` overrides it. Before each start the orchestrator writes a marker into the profile folder, and the browser container refuses to start if it doesn't see it, so a wrong path fails loudly instead of opening an empty profile.
 - **Proxying:** CDP, the live stream and the visual endpoints are reached only through the orchestrator, behind token checks. Browser containers publish no ports.
-- **Control socket:** the container's entry process listens on a Unix socket in a volume shared only with the orchestrator, never on a network port, so neither pages nor other browser containers can reach it. It relays CDP (headful Chromium binds it to the container's own loopback), serves the H.264 stream and, later, Visual-mode input and screenshots.
-- **Sandbox:** Chromium's own sandbox stays on. It needs user namespaces, which Docker's default seccomp profile blocks, so the orchestrator starts browser containers with BrowserPier's seccomp profile: Docker's default plus namespace creation. Never `--no-sandbox`.
+- **Control socket:** the container's entry process listens on a Unix socket in a folder shared only with the orchestrator (`profiles/<name>/run/`, so each container sees only its own), never on a network port, so neither pages nor other browser containers can reach it. It relays CDP (headful Chromium binds it to the container's own loopback), serves the H.264 stream and, later, Visual-mode input and screenshots.
+- **Sandbox:** Chromium's own sandbox stays on. It needs user namespaces, which Docker's default seccomp profile blocks, so the orchestrator starts browser containers with BrowserPier's seccomp profile: Docker's default plus namespace creation. Containers drop every capability except `SYS_CHROOT`, which the sandbox uses inside its own user namespace, and run with `no-new-privileges`. Never `--no-sandbox`.
 - **Chrome launch setup:**
   - Drop `--enable-automation` and set `--disable-blink-features=AutomationControlled`.
   - `--use-angle=swiftshader --enable-unsafe-swiftshader`, so WebGL works in a container (software rendering on SwiftShader; this combination is checked in CI).
@@ -243,7 +244,7 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 - Raw CDP has no authentication, so it is never exposed directly; it goes through the token-checked proxy.
 - CDP access is equivalent to full control of every logged-in account in that profile. Docs say so plainly, and tokens are scoped per profile.
 - Tokens, the PIN and the admin password are hashed at rest.
-- Treat profile volumes as secrets, since they hold live session cookies. With `password-store=basic`, cookies on disk are effectively readable.
+- Treat profile folders as secrets, since they hold live session cookies. With `password-store=basic`, cookies on disk are effectively readable.
 - Page text returned to agents is fenced and sanitised (see MCP tools), since agents browse untrusted pages.
 
 ---
@@ -273,7 +274,8 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 | Deployment | Generic docker-compose first (any VPS), Umbrel app second | The author runs it on Umbrel, but it should work for anyone on a plain server. |
 | Fingerprints | No spoofing; one stable real fingerprint per profile | Spoofing needs CDP on every page, and a changing fingerprint flags logged-in accounts. |
 | Proxies | Per-profile, authenticated, via a forwarding proxy; timezone and locale matched | On a VPS, residential proxies are what makes protected sites usable. |
-| Orchestrator ↔ browser container | A Unix socket on a volume shared with the orchestrator | Nothing listens on a network, so a page or another container can't reach CDP. |
+| Orchestrator ↔ browser container | A Unix socket in a per-profile folder shared with the orchestrator | Nothing listens on a network, so a page or another container can't reach CDP. |
+| Profile storage | Bind-mounted folders in the data dir, not named Docker volumes | One directory to back up or move; export and downloads read files directly. The host path is detected from the orchestrator's own mounts. |
 | Chromium sandbox | On, with a seccomp profile that allows user namespaces | Pages are untrusted; the container is a second boundary, not the only one. |
 
 ### Still open
@@ -317,7 +319,7 @@ v1 stays fully self-hosted on one box. The aim right now is to ship a complete, 
 
 **Groundwork that's cheap in v1**
 - Put the browser lifecycle behind a `Runner` interface (start, stop, and optionally suspend/resume, for a profile) with local Docker as the only v1 backend.
-- Put profile storage behind a `ProfileStore` interface with a local volume as the only v1 backend.
+- Put profile storage behind a `ProfileStore` interface with a local folder as the only v1 backend.
 - Both are internal Go interfaces: no new features, no new config.
 
 **Stage 1: FOSS adoption**

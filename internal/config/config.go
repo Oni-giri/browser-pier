@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 )
 
@@ -20,6 +21,15 @@ type Config struct {
 	Listen string
 	// DataDir holds the database and one folder per profile (BROWSERPIER_DATA_DIR).
 	DataDir string
+	// HostDataDir is DataDir's path on the Docker host, for bind mounts
+	// (BROWSERPIER_HOST_DATA_DIR). Empty means detect it.
+	HostDataDir string
+	// BrowserImage overrides the browser image (BROWSERPIER_BROWSER_IMAGE).
+	// Empty means the one matching this build.
+	BrowserImage string
+	// UsernsMode is the browser containers' user namespace mode
+	// (BROWSERPIER_USERNS_MODE): "keep-id" under rootless Podman.
+	UsernsMode string
 }
 
 // Load reads the configuration from the process environment.
@@ -35,8 +45,11 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		return def
 	}
 	c := Config{
-		Listen:  get("BROWSERPIER_LISTEN", DefaultListen),
-		DataDir: get("BROWSERPIER_DATA_DIR", DefaultDataDir),
+		Listen:       get("BROWSERPIER_LISTEN", DefaultListen),
+		DataDir:      get("BROWSERPIER_DATA_DIR", DefaultDataDir),
+		HostDataDir:  get("BROWSERPIER_HOST_DATA_DIR", ""),
+		BrowserImage: get("BROWSERPIER_BROWSER_IMAGE", ""),
+		UsernsMode:   get("BROWSERPIER_USERNS_MODE", ""),
 	}
 
 	_, port, err := net.SplitHostPort(c.Listen)
@@ -48,6 +61,9 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	}
 	if c.DataDir == "" {
 		return Config{}, errors.New("BROWSERPIER_DATA_DIR: must not be empty")
+	}
+	if c.HostDataDir != "" && !filepath.IsAbs(c.HostDataDir) {
+		return Config{}, fmt.Errorf("BROWSERPIER_HOST_DATA_DIR: want an absolute path, got %q", c.HostDataDir)
 	}
 	return c, nil
 }

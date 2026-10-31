@@ -20,6 +20,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -43,7 +44,13 @@ func run(log *slog.Logger) error {
 	ctx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stopSignals()
 
+	if err := checkMounts(cfg); err != nil {
+		return err
+	}
 	if err := prepareProfile(cfg.ProfileDir); err != nil {
+		return err
+	}
+	if err := prepareHome(); err != nil {
 		return err
 	}
 
@@ -123,6 +130,40 @@ func prepareProfile(dir string) error {
 		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("clear %s: %w", name, err)
 		}
+	}
+	return nil
+}
+
+// mountMarker is the file the orchestrator writes into the profile and
+// control folders before each start (see internal/sessions).
+const mountMarker = ".browserpier-mount"
+
+// checkMounts makes sure the folders mounted here are the ones the
+// orchestrator prepared. If its idea of the data dir's host path is wrong,
+// Docker mounts some other folder, and Chromium would open an empty profile
+// while the real one sits untouched elsewhere.
+func checkMounts(c config) error {
+	if c.MountCheck == "" {
+		return nil
+	}
+	for _, dir := range []string{c.ProfileDir, filepath.Dir(c.ControlSocket)} {
+		b, err := os.ReadFile(filepath.Join(dir, mountMarker)) //nolint:gosec // dir is the container's own config
+		if err != nil || strings.TrimSpace(string(b)) != c.MountCheck {
+			return fmt.Errorf("%s is not the folder the orchestrator prepared (no matching %s); check BROWSERPIER_HOST_DATA_DIR", dir, mountMarker)
+		}
+	}
+	return nil
+}
+
+// prepareHome creates $HOME. The orchestrator runs the container as its own
+// uid, which has no home directory in the image.
+func prepareHome() error {
+	home := os.Getenv("HOME")
+	if home == "" || home == "/" {
+		return nil
+	}
+	if err := os.MkdirAll(home, 0o700); err != nil { //nolint:gosec // HOME is the container's own config
+		return fmt.Errorf("create HOME: %w", err)
 	}
 	return nil
 }
