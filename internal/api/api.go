@@ -62,13 +62,15 @@ func (a *API) Register(mux *http.ServeMux) {
 	mux.Handle("GET /api/profiles/{name}/files", t(a.listFiles))
 	mux.Handle("GET /api/profiles/{name}/files/{file}", t(a.getFile))
 	mux.Handle("DELETE /api/profiles/{name}/files/{file}", t(a.deleteFile))
-	// Many CDP clients can't set headers, so the CDP proxy also takes the
-	// token as ?token=.
+	mux.Handle("POST /api/sessions/{id}/cdp-ticket", t(a.cdpTicket))
 	if a.handoffs != nil {
 		a.registerHandoffs(mux)
 	}
-	mux.Handle("GET /cdp/{profile}", tokenFromQuery(t(a.cdp)))
-	mux.Handle("GET /cdp/{profile}/{path...}", tokenFromQuery(t(a.cdp)))
+	// Many CDP clients can't set headers, so the CDP proxy also takes a
+	// ticket as ?ticket=; never the token, which a proxy in front could log.
+	c := func(h http.HandlerFunc) http.Handler { return a.web.RequireTokenOrCDPTicket(h) }
+	mux.Handle("GET /cdp/{profile}", c(a.cdp))
+	mux.Handle("GET /cdp/{profile}/{path...}", c(a.cdp))
 }
 
 type profileJSON struct {
