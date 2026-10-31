@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	_ "time/tzdata" // the orchestrator image has no zoneinfo to check time zones against
 )
 
 // Mode is how agents drive a session by default.
@@ -57,9 +58,27 @@ type Profile struct {
 	// Proxy is the upstream proxy URL, which may carry credentials: never log it.
 	Proxy         string
 	HandoffPolicy HandoffPolicy
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	// TimeZone and Locale, when set, are used instead of the ones matching
+	// the exit location: an IANA zone such as Europe/Berlin and a BCP 47
+	// locale such as de-DE.
+	TimeZone string
+	Locale   string
+	// Location is where the browser appeared to be the last time it ran.
+	// BrowserPier records it; it can't be set.
+	Location  Location
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
+
+// Location is a browser's exit location as last seen.
+type Location struct {
+	Country   string // ISO 3166-1 alpha-2
+	TimeZone  string // IANA
+	IP        string
+	CheckedAt time.Time // zero if never
+}
+
+var localeRE = regexp.MustCompile(`^[a-z]{2,3}(-[A-Z]{2})?$`)
 
 // New returns a profile with the default settings.
 func New(name string) Profile {
@@ -94,6 +113,14 @@ func (p Profile) Validate() error {
 	case PolicyLink, PolicyPIN, PolicySignIn:
 	default:
 		return fmt.Errorf("handoff policy %q: want %q, %q or %q", p.HandoffPolicy, PolicyLink, PolicyPIN, PolicySignIn)
+	}
+	if p.TimeZone != "" {
+		if _, err := time.LoadLocation(p.TimeZone); err != nil || p.TimeZone == "Local" {
+			return fmt.Errorf("time zone %q: want an IANA name such as Europe/Berlin", p.TimeZone)
+		}
+	}
+	if p.Locale != "" && !localeRE.MatchString(p.Locale) {
+		return fmt.Errorf("locale %q: want a language and country such as de-DE", p.Locale)
 	}
 	return validProxy(p.Proxy)
 }
@@ -139,7 +166,8 @@ type Store struct {
 
 func NewStore(db *sql.DB) *Store { return &Store{db: db, now: time.Now} }
 
-const columns = `name, default_mode, auto_stop_minutes, screen_width, screen_height, proxy, handoff_policy, created_at, updated_at`
+const columns = `name, default_mode, auto_stop_minutes, screen_width, screen_height, proxy, handoff_policy, created_at, updated_at,
+	tz_override, locale_override, geo_country, geo_time_zone, geo_ip, geo_checked_at`
 
 // Create adds a new profile.
 func (s *Store) Create(ctx context.Context, p Profile) (Profile, error) {
@@ -148,10 +176,11 @@ func (s *Store) Create(ctx context.Context, p Profile) (Profile, error) {
 	}
 	now := s.now().Truncate(time.Millisecond)
 	p.CreatedAt, p.UpdatedAt = now, now
-	res, err := s.db.ExecContext(ctx, `INSERT INTO profiles (`+columns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	res, err := s.db.ExecContext(ctx, `INSERT INTO profiles (name, default_mode, auto_stop_minutes, screen_width, screen_height,
+		proxy, handoff_policy, created_at, updated_at, tz_override, locale_override) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (name) DO NOTHING`,
 		p.Name, p.DefaultMode, int(p.AutoStop/time.Minute), p.Width, p.Height, p.Proxy, p.HandoffPolicy,
-		now.UnixMilli(), now.UnixMilli())
+		now.UnixMilli(), now.UnixMilli(), p.TimeZone, p.Locale)
 	if err != nil {
 		return Profile{}, err
 	}
@@ -168,8 +197,8 @@ func (s *Store) Update(ctx context.Context, p Profile) (Profile, error) {
 	}
 	now := s.now().Truncate(time.Millisecond)
 	res, err := s.db.ExecContext(ctx, `UPDATE profiles SET default_mode = ?, auto_stop_minutes = ?, screen_width = ?,
-		screen_height = ?, proxy = ?, handoff_policy = ?, updated_at = ? WHERE name = ?`,
-		p.DefaultMode, int(p.AutoStop/time.Minute), p.Width, p.Height, p.Proxy, p.HandoffPolicy, now.UnixMilli(), p.Name)
+		screen_height = ?, proxy = ?, handoff_policy = ?, tz_override = ?, locale_override = ?, updated_at = ? WHERE name = ?`,
+		p.DefaultMode, int(p.AutoStop/time.Minute), p.Width, p.Height, p.Proxy, p.HandoffPolicy, p.TimeZone, p.Locale, now.UnixMilli(), p.Name)
 	if err != nil {
 		return Profile{}, err
 	}
@@ -177,6 +206,13 @@ func (s *Store) Update(ctx context.Context, p Profile) (Profile, error) {
 		return Profile{}, ErrNotFound
 	}
 	return s.Get(ctx, p.Name)
+}
+
+// SetLocation records where the profile's browser appeared to be.
+func (s *Store) SetLocation(ctx context.Context, name string, l Location) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE profiles SET geo_country = ?, geo_time_zone = ?, geo_ip = ?, geo_checked_at = ? WHERE name = ?`,
+		l.Country, l.TimeZone, l.IP, l.CheckedAt.UnixMilli(), name)
+	return err
 }
 
 // Get returns one profile.
@@ -222,9 +258,13 @@ func (s *Store) Delete(ctx context.Context, name string) error {
 func scan(row interface{ Scan(...any) error }) (Profile, error) {
 	var p Profile
 	var autoStop int
-	var created, updated int64
-	err := row.Scan(&p.Name, &p.DefaultMode, &autoStop, &p.Width, &p.Height, &p.Proxy, &p.HandoffPolicy, &created, &updated)
+	var created, updated, checked int64
+	err := row.Scan(&p.Name, &p.DefaultMode, &autoStop, &p.Width, &p.Height, &p.Proxy, &p.HandoffPolicy, &created, &updated,
+		&p.TimeZone, &p.Locale, &p.Location.Country, &p.Location.TimeZone, &p.Location.IP, &checked)
 	p.AutoStop = time.Duration(autoStop) * time.Minute
 	p.CreatedAt, p.UpdatedAt = time.UnixMilli(created), time.UnixMilli(updated)
+	if checked != 0 {
+		p.Location.CheckedAt = time.UnixMilli(checked)
+	}
 	return p, err
 }

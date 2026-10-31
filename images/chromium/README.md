@@ -31,6 +31,10 @@ Settings, all optional:
 | `BROWSERPIER_STOP_TIMEOUT` | `20s` | How long Chromium gets to close before it's killed. Keep it under the container's stop timeout. |
 | `BROWSERPIER_PROFILE_DIR` | `/profile` | |
 | `BROWSERPIER_CONTROL_SOCKET` | `/run/browserpier/control.sock` | |
+| `BROWSERPIER_PROXY_FILE` | `/run/browserpier/proxy.json` | `{"url": "socks5://user:pass@host:port"}` (or `http`, `https`): the profile's proxy. Read and deleted before Chromium starts. |
+| `BROWSERPIER_GEOIP_URL` | none | Endpoint to look up the exit location (`country_iso`, `time_zone`); empty for no lookup. |
+| `BROWSERPIER_GEO_COUNTRY`, `BROWSERPIER_GEO_TZ` | none | The location the profile ran with last time; the zone is kept while the country is the same. |
+| `BROWSERPIER_TZ_OVERRIDE`, `BROWSERPIER_LOCALE_OVERRIDE` | none | The profile's manual time zone and language; they win. |
 | `BROWSERPIER_MOUNT_CHECK` | none | When set, both `/profile` and the control socket's folder must hold a `.browserpier-mount` file with this value, or the entrypoint exits 1 before touching the profile. The orchestrator sets it so a wrong host path can't open an empty profile. |
 
 The container exits 0 only after a graceful stop: Chromium closed through CDP's `Browser.close` in time, so the profile is safely on disk. It exits 1 if Chromium crashed, failed to start, had to be killed, or had to be stopped with SIGTERM because CDP didn't answer (which can lose the last few seconds of cookie writes); the last log line says which.
@@ -46,6 +50,8 @@ HTTP over the Unix socket:
 | `GET /screenshot` | The display as PNG; `?width=` scales it down. `X-Screen-Width` and `X-Screen-Height` give the screen size. |
 | `POST /input/click` | `{"x", "y", "button", "double"}` in screen pixels, through xdotool. |
 | `POST /input/type` | `{"text"}`, up to 2000 characters, through xdotool; `\n` presses Enter. |
+| `GET /geo` | The location the browser runs with: country, time zone, locale, Accept-Language list, and where they came from. |
+| `GET /proxy/stats` | Bytes sent and received through the proxy, when there is one. |
 | `GET /stream` | The display as an H.264 Annex-B byte stream (constrained baseline, 30 fps, keyframe every 2 s), one reader at a time (409 otherwise). The encoder runs only while it's read. |
 
 ## Seccomp profile

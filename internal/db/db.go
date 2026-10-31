@@ -70,6 +70,15 @@ var migrations = []string{
 		remember     INTEGER NOT NULL,
 		user_agent   TEXT NOT NULL DEFAULT ''
 	);`,
+
+	// A profile's manual time zone and language, and the exit location it
+	// last ran with.
+	`ALTER TABLE profiles ADD COLUMN tz_override TEXT NOT NULL DEFAULT '';
+	ALTER TABLE profiles ADD COLUMN locale_override TEXT NOT NULL DEFAULT '';
+	ALTER TABLE profiles ADD COLUMN geo_country TEXT NOT NULL DEFAULT '';
+	ALTER TABLE profiles ADD COLUMN geo_time_zone TEXT NOT NULL DEFAULT '';
+	ALTER TABLE profiles ADD COLUMN geo_ip TEXT NOT NULL DEFAULT '';
+	ALTER TABLE profiles ADD COLUMN geo_checked_at INTEGER NOT NULL DEFAULT 0;`,
 }
 
 // Open opens (creating if needed) the database at path and migrates it.

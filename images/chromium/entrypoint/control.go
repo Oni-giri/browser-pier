@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -18,7 +19,9 @@ import (
 //	    /cdp/...   CDP over HTTP and WebSocket, relayed to Chromium's loopback port
 //	GET /stream    the display as an H.264 Annex-B byte stream, one reader at a time
 //	GET /screenshot, POST /input/click, POST /input/type   Visual mode (see visual.go)
-func newControlHandler(cdp string, stream http.Handler, vis *visual) http.Handler {
+//	GET /geo           the location the browser runs with
+//	GET /proxy/stats   bytes through the proxy, when there is one
+func newControlHandler(cdp string, stream http.Handler, vis *visual, fwd *forwarder, where geo) http.Handler {
 	target := &url.URL{Scheme: "http", Host: cdp}
 	relay := &httputil.ReverseProxy{Rewrite: func(pr *httputil.ProxyRequest) {
 		// SetURL also sets Host to the loopback address, which Chromium requires.
@@ -36,6 +39,13 @@ func newControlHandler(cdp string, stream http.Handler, vis *visual) http.Handle
 	mux.Handle("GET /stream", stream)
 	if vis != nil {
 		vis.register(mux)
+	}
+	mux.HandleFunc("GET /geo", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(where)
+	})
+	if fwd != nil {
+		mux.HandleFunc("GET /proxy/stats", fwd.stats)
 	}
 	return mux
 }

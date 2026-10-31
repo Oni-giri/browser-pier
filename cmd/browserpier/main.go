@@ -109,6 +109,7 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	defer mgr.Close()
+	mgr.SetGeoURL(cfg.GeoIPURL)
 	if err := mgr.Reconcile(ctx); err != nil {
 		return fmt.Errorf("checking browsers left running: %w", err)
 	}

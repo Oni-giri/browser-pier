@@ -185,6 +185,24 @@ type Site struct {
 	mu  sync.Mutex
 	// issued is the session token from the last login, seen the cookie on the last /account visit.
 	issued, seen string
+	// requests counts every request; acceptLanguage is the last page
+	// request's Accept-Language.
+	requests       int
+	acceptLanguage string
+}
+
+// Requests counts the requests the site has served.
+func (s *Site) Requests() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.requests
+}
+
+// AcceptLanguage is the Accept-Language of the last page request.
+func (s *Site) AcceptLanguage() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.acceptLanguage
 }
 
 // NewSite serves the site on every interface; host is how the browser
@@ -223,6 +241,10 @@ func NewSite(t *testing.T, host string) *Site {
 		}
 		_, _ = io.WriteString(w, "<h1>Signed in as pier</h1><p>BrowserPier persistence test</p>")
 	})
+	mux.HandleFunc("GET /geo", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ip":"198.51.100.23","country_iso":"DE","time_zone":"Europe/Berlin"}`)
+	})
 	mux.HandleFunc("GET /download", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Disposition", `attachment; filename="report.csv"`)
 		w.Header().Set("Content-Type", "text/csv")
@@ -241,6 +263,12 @@ document.getElementById('file').addEventListener('change', async e => {
 	}
 	logged := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Logf("site: %s %s", r.Method, r.URL.Path)
+		s.mu.Lock()
+		s.requests++
+		if r.URL.Path != "/geo" {
+			s.acceptLanguage = r.Header.Get("Accept-Language")
+		}
+		s.mu.Unlock()
 		// Content sniffing doesn't take a page starting with <form> as HTML.
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		mux.ServeHTTP(w, r)

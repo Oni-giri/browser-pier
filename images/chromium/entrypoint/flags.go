@@ -4,8 +4,9 @@ import "fmt"
 
 // chromiumArgs is Chromium's command line. It never includes
 // --enable-automation, --headless or --no-sandbox, and spoofs nothing.
-// smallShm is set when /dev/shm is too small for Chromium's shared memory.
-func chromiumArgs(c config, smallShm bool) []string {
+// smallShm is set when /dev/shm is too small for Chromium's shared memory;
+// proxied when the profile has a proxy, served by the forwarder.
+func chromiumArgs(c config, smallShm, proxied bool) []string {
 	args := []string{
 		"--user-data-dir=" + c.ProfileDir,
 		// Chromium binds this to the container's loopback; the control socket relays it.
@@ -31,6 +32,16 @@ func chromiumArgs(c config, smallShm bool) []string {
 	}
 	if smallShm {
 		args = append(args, "--disable-dev-shm-usage")
+	}
+	if proxied {
+		args = append(args,
+			// Everything goes through the forwarder; with a single proxy
+			// and no DIRECT fallback, if it's down nothing goes out.
+			"--proxy-server=socks5://"+forwarderAddr,
+			// And nothing resolves a name locally, so DNS can't leak
+			// around the proxy either.
+			"--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1",
+		)
 	}
 	return args
 }

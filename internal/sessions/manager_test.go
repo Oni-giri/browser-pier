@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -683,5 +684,68 @@ func TestDisconnectToken(t *testing.T) {
 	f.m.DisconnectToken("t1")
 	if revoked.Err() == nil || kept.Err() != nil {
 		t.Fatalf("after revoking t1: t1 %v, t2 %v", revoked.Err(), kept.Err())
+	}
+}
+
+func TestProxyAndLocationHandover(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	p, _ := f.m.Profiles().Get(ctx, "google")
+	p.Proxy = "socks5://user:s3cret@proxy.example:1080"
+	p.Locale = "de-DE"
+	if _, err := f.m.Profiles().Update(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.Profiles().SetLocation(ctx, "google", profiles.Location{Country: "US", TimeZone: "America/Chicago"}); err != nil {
+		t.Fatal(err)
+	}
+	f.m.SetGeoURL("https://geo.example/json")
+
+	// The browser reads and deletes the proxy file itself; here the fake
+	// checks it while "starting", and reports a fresh lookup.
+	proxyPath := filepath.Join(f.dir, "profiles", "google", "run", proxyFile)
+	var seen string
+	var mode os.FileMode
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		if seen == "" {
+			b, _ := os.ReadFile(proxyPath)
+			st, _ := os.Stat(proxyPath)
+			seen = string(b)
+			if st != nil {
+				mode = st.Mode().Perm()
+			}
+		}
+		_, _ = w.Write([]byte("ok\n"))
+	})
+	mux.HandleFunc("GET /geo", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"ip":"203.0.113.9","country":"DE","time_zone":"Europe/Berlin","source":"lookup"}`))
+	})
+	f.rt.Control = mux
+
+	s := f.start(f.m)
+	if seen != `{"url":"socks5://user:s3cret@proxy.example:1080"}` || mode != 0o600 {
+		t.Fatalf("proxy file %q, mode %v", seen, mode)
+	}
+	c, _ := f.rt.Container(s.ContainerID)
+	env := strings.Join(c.Spec.Env, "\n")
+	for _, want := range []string{"BROWSERPIER_GEOIP_URL=https://geo.example/json", "BROWSERPIER_GEO_COUNTRY=US", "BROWSERPIER_GEO_TZ=America/Chicago", "BROWSERPIER_LOCALE_OVERRIDE=de-DE", "BROWSERPIER_TZ_OVERRIDE="} {
+		if !strings.Contains(env, want) {
+			t.Errorf("env lacks %s:\n%s", want, env)
+		}
+	}
+	if strings.Contains(env, "s3cret") {
+		t.Fatal("proxy credentials in the container's environment")
+	}
+	got, _ := f.m.Profiles().Get(ctx, "google")
+	if got.Location.Country != "DE" || got.Location.TimeZone != "Europe/Berlin" || got.Location.IP != "203.0.113.9" || got.Location.CheckedAt.IsZero() {
+		t.Fatalf("location not recorded: %+v", got.Location)
+	}
+
+	if _, err := f.m.Stop(ctx, s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(proxyPath); !os.IsNotExist(err) {
+		t.Fatal("the proxy credentials were left in the control folder")
 	}
 }

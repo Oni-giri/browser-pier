@@ -19,7 +19,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := config{Width: 1920, Height: 1080, ProfileDir: "/profile", ControlSocket: "/run/browserpier/control.sock", StopTimeout: 20 * time.Second}
+	want := config{Width: 1920, Height: 1080, ProfileDir: "/profile", ControlSocket: "/run/browserpier/control.sock", StopTimeout: 20 * time.Second, ProxyFile: "/run/browserpier/proxy.json"}
 	if c != want {
 		t.Fatalf("got %+v, want %+v", c, want)
 	}
@@ -36,7 +36,7 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := config{Width: 1280, Height: 800, ProfileDir: "/p", ControlSocket: "/s/c.sock", StopTimeout: 45 * time.Second, MountCheck: "s1"}
+	want := config{Width: 1280, Height: 800, ProfileDir: "/p", ControlSocket: "/s/c.sock", StopTimeout: 45 * time.Second, MountCheck: "s1", ProxyFile: "/run/browserpier/proxy.json"}
 	if c != want {
 		t.Fatalf("got %+v, want %+v", c, want)
 	}
@@ -61,7 +61,7 @@ func TestLoadConfigRejectsBadValues(t *testing.T) {
 
 func TestChromiumArgs(t *testing.T) {
 	c := config{Width: 1280, Height: 800, ProfileDir: "/profile"}
-	args := chromiumArgs(c, false)
+	args := chromiumArgs(c, false, false)
 	for _, want := range []string{
 		"--user-data-dir=/profile",
 		"--password-store=basic",
@@ -87,7 +87,7 @@ func TestChromiumArgs(t *testing.T) {
 	if slices.Contains(args, "--disable-dev-shm-usage") {
 		t.Error("--disable-dev-shm-usage without a small /dev/shm")
 	}
-	if !slices.Contains(chromiumArgs(c, true), "--disable-dev-shm-usage") {
+	if !slices.Contains(chromiumArgs(c, true, false), "--disable-dev-shm-usage") {
 		t.Error("small /dev/shm: want --disable-dev-shm-usage")
 	}
 }

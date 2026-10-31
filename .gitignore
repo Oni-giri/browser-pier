@@ -28,3 +28,6 @@ coverage.*
 .vscode/
 *.swp
 .DS_Store
+
+# A stray go build of images/chromium/entrypoint lands here.
+/entrypoint
