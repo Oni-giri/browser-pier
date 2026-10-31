@@ -107,6 +107,9 @@ var migrations = []string{
 	`UPDATE handoffs SET status = 'cancelled', note = 'another handoff was open'
 		WHERE status = 'pending' AND rowid NOT IN (SELECT min(rowid) FROM handoffs WHERE status = 'pending' GROUP BY session_id);
 	CREATE UNIQUE INDEX handoffs_one_pending ON handoffs(session_id) WHERE status = 'pending';`,
+
+	// The web UI reads each profile's latest session on every refresh.
+	`CREATE INDEX sessions_profile_created ON sessions(profile, created_at);`,
 }
 
 // Open opens (creating if needed) the database at path and migrates it.

@@ -1,0 +1,61 @@
+{{define "content"}}{{with .Data}}
+<div class="page">
+  <div class="page-head">
+    <div>
+      <h1>Profiles</h1>
+      <p class="num" id="summary">{{template "summary" .}}</p>
+    </div>
+    <div class="actions">
+      <a class="btn primary" href="/profiles/new" hx-get="/profiles/new" hx-target="#modal" data-key="n">New profile <kbd>N</kbd></a>
+    </div>
+  </div>
+  {{if .All}}
+  <div class="toolbar">
+    <nav class="seg" aria-label="Filter">
+      <a href="/profiles?view={{.View}}"{{if eq .Show ""}} aria-current="true"{{end}}>All <span class="count">{{len .All}}</span></a>
+      <a href="/profiles?show=help&amp;view={{.View}}"{{if eq .Show "help"}} aria-current="true"{{end}}>Needs you <span class="count">{{index .Counts "help"}}</span></a>
+      <a href="/profiles?show=running&amp;view={{.View}}"{{if eq .Show "running"}} aria-current="true"{{end}}>Running <span class="count">{{index .Counts "running"}}</span></a>
+      <a href="/profiles?show=stopped&amp;view={{.View}}"{{if eq .Show "stopped"}} aria-current="true"{{end}}>Stopped <span class="count">{{index .Counts "stopped"}}</span></a>
+    </nav>
+    <nav class="seg" aria-label="Layout">
+      <a href="/profiles?show={{.Show}}&amp;view=grid" aria-label="Grid"{{if eq .View "grid"}} aria-current="true"{{end}}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/></svg></a>
+      <a href="/profiles?show={{.Show}}&amp;view=table" aria-label="Table"{{if eq .View "table"}} aria-current="true"{{end}}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14"/></svg></a>
+    </nav>
+  </div>
+  {{end}}
+  <div id="list" hx-get="/profiles?show={{.Show}}&amp;view={{.View}}&amp;q={{.Query}}" hx-trigger="every 5s" hx-swap="innerHTML" data-poll>
+    {{template "list" .}}
+  </div>
+  <p class="foot-note">One browser per profile. An agent asking for a running profile attaches to it.</p>
+</div>
+{{template "confirm-dialogs" "/profiles"}}
+{{end}}{{end}}
+
+{{define "summary"}}{{len .All}} {{plural (len .All) "profile" "profiles"}} · {{.Running}} running{{if .Running}} · {{gb .Mem.Used}} in use{{if ge .Mem.Room 0}} · room for about {{.Mem.Room}} more{{end}}{{end}}{{end}}
+
+{{define "list"}}
+{{if not .All}}
+  <div class="cell empty">
+    <div class="plus">+</div>
+    <h2>Create your first profile</h2>
+    <p>A profile is a saved browser that stays signed in. Log into a service once, and your agents can use it from then on.</p>
+    <a class="btn primary" href="/profiles/new" hx-get="/profiles/new" hx-target="#modal">New profile</a>
+  </div>
+{{else if not .Shown}}
+  <div class="cell empty"><h2>Nothing here</h2><p>{{if .Query}}No profile matches “{{.Query}}”.{{else}}No profile is in this state right now.{{end}}</p><a class="btn" href="/profiles">Show all</a></div>
+{{else if eq .View "table"}}
+  <div class="table-wrap">
+  <table class="table">
+    <thead><tr><th>Profile</th><th>Status</th><th>Mode</th><th>Agent</th><th>Memory</th><th>Activity</th><th class="right">Actions</th></tr></thead>
+    <tbody>{{range .Shown}}{{template "row" .}}{{end}}</tbody>
+  </table>
+  </div>
+{{else}}
+  <div class="grid">
+    {{range .Shown}}{{template "card" .}}{{end}}
+    <a class="cell dashed" href="/profiles/new" hx-get="/profiles/new" hx-target="#modal"><span class="plus">+</span><b>New profile</b><span class="small muted">Log in once, agents reuse it</span></a>
+  </div>
+{{end}}
+{{end}}
+
+{{define "list-poll"}}{{template "list" .}}<p class="num" id="summary" hx-swap-oob="true">{{template "summary" .}}</p>{{end}}

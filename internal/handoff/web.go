@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
@@ -24,7 +25,19 @@ var pageHTML string
 //go:embed handoff.js
 var pageJS []byte
 
-var page = template.Must(template.New("handoff").Parse(pageHTML))
+var page = template.Must(template.New("handoff").Funcs(template.FuncMap{"initials": initials}).Parse(pageHTML))
+
+// initials are up to two letters for the agent's badge: "research-bot" → "RB".
+func initials(name string) string {
+	out := ""
+	for _, part := range strings.FieldsFunc(name, func(r rune) bool { return r == '-' || r == '_' || r == ' ' || r == '.' }) {
+		out += strings.ToUpper(string([]rune(part)[0]))
+		if len([]rune(out)) == 2 {
+			break
+		}
+	}
+	return out
+}
 
 // browserCookie marks the one browser a handoff link was opened in.
 const browserCookie = "bp_handoff"
@@ -84,7 +97,7 @@ func (w *Web) render(rw http.ResponseWriter, status int, v view) {
 	rw.Header().Set("Cache-Control", "no-store")
 	rw.Header().Set("Referrer-Policy", "no-referrer")
 	rw.Header().Set("X-Frame-Options", "DENY")
-	rw.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; media-src 'self' blob:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+	rw.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' blob:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 	rw.WriteHeader(status)
 	v.Reason = v.H.Reason.Label()
 	v.ExpiresMs = v.H.ExpiresAt.UnixMilli()

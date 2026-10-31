@@ -186,6 +186,7 @@ func (s *Service) Create(ctx context.Context, sessionID, agent string, reason Re
 		_, _ = s.db.ExecContext(ctx, `DELETE FROM handoffs WHERE id = ?`, h.ID)
 		return Handoff{}, "", err
 	}
+	s.m.NoteAttention(sessionID, agent, "Paused, waiting for you: "+reason.Label())
 	s.log.Info("handoff opened", "handoff", h.ID, "profile", h.Profile, "agent", agent, "reason", reason, "policy", h.Policy)
 	return h, token, nil
 }
@@ -261,6 +262,72 @@ func (s *Service) ByToken(ctx context.Context, token string) (Handoff, error) {
 		return h, err
 	}
 	return s.checkLive(ctx, h)
+}
+
+// Pending returns the open handoffs, oldest first, ending any whose time
+// is up or whose browser stopped.
+func (s *Service) Pending(ctx context.Context) ([]Handoff, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+columns+` FROM handoffs WHERE status = 'pending' ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	var open []Handoff
+	for rows.Next() {
+		h, err := scan(rows)
+		if err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		open = append(open, h)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	var out []Handoff
+	for _, h := range open {
+		h, err := s.checkLive(ctx, h)
+		if err != nil {
+			return nil, err
+		}
+		if h.Status == Pending {
+			out = append(out, h)
+		}
+	}
+	return out, nil
+}
+
+// Stats counts the handoffs asked for since a time, and the median time
+// people took to answer the ones they did (done or can't).
+func (s *Service) Stats(ctx context.Context, since time.Time) (count int, median time.Duration, err error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT status, finished_at - created_at FROM handoffs WHERE created_at >= ?`, since.UnixMilli())
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() { _ = rows.Close() }()
+	var took []int64
+	for rows.Next() {
+		var status Status
+		var ms int64
+		if err := rows.Scan(&status, &ms); err != nil {
+			return 0, 0, err
+		}
+		count++
+		if status == Done || status == Cant { // a person answered
+			took = append(took, ms)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, 0, err
+	}
+	if n := len(took); n > 0 {
+		slices.Sort(took)
+		mid := took[n/2]
+		if n%2 == 0 {
+			mid = took[n/2-1] + (took[n/2]-took[n/2-1])/2
+		}
+		median = time.Duration(mid) * time.Millisecond
+	}
+	return count, median, nil
 }
 
 // checkLive ends a pending handoff whose time is up or whose browser stopped.
@@ -398,9 +465,18 @@ func (s *Service) finish(ctx context.Context, h Handoff, status Status, note str
 	if _, err := s.m.SetNeedsHelp(h.SessionID, false); err != nil && !errors.Is(err, sessions.ErrNotRunning) {
 		s.log.Warn("handing the browser back", "handoff", h.ID, "err", err)
 	}
+	s.m.Note(h.SessionID, "", finishedNotes[status])
 	s.log.Info("handoff finished", "handoff", h.ID, "profile", h.Profile, "status", status)
 	s.wake(h.ID)
 	return h, nil
+}
+
+// finishedNotes are what the agent log says when a handoff ends.
+var finishedNotes = map[Status]string{
+	Done:      "Handed back: done",
+	Cant:      "Handed back: couldn't do it",
+	Cancelled: "Help request cancelled",
+	Expired:   "Help request expired",
 }
 
 func (s *Service) wake(id string) {

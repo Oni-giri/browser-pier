@@ -147,6 +147,7 @@ func (a *API) uploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tok, _ := auth.TokenFromContext(r.Context())
+	a.m.Note(s.ID, tok.Name, "Uploaded "+f.Name)
 	a.log.Info("file uploaded", "profile", s.Profile, "file", f.Name, "bytes", f.Size, "token", tok.Name)
 	writeJSON(w, http.StatusCreated, map[string]any{"name": f.Name, "size": f.Size, "path": path,
 		"url": a.baseURL(r) + "/api/profiles/" + url.PathEscape(s.Profile) + "/files"})

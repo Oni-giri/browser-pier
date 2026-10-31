@@ -29,6 +29,8 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/handoff"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
+	"github.com/Oni-giri/browser-pier/internal/settings"
+	"github.com/Oni-giri/browser-pier/internal/ui"
 	"github.com/Oni-giri/browser-pier/internal/webrtc"
 )
 
@@ -120,12 +122,22 @@ func run(log *slog.Logger) error {
 	}
 	defer mgr.Close()
 	mgr.SetGeoURL(cfg.GeoIPURL)
-	if cfg.RAMLimitPercent > 0 {
-		total, err := hostMemory()
-		if err != nil {
-			return fmt.Errorf("reading the host's memory for BROWSERPIER_RAM_LIMIT_PERCENT: %w", err)
+	prefs := settings.New(database)
+	saved, err := prefs.Get(ctx)
+	if err != nil {
+		return fmt.Errorf("reading settings: %w", err)
+	}
+	// The environment wins over the web UI's setting, as for the admin password.
+	ramPercent := cfg.RAMLimitPercent
+	if !cfg.RAMLimitFromEnv && saved.RAMLimitPercent > 0 {
+		ramPercent = saved.RAMLimitPercent
+	}
+	total, memErr := hostMemory()
+	if ramPercent > 0 {
+		if memErr != nil {
+			return fmt.Errorf("reading the host's memory for the memory limit: %w", memErr)
 		}
-		mgr.SetMemoryLimit(total*int64(cfg.RAMLimitPercent)/100, perBrowser)
+		mgr.SetMemoryLimit(total*int64(ramPercent)/100, perBrowser)
 	}
 	go mgr.WatchIdle(ctx, 30*time.Second)
 	if err := mgr.Reconcile(ctx); err != nil {
@@ -167,6 +179,7 @@ func run(log *slog.Logger) error {
 	log.Info("starting", "version", version, "listen", ln.Addr().String(), "data_dir", dataDir,
 		"host_data_dir", hostDataDir, "browser_image", image)
 	agentAPI := api.New(mgr, web, fileStore, log, cfg.PublicURL)
+	agentAPI.SetSettings(prefs)
 	go agentAPI.WatchRevocations(ctx, 10*time.Second)
 	relay, err := webrtc.New(webrtc.Options{Port: cfg.WebRTCPort, IPs: cfg.WebRTCIPs}, mgr.Layout().ControlSocket, log)
 	if err != nil {
@@ -177,7 +190,18 @@ func run(log *slog.Logger) error {
 	handoffs := handoff.New(database, mgr, log)
 	go handoffs.Sweep(ctx, 15*time.Second)
 	agentAPI.SetHandoffs(handoffs)
-	return serve(ctx, ln, newHandler(web, agentAPI, live, handoff.NewWeb(handoffs, web, live, mgr, log)), log)
+	app := ui.New(mgr, web, handoffs, prefs, log, ui.Options{
+		PublicURL:       cfg.PublicURL,
+		HostMemory:      total,
+		RAMLimitFromEnv: cfg.RAMLimitFromEnv,
+		SetRAMLimit: func(percent int) {
+			if total > 0 {
+				mgr.SetMemoryLimit(total*int64(percent)/100, perBrowser)
+				log.Info("memory limit changed", "percent", percent)
+			}
+		},
+	})
+	return serve(ctx, ln, newHandler(web, agentAPI, live, handoff.NewWeb(handoffs, web, live, mgr, log), app), log)
 }
 
 // perBrowser is the memory a new browser is expected to need when
@@ -249,7 +273,7 @@ func browserUser(uid, gid int) (int, int) {
 
 // newHandler is every route. Cross-origin form posts are refused, so a
 // page elsewhere can't act with the admin's cookie.
-func newHandler(web *auth.Web, agentAPI *api.API, live *webrtc.Handler, handoffs *handoff.Web) http.Handler {
+func newHandler(web *auth.Web, agentAPI *api.API, live *webrtc.Handler, handoffs *handoff.Web, app *ui.UI) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -263,12 +287,9 @@ func newHandler(web *auth.Web, agentAPI *api.API, live *webrtc.Handler, handoffs
 	if handoffs != nil {
 		handoffs.Register(mux)
 	}
-	// Until the web UI lands (PROJ-11), the home page only confirms the sign-in.
-	mux.Handle("GET /{$}", web.RequireAdmin(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(`<!doctype html><title>BrowserPier</title><p>Signed in to BrowserPier.</p>` +
-			`<form method="post" action="/logout"><button>Sign out</button></form>`))
-	})))
+	if app != nil {
+		app.Register(mux)
+	}
 	return new(http.CrossOriginProtection).Handler(mux)
 }
 

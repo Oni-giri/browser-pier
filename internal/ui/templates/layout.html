@@ -1,0 +1,53 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="same-origin">
+<meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false,"includeIndicatorStyles":false,"historyCacheSize":0,"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"422","swap":true},{"code":"[45]..","swap":false,"error":true}]}'>
+<title>{{.Title}} · BrowserPier</title>
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/htmx.min.js" defer></script>
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<a class="sr-only" href="#main">Skip to content</a>
+<header class="top">
+  <div class="top-in">
+    <a class="logo" href="/">{{template "logo"}}BrowserPier</a>
+    <nav class="nav" aria-label="Main">
+      <a href="/"{{if eq .Nav "overview"}} aria-current="page"{{end}}>Overview</a>
+      <a href="/profiles"{{if eq .Nav "profiles"}} aria-current="page"{{end}}>Profiles</a>
+      <a href="/agents"{{if eq .Nav "agents"}} aria-current="page"{{end}}>Agents</a>
+      <a href="/settings"{{if eq .Nav "settings"}} aria-current="page"{{end}}>Settings</a>
+    </nav>
+    <span id="chip" hx-get="/chip" hx-trigger="every 5s" hx-swap="innerHTML">{{template "chip" .Help}}</span>
+    <div class="grow"></div>
+    <form class="search" action="/profiles" method="get" role="search">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <input id="search" name="q" type="search" placeholder="Search…" aria-label="Search profiles" list="profile-names" autocomplete="off">
+      <kbd aria-hidden="true">⌘K</kbd>
+      <datalist id="profile-names">{{range .Profiles}}<option value="{{.}}">{{end}}</datalist>
+    </form>
+    <details class="avatar menu">
+      <summary aria-label="Account and sign out">A</summary>
+      <div class="menu-list">
+        <a href="/settings#account">Account</a>
+        <hr>
+        <form method="post" action="/logout"><button type="submit" class="btn-reset">Sign out</button></form>
+      </div>
+    </details>
+  </div>
+</header>
+<main id="main">
+{{template "content" .}}
+</main>
+<div id="modal"></div>
+<div id="toasts" role="status" aria-live="polite">{{with .Flash.Text}}<div class="toast{{if $.Flash.Error}} error{{end}}">{{if not $.Flash.Error}}✓ {{end}}{{.}}</div>{{end}}</div>
+</body>
+</html>{{end}}
+
+{{define "logo"}}<svg width="22" height="22" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7" fill="#09090B"/><path d="M5 12h18M8 12v9M14 12v9M20 12v9" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/><circle cx="20" cy="6.5" r="2.2" fill="#2F6BFF"/></svg>{{end}}
+
+{{define "chip"}}{{if .Count}}<a class="chip-help" href="{{.Link}}">{{.Count}} needs you</a>{{end}}{{end}}

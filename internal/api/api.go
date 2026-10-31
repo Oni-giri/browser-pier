@@ -16,12 +16,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/handoff"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
+	"github.com/Oni-giri/browser-pier/internal/settings"
 )
 
 // API is the agent-facing HTTP API.
@@ -30,6 +32,7 @@ type API struct {
 	web      *auth.Web
 	files    *files.Store
 	handoffs *handoff.Service
+	settings *settings.Store // the admin's defaults for new profiles, if set
 	log      *slog.Logger
 	public   string // BROWSERPIER_PUBLIC_URL, if set
 }
@@ -37,6 +40,10 @@ type API struct {
 func New(m *sessions.Manager, web *auth.Web, fs *files.Store, log *slog.Logger, publicURL string) *API {
 	return &API{m: m, web: web, files: fs, log: log, public: strings.TrimRight(publicURL, "/")}
 }
+
+// SetSettings makes profiles created through the API start from the
+// admin's defaults instead of the built-in ones.
+func (a *API) SetSettings(s *settings.Store) { a.settings = s }
 
 // Register adds the API's routes to mux.
 func (a *API) Register(mux *http.ServeMux) {
@@ -167,7 +174,16 @@ func (a *API) createProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "set a profile's proxy in the web UI, not through the API")
 		return
 	}
+	// The admin's default proxy applies: the agent didn't choose it.
 	p := profiles.New(in.Name)
+	if a.settings != nil {
+		set, err := a.settings.Get(r.Context())
+		if err != nil {
+			a.internal(w, "loading the default settings", err)
+			return
+		}
+		p = set.NewProfile(in.Name)
+	}
 	if in.DefaultMode != nil {
 		p.DefaultMode = profiles.Mode(*in.DefaultMode)
 	}
@@ -178,8 +194,8 @@ func (a *API) createProfile(w http.ResponseWriter, r *http.Request) {
 		p.Width, p.Height = in.Screen.Width, in.Screen.Height
 	}
 	if in.HandoffPolicy != nil {
-		// Agents can make handoffs stricter, never looser: a looser
-		// policy is ignored, as the spec says.
+		// Agents can make handoffs stricter than the default, never
+		// looser: a looser policy is ignored, as the spec says.
 		asked := profiles.HandoffPolicy(*in.HandoffPolicy)
 		rank, ok := policyRank[asked]
 		if !ok {
@@ -225,7 +241,7 @@ func (a *API) sessionOut(r *http.Request, s sessions.Session, attached bool) ses
 	base := a.baseURL(r)
 	out := sessionJSON{
 		ID: s.ID, Profile: s.Profile, Mode: string(s.Mode), State: string(s.State), Attached: attached,
-		LiveViewURL: base + "/live/" + s.Profile,
+		LiveViewURL: base + "/profiles/" + url.PathEscape(s.Profile),
 		InUseBy:     s.InUseBy, Error: s.Error, LastLog: s.LastLog, CreatedAt: s.CreatedAt,
 	}
 	if s.Mode == profiles.ModeAPI && s.State.Live() {
@@ -292,7 +308,9 @@ func (a *API) startSession(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusCreated
 	if attached {
 		status = http.StatusOK
+		a.m.Note(s.ID, tok.Name, "Attached")
 	} else {
+		a.m.Note(s.ID, tok.Name, "Started the browser")
 		a.log.Info("session started", "session", s.ID, "profile", s.Profile, "mode", s.Mode, "token", tok.Name)
 	}
 	writeJSON(w, status, a.sessionOut(r, s, attached))
@@ -361,8 +379,12 @@ func (a *API) stopSession(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	tok, _ := auth.TokenFromContext(r.Context())
+	// Noted first: the log goes with the session once it has stopped.
+	a.m.Note(s.ID, tok.Name, "Stopping the browser")
 	stopped, err := a.m.Stop(r.Context(), s.ID)
 	if err != nil {
+		a.m.Note(s.ID, tok.Name, "Couldn't stop the browser") // still live, so still logged
 		if errors.Is(err, sessions.ErrClosed) {
 			writeError(w, http.StatusServiceUnavailable, "BrowserPier is shutting down")
 			return
@@ -370,7 +392,6 @@ func (a *API) stopSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	tok, _ := auth.TokenFromContext(r.Context())
 	a.log.Info("session stopped by an agent", "session", s.ID, "profile", s.Profile, "token", tok.Name)
 	writeJSON(w, http.StatusOK, a.sessionOut(r, stopped, false))
 }
@@ -412,6 +433,10 @@ func (a *API) screenshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusOK {
+		tok, _ := auth.TokenFromContext(r.Context())
+		a.m.Note(s.ID, tok.Name, "Took a screenshot")
+	}
 	relay(w, resp, "Content-Type", "X-Screen-Width", "X-Screen-Height")
 }
 
@@ -443,8 +468,40 @@ func (a *API) input(path string) http.HandlerFunc {
 			writeError(w, resp.StatusCode, strings.TrimSpace(string(msg)))
 			return
 		}
+		tok, _ := auth.TokenFromContext(r.Context())
+		a.m.Note(s.ID, tok.Name, describeInput(path, body))
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// describeInput puts a click or keystrokes in words for the activity
+// log. Typed text is never included, only its length: it may be a
+// password or a one-time code.
+func describeInput(path string, body []byte) string {
+	if path == "/input/type" {
+		var t struct{ Text string }
+		_ = json.Unmarshal(body, &t)
+		if n := utf8.RuneCountInString(t.Text); n != 1 {
+			return fmt.Sprintf("Typed %d characters", n)
+		}
+		return "Typed 1 character"
+	}
+	var c struct {
+		X, Y   int
+		Button string
+		Double bool
+	}
+	_ = json.Unmarshal(body, &c)
+	what := "Clicked"
+	switch {
+	case c.Double:
+		what = "Double-clicked"
+	case c.Button == "right":
+		what = "Right-clicked"
+	case c.Button == "middle":
+		what = "Middle-clicked"
+	}
+	return fmt.Sprintf("%s at %d, %d", what, c.X, c.Y)
 }
 
 // control makes one request to a profile's control socket.

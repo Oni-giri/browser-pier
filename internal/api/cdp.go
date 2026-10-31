@@ -108,6 +108,8 @@ func (a *API) cdp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
+	a.m.Note(s.ID, tok.Name, "Connected over CDP")
+	defer a.m.Note(s.ID, tok.Name, "Disconnected")
 	proxy := &httputil.ReverseProxy{
 		Transport: controlTransport(sock),
 		Rewrite: func(pr *httputil.ProxyRequest) {

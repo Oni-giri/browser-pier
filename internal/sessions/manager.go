@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/docker"
@@ -97,8 +98,8 @@ type Manager struct {
 	readyTimeout time.Duration
 	now          func() time.Time
 	geoURL       string // where browsers look up their exit location; "" for nowhere
-	memLimit     int64  // bytes all browsers may use together; 0 for no limit
-	memEach      int64  // what a new browser is expected to take
+	// mem is the memory cap, set by SetMemoryLimit; nil for none.
+	mem atomic.Pointer[memLimits]
 
 	ctx    context.Context // ends with Close
 	cancel context.CancelFunc
@@ -135,6 +136,8 @@ type live struct {
 	human bool
 	// viewers counts open live views.
 	viewers int
+	// activity is what agents did, oldest first; it goes with the session.
+	activity []Activity
 }
 
 // conn is one agent connection to a browser; cancelling it closes it.
@@ -511,12 +514,8 @@ func (m *Manager) awaitReady(l *live, cid string) {
 }
 
 func healthy(ctx context.Context, sock string) bool {
-	c := &http.Client{Timeout: time.Second, Transport: &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", sock)
-		},
-	}}
-	defer c.CloseIdleConnections()
+	c := controlClient(sock)
+	c.Timeout = time.Second
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://control/healthz", nil)
 	if err != nil {
 		return false
@@ -527,6 +526,16 @@ func healthy(ctx context.Context, sock string) bool {
 	}
 	_ = resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
+}
+
+// controlClient talks to a browser's control socket, one connection per request.
+func controlClient(sock string) *http.Client {
+	return &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", sock)
+		},
+		DisableKeepAlives: true,
+	}}
 }
 
 // watch finishes the session when its container exits.
@@ -622,12 +631,8 @@ func (m *Manager) removeProxyFile(profile string) {
 func (m *Manager) recordLocation(sock, profile string) {
 	ctx, cancel := context.WithTimeout(m.ctx, 5*time.Second)
 	defer cancel()
-	c := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "unix", sock)
-	}}}
-	defer c.CloseIdleConnections()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://control/geo", nil)
-	resp, err := c.Do(req)
+	resp, err := controlClient(sock).Do(req)
 	if err != nil {
 		return
 	}

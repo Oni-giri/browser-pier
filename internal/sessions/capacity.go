@@ -76,10 +76,52 @@ func (m *Manager) stopIdle(ctx context.Context) {
 	}
 }
 
+// memLimits is the memory cap and what a new browser is expected to take.
+type memLimits struct{ limit, each int64 }
+
 // SetMemoryLimit caps the memory all browsers may use together (0: no
-// cap), expecting each new browser to need perBrowser. Call it before Start.
+// cap), expecting each new browser to need perBrowser. It can be called
+// at any time; the new cap applies to the next start, and browsers
+// already running aren't stopped for it.
 func (m *Manager) SetMemoryLimit(limit, perBrowser int64) {
-	m.memLimit, m.memEach = limit, perBrowser
+	m.mem.Store(&memLimits{limit, perBrowser})
+}
+
+// MemoryLimit is the current cap on the memory all browsers may use
+// together; 0 means none.
+func (m *Manager) MemoryLimit() int64 {
+	limit, _ := m.memLimits()
+	return limit
+}
+
+func (m *Manager) memLimits() (limit, each int64) {
+	if l := m.mem.Load(); l != nil {
+		return l.limit, l.each
+	}
+	return 0, 0
+}
+
+// MemoryReport is what the live browsers use against the memory limit,
+// counted the way a new start is admitted.
+type MemoryReport struct {
+	Limit, Used, Each int64 // Limit is 0 when there is none
+	Browsers          []Usage
+}
+
+// Room is how many more browsers fit under the limit, or -1 when there is
+// no limit to count against.
+func (r MemoryReport) Room() int {
+	if r.Limit <= 0 || r.Each <= 0 {
+		return -1
+	}
+	return int(max(r.Limit-r.Used, 0) / r.Each)
+}
+
+// Memory reports what the live browsers use, for the web UI.
+func (m *Manager) Memory(ctx context.Context) MemoryReport {
+	limit, each := m.memLimits()
+	used, browsers := m.memoryInUse(ctx, each)
+	return MemoryReport{Limit: limit, Used: used, Each: each, Browsers: browsers}
 }
 
 // ErrNoRoom is returned, wrapped in a *NoRoomError, when a new browser
@@ -115,12 +157,13 @@ func gb(n int64) string { return fmt.Sprintf("%.1f GB", float64(n)/(1<<30)) }
 // the longest-idle browser no agent is using until it does. If none can
 // be stopped, it refuses with what is running.
 func (m *Manager) makeRoom(ctx context.Context) error {
-	if m.memLimit <= 0 {
+	limit, each := m.memLimits()
+	if limit <= 0 {
 		return nil
 	}
 	for range 32 {
-		used, running := m.memoryInUse(ctx)
-		if used+m.memEach <= m.memLimit {
+		used, running := m.memoryInUse(ctx, each)
+		if used+each <= limit {
 			return nil
 		}
 		victim, idle := m.longestIdle()
@@ -129,8 +172,8 @@ func (m *Manager) makeRoom(ctx context.Context) error {
 			for i, u := range running {
 				list[i] = u.String()
 			}
-			m.log.Warn("refused a browser: no room", "used", gb(used), "limit", gb(m.memLimit), "running", strings.Join(list, "; "))
-			return &NoRoomError{Limit: m.memLimit, Used: used, Running: running}
+			m.log.Warn("refused a browser: no room", "used", gb(used), "limit", gb(limit), "running", strings.Join(list, "; "))
+			return &NoRoomError{Limit: limit, Used: used, Running: running}
 		}
 		_, err := m.stopIf(ctx, victim, func(l *live) bool { return l.idleLocked(m.now()) > 0 })
 		if errors.Is(err, errStillInUse) {
@@ -145,8 +188,9 @@ func (m *Manager) makeRoom(ctx context.Context) error {
 }
 
 // memoryInUse adds up what the live browsers use, and describes each.
-// A browser whose usage can't be read counts as a new one would.
-func (m *Manager) memoryInUse(ctx context.Context) (int64, []Usage) {
+// A browser whose usage can't be read counts as each, what a new one is
+// expected to take.
+func (m *Manager) memoryInUse(ctx context.Context, each int64) (int64, []Usage) {
 	type entry struct {
 		profile, cid string
 		state        State
@@ -163,14 +207,14 @@ func (m *Manager) memoryInUse(ctx context.Context) (int64, []Usage) {
 	var total int64
 	var running []Usage
 	for _, e := range entries {
-		used := m.memEach
+		used := each
 		if e.cid != "" {
 			if n, err := m.rt.MemoryUsage(ctx, e.cid); err == nil {
 				used = n
 				// A browser still booting will grow: count at least what a
 				// new one is expected to take.
 				if e.state == Starting {
-					used = max(n, m.memEach)
+					used = max(n, each)
 				}
 			}
 		}

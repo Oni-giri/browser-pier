@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -106,6 +107,8 @@ type fixture struct {
 	profiles *profiles.Store
 	web      *auth.Web
 	handoffs *handoff.Service
+	api      *API
+	db       *sql.DB
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -122,7 +125,7 @@ func newFixture(t *testing.T) *fixture {
 	}
 	t.Cleanup(func() { _ = d.Close() })
 	log := slog.New(slog.DiscardHandler)
-	f := &fixture{t: t, b: &browser{}, rt: sessionstest.New(dir), tokens: auth.NewTokens(d), profiles: profiles.NewStore(d)}
+	f := &fixture{t: t, b: &browser{}, rt: sessionstest.New(dir), tokens: auth.NewTokens(d), profiles: profiles.NewStore(d), db: d}
 	f.rt.Control = f.b.handler()
 	f.m, err = sessions.NewManager(d, f.rt, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)
 	if err != nil {
@@ -154,6 +157,7 @@ func newFixture(t *testing.T) *fixture {
 	f.handoffs = handoff.New(d, f.m, log)
 	a.SetHandoffs(f.handoffs)
 	a.Register(mux)
+	f.api = a
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	return f
@@ -254,7 +258,7 @@ func TestSessions(t *testing.T) {
 		t.Fatalf("started %+v", s)
 	}
 	host := strings.TrimPrefix(f.srv.URL, "http://")
-	if s.CDPURL != "ws://"+host+"/cdp/google" || s.LiveViewURL != "http://"+host+"/live/google" {
+	if s.CDPURL != "ws://"+host+"/cdp/google" || s.LiveViewURL != "http://"+host+"/profiles/google" {
 		t.Fatalf("URLs %q, %q", s.CDPURL, s.LiveViewURL)
 	}
 

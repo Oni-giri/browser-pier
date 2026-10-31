@@ -57,6 +57,9 @@ type Config struct {
 	// no cap). Past it, the longest-idle unused browser is stopped to make
 	// room, or a new one is refused.
 	RAMLimitPercent int
+	// RAMLimitFromEnv: BROWSERPIER_RAM_LIMIT_PERCENT is set. Otherwise the
+	// limit saved in the web UI's settings wins over the default.
+	RAMLimitFromEnv bool
 	// FilesLimitMB caps each profile's downloads and uploads together, in
 	// MiB (BROWSERPIER_FILES_LIMIT_MB); the oldest go first. 0 is no cap.
 	FilesLimitMB int
@@ -153,6 +156,7 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		c.WebRTCIPs = append(c.WebRTCIPs, ip)
 	}
 	ram := get("BROWSERPIER_RAM_LIMIT_PERCENT", "70")
+	_, c.RAMLimitFromEnv = lookup("BROWSERPIER_RAM_LIMIT_PERCENT")
 	if c.RAMLimitPercent, err = strconv.Atoi(strings.TrimSuffix(ram, "%")); err != nil || c.RAMLimitPercent < 0 || c.RAMLimitPercent > 100 {
 		return Config{}, fmt.Errorf("BROWSERPIER_RAM_LIMIT_PERCENT: want 0 to 100, got %q", ram)
 	}

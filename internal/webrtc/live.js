@@ -2,11 +2,12 @@
 // send mouse and keyboard over a data channel. No build step.
 "use strict";
 (() => {
-  const profile = document.body.dataset.profile;
+  const root = document.querySelector("[data-profile]");
+  const profile = root.dataset.profile;
   // A handoff page points these at its own endpoints; its offer answers
   // with control from the start.
-  const offerURL = document.body.dataset.offer || `/live/${encodeURIComponent(profile)}/offer`;
-  const statusURL = document.body.dataset.status || `/live/${encodeURIComponent(profile)}/status`;
+  const offerURL = root.dataset.offer || `/live/${encodeURIComponent(profile)}/offer`;
+  const statusURL = root.dataset.status || `/live/${encodeURIComponent(profile)}/status`;
   const video = document.getElementById("screen");
   const stage = document.getElementById("stage");
   const who = document.getElementById("who");
@@ -68,10 +69,12 @@
     } else if (s === "starting") { label = "Starting…"; }
     who.textContent = label;
     who.className = "pill " + cls;
-    const agentDriving = !!(status.in_use_by && status.in_use_by.length);
+    // While it waits for help the agent is paused, so a person can always take over.
+    const agentDriving = s === "running" && !!(status.in_use_by && status.in_use_by.length);
     if (takeBtn) {
       takeBtn.textContent = control ? "Hand back" : "Take control";
-      takeBtn.disabled = !dc || dc.readyState !== "open" || (!control && (agentDriving || status.human_control || s !== "running"));
+      if (takeBtn.classList.contains("btn")) takeBtn.classList.toggle("blue", !control);
+      takeBtn.disabled = !dc || dc.readyState !== "open" || (!control && (agentDriving || status.human_control || (s !== "running" && s !== "needs_help")));
     }
     typeBtn.hidden = !(control && touch);
     fitBtn.hidden = !touch;

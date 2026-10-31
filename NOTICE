@@ -1,0 +1,21 @@
+BrowserPier
+Copyright the BrowserPier authors.
+
+This product includes third-party software, embedded in the orchestrator
+binary:
+
+htmx 2.0.4 (internal/ui/static/htmx.min.js)
+  https://htmx.org
+  Licensed under the Zero-Clause BSD license:
+  Permission to use, copy, modify, and/or distribute this software for any
+  purpose with or without fee is hereby granted.
+
+Geist and Geist Mono (internal/ui/static/fonts/)
+  https://github.com/vercel/geist-font
+  Copyright 2024 The Geist Project Authors
+  Licensed under the SIL Open Font License, Version 1.1. The license text is
+  in internal/ui/static/fonts/OFL.txt.
+
+Docker's default seccomp profile (images/chromium/seccomp.json, generated)
+  https://github.com/moby/profiles
+  Licensed under the Apache License, Version 2.0.

@@ -316,7 +316,7 @@ func (w *Web) render(rw http.ResponseWriter, status int, name string, d pageData
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	rw.Header().Set("Cache-Control", "no-store")
 	rw.Header().Set("X-Frame-Options", "DENY")
-	rw.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+	rw.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 	rw.WriteHeader(status)
 	if err := w.pages[name].ExecuteTemplate(rw, "page", d); err != nil {
 		w.log.Error("rendering a page", "page", name, "err", err)
