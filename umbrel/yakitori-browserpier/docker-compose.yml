@@ -10,8 +10,9 @@ services:
       PROXY_AUTH_WHITELIST: "/api/*,/cdp/*,/mcp,/mcp/*,/h/*,/static/*"
 
   web:
-    # TODO(PROJ-28): pin to the first release, as 1.0.0@sha256:…, and
-    # BROWSERPIER_BROWSER_IMAGE below to the matching browser image.
+    # Pinned to a release once its images are published, as
+    # 0.1.0@sha256:…, with BROWSERPIER_BROWSER_IMAGE below to match
+    # (RELEASING.md, step 6).
     image: ghcr.io/oni-giri/browser-pier:edge
     restart: on-failure
     # Time to stop every browser gracefully on the way out (each gets 30s,

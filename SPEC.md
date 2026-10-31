@@ -343,7 +343,8 @@ Designs: the "Browser Orchestrator UI" canvas (private to the author). The UI st
   - **Ports:** the app listens on 127.0.0.1:7437 unless `BROWSERPIER_BIND` says otherwise (a Tailscale address, say). Live views use 7438 UDP and TCP.
   - **HTTPS:** the `https` profile adds Caddy for automatic HTTPS, from the shipped `Caddyfile`: no access log, and `?ticket=` and `?token=` redacted from its error log. The guide also covers an existing reverse proxy (WebSockets, long timeouts, no query strings in any log).
   - **Trusted proxies:** the compose network has a fixed subnet (`BROWSERPIER_NET`) with fixed addresses, and only Caddy's is trusted for `X-Forwarded-*`. A proxy on the host is trusted by setting the network's gateway instead.
-  - **Image:** `BROWSERPIER_VERSION` defaults to `edge` until the first release.
+  - **Image:** `BROWSERPIER_VERSION` defaults to `latest` in the repository, and to the release itself in the files attached to a GitHub release, which is where the install guide downloads them from. `edge` follows `main`.
+  - **Releases:** a `v*` tag publishes both images (`0.1.0`, `0.1` and `latest`), then CI makes the GitHub release with the pinned install files and the version's `CHANGELOG.md` section. `RELEASING.md` has the steps.
   - **Configuration:** through environment variables, where an empty value counts as unset. Without `BROWSERPIER_ADMIN_PASSWORD`, the first-run setup page asks for the code printed in the log.
 - **WebRTC on a server:** advertise the public IP (or the Tailscale IP), open one UDP port with a TCP fallback. Optional TURN (v1.1) for viewers on networks that block UDP.
 - **Umbrel:** `yakitori-browserpier` in the author's community app store (`Oni-giri/yakitoris-app-store`); the source is `umbrel/yakitori-browserpier/`.

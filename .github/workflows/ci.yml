@@ -116,3 +116,29 @@ jobs:
           build-args: VERSION=${{ steps.version.outputs.version }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  # A v* tag also makes the GitHub release, once both images are published:
+  # the install files pinned to the version, and its CHANGELOG.md section.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Both images exist for this version
+        run: |
+          for image in browser-pier browser-pier-chromium; do
+            docker buildx imagetools inspect "ghcr.io/oni-giri/$image:${GITHUB_REF_NAME#v}"
+          done
+      - run: deploy/release-files.sh "${GITHUB_REF_NAME#v}" dist
+      - run: gh release create "$GITHUB_REF_NAME" --verify-tag --title "BrowserPier $GITHUB_REF_NAME" --notes-file dist/notes.md dist/docker-compose.yml dist/Caddyfile dist/env.example
+        env:
+          GH_TOKEN: ${{ github.token }}

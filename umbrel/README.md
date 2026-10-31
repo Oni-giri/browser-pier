@@ -15,7 +15,7 @@
 
 ## Publishing
 
-1. Pin the images. `docker-compose.yml` uses `edge` until the first release (PROJ-28). Then:
+1. Pin the images to the release (see step 6 of `RELEASING.md`):
    - set `image:` to `ghcr.io/oni-giri/browser-pier:<version>@sha256:<digest>`, with the multi-arch index digest (`docker buildx imagetools inspect`)
    - set `BROWSERPIER_BROWSER_IMAGE` to `ghcr.io/oni-giri/browser-pier-chromium:<version>@sha256:<digest>`
    - set `version:` in `umbrel-app.yml` to match
