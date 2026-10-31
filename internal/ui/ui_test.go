@@ -1,9 +1,11 @@
 package ui
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -393,5 +395,80 @@ func TestFormatting(t *testing.T) {
 	}
 	if got := maskProxy("socks5://u:p@h:1"); got != "socks5://u:••••@h:1" {
 		t.Errorf("maskProxy = %q", got)
+	}
+}
+
+func TestExportAndImport(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	p := profiles.New("google")
+	p.DefaultMode, p.Width, p.Height = profiles.ModeAPI, 1280, 800
+	if _, err := f.m.Profiles().Create(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	cookies := filepath.Join(f.m.Layout().ProfileDir("google"), "chrome", "Default", "Cookies")
+	if err := os.MkdirAll(filepath.Dir(cookies), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cookies, []byte("session=abc"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const pass = "correct horse battery"
+
+	if r := f.post("/profiles/google/export", url.Values{"passphrase": {pass}, "confirm": {"different one"}}); r.code != http.StatusSeeOther {
+		t.Fatalf("mismatched passphrases: %d", r.code)
+	}
+	if _, _, err := f.m.Start(ctx, "google", ""); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.post("/profiles/google/export", url.Values{"passphrase": {pass}, "confirm": {pass}}); r.code != http.StatusSeeOther || r.header.Get("Content-Disposition") != "" {
+		t.Fatalf("export while running: %d", r.code)
+	}
+	s, _ := f.m.Live("google")
+	if _, err := f.m.Stop(ctx, s.ID); err != nil {
+		t.Fatal(err)
+	}
+	exp := f.post("/profiles/google/export", url.Values{"passphrase": {pass}, "confirm": {pass}})
+	if exp.code != http.StatusOK || !strings.Contains(exp.header.Get("Content-Disposition"), "attachment") || strings.Contains(exp.body, "session=abc") {
+		t.Fatalf("export: %d %v", exp.code, exp.header)
+	}
+
+	imp := func(name, passphrase string) reply {
+		var body bytes.Buffer
+		mw := multipart.NewWriter(&body)
+		_ = mw.WriteField("name", name)
+		_ = mw.WriteField("passphrase", passphrase)
+		fw, _ := mw.CreateFormFile("archive", "google.browserpier.age")
+		_, _ = fw.Write([]byte(exp.body))
+		_ = mw.Close()
+		req, _ := http.NewRequest(http.MethodPost, f.srv.URL+"/profiles/import", &body)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		resp, err := f.client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return reply{code: resp.StatusCode, location: resp.Header.Get("Location")}
+	}
+	if r := imp("google-copy", "not the passphrase"); r.location != "/profiles" {
+		t.Fatalf("wrong passphrase: %d %s", r.code, r.location)
+	}
+	if r := imp("google", pass); r.location != "/profiles" {
+		t.Fatalf("a name that's taken: %s", r.location)
+	}
+	if r := imp("google-copy", pass); r.code != http.StatusSeeOther || r.location != "/profiles/google-copy" {
+		t.Fatalf("import: %d %s", r.code, r.location)
+	}
+	copied, err := f.m.Profiles().Get(ctx, "google-copy")
+	if err != nil || copied.DefaultMode != profiles.ModeAPI || copied.Width != 1280 {
+		t.Fatalf("imported profile %+v, %v", copied, err)
+	}
+	b, err := os.ReadFile(filepath.Join(f.m.Layout().ProfileDir("google-copy"), "chrome", "Default", "Cookies"))
+	if err != nil || string(b) != "session=abc" {
+		t.Fatalf("imported cookies %q, %v", b, err)
+	}
+	left, _ := filepath.Glob(filepath.Join(f.m.Layout().DataDir, "profiles", sessions.ImportPrefix+"*"))
+	if len(left) != 0 {
+		t.Fatalf("failed imports left folders: %v", left)
 	}
 }

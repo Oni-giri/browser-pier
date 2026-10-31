@@ -195,6 +195,7 @@ func run(log *slog.Logger) error {
 		PublicURL:       cfg.PublicURL,
 		HostMemory:      total,
 		RAMLimitFromEnv: cfg.RAMLimitFromEnv,
+		Version:         version,
 		SetRAMLimit: func(percent int) {
 			if total > 0 {
 				mgr.SetMemoryLimit(total*int64(percent)/100, perBrowser)

@@ -545,3 +545,17 @@ func TestNoRoomNamesOnlyVisibleProfiles(t *testing.T) {
 		t.Fatalf("all-profiles token: %d %q", code, e["error"])
 	}
 }
+
+// A profile being exported can't start; an agent is told why.
+func TestStartWhileHeldIsAConflict(t *testing.T) {
+	f := newFixture(t)
+	release, err := f.m.Hold("google")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	var e struct{ Error string }
+	if code := f.call(f.all, http.MethodPost, "/api/sessions", `{"profile": "google"}`, &e); code != http.StatusConflict || !strings.Contains(e.Error, "exported") {
+		t.Fatalf("start while held: %d %s", code, e.Error)
+	}
+}

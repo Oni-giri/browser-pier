@@ -63,6 +63,9 @@ func (l Layout) hostDir(profile, sub string) string {
 	return filepath.Join(l.HostDataDir, "profiles", profile, sub)
 }
 
+// ProfileDir is a profile's whole folder, as the orchestrator sees it.
+func (l Layout) ProfileDir(profile string) string { return l.dir(profile) }
+
 // FilesDir is a profile's downloads and uploads folder, as the orchestrator sees it.
 func (l Layout) FilesDir(profile string) string { return l.dir(profile, "files") }
 
@@ -109,6 +112,7 @@ type Manager struct {
 
 	mu   sync.Mutex
 	live map[string]*live // by profile name
+	held map[string]bool  // profiles whose folder is being exported or imported (Hold)
 	// inputsDone is signalled, with mu, when an agent input action ends.
 	inputsDone *sync.Cond
 
@@ -178,6 +182,7 @@ func NewManager(db *sql.DB, rt Runtime, layout Layout, log *slog.Logger) (*Manag
 		ctx:          ctx,
 		cancel:       cancel,
 		live:         map[string]*live{},
+		held:         map[string]bool{},
 	}
 	m.inputsDone = sync.NewCond(&m.mu)
 	return m, nil
@@ -304,6 +309,9 @@ func (m *Manager) hasLive(profile string) bool {
 
 // begin records a new Starting session. m.mu must be held.
 func (m *Manager) begin(ctx context.Context, profile string, mode profiles.Mode) (*live, profiles.Profile, error) {
+	if m.held[profile] {
+		return nil, profiles.Profile{}, ErrProfileHeld
+	}
 	p, err := m.profiles.Get(ctx, profile)
 	if err != nil {
 		return nil, p, err
@@ -1001,6 +1009,9 @@ func (m *Manager) DeleteProfile(ctx context.Context, name string) error {
 	if _, ok := m.live[name]; ok {
 		return ErrProfileBusy
 	}
+	if m.held[name] {
+		return ErrProfileHeld
+	}
 	// Move the folder aside first, so a failure leaves either everything
 	// (the record and the folder) or a tombstone that Reconcile removes,
 	// never logged-in browser data with no profile pointing at it. name was
@@ -1030,9 +1041,13 @@ func (m *Manager) DeleteProfile(ctx context.Context, name string) error {
 	return nil
 }
 
-// tombstonePrefix names folders of deleted profiles not yet removed.
-// Profile names can't start with a dot, so they never collide.
-const tombstonePrefix = ".deleted-"
+// tombstonePrefix names folders of deleted profiles not yet removed, and
+// ImportPrefix folders an import was filling when it stopped. Profile
+// names can't start with a dot, so they never collide.
+const (
+	tombstonePrefix = ".deleted-"
+	ImportPrefix    = ".importing-"
+)
 
 // removeTombstones finishes deleting profile folders a past deletion
 // couldn't remove.
@@ -1042,7 +1057,7 @@ func (m *Manager) removeTombstones() {
 		return
 	}
 	for _, e := range entries {
-		if e.IsDir() && strings.HasPrefix(e.Name(), tombstonePrefix) {
+		if e.IsDir() && (strings.HasPrefix(e.Name(), tombstonePrefix) || strings.HasPrefix(e.Name(), ImportPrefix)) {
 			if err := os.RemoveAll(filepath.Join(m.layout.DataDir, "profiles", e.Name())); err != nil {
 				m.log.Warn("removing a deleted profile's folder", "folder", e.Name(), "err", err)
 			}

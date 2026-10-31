@@ -8,6 +8,7 @@
 package sessions
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Oni-giri/browser-pier/internal/archive"
 	"github.com/Oni-giri/browser-pier/internal/browsertest"
 	"github.com/Oni-giri/browser-pier/internal/db"
 	"github.com/Oni-giri/browser-pier/internal/docker"
@@ -171,6 +173,52 @@ func TestLoginSurvivesStopAndStart(t *testing.T) {
 	}
 	if got := site.Account(t, browsertest.Page(t, control)); got != token {
 		t.Fatalf("after stop and start the site saw session %q, want %q", got, token)
+	}
+	stopCleanly(t, m, next.ID)
+}
+
+// TestLoginSurvivesExportAndImport: a profile exported and imported under
+// another name is still logged in.
+func TestLoginSurvivesExportAndImport(t *testing.T) {
+	f := newRealFixture(t)
+	m := f.manager(f.layout)
+	name := f.profile(m)
+	site := browsertest.NewSite(t, siteHost(t))
+
+	s := startRunning(t, m, name)
+	p := browsertest.Page(t, browsertest.ControlClient(f.layout.ControlSocket(name)))
+	token := site.Login(t, p)
+	p.Close()
+	stopCleanly(t, m, s.ID)
+
+	release, err := m.Hold(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := m.Start(context.Background(), name, ""); !errors.Is(err, ErrProfileHeld) {
+		t.Fatalf("start during an export: %v", err)
+	}
+	var buf bytes.Buffer
+	const pass = "correct horse battery"
+	if err := archive.Export(&buf, f.layout.ProfileDir(name), archive.Manifest{}, pass); err != nil {
+		t.Fatal(err)
+	}
+	release()
+
+	copyName := name + "c"
+	if _, err := archive.Import(&buf, pass, f.layout.ProfileDir(copyName), archive.DefaultLimits); err != nil {
+		t.Fatal(err)
+	}
+	cp := profiles.New(copyName)
+	cp.Width, cp.Height = 1280, 800
+	if _, err := m.Profiles().Create(context.Background(), cp); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", containerName(copyName)).Run() })
+
+	next := startRunning(t, m, copyName)
+	if got := site.Account(t, browsertest.Page(t, browsertest.ControlClient(f.layout.ControlSocket(copyName)))); got != token {
+		t.Fatalf("the imported copy is signed in as %q, want %q", got, token)
 	}
 	stopCleanly(t, m, next.ID)
 }
