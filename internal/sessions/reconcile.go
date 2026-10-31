@@ -2,6 +2,8 @@ package sessions
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -29,7 +31,15 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		byID[c.ID] = c
 	}
 
-	var outdated []string // sessions to stop before anything attaches to them
+	// Browsers an older BrowserPier started (docker.Spec) are stopped
+	// before anything attaches to them: running ones by session, starting
+	// ones by container.
+	var outdated []string
+	type starting struct {
+		l   *live
+		cid string
+	}
+	var outdatedStarting []starting
 	m.mu.Lock()
 	for _, s := range rows {
 		c, ok := byID[s.ContainerID]
@@ -51,9 +61,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			m.mu.Lock()
 			continue
 		case c.Spec != docker.Spec && s.State == Starting:
-			m.mu.Unlock()
-			m.abort(l, c.ID, "BrowserPier was updated before the browser started")
-			m.mu.Lock()
+			outdatedStarting = append(outdatedStarting, starting{l, c.ID})
 			continue
 		case c.Spec != docker.Spec && (s.State == Running || s.State == NeedsHelp):
 			outdated = append(outdated, s.ID)
@@ -75,20 +83,38 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	}
 	m.mu.Unlock()
 
-	// Browsers an older BrowserPier started lack what it has added since,
-	// such as the egress filter, so they don't run on under this one.
+	// They lack what BrowserPier has added since, such as the egress
+	// filter, so they don't run on under this one. If one won't stop,
+	// BrowserPier doesn't start either; the next start tries again.
+	errs := make([]error, len(outdated)+len(outdatedStarting))
 	var old sync.WaitGroup
-	for _, id := range outdated {
+	for i, id := range outdated {
 		m.log.Info("stopping a browser an older BrowserPier started", "session", id)
 		old.Go(func() {
 			ctx, cancel := context.WithTimeout(m.ctx, stopTimeout+30*time.Second)
 			defer cancel()
 			if _, err := m.Stop(ctx, id); err != nil {
-				m.log.Warn("stopping a browser an older BrowserPier started", "session", id, "err", err)
+				errs[i] = fmt.Errorf("stopping session %s, which an older BrowserPier started: %w", id, err)
 			}
 		})
 	}
+	for i, o := range outdatedStarting {
+		m.log.Info("stopping a browser an older BrowserPier was starting", "session", o.l.sess.ID)
+		old.Go(func() {
+			ctx, cancel := context.WithTimeout(m.ctx, stopTimeout+30*time.Second)
+			defer cancel()
+			// Stopped first: removing a running container fails.
+			if err := m.rt.Stop(ctx, o.cid); err != nil {
+				errs[len(outdated)+i] = fmt.Errorf("stopping container %s, which an older BrowserPier started: %w", o.cid, err)
+				return
+			}
+			m.abort(o.l, o.cid, "BrowserPier was updated before the browser started")
+		})
+	}
 	old.Wait()
+	if err := errors.Join(errs...); err != nil {
+		return err
+	}
 
 	// Strays are stopped before Reconcile returns, so their names are free
 	// by the time the first Start comes in. A failure is logged, not fatal:

@@ -369,17 +369,29 @@ func TestReconcileAfterRestart(t *testing.T) {
 func TestReconcileStopsBrowsersFromAnOlderVersion(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
-	if _, err := f.m.Profiles().Create(ctx, profiles.New("github")); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"github", "gitlab"} {
+		if _, err := f.m.Profiles().Create(ctx, profiles.New(name)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	old := f.start(f.m)
 	current, _, err := f.m.Start(ctx, "github", "")
 	if err != nil {
 		t.Fatal(err)
 	}
+	// One more, which the old BrowserPier was still starting.
+	starting, _, err := f.m.Start(ctx, "gitlab", "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	f.m.Close()
+	starting.State = Starting
+	if err := updateSession(ctx, f.m.db, starting); err != nil {
+		t.Fatal(err)
+	}
 	f.rt.Mu.Lock()
 	f.rt.Containers[old.ContainerID].Version = "" // from before the label
+	f.rt.Containers[starting.ContainerID].Version = "1"
 	stops := f.rt.Stops
 	f.rt.Mu.Unlock()
 
@@ -396,8 +408,14 @@ func TestReconcileStopsBrowsersFromAnOlderVersion(t *testing.T) {
 	f.rt.Mu.Lock()
 	stopped := f.rt.Stops - stops
 	f.rt.Mu.Unlock()
-	if stopped != 1 {
-		t.Fatalf("%d containers stopped, want the old one", stopped)
+	if stopped != 2 {
+		t.Fatalf("%d containers stopped, want the two old ones", stopped)
+	}
+	if got := f.stored(starting.ID); got.State != Failed || !strings.Contains(got.Error, "updated") {
+		t.Fatalf("old starting session: %+v", got)
+	}
+	if _, ok := f.rt.Container(starting.ContainerID); ok {
+		t.Fatal("the old starting container is still there")
 	}
 	if s, ok := m.Live("github"); !ok || s.ID != current.ID {
 		t.Fatalf("the current browser wasn't picked up: %+v, %t", s, ok)
@@ -406,6 +424,22 @@ func TestReconcileStopsBrowsersFromAnOlderVersion(t *testing.T) {
 	s, attached, err := m.Start(ctx, "google", "")
 	if err != nil || attached || s.ID == old.ID {
 		t.Fatalf("restart: %+v, %t, %v", s, attached, err)
+	}
+}
+
+// If an old browser won't stop, BrowserPier doesn't start with it running.
+func TestReconcileFailsIfAnOldBrowserWontStop(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	old := f.start(f.m)
+	f.m.Close()
+	f.rt.Mu.Lock()
+	f.rt.Containers[old.ContainerID].Version = ""
+	f.rt.StopErr = errors.New("docker is stuck")
+	f.rt.Mu.Unlock()
+	m := f.manager()
+	if err := m.Reconcile(ctx); err == nil || !strings.Contains(err.Error(), "docker is stuck") {
+		t.Fatalf("Reconcile = %v", err)
 	}
 }
 
