@@ -27,5 +27,6 @@ The first release: persistent, self-hosted browsers for AI agents.
 - An Umbrel app for a community app store, in `umbrel/`.
 
 **Known limits**
+- The repository is private for now, so installing needs a GitHub sign-in for the files and `docker login ghcr.io` for the images. See `deploy/README.md`.
 - Pages get no QUIC, and WebRTC in pages runs over TCP only, since every connection goes through the browser's filtering proxy.
 - WebGL is software-rendered (SwiftShader), which some bot detection notices. See `images/chromium/ANTI-BOT.md`.

@@ -27,6 +27,8 @@ curl -fsSL  $release/env.example -o .env
 install -d -m 700 data
 ```
 
+While the repository is private, those downloads and the images need a GitHub sign-in: get the files with `gh release download --repo Oni-giri/browser-pier --pattern '*'` (rename `env.example` to `.env`), and run `docker login ghcr.io` with a token that can read packages.
+
 These come from the latest release and run that release. The files on the `main` branch are for development and may need a newer image than the latest release.
 
 Edit `.env`:
