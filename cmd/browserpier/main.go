@@ -124,6 +124,8 @@ func run(log *slog.Logger) error {
 	}
 	defer mgr.Close()
 	mgr.SetGeoURL(cfg.GeoIPURL)
+	// The addresses live viewers reach the host at are the host's own.
+	mgr.SetHostIPs(cfg.WebRTCIPs)
 	prefs := settings.New(database)
 	saved, err := prefs.Get(ctx)
 	if err != nil {

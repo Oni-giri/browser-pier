@@ -58,6 +58,10 @@
           <input class="input mono" name="proxy" value="{{.Proxy}}" placeholder="socks5://user:pass@host:port" autocomplete="off" spellcheck="false">
           <span class="hint">HTTP, HTTPS or SOCKS5. Time zone and language follow the proxy's location.</span>
         </label>
+        <div class="field">
+          <label class="check"><input type="checkbox" name="local_network" value="1"{{if .Profile.LocalNetwork}} checked{{end}}> Let pages reach the local network</label>
+          <span class="hint">For a router's admin page, say. Off, pages can't open addresses on your LAN, this server or its other apps.</span>
+        </div>
         {{if not .New}}
         <div class="two">
           <label class="field"><span class="label">Time zone</span><input class="input" name="time_zone" value="{{.Profile.TimeZone}}" placeholder="{{or .Profile.Location.TimeZone "From the proxy"}}" autocomplete="off" spellcheck="false"><span class="hint">An IANA zone such as Europe/Berlin. Empty: match the exit.</span></label>

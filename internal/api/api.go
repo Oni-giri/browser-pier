@@ -80,6 +80,7 @@ type profileJSON struct {
 	HandoffPolicy   string     `json:"handoff_policy"`
 	TimeZone        string     `json:"time_zone,omitempty"` // set by hand
 	Locale          string     `json:"locale,omitempty"`    // set by hand
+	LocalNetwork    bool       `json:"local_network"`       // pages may reach private addresses
 	// Location is where the browser appeared to be when it last started.
 	Location  *locationJSON `json:"location,omitempty"`
 	Status    string        `json:"status"` // the live session's state, or stopped
@@ -109,6 +110,7 @@ func (a *API) profileOut(p profiles.Profile) profileJSON {
 		HandoffPolicy:   string(p.HandoffPolicy),
 		TimeZone:        p.TimeZone,
 		Locale:          p.Locale,
+		LocalNetwork:    p.LocalNetwork,
 		Status:          string(sessions.Stopped),
 	}
 	if l := p.Location; !l.CheckedAt.IsZero() {
@@ -154,6 +156,7 @@ type createProfileJSON struct {
 	Screen          *screenJSON `json:"screen"`
 	HandoffPolicy   *string     `json:"handoff_policy"`
 	Proxy           *string     `json:"proxy"`
+	LocalNetwork    *bool       `json:"local_network"`
 }
 
 // policyRank orders handoff policies from least to most strict.
@@ -173,6 +176,11 @@ func (a *API) createProfile(w http.ResponseWriter, r *http.Request) {
 		// A proxy sees where the browser goes; an agent steered by a page
 		// shouldn't be able to choose one.
 		writeError(w, http.StatusBadRequest, "set a profile's proxy in the web UI, not through the API")
+		return
+	}
+	if in.LocalNetwork != nil && *in.LocalNetwork {
+		// Nor to open the LAN to the pages it visits.
+		writeError(w, http.StatusBadRequest, "let a profile reach the local network in the web UI, not through the API")
 		return
 	}
 	// The admin's default proxy applies: the agent didn't choose it.

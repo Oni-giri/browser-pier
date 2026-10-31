@@ -693,6 +693,7 @@ func TestProxyAndLocationHandover(t *testing.T) {
 	p, _ := f.m.Profiles().Get(ctx, "google")
 	p.Proxy = "socks5://user:s3cret@proxy.example:1080"
 	p.Locale = "de-DE"
+	p.LocalNetwork = true
 	if _, err := f.m.Profiles().Update(ctx, p); err != nil {
 		t.Fatal(err)
 	}
@@ -700,6 +701,7 @@ func TestProxyAndLocationHandover(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.m.SetGeoURL("https://geo.example/json")
+	f.m.SetHostIPs([]string{"203.0.113.4", "100.72.0.9"})
 
 	// The browser reads and deletes the proxy file itself; here the fake
 	// checks it while "starting", and reports a fresh lookup.
@@ -729,7 +731,7 @@ func TestProxyAndLocationHandover(t *testing.T) {
 	}
 	c, _ := f.rt.Container(s.ContainerID)
 	env := strings.Join(c.Spec.Env, "\n")
-	for _, want := range []string{"BROWSERPIER_GEOIP_URL=https://geo.example/json", "BROWSERPIER_GEO_COUNTRY=US", "BROWSERPIER_GEO_TZ=America/Chicago", "BROWSERPIER_LOCALE_OVERRIDE=de-DE", "BROWSERPIER_TZ_OVERRIDE="} {
+	for _, want := range []string{"BROWSERPIER_GEOIP_URL=https://geo.example/json", "BROWSERPIER_GEO_COUNTRY=US", "BROWSERPIER_GEO_TZ=America/Chicago", "BROWSERPIER_LOCALE_OVERRIDE=de-DE", "BROWSERPIER_TZ_OVERRIDE=", "BROWSERPIER_LOCAL_NETWORK=true", "BROWSERPIER_HOST_IPS=203.0.113.4,100.72.0.9"} {
 		if !strings.Contains(env, want) {
 			t.Errorf("env lacks %s:\n%s", want, env)
 		}
