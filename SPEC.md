@@ -307,10 +307,11 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 - Headful Chromium on a virtual display, with no automation flags.
 - Visual mode sends real OS-level input through xdotool, not CDP input events. The CDP connection itself is detectable, so in Visual mode no CDP client stays attached to the page.
 - Residential IP: a home server's own connection by default, with an optional per-profile proxy. On a VPS, a residential proxy is close to required for protected sites.
-- Timezone and locale always match the exit IP.
+- Timezone and locale always match the exit IP. Chromium's interface languages are installed, so `Intl` agrees with `navigator.languages`.
 - WebRTC can't leak the host IP when a proxy is set.
 - No fingerprint spoofing: each profile keeps one real, consistent fingerprint over time.
 - Persistent, aged profiles with real logins help on their own.
+- **Validation** (PROJ-15): `images/chromium/ANTI-BOT.md` has the results against public detection pages, and the signals that remain (SwiftShader, no taskbar). `TestVisualModeLooksLikeAPerson` checks Visual mode in CI's Docker tests.
 
 ---
 

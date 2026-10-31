@@ -14,7 +14,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 FROM debian:trixie-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      chromium xvfb xdotool \
+      chromium chromium-l10n xvfb xdotool \
       gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-ugly \
       fonts-liberation fonts-dejavu-core fonts-noto-color-emoji fonts-noto-cjk \
       ca-certificates tzdata \
@@ -23,7 +23,11 @@ RUN apt-get update \
 # Fail the build, not the first session, if a plugin or a switch the entrypoint
 # relies on is missing. Chromium ignores unknown switches silently, so each
 # switch must appear in the binary as a whole NUL-terminated string.
+# Chromium's interface languages (chromium-l10n): without them it runs in
+# en-US whatever LANGUAGE says, and Intl's locale contradicts
+# navigator.languages, which matches the exit location.
 RUN for el in ximagesrc videoconvert x264enc fdsink; do gst-inspect-1.0 "$el" >/dev/null || { echo "missing GStreamer element $el"; exit 1; }; done \
+ && for l in de fr es ja; do test -f /usr/lib/chromium/locales/$l.pak || { echo "missing Chromium locale $l"; exit 1; }; done \
  && tr '\0' '\n' < /usr/lib/chromium/chromium > /tmp/strings \
  && for sw in user-data-dir remote-debugging-port password-store disable-blink-features use-angle enable-unsafe-swiftshader \
                webrtc-ip-handling-policy disable-component-update disable-background-networking no-first-run \
