@@ -35,7 +35,16 @@ const (
 	// container, so two of them on one Docker host leave each other's
 	// browsers alone.
 	LabelInstance = "io.browserpier.instance"
+	// LabelSpec is the version of the container definition (Spec) a
+	// container was created with.
+	LabelSpec = "io.browserpier.spec"
 )
+
+// Spec versions browserConfig. It goes up when a browser running under the
+// previous definition mustn't be picked up after an update, so the
+// orchestrator stops it instead: 2 sends every page connection through the
+// egress filter (PROJ-26).
+const Spec = "2"
 
 const (
 	// StopTimeout is how long a browser container gets to stop before Docker
@@ -72,6 +81,7 @@ type Container struct {
 	Profile string
 	Session string
 	State   string // Docker's state: created, running, exited, ...
+	Spec    string // the definition's version (LabelSpec); "" before there was one
 }
 
 // Client starts browser containers from one image.
@@ -212,6 +222,7 @@ func browserConfig(image, seccompOpt string, spec BrowserSpec) (*container.Confi
 			LabelManaged: "true",
 			LabelProfile: spec.Profile,
 			LabelSession: spec.Session,
+			LabelSpec:    Spec,
 		},
 		StopTimeout: &stop,
 	}
@@ -345,6 +356,7 @@ func (c *Client) List(ctx context.Context) ([]Container, error) {
 			Profile: it.Labels[LabelProfile],
 			Session: it.Labels[LabelSession],
 			State:   string(it.State),
+			Spec:    it.Labels[LabelSpec],
 		})
 	}
 	return out, nil

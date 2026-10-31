@@ -364,6 +364,51 @@ func TestReconcileAfterRestart(t *testing.T) {
 	}
 }
 
+// A browser an older BrowserPier started (without the egress filter, say)
+// is stopped, not picked up, and its login kept by the usual stop.
+func TestReconcileStopsBrowsersFromAnOlderVersion(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	if _, err := f.m.Profiles().Create(ctx, profiles.New("github")); err != nil {
+		t.Fatal(err)
+	}
+	old := f.start(f.m)
+	current, _, err := f.m.Start(ctx, "github", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.m.Close()
+	f.rt.Mu.Lock()
+	f.rt.Containers[old.ContainerID].Version = "" // from before the label
+	stops := f.rt.Stops
+	f.rt.Mu.Unlock()
+
+	m := f.manager()
+	if err := m.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if s, ok := m.Live("google"); ok {
+		t.Fatalf("the old browser was picked up: %+v", s)
+	}
+	if got := f.stored(old.ID); got.State != Stopped {
+		t.Fatalf("old session: %+v", got)
+	}
+	f.rt.Mu.Lock()
+	stopped := f.rt.Stops - stops
+	f.rt.Mu.Unlock()
+	if stopped != 1 {
+		t.Fatalf("%d containers stopped, want the old one", stopped)
+	}
+	if s, ok := m.Live("github"); !ok || s.ID != current.ID {
+		t.Fatalf("the current browser wasn't picked up: %+v, %t", s, ok)
+	}
+	// Starting it again gets a browser from this version.
+	s, attached, err := m.Start(ctx, "google", "")
+	if err != nil || attached || s.ID == old.ID {
+		t.Fatalf("restart: %+v, %t, %v", s, attached, err)
+	}
+}
+
 func TestDeleteProfile(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
