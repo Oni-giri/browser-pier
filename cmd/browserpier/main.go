@@ -25,6 +25,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/config"
 	"github.com/Oni-giri/browser-pier/internal/db"
 	"github.com/Oni-giri/browser-pier/internal/docker"
+	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
@@ -122,13 +123,31 @@ func run(log *slog.Logger) error {
 		PublicURL:      cfg.PublicURL,
 	})
 
+	fileStore := files.New(mgr.Layout().FilesDir, int64(cfg.FilesLimitMB)<<20, uid, gid)
+	go fileStore.Sweep(ctx, func() []string {
+		// Every profile, not only running ones: a cap lowered in the
+		// settings applies to stopped profiles too.
+		all, err := mgr.Profiles().List(ctx)
+		if err != nil {
+			log.Warn("listing profiles for the files cap", "err", err)
+			return nil
+		}
+		names := make([]string, 0, len(all))
+		for _, p := range all {
+			names = append(names, p.Name)
+		}
+		return names
+	}, time.Minute, func(profile string, err error) {
+		log.Warn("enforcing the files cap", "profile", profile, "err", err)
+	})
+
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return err
 	}
 	log.Info("starting", "version", version, "listen", ln.Addr().String(), "data_dir", dataDir,
 		"host_data_dir", hostDataDir, "browser_image", image)
-	agentAPI := api.New(mgr, web, log, cfg.PublicURL)
+	agentAPI := api.New(mgr, web, fileStore, log, cfg.PublicURL)
 	go agentAPI.WatchRevocations(ctx, 10*time.Second)
 	return serve(ctx, ln, newHandler(web, agentAPI), log)
 }

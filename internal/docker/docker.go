@@ -54,6 +54,7 @@ type BrowserSpec struct {
 	// ProfileDir and ControlDir are host paths, as the Docker daemon sees them.
 	ProfileDir string // Chromium's user data dir
 	ControlDir string // holds the control socket; shared with no other container
+	FilesDir   string // downloads and uploads
 	User       string // uid:gid to run as
 	Screen     string // WIDTHxHEIGHT
 	// MountCheck is the value the orchestrator wrote to the marker file in
@@ -215,6 +216,7 @@ func browserConfig(image, seccompOpt string, spec BrowserSpec) (*container.Confi
 		Mounts: []mount.Mount{
 			{Type: mount.TypeBind, Source: spec.ProfileDir, Target: "/profile"},
 			{Type: mount.TypeBind, Source: spec.ControlDir, Target: "/run/browserpier"},
+			{Type: mount.TypeBind, Source: spec.FilesDir, Target: "/files"},
 		},
 		// Chromium's sandbox needs the seccomp profile (see images/chromium)
 		// and no setuid. The browser's user has no effective capabilities,

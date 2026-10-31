@@ -197,6 +197,12 @@ Starting a session returns its id, the CDP URL (proxied through the orchestrator
 
 Downloads land in a per-profile folder. The API lists, fetches and deletes them, and uploads files into the session so the agent or a human can pick them in a file chooser. Files are kept with the profile until deleted, or until a size cap evicts the oldest.
 
+- Each profile has `files/downloads` and `files/uploads`, mounted at `/files` in its browser. A managed Chromium policy sends every download to `/files/downloads` without asking, in both modes, with no CDP involved.
+- An uploaded file lands in `/files/uploads/<name>` (the response gives the path): an agent sets it on a file input with `DOM.setFileInputFiles`, and a person can pick it in the file chooser. Uploads are at most 100 MiB.
+- The cap is per profile, downloads and uploads together (`BROWSERPIER_FILES_LIMIT_MB`, default 1024); the oldest files go first, and a download in progress is never evicted.
+- Downloads come from untrusted pages, so the API always serves them as attachments (`application/octet-stream`, `nosniff`, a sandbox CSP), never rendered.
+- The browser can put anything in these folders, symlinks included. The orchestrator only touches them through `os.Root` and only serves regular files, so a planted link can't expose a host file.
+
 ### MCP tools
 
 - **Explicit handles:** `start` returns a `session_id` and every stateful tool takes it as an argument. Nothing depends on the MCP connection staying open, so several browsers can run in one conversation.

@@ -24,6 +24,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/browsertest"
 	"github.com/Oni-giri/browser-pier/internal/db"
 	"github.com/Oni-giri/browser-pier/internal/docker"
+	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
@@ -102,7 +103,7 @@ func newRealAPI(t *testing.T) agent {
 	}
 	web := auth.NewWeb(admin, tokens, log, auth.WebOptions{CookieSecure: "auto"})
 	mux := http.NewServeMux()
-	New(m, web, log, "").Register(mux)
+	New(m, web, files.New(m.Layout().FilesDir, 0, os.Getuid(), os.Getgid()), log, "").Register(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return agent{t: t, base: srv.URL, token: secret}
@@ -180,5 +181,105 @@ func TestAgentKeepsItsLoginThroughTheAPI(t *testing.T) {
 	}
 	if code := a.do(http.MethodPost, "/api/sessions/"+s.ID+"/click", `{"x": 640, "y": 400}`, nil); code != http.StatusNoContent {
 		t.Fatalf("click: %d", code)
+	}
+}
+
+// TestDownloadsAndUploads: a download lands in the profile's files and is
+// served by the API, in API mode and in Visual mode (where nothing
+// attaches over CDP); an uploaded file can be picked by a page.
+func TestDownloadsAndUploads(t *testing.T) {
+	a := newRealAPI(t)
+	site := browsertest.NewSite(t, siteHost(t))
+	name := fmt.Sprintf("f%d", time.Now().UnixNano()%1e9)
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", "browserpier-"+name).Run() })
+	if code := a.do(http.MethodPost, "/api/profiles", fmt.Sprintf(`{"name": %q, "default_mode": "api", "screen": {"width": 1280, "height": 800}}`, name), nil); code != http.StatusCreated {
+		t.Fatalf("create profile: %d", code)
+	}
+	var s sessionJSON
+	if code := a.do(http.MethodPost, "/api/sessions", fmt.Sprintf(`{"profile": %q}`, name), &s); code != http.StatusCreated {
+		t.Fatalf("start: %d", code)
+	}
+	cdpHTTP := strings.Replace(s.CDPURL, "ws://", "http://", 1)
+	p := browsertest.PageVia(t, cdpHTTP+"/json/list", a.header())
+
+	// Download, driven over CDP.
+	_, _ = p.Try("Page.navigate", map[string]any{"url": site.URL + "/download"})
+	waitForFile(t, a, name, "report.csv", "a,b\n1,2\n")
+
+	// Upload, then pick it in a file input the way an agent would.
+	req, _ := http.NewRequest(http.MethodPost, a.base+"/api/sessions/"+s.ID+"/files?name=hello.txt", strings.NewReader("hello from the agent"))
+	req.Header = a.header()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var up struct{ Path string }
+	_ = json.NewDecoder(resp.Body).Decode(&up)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated || up.Path != "/files/uploads/hello.txt" {
+		t.Fatalf("upload: %d %+v", resp.StatusCode, up)
+	}
+	p.Navigate(site.URL + "/upload")
+	doc := p.Call("DOM.getDocument", nil)
+	var root struct{ Root struct{ NodeID int } }
+	_ = json.Unmarshal(doc, &root)
+	q := p.Call("DOM.querySelector", map[string]any{"nodeId": root.Root.NodeID, "selector": "#file"})
+	var node struct{ NodeID int }
+	_ = json.Unmarshal(q, &node)
+	p.Call("DOM.setFileInputFiles", map[string]any{"nodeId": node.NodeID, "files": []string{up.Path}})
+	deadline := time.Now().Add(10 * time.Second)
+	for p.Eval("document.getElementById('out').textContent") != "hello.txt:hello from the agent" {
+		if time.Now().After(deadline) {
+			t.Fatalf("the page read %v from the uploaded file", p.Eval("document.getElementById('out').textContent"))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	p.Close()
+	if code := a.do(http.MethodDelete, "/api/sessions/"+s.ID, "", nil); code != http.StatusOK {
+		t.Fatalf("stop: %d", code)
+	}
+
+	// Visual mode: no CDP, so open the download by typing in the address bar.
+	if code := a.do(http.MethodDelete, "/api/profiles/"+name+"/files/report.csv", "", nil); code != http.StatusNoContent {
+		t.Fatalf("delete: %d", code)
+	}
+	var vis sessionJSON
+	if code := a.do(http.MethodPost, "/api/sessions", fmt.Sprintf(`{"profile": %q, "mode": "visual"}`, name), &vis); code != http.StatusCreated {
+		t.Fatalf("visual start: %d", code)
+	}
+	// The address bar sits about 63 px from the top of a 1280x800 window.
+	if code := a.do(http.MethodPost, "/api/sessions/"+vis.ID+"/click", `{"x": 500, "y": 63}`, nil); code != http.StatusNoContent {
+		t.Fatalf("click: %d", code)
+	}
+	if code := a.do(http.MethodPost, "/api/sessions/"+vis.ID+"/type", fmt.Sprintf(`{"text": %q}`, site.URL+"/download\n"), nil); code != http.StatusNoContent {
+		t.Fatalf("type: %d", code)
+	}
+	waitForFile(t, a, name, "report.csv", "a,b\n1,2\n")
+}
+
+func waitForFile(t *testing.T, a agent, profile, name, want string) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		req, _ := http.NewRequest(http.MethodGet, a.base+"/api/profiles/"+profile+"/files/"+name, nil)
+		req.Header = a.header()
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			if string(body) != want {
+				t.Fatalf("%s holds %q, want %q", name, body, want)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			var list any
+			a.do(http.MethodGet, "/api/profiles/"+profile+"/files", "", &list)
+			t.Fatalf("%s never appeared; files: %v", name, list)
+		}
+		time.Sleep(250 * time.Millisecond)
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
+	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
@@ -25,12 +26,13 @@ import (
 type API struct {
 	m      *sessions.Manager
 	web    *auth.Web
+	files  *files.Store
 	log    *slog.Logger
 	public string // BROWSERPIER_PUBLIC_URL, if set
 }
 
-func New(m *sessions.Manager, web *auth.Web, log *slog.Logger, publicURL string) *API {
-	return &API{m: m, web: web, log: log, public: strings.TrimRight(publicURL, "/")}
+func New(m *sessions.Manager, web *auth.Web, fs *files.Store, log *slog.Logger, publicURL string) *API {
+	return &API{m: m, web: web, files: fs, log: log, public: strings.TrimRight(publicURL, "/")}
 }
 
 // Register adds the API's routes to mux.
@@ -45,6 +47,10 @@ func (a *API) Register(mux *http.ServeMux) {
 	mux.Handle("GET /api/sessions/{id}/screenshot", t(a.screenshot))
 	mux.Handle("POST /api/sessions/{id}/click", t(a.input("/input/click")))
 	mux.Handle("POST /api/sessions/{id}/type", t(a.input("/input/type")))
+	mux.Handle("POST /api/sessions/{id}/files", t(a.uploadFile))
+	mux.Handle("GET /api/profiles/{name}/files", t(a.listFiles))
+	mux.Handle("GET /api/profiles/{name}/files/{file}", t(a.getFile))
+	mux.Handle("DELETE /api/profiles/{name}/files/{file}", t(a.deleteFile))
 	// Many CDP clients can't set headers, so the CDP proxy also takes the
 	// token as ?token=.
 	mux.Handle("GET /cdp/{profile}", tokenFromQuery(t(a.cdp)))

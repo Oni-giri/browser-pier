@@ -19,6 +19,7 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/db"
+	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/sessions/sessionstest"
@@ -147,7 +148,7 @@ func newFixture(t *testing.T) *fixture {
 	web := auth.NewWeb(admin, f.tokens, log, auth.WebOptions{CookieSecure: "auto"})
 	f.web = web
 	mux := http.NewServeMux()
-	New(f.m, web, log, "").Register(mux)
+	New(f.m, web, files.New(f.m.Layout().FilesDir, 1<<20, os.Getuid(), os.Getgid()), log, "").Register(mux)
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	return f
@@ -490,7 +491,7 @@ func TestCDPConnectionsCloseOnHandoffAndRevocation(t *testing.T) {
 	if err := f.tokens.Revoke(ctx, tok.ID); err != nil {
 		t.Fatal(err)
 	}
-	a := New(f.m, f.web, slog.New(slog.DiscardHandler), "")
+	a := New(f.m, f.web, files.New(f.m.Layout().FilesDir, 0, os.Getuid(), os.Getgid()), slog.New(slog.DiscardHandler), "")
 	a.checkRevocations(ctx)
 	if !closed(conn) {
 		t.Fatal("a revoked token's CDP connection stayed open")

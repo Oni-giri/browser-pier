@@ -55,6 +55,7 @@ Configuration is through `BROWSERPIER_*` environment variables:
 | `BROWSERPIER_ADMIN_PASSWORD` | none | Admin password (at least 8 characters). Wins over one set in the UI at every start, so changing it is how to reset a lost one. Without it, the first visit goes to a setup page that asks for a code printed in the log. |
 | `BROWSERPIER_PUBLIC_URL` | none | How people reach BrowserPier, e.g. `https://pier.example.com`. An https URL makes cookies Secure. |
 | `BROWSERPIER_COOKIE_SECURE` | `auto` | `auto` (Secure when served over HTTPS), `always` or `never` |
+| `BROWSERPIER_FILES_LIMIT_MB` | `1024` | Cap on each profile's downloads and uploads together; the oldest go first. `0` for no cap. |
 | `BROWSERPIER_TRUSTED_PROXIES` | none | Proxies whose `X-Forwarded-For`/`-Proto` are believed: CIDRs, comma-separated, or `private`. Set it only when BrowserPier is reachable through that proxy alone. |
 
 BrowserPier talks to Docker through the usual `DOCKER_HOST`. The data dir must be on a volume or bind mount when BrowserPier runs in a container, and it needs the Docker socket.
