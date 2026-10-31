@@ -3,13 +3,15 @@
 {
 	# Caddy's error log records each failed request's URI. Agents that
 	# can't set headers connect to /cdp/… with ?ticket=: keep it out, even
-	# though a ticket is single-use and lasts a minute.
+	# though a ticket is single-use and lasts a minute. BrowserPier refuses
+	# ?token=, but a client may still send one.
 	log default {
 		format filter {
 			wrap json
 			fields {
 				request>uri query {
 					replace ticket REDACTED
+					replace token REDACTED
 				}
 			}
 		}
