@@ -1,0 +1,9 @@
+.git
+.github
+bin
+data
+design
+images
+umbrel
+deploy
+*.md

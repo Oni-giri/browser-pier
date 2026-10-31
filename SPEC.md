@@ -253,6 +253,7 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 - **Umbrel:** an app in the author's community app store, with the manifest plus a compose using Umbrel's app proxy and app password.
 - Browser containers are started by the orchestrator, not listed in the compose file.
 - App data holds the database and one folder per profile.
+- The orchestrator listens on port **7437** by default ("PIER" on a phone keypad), set with `BROWSERPIER_LISTEN`. It avoids 8080 and other ports common among self-hosted apps, since Umbrel needs a unique port per app.
 - **Profile export and import:** from a profile's ⋯ menu, download it as a password-encrypted archive, and import one into a new profile. A profile must be stopped to export, so its files are consistent.
 
 ---

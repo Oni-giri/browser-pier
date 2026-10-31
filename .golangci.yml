@@ -1,0 +1,22 @@
+version: "2"
+
+run:
+  build-tags:
+    - docker
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errorlint
+    - gosec
+    - misspell
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/Oni-giri/browser-pier
