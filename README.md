@@ -67,6 +67,16 @@ DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock BROWSERPIER_USERNS_MODE=k
   BROWSERPIER_TEST_SITE_HOST=host.docker.internal make test-docker   # with a `docker` → `podman` shim on PATH
 ```
 
+### Trying the API
+
+```sh
+TOKEN=$(BROWSERPIER_DATA_DIR=./data ./bin/browserpier token create me | head -1)
+curl -H "Authorization: Bearer $TOKEN" -X POST localhost:7437/api/profiles -d '{"name": "demo", "default_mode": "api"}'
+curl -H "Authorization: Bearer $TOKEN" -X POST localhost:7437/api/sessions -d '{"profile": "demo"}'
+# then, from Playwright: chromium.connectOverCDP("http://localhost:7437/cdp/demo", {headers: {Authorization: `Bearer ${TOKEN}`}})
+curl -H "Authorization: Bearer $TOKEN" -X DELETE localhost:7437/api/sessions/<id>
+```
+
 CI lints, tests and builds every push and pull request, and publishes the orchestrator image to ghcr.io from `main` (tag `edge`) and from `v*` tags.
 
 ## Security, in one paragraph

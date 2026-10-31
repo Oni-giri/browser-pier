@@ -187,6 +187,12 @@ All endpoints take `Authorization: Bearer <agent token>`. The same actions are e
 
 Starting a session returns its id, the CDP URL (proxied through the orchestrator) and the live view URL.
 
+- **Scopes:** a token sees only the profiles it is scoped to; anything else answers 404, as if it didn't exist. Only a token for all profiles can create one.
+- **What agents can't change:** an agent creating a profile can't set its proxy (a proxy sees where the browser goes, and an agent can be steered by the pages it reads), and can make its handoff policy stricter than the default but never looser.
+- **CDP:** `/cdp/{profile}` is the browser's WebSocket; `/cdp/{profile}/json/version` and `/json/list` work too, with their URLs pointing back through BrowserPier, so `connectOverCDP("https://…/cdp/{profile}")` works. Clients that can't set headers can pass the token as `?token=`. The token never reaches the browser. The proxy refuses a Visual-mode session (no CDP client may attach to the page) and a browser a person is using during a handoff.
+- **Visual mode:** screenshot, click and type go through the container's X display and xdotool. During a handoff, agents can still take screenshots but not click or type. Coordinates are screen pixels; a screenshot can be scaled down with `?width=`, and the response gives the screen size.
+- **Tokens without the UI:** `browserpier token create NAME [-profiles a,b]`, `token list` and `token revoke ID` manage tokens from the command line, e.g. through `docker exec`.
+
 ### Files
 
 Downloads land in a per-profile folder. The API lists, fetches and deletes them, and uploads files into the session so the agent or a human can pick them in a file chooser. Files are kept with the profile until deleted, or until a size cap evicts the oldest.

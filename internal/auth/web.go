@@ -81,6 +81,9 @@ func NewWeb(admin *Admin, tokens *Tokens, log *slog.Logger, opts WebOptions) *We
 	return w
 }
 
+// Tokens is the agent token store the middleware checks against.
+func (w *Web) Tokens() *Tokens { return w.tokens }
+
 // Register adds /login, /logout and /setup.
 func (w *Web) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /login", w.loginPage)

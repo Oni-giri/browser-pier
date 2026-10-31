@@ -16,12 +16,13 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/db"
 	"github.com/Oni-giri/browser-pier/internal/docker"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
+	"github.com/Oni-giri/browser-pier/internal/sessions/sessionstest"
 )
 
 type fixture struct {
 	t      *testing.T
 	dir    string
-	rt     *fakeRuntime
+	rt     *sessionstest.FakeRuntime
 	m      *Manager
 	layout Layout
 }
@@ -34,7 +35,7 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	f := &fixture{t: t, dir: dir, rt: newFakeRuntime(dir),
+	f := &fixture{t: t, dir: dir, rt: sessionstest.New(dir),
 		layout: Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}}
 	f.m = f.manager()
 	if _, err := f.m.Profiles().Create(context.Background(), profiles.New("google")); err != nil {
@@ -120,7 +121,7 @@ func TestStartAttachStop(t *testing.T) {
 	if got := f.stored(s.ID); got.State != Stopped {
 		t.Fatalf("stored state %s", got.State)
 	}
-	if f.rt.count() != 0 {
+	if f.rt.Count() != 0 {
 		t.Fatal("the stopped container wasn't removed")
 	}
 	if _, ok := f.m.Live("google"); ok {
@@ -145,8 +146,8 @@ func TestContainerSpec(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := f.start(f.m)
-	c, _ := f.rt.container(s.ContainerID)
-	spec := c.spec
+	c, _ := f.rt.Container(s.ContainerID)
+	spec := c.Spec
 	if spec.Name != "browserpier-google" || spec.Profile != "google" || spec.Session != s.ID || spec.Screen != "1280x800" {
 		t.Fatalf("spec %+v", spec)
 	}
@@ -203,33 +204,33 @@ func TestConcurrentStartsShareOneBrowser(t *testing.T) {
 			n++
 		}
 	}
-	if n != 1 || f.rt.creates != 1 {
-		t.Fatalf("%d callers started a browser and %d containers were created; want 1 and 1", n, f.rt.creates)
+	if n != 1 || f.rt.Creates != 1 {
+		t.Fatalf("%d callers started a browser and %d containers were created; want 1 and 1", n, f.rt.Creates)
 	}
 }
 
 func TestStartFailsWhenTheBrowserExits(t *testing.T) {
 	f := newFixture(t)
 	status := 1
-	f.rt.exitOnStart = &status
-	f.rt.lastLog = `level=ERROR msg=exiting err="profile /profile is not writable"`
+	f.rt.ExitOnStart = &status
+	f.rt.LastLog = `level=ERROR msg=exiting err="profile /profile is not writable"`
 
 	s, _, err := f.m.Start(context.Background(), "google", "")
 	if !errors.Is(err, ErrStartFailed) {
 		t.Fatalf("Start err = %v, want ErrStartFailed", err)
 	}
-	if s.State != Failed || s.LastLog != f.rt.lastLog || !strings.Contains(s.Error, "exit status 1") {
+	if s.State != Failed || s.LastLog != f.rt.LastLog || !strings.Contains(s.Error, "exit status 1") {
 		t.Fatalf("failed session %+v", s)
 	}
-	if got := f.stored(s.ID); got.State != Failed || got.LastLog != f.rt.lastLog {
+	if got := f.stored(s.ID); got.State != Failed || got.LastLog != f.rt.LastLog {
 		t.Fatalf("stored %+v", got)
 	}
-	if f.rt.count() != 0 {
+	if f.rt.Count() != 0 {
 		t.Fatal("the failed container wasn't removed")
 	}
 
 	// Retry works once the cause is gone.
-	f.rt.exitOnStart = nil
+	f.rt.ExitOnStart = nil
 	if s := f.start(f.m); s.State != Running {
 		t.Fatalf("retry: %+v", s)
 	}
@@ -238,11 +239,11 @@ func TestStartFailsWhenTheBrowserExits(t *testing.T) {
 func TestBrowserCrashFailsTheSession(t *testing.T) {
 	f := newFixture(t)
 	s := f.start(f.m)
-	f.rt.lastLog = "level=ERROR msg=exiting err=\"chromium exited by itself\""
-	f.rt.exit(s.ContainerID, 1)
+	f.rt.LastLog = "level=ERROR msg=exiting err=\"chromium exited by itself\""
+	f.rt.Exit(s.ContainerID, 1)
 	eventually(t, "the session to fail", func() bool { return f.stored(s.ID).State == Failed })
 	got := f.stored(s.ID)
-	if !strings.Contains(got.Error, "unexpectedly") || got.LastLog != f.rt.lastLog {
+	if !strings.Contains(got.Error, "unexpectedly") || got.LastLog != f.rt.LastLog {
 		t.Fatalf("stored %+v", got)
 	}
 	if _, ok := f.m.Live("google"); ok {
@@ -253,7 +254,7 @@ func TestBrowserCrashFailsTheSession(t *testing.T) {
 func TestUncleanStopFailsTheSession(t *testing.T) {
 	f := newFixture(t)
 	s := f.start(f.m)
-	f.rt.stopStatus = 1 // the entrypoint's SIGTERM fallback
+	f.rt.StopStatus = 1 // the entrypoint's SIGTERM fallback
 	got, err := f.m.Stop(context.Background(), s.ID)
 	if err != nil || got.State != Failed || !strings.Contains(got.Error, "logins may be lost") {
 		t.Fatalf("Stop = %+v, %v", got, err)
@@ -262,14 +263,14 @@ func TestUncleanStopFailsTheSession(t *testing.T) {
 
 func TestReadyTimeout(t *testing.T) {
 	f := newFixture(t)
-	f.rt.unhealthy = true
+	f.rt.Unhealthy = true
 	f.m.readyTimeout = 300 * time.Millisecond
 	s, _, err := f.m.Start(context.Background(), "google", "")
 	if !errors.Is(err, ErrStartFailed) || s.State != Failed || !strings.Contains(s.Error, "wasn't ready") {
 		t.Fatalf("Start = %+v, %v", s, err)
 	}
-	if f.rt.stops != 1 || f.rt.count() != 0 {
-		t.Fatalf("stops %d, containers left %d; want the container stopped and removed", f.rt.stops, f.rt.count())
+	if f.rt.Stops != 1 || f.rt.Count() != 0 {
+		t.Fatalf("stops %d, containers left %d; want the container stopped and removed", f.rt.Stops, f.rt.Count())
 	}
 }
 
@@ -331,14 +332,14 @@ func TestReconcileAfterRestart(t *testing.T) {
 	f.m.Close() // the orchestrator goes down; browsers keep running
 
 	// While it's down, one container disappears and a stray one appears.
-	f.rt.exit(gone.ContainerID, 0)
+	f.rt.Exit(gone.ContainerID, 0)
 	if err := f.rt.Remove(ctx, gone.ContainerID); err != nil {
 		t.Fatal(err)
 	}
-	f.rt.mu.Lock()
-	f.rt.containers["stray"] = &fakeContainer{id: "stray", state: "running", exited: make(chan struct{})}
-	f.rt.containers["stray"].spec.Name = "browserpier-stray"
-	f.rt.mu.Unlock()
+	f.rt.Mu.Lock()
+	f.rt.Containers["stray"] = &sessionstest.FakeContainer{ID: "stray", State: "running", Exited: make(chan struct{})}
+	f.rt.Containers["stray"].Spec.Name = "browserpier-stray"
+	f.rt.Mu.Unlock()
 
 	m := f.manager()
 	if err := m.Reconcile(ctx); err != nil {
@@ -354,7 +355,7 @@ func TestReconcileAfterRestart(t *testing.T) {
 		t.Fatalf("session with a vanished container: %+v", got)
 	}
 	eventually(t, "the stray container to go", func() bool {
-		_, ok := f.rt.container("stray")
+		_, ok := f.rt.Container("stray")
 		return !ok
 	})
 	if got, err := m.Stop(ctx, running.ID); err != nil || got.State != Stopped {
@@ -441,36 +442,36 @@ func TestClosedManagerRefuses(t *testing.T) {
 		t.Fatalf("Start after Close = %v", err)
 	}
 	// Closing leaves the browser running for the next orchestrator.
-	if c, _ := f.rt.container(s.ContainerID); c.state != "running" {
-		t.Fatalf("container %s after Close", c.state)
+	if c, _ := f.rt.Container(s.ContainerID); c.State != "running" {
+		t.Fatalf("container %s after Close", c.State)
 	}
 }
 
 func TestStartNeverRemovesSomeoneElsesContainer(t *testing.T) {
 	f := newFixture(t)
-	f.rt.mu.Lock()
-	f.rt.containers["theirs"] = &fakeContainer{id: "theirs", state: "exited", foreign: true, exited: make(chan struct{})}
-	f.rt.containers["theirs"].spec.Name = "browserpier-google"
-	f.rt.mu.Unlock()
+	f.rt.Mu.Lock()
+	f.rt.Containers["theirs"] = &sessionstest.FakeContainer{ID: "theirs", State: "exited", Foreign: true, Exited: make(chan struct{})}
+	f.rt.Containers["theirs"].Spec.Name = "browserpier-google"
+	f.rt.Mu.Unlock()
 
 	s, _, err := f.m.Start(context.Background(), "google", "")
 	if !errors.Is(err, ErrStartFailed) || !strings.Contains(s.Error, "already named browserpier-google") {
 		t.Fatalf("Start = %+v, %v; want a name-collision failure", s, err)
 	}
-	if _, ok := f.rt.container("theirs"); !ok {
+	if _, ok := f.rt.Container("theirs"); !ok {
 		t.Fatal("an unrelated container was deleted")
 	}
 
 	// A stopped one of our own for this profile is cleared out of the way.
-	f.rt.mu.Lock()
-	delete(f.rt.containers, "theirs")
-	f.rt.containers["ours"] = &fakeContainer{id: "ours", state: "exited", exited: make(chan struct{})}
-	f.rt.containers["ours"].spec = docker.BrowserSpec{Name: "browserpier-google", Profile: "google"}
-	f.rt.mu.Unlock()
+	f.rt.Mu.Lock()
+	delete(f.rt.Containers, "theirs")
+	f.rt.Containers["ours"] = &sessionstest.FakeContainer{ID: "ours", State: "exited", Exited: make(chan struct{})}
+	f.rt.Containers["ours"].Spec = docker.BrowserSpec{Name: "browserpier-google", Profile: "google"}
+	f.rt.Mu.Unlock()
 	if s := f.start(f.m); s.State != Running {
 		t.Fatalf("Start with a stale container of ours: %+v", s)
 	}
-	if _, ok := f.rt.container("ours"); ok {
+	if _, ok := f.rt.Container("ours"); ok {
 		t.Fatal("our stale container wasn't removed")
 	}
 }
@@ -485,7 +486,7 @@ func TestFailedSaveFailsTheStartAndHeals(t *testing.T) {
 	if !errors.Is(err, ErrStartFailed) || !strings.Contains(s.Error, "saving the session") {
 		t.Fatalf("Start with a failing database = %+v, %v", s, err)
 	}
-	if f.rt.count() != 0 {
+	if f.rt.Count() != 0 {
 		t.Fatal("a container was left behind with no record of it")
 	}
 	if _, err := f.m.db.ExecContext(ctx, `DROP TRIGGER no_updates`); err != nil {
@@ -506,14 +507,14 @@ func TestFailedSaveFailsTheStartAndHeals(t *testing.T) {
 
 func TestCloseReleasesWaitingCallers(t *testing.T) {
 	f := newFixture(t)
-	f.rt.unhealthy = true
+	f.rt.Unhealthy = true
 	f.m.readyTimeout = time.Hour
 	errc := make(chan error, 1)
 	go func() {
 		_, _, err := f.m.Start(context.Background(), "google", "")
 		errc <- err
 	}()
-	eventually(t, "the container to start", func() bool { return f.rt.count() == 1 })
+	eventually(t, "the container to start", func() bool { return f.rt.Count() == 1 })
 	f.m.Close()
 	select {
 	case err := <-errc:
@@ -529,7 +530,7 @@ func TestStopErrorLeavesTheSessionRunning(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
 	s := f.start(f.m)
-	f.rt.stopErr = errors.New("daemon hiccup")
+	f.rt.StopErr = errors.New("daemon hiccup")
 	if _, err := f.m.Stop(ctx, s.ID); err == nil || !strings.Contains(err.Error(), "daemon hiccup") {
 		t.Fatalf("Stop = %v, want the Docker error", err)
 	}
@@ -539,7 +540,7 @@ func TestStopErrorLeavesTheSessionRunning(t *testing.T) {
 	if got := f.stored(s.ID); got.State != Running {
 		t.Fatalf("stored %s, want running", got.State)
 	}
-	f.rt.stopErr = nil
+	f.rt.StopErr = nil
 	if got, err := f.m.Stop(ctx, s.ID); err != nil || got.State != Stopped {
 		t.Fatalf("retry Stop = %+v, %v", got, err)
 	}
@@ -559,8 +560,8 @@ func TestConcurrentStopsShareOneAttempt(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	if f.rt.stops != 1 {
-		t.Fatalf("%d Docker stops for one session", f.rt.stops)
+	if f.rt.Stops != 1 {
+		t.Fatalf("%d Docker stops for one session", f.rt.Stops)
 	}
 }
 
@@ -599,5 +600,88 @@ func TestReconcileRemovesTombstones(t *testing.T) {
 	}
 	if _, err := os.Stat(tomb); !os.IsNotExist(err) {
 		t.Fatalf("tombstone still there: %v", err)
+	}
+}
+
+func TestAttachShowsInUseByAndEndsWithTheSession(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	s := f.start(f.m)
+	c1, r1, err := f.m.Attach(ctx, s.ID, "t1", "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, r2, _ := f.m.Attach(ctx, s.ID, "t1", "claude")
+	c3, r3, _ := f.m.Attach(ctx, s.ID, "t2", "browser-use")
+	if got, _ := f.m.Live("google"); strings.Join(got.InUseBy, ",") != "browser-use,claude" {
+		t.Fatalf("InUseBy = %v", got.InUseBy)
+	}
+	if got := f.m.ConnectedTokens(); len(got) != 2 {
+		t.Fatalf("ConnectedTokens = %v", got)
+	}
+	r1()
+	r1() // releasing twice is harmless
+	if c1.Err() == nil {
+		t.Fatal("a released connection's context is still open")
+	}
+	r3()
+	if c3.Err() == nil {
+		t.Fatal("release didn't cancel")
+	}
+	if got, _ := f.m.Get(ctx, s.ID); strings.Join(got.InUseBy, ",") != "claude" {
+		t.Fatalf("InUseBy after release = %v", got.InUseBy)
+	}
+	r2()
+	if _, _, err := f.m.Attach(ctx, "nope", "t1", "claude"); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("Attach unknown = %v", err)
+	}
+
+	// Stopping the session closes what's still attached.
+	c4, r4, _ := f.m.Attach(ctx, s.ID, "t1", "claude")
+	defer r4()
+	if _, err := f.m.Stop(ctx, s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if c4.Err() == nil {
+		t.Fatal("a connection outlived its session")
+	}
+}
+
+func TestHandoffClosesAgentConnections(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	s := f.start(f.m)
+	c, release, _ := f.m.Attach(ctx, s.ID, "t1", "claude")
+	defer release()
+	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if c.Err() == nil {
+		t.Fatal("an agent stayed connected while a person has the browser")
+	}
+	if _, _, err := f.m.Attach(ctx, s.ID, "t1", "claude"); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("Attach during a handoff = %v", err)
+	}
+	if _, err := f.m.SetNeedsHelp(s.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	_, r, err := f.m.Attach(ctx, s.ID, "t1", "claude")
+	if err != nil {
+		t.Fatalf("Attach after hand-back = %v", err)
+	}
+	r()
+}
+
+func TestDisconnectToken(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	s := f.start(f.m)
+	revoked, r1, _ := f.m.Attach(ctx, s.ID, "t1", "claude")
+	defer r1()
+	kept, r2, _ := f.m.Attach(ctx, s.ID, "t2", "other")
+	defer r2()
+	f.m.DisconnectToken("t1")
+	if revoked.Err() == nil || kept.Err() != nil {
+		t.Fatalf("after revoking t1: t1 %v, t2 %v", revoked.Err(), kept.Err())
 	}
 }

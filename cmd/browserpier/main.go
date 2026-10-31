@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Oni-giri/browser-pier/internal/api"
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/config"
 	"github.com/Oni-giri/browser-pier/internal/db"
@@ -37,6 +38,13 @@ func main() {
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(version)
+		return
+	}
+	if flag.Arg(0) == "token" {
+		if err := tokenCommand(flag.Args()[1:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "browserpier token:", err)
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -120,7 +128,9 @@ func run(log *slog.Logger) error {
 	}
 	log.Info("starting", "version", version, "listen", ln.Addr().String(), "data_dir", dataDir,
 		"host_data_dir", hostDataDir, "browser_image", image)
-	return serve(ctx, ln, newHandler(web), log)
+	agentAPI := api.New(mgr, web, log, cfg.PublicURL)
+	go agentAPI.WatchRevocations(ctx, 10*time.Second)
+	return serve(ctx, ln, newHandler(web, agentAPI), log)
 }
 
 // instanceID is this BrowserPier's ID, made on first start and kept in the
@@ -167,13 +177,14 @@ func browserUser(uid, gid int) (int, int) {
 
 // newHandler is every route. Cross-origin form posts are refused, so a
 // page elsewhere can't act with the admin's cookie.
-func newHandler(web *auth.Web) http.Handler {
+func newHandler(web *auth.Web, agentAPI *api.API) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	web.Register(mux)
+	agentAPI.Register(mux)
 	// Until the web UI lands (PROJ-11), the home page only confirms the sign-in.
 	mux.Handle("GET /{$}", web.RequireAdmin(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
