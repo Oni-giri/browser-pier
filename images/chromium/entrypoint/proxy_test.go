@@ -52,10 +52,13 @@ func socksGet(t *testing.T, fwdAddr, host string, port int) (string, error) {
 	return string(b), nil
 }
 
-func startForwarder(t *testing.T, upstream string) *forwarder {
+func startForwarder(t *testing.T, upstream string, localNetwork bool) *forwarder {
 	t.Helper()
-	u, _ := url.Parse(upstream)
-	f, err := newForwarder(u, slog.New(slog.DiscardHandler))
+	var u *url.URL
+	if upstream != "" {
+		u, _ = url.Parse(upstream)
+	}
+	f, err := newForwarder(u, localNetwork, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,13 +85,14 @@ func TestForwarderThroughUpstreams(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			up := mk(t, "user", "p@ss:word")
-			f := startForwarder(t, name+"://user:"+url.QueryEscape("p@ss:word")+"@"+up.Addr)
-			body, err := socksGet(t, fwdAddrs[f], "localhost", port)
+			up.Alias("origin.test", "127.0.0.1")
+			f := startForwarder(t, name+"://user:"+url.QueryEscape("p@ss:word")+"@"+up.Addr, false)
+			body, err := socksGet(t, fwdAddrs[f], "origin.test", port)
 			if err != nil || body != "hello" {
 				t.Fatalf("through the forwarder: %q, %v", body, err)
 			}
 			// The upstream got the name, not an address: no local DNS.
-			if got := up.Targets(); len(got) != 1 || got[0] != "localhost:"+strconv.Itoa(port) {
+			if got := up.Targets(); len(got) != 1 || got[0] != "origin.test:"+strconv.Itoa(port) {
 				t.Fatalf("upstream saw %v", got)
 			}
 			deadline := time.Now().Add(5 * time.Second)
@@ -99,8 +103,8 @@ func TestForwarderThroughUpstreams(t *testing.T) {
 				time.Sleep(10 * time.Millisecond)
 			}
 
-			bad := startForwarder(t, name+"://user:wrong@"+up.Addr)
-			if _, err := socksGet(t, fwdAddrs[bad], "localhost", port); err == nil {
+			bad := startForwarder(t, name+"://user:wrong@"+up.Addr, false)
+			if _, err := socksGet(t, fwdAddrs[bad], "origin.test", port); err == nil {
 				t.Fatal("wrong upstream credentials still got through")
 			}
 			if up.Denied() == 0 {
@@ -127,18 +131,21 @@ func TestReadProxyFileDeletesIt(t *testing.T) {
 	}
 	for _, bad := range []string{"ftp://x:1", "http://noport"} {
 		u, _ := url.Parse(bad)
-		if _, err := newForwarder(u, slog.New(slog.DiscardHandler)); err == nil {
+		if _, err := newForwarder(u, false, slog.New(slog.DiscardHandler)); err == nil {
 			t.Errorf("newForwarder(%s) accepted", bad)
 		}
 	}
 }
 
-func TestProxiedChromiumArgs(t *testing.T) {
-	args := strings.Join(chromiumArgs(config{Width: 1280, Height: 800, ProfileDir: "/p"}, false, true), " ")
-	if !strings.Contains(args, "--proxy-server=socks5://127.0.0.1:1080") || !strings.Contains(args, "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1") {
-		t.Fatalf("proxied args: %s", args)
-	}
-	if strings.Contains(strings.Join(chromiumArgs(config{Width: 1280, Height: 800}, false, false), " "), "proxy-server") {
-		t.Fatal("proxy flags without a proxy")
+func TestChromiumAlwaysGoesThroughTheForwarder(t *testing.T) {
+	args := strings.Join(chromiumArgs(config{Width: 1280, Height: 800, ProfileDir: "/p"}, false), " ")
+	for _, want := range []string{
+		"--proxy-server=socks5://127.0.0.1:1080",
+		"--proxy-bypass-list=<-loopback>",
+		"--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1",
+	} {
+		if !strings.Contains(args, want) {
+			t.Errorf("missing %s: %s", want, args)
+		}
 	}
 }

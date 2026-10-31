@@ -34,6 +34,9 @@ type config struct {
 	// (BROWSERPIER_TZ_OVERRIDE, BROWSERPIER_LOCALE_OVERRIDE).
 	StoredCountry, StoredTZ    string
 	OverrideTZ, OverrideLocale string
+	// LocalNetwork (BROWSERPIER_LOCAL_NETWORK) lets pages reach private
+	// addresses: the LAN, the Docker host. Off by default.
+	LocalNetwork bool
 }
 
 func loadConfig(lookup func(string) (string, bool)) (config, error) {
@@ -65,6 +68,9 @@ func loadConfig(lookup func(string) (string, bool)) (config, error) {
 	}
 
 	var err error
+	if c.LocalNetwork, err = strconv.ParseBool(get("BROWSERPIER_LOCAL_NETWORK", "false")); err != nil {
+		return config{}, fmt.Errorf("BROWSERPIER_LOCAL_NETWORK: want true or false, got %q", get("BROWSERPIER_LOCAL_NETWORK", ""))
+	}
 	if c.StopTimeout, err = time.ParseDuration(get("BROWSERPIER_STOP_TIMEOUT", "20s")); err != nil || c.StopTimeout <= 0 {
 		return config{}, fmt.Errorf("BROWSERPIER_STOP_TIMEOUT: want a positive duration such as 20s, got %q", get("BROWSERPIER_STOP_TIMEOUT", ""))
 	}

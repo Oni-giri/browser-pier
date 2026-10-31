@@ -20,7 +20,7 @@ import (
 //	GET /stream    the display as an H.264 Annex-B byte stream, one reader at a time
 //	GET /screenshot, POST /input/{click,type,scroll,key,drag}   Visual mode (see visual.go)
 //	GET /geo           the location the browser runs with
-//	GET /proxy/stats   bytes through the proxy, when there is one
+//	GET /proxy/stats   bytes through the upstream proxy, and connections refused
 func newControlHandler(cdp string, stream http.Handler, vis *visual, fwd *forwarder, where geo) http.Handler {
 	target := &url.URL{Scheme: "http", Host: cdp}
 	relay := &httputil.ReverseProxy{Rewrite: func(pr *httputil.ProxyRequest) {

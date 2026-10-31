@@ -4,9 +4,8 @@ import "fmt"
 
 // chromiumArgs is Chromium's command line. It never includes
 // --enable-automation, --headless or --no-sandbox, and spoofs nothing.
-// smallShm is set when /dev/shm is too small for Chromium's shared memory;
-// proxied when the profile has a proxy, served by the forwarder.
-func chromiumArgs(c config, smallShm, proxied bool) []string {
+// smallShm is set when /dev/shm is too small for Chromium's shared memory.
+func chromiumArgs(c config, smallShm bool) []string {
 	args := []string{
 		"--user-data-dir=" + c.ProfileDir,
 		// Chromium binds this to the container's loopback; the control socket relays it.
@@ -17,7 +16,16 @@ func chromiumArgs(c config, smallShm, proxied bool) []string {
 		// No GPU in the container: WebGL runs on SwiftShader.
 		"--use-angle=swiftshader",
 		"--enable-unsafe-swiftshader",
-		// A proxied profile can't leak the host IP over WebRTC.
+		// Every connection goes through the forwarder, which refuses the
+		// local network unless the profile allows it (egress.go). With a
+		// single proxy and no DIRECT fallback, if it's down nothing goes out.
+		"--proxy-server=socks5://" + forwarderAddr,
+		// Chromium sends loopback and link-local addresses around the proxy
+		// unless told not to; the metadata endpoint is link-local.
+		"--proxy-bypass-list=<-loopback>",
+		// Nothing resolves a name locally, so DNS can't go around it either.
+		"--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1",
+		// Nor can WebRTC's UDP, which the forwarder doesn't carry.
 		"--webrtc-ip-handling-policy=disable_non_proxied_udp",
 		"--disable-component-update",
 		"--disable-background-networking",
@@ -32,16 +40,6 @@ func chromiumArgs(c config, smallShm, proxied bool) []string {
 	}
 	if smallShm {
 		args = append(args, "--disable-dev-shm-usage")
-	}
-	if proxied {
-		args = append(args,
-			// Everything goes through the forwarder; with a single proxy
-			// and no DIRECT fallback, if it's down nothing goes out.
-			"--proxy-server=socks5://"+forwarderAddr,
-			// And nothing resolves a name locally, so DNS can't leak
-			// around the proxy either.
-			"--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1",
-		)
 	}
 	return args
 }
