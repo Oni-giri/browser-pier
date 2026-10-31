@@ -55,6 +55,7 @@ type Web struct {
 	slow        chan struct{}
 	setup       *Lockout
 	badToken    *Lockout
+	tickets     *tickets
 	pages       map[string]*template.Template
 }
 
@@ -69,6 +70,7 @@ func NewWeb(admin *Admin, tokens *Tokens, log *slog.Logger, opts WebOptions) *We
 		backstop:    &backstop{window: 15 * time.Minute, free: 20, base: 2 * time.Second, max: 30 * time.Second, now: time.Now},
 		setup:       NewLockout(10, 5*time.Minute, 5*time.Minute),
 		badToken:    NewLockout(20, 5*time.Minute, 5*time.Minute),
+		tickets:     newTickets(),
 		slow:        make(chan struct{}, 1),
 		pages:       map[string]*template.Template{},
 	}
@@ -111,6 +113,7 @@ type ctxKey int
 const (
 	tokenKey ctxKey = iota
 	adminKey
+	ticketKey
 )
 
 // TokenFromContext returns the agent token that authenticated the request.

@@ -75,9 +75,8 @@ func TestActivityLogCDPAndStop(t *testing.T) {
 	s := f.start(f.all, "google", "api")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	host := strings.TrimPrefix(f.srv.URL, "http://")
 	//nolint:bodyclose // after an upgrade the connection owns the body
-	conn, _, err := websocket.Dial(ctx, "ws://"+host+"/cdp/google?token="+f.scoped, nil)
+	conn, _, err := websocket.Dial(ctx, f.ticket(f.scoped, s.ID), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

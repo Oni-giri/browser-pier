@@ -65,6 +65,8 @@ s = requests.post("{{.Base}}/api/sessions", json={"profile": "google", "mode": "
 
 with sync_playwright() as p:
     browser = p.chromium.connect_over_cdp(s["cdp_url"], headers=auth)
+    <span class="c"># can't set headers? POST /api/sessions/{id}/cdp-ticket gives a
+    # one-minute "cdp_url" that needs none</span>
     page = browser.contexts[0].pages[0]
     page.goto("https://mail.google.com")
 
@@ -91,6 +93,7 @@ claude mcp add --transport http browserpier {{.Base}}/mcp \
         <li><span class="m POST">POST</span><code>/api/sessions</code><span>Start or attach to a browser</span></li>
         <li><span class="m DELETE">DELETE</span><code>/api/sessions/{id}</code><span>Stop it, keep the profile</span></li>
         <li><span class="m WS">WS</span><code>/cdp/{profile}</code><span>API mode, token-checked</span></li>
+        <li><span class="m POST">POST</span><code>/api/sessions/{id}/cdp-ticket</code><span>A CDP URL for clients that can't set headers</span></li>
         <li><span class="m GET">GET</span><code>/api/sessions/{id}/screenshot</code><span>Visual mode: see the screen</span></li>
         <li><span class="m POST">POST</span><code>/api/sessions/{id}/click</code><span>Visual mode: click, and /type to type</span></li>
         <li><span class="m GET">GET</span><code>/api/profiles/{name}/files</code><span>Downloaded files</span></li>

@@ -101,8 +101,10 @@ func (b *browser) checkLeaks(r *http.Request) {
 	if v := r.Header.Get("Authorization"); v != "" {
 		b.leaks = append(b.leaks, "Authorization: "+v)
 	}
-	if v := r.URL.Query().Get("token"); v != "" {
-		b.leaks = append(b.leaks, "token="+v)
+	for _, k := range []string{"token", "ticket"} {
+		if v := r.URL.Query().Get(k); v != "" {
+			b.leaks = append(b.leaks, k+"="+v)
+		}
 	}
 	if v := r.Header.Get("Cookie"); v != "" {
 		b.leaks = append(b.leaks, "Cookie: "+v)
@@ -205,6 +207,23 @@ func (f *fixture) start(token, profile, mode string) sessionJSON {
 		f.t.Fatalf("start %s: %d %+v", profile, code, s)
 	}
 	return s
+}
+
+// ticket mints a CDP ticket for the session and returns its cdp_url.
+func (f *fixture) ticket(token, sessionID string) string {
+	f.t.Helper()
+	var out struct {
+		Ticket  string `json:"ticket"`
+		CDPURL  string `json:"cdp_url"`
+		Expires string `json:"expires_at"`
+	}
+	if code := f.call(token, http.MethodPost, "/api/sessions/"+sessionID+"/cdp-ticket", "", &out); code != http.StatusCreated {
+		f.t.Fatalf("cdp-ticket: %d %+v", code, out)
+	}
+	if !strings.HasPrefix(out.Ticket, auth.TicketPrefix) || !strings.HasSuffix(out.CDPURL, "?ticket="+out.Ticket) || out.Expires == "" {
+		f.t.Fatalf("cdp-ticket: %+v", out)
+	}
+	return out.CDPURL
 }
 
 func TestEveryRouteNeedsAToken(t *testing.T) {
@@ -355,22 +374,11 @@ func TestCDPProxy(t *testing.T) {
 		t.Fatalf("targets %v", targets)
 	}
 
-	// A client that can only put the token in the URL gets URLs that carry it.
-	resp, err := http.Get(f.srv.URL + "/cdp/google/json/version?token=" + f.all)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = json.NewDecoder(resp.Body).Decode(&version)
-	_ = resp.Body.Close()
-	if version["webSocketDebuggerUrl"] != "ws://"+host+"/cdp/google/devtools/browser/abc?token="+f.all {
-		t.Fatalf("query-token version %v", version)
-	}
-
-	// The browser WebSocket, with the token in the query, as Puppeteer would.
+	// The browser WebSocket, with a ticket in the query, as Puppeteer would.
 	dctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	//nolint:bodyclose // after an upgrade the connection owns the body
-	conn, _, err := websocket.Dial(dctx, "ws://"+host+"/cdp/google?token="+f.all, nil)
+	conn, _, err := websocket.Dial(dctx, f.ticket(f.all, s.ID), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -486,7 +494,7 @@ func TestCDPConnectionsCloseOnHandoffAndRevocation(t *testing.T) {
 		dctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		//nolint:bodyclose // after an upgrade the connection owns the body
-		conn, _, err := websocket.Dial(dctx, "ws://"+host+"/cdp/google?token="+token, nil)
+		conn, _, err := websocket.Dial(dctx, "ws://"+host+"/cdp/google", &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer " + token}}})
 		if err != nil {
 			t.Fatal(err)
 		}

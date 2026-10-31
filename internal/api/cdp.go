@@ -16,25 +16,32 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
-type queryTokenKey struct{}
-
-// tokenFromQuery moves ?token= into the Authorization header (if there is
-// none), and out of the URL, so it is never forwarded.
-func tokenFromQuery(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		tok := q.Get("token")
-		if tok == "" {
-			next.ServeHTTP(w, r)
-			return
-		}
-		r = r.Clone(context.WithValue(r.Context(), queryTokenKey{}, tok))
-		q.Del("token")
-		r.URL.RawQuery = q.Encode()
-		if r.Header.Get("Authorization") == "" {
-			r.Header.Set("Authorization", "Bearer "+tok)
-		}
-		next.ServeHTTP(w, r)
+// cdpTicket mints a ticket for clients that can't set headers: they
+// connect to the cdp_url it returns, which carries the ticket instead of
+// the token.
+func (a *API) cdpTicket(w http.ResponseWriter, r *http.Request) {
+	s, ok := a.session(w, r)
+	if !ok {
+		return
+	}
+	if s.Mode != profiles.ModeAPI {
+		writeError(w, http.StatusConflict, "the session is in Visual mode, where nothing may attach to the page over CDP; use the visual endpoints, or restart it with mode api")
+		return
+	}
+	tok, _ := auth.TokenFromContext(r.Context())
+	ticket, expires, err := a.web.MintCDPTicket(tok, s.Profile)
+	if errors.Is(err, auth.ErrTooManyTickets) {
+		writeError(w, http.StatusTooManyRequests, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "couldn't make a ticket")
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"ticket":     ticket,
+		"expires_at": expires.UTC().Format(time.RFC3339),
+		"cdp_url":    "ws" + strings.TrimPrefix(a.baseURL(r), "http") + "/cdp/" + s.Profile + "?ticket=" + url.QueryEscape(ticket),
 	})
 }
 
@@ -194,14 +201,22 @@ func (a *API) cdpJSON(w http.ResponseWriter, r *http.Request, profile, path stri
 		return
 	}
 	base := "ws" + strings.TrimPrefix(a.baseURL(r), "http") + "/cdp/" + profile
-	suffix := ""
-	if tok, ok := r.Context().Value(queryTokenKey{}).(string); ok {
-		// The caller authenticated in the URL, so the URLs it follows must too.
-		suffix = "?token=" + url.QueryEscape(tok)
-	}
+	// A caller that came with a ticket used it up, so each URL it may
+	// follow carries a fresh one.
+	byTicket := auth.ByCDPTicket(r.Context())
+	tok, _ := auth.TokenFromContext(r.Context())
+	var mintErr error
 	rewrite := func(m map[string]any) {
 		if v, ok := m["webSocketDebuggerUrl"].(string); ok {
 			if u, err := url.Parse(v); err == nil {
+				suffix := ""
+				if byTicket {
+					ticket, _, err := a.web.MintCDPTicket(tok, profile)
+					if err != nil {
+						mintErr = err
+					}
+					suffix = "?ticket=" + url.QueryEscape(ticket)
+				}
 				m["webSocketDebuggerUrl"] = base + u.Path + suffix
 			}
 		}
@@ -218,6 +233,14 @@ func (a *API) cdpJSON(w http.ResponseWriter, r *http.Request, profile, path stri
 				rewrite(m)
 			}
 		}
+	}
+	if errors.Is(mintErr, auth.ErrTooManyTickets) {
+		writeError(w, http.StatusTooManyRequests, mintErr.Error())
+		return
+	}
+	if mintErr != nil {
+		writeError(w, http.StatusInternalServerError, "couldn't make a ticket")
+		return
 	}
 	writeJSON(w, http.StatusOK, body)
 }

@@ -213,6 +213,7 @@ All endpoints take `Authorization: Bearer <agent token>`. The same actions are e
 | POST | `/api/sessions/{id}/files` | Upload a file into the session |
 | POST | `/api/sessions/{id}/content` | v1.1: page as Markdown, readability text, screenshot or PDF |
 | WS | `/cdp/{profile}` | API mode: CDP, proxied and token-checked |
+| POST | `/api/sessions/{id}/cdp-ticket` | API mode: a one-minute, single-use CDP URL for clients that can't set headers |
 | POST | `/api/sessions/{id}/handoff` | One-time link for a human: `{reason, detail, require?}` |
 | GET | `/api/handoffs/{id}` | Long-poll for done / can't, plus the human's note |
 | DELETE | `/api/handoffs/{id}` | Withdraw a request the agent no longer needs: `{note?}`. Refused (409) once a person has opened the link. |
@@ -221,7 +222,11 @@ Starting a session returns its id, the CDP URL (proxied through the orchestrator
 
 - **Scopes:** a token sees only the profiles it is scoped to; anything else answers 404, as if it didn't exist. Only a token for all profiles can create one.
 - **What agents can't change:** an agent creating a profile can't set its proxy (a proxy sees where the browser goes, and an agent can be steered by the pages it reads) or open the local network to its pages, and can make its handoff policy stricter than the default but never looser.
-- **CDP:** `/cdp/{profile}` is the browser's WebSocket; `/cdp/{profile}/json/version` and `/json/list` work too, with their URLs pointing back through BrowserPier, so `connectOverCDP("https://…/cdp/{profile}")` works. Clients that can't set headers can pass the token as `?token=`. The token never reaches the browser. The proxy refuses a Visual-mode session (no CDP client may attach to the page) and a browser a person is using during a handoff.
+- **CDP:** `/cdp/{profile}` is the browser's WebSocket; `/cdp/{profile}/json/version` and `/json/list` work too, with their URLs pointing back through BrowserPier, so `connectOverCDP("https://…/cdp/{profile}")` works. The token never reaches the browser.
+  - **Clients that can't set headers** get a ticket from `POST /api/sessions/{id}/cdp-ticket`, with the token in the header, and connect to the `cdp_url` it returns (`wss://…/cdp/{profile}?ticket=…`), as a WebSocket or as the `http(s)` URL Playwright fetches `/json/version` from.
+  - **A ticket** opens one profile's CDP endpoint once, within 60 seconds, as the token that made it. It's kept hashed in memory only, and revoking the token voids it.
+  - **The `/json` endpoints** use up the ticket they were called with, and the URLs they return each carry a fresh one, so a client can follow them. Calling `/json/version` and then `/json/list` takes two tickets.
+  - **The token is never taken in the URL** (`?token=` answers 400): a proxy in front may log URLs, and a ticket that leaks there is already used or about to expire. The proxy refuses a Visual-mode session (no CDP client may attach to the page) and a browser a person is using during a handoff.
 - **Visual mode:** screenshot, click and type go through the container's X display and xdotool. During a handoff, agents can still take screenshots but not click or type. Coordinates are screen pixels; a screenshot can be scaled down with `?width=`, and the response gives the screen size.
 - **Computer actions:** `/computer` takes one action. `click {x, y, button?, double?}` and `type {text}` work as above; `scroll {x, y, dx?, dy?}` scrolls by whole wheel notches at a point, at most 20 each way; `key {keys}` presses a combination like `"ctrl+l"` or a list of up to 10, each made of X keysym names (`Return`, `Tab`, `a`…, with aliases such as `Enter`, `Esc`, `Cmd`, `PageDown`) joined by `+`; `drag {from: {x, y}, to: {x, y}, button?}` presses, moves in steps and releases. These run through xdotool with the same checks as click, never as an xdotool script. `wait {ms}` pauses up to 10 s. `zoom {x, y, w, h}` returns that region of the screen as a PNG at full resolution, cut off at the screen's edges. With `screenshot: true` any other action answers with the screen afterwards (scaled to `width` if given) instead of 204. During a handoff, wait and zoom still work. The activity log names each action but never typed text: keys that could spell something are logged only as a count.
 - **Tokens without the UI:** `browserpier token create NAME [-profiles a,b]`, `token list` and `token revoke ID` manage tokens from the command line, e.g. through `docker exec`.
@@ -327,6 +332,7 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 - Raw CDP has no authentication, so it is never exposed directly; it goes through the token-checked proxy.
 - CDP access is equivalent to full control of every logged-in account in that profile. Docs say so plainly, and tokens are scoped per profile.
 - Tokens, the PIN and the admin password are hashed at rest.
+- Agent tokens are never taken in a URL. Clients that can't set headers connect to CDP with a single-use ticket that lasts a minute.
 - Treat profile folders as secrets, since they hold live session cookies. With `password-store=basic`, cookies on disk are effectively readable.
 - Page text returned to agents is fenced and sanitised (see MCP tools), since agents browse untrusted pages.
 - Pages can't reach the local network, the Docker host or a VPS's metadata endpoint through the browser, unless the admin allows a profile the local network (see Egress).
@@ -338,7 +344,7 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 - **Generic (primary):** `deploy/docker-compose.yml` and `deploy/README.md` (the install guide for a fresh VPS).
   - **The orchestrator container:** runs as the installing user (`PUID`/`PGID`) with the Docker socket's group added, and `./data` bind-mounted (its host path is detected).
   - **Ports:** the app listens on 127.0.0.1:7437 unless `BROWSERPIER_BIND` says otherwise (a Tailscale address, say). Live views use 7438 UDP and TCP.
-  - **HTTPS:** the `https` profile adds Caddy for automatic HTTPS, from the shipped `Caddyfile`: no access log, and `?token=` redacted from its error log. The guide also covers an existing reverse proxy (WebSockets, long timeouts, no query strings in any log).
+  - **HTTPS:** the `https` profile adds Caddy for automatic HTTPS, from the shipped `Caddyfile`: no access log, and `?ticket=` and `?token=` redacted from its error log. The guide also covers an existing reverse proxy (WebSockets, long timeouts, no query strings in any log).
   - **Trusted proxies:** the compose network has a fixed subnet (`BROWSERPIER_NET`) with fixed addresses, and only Caddy's is trusted for `X-Forwarded-*`. A proxy on the host is trusted by setting the network's gateway instead.
   - **Image:** `BROWSERPIER_VERSION` defaults to `edge` until the first release.
   - **Configuration:** through environment variables, where an empty value counts as unset. Without `BROWSERPIER_ADMIN_PASSWORD`, the first-run setup page asks for the code printed in the log.
@@ -371,6 +377,7 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 | Fingerprints | No spoofing; one stable real fingerprint per profile | Spoofing needs CDP on every page, and a changing fingerprint flags logged-in accounts. |
 | Proxies | Per-profile, authenticated, via a forwarding proxy; timezone and locale matched | On a VPS, residential proxies are what makes protected sites usable. |
 | Page egress | Through the forwarder in the container, which refuses private and link-local addresses; a profile can be allowed the local network | The browser shouldn't be a way into the LAN, the host's other apps or a VPS's credentials. Kept in the container for now: `--network none` makes Chromium report itself offline. |
+| CDP without headers | Single-use, one-minute tickets; the token is never taken in the URL | A proxy in front may log URLs, and a logged token would be good until revoked. `?token=` was removed before the first release rather than deprecated, as nothing depended on it. |
 | Orchestrator ↔ browser container | A Unix socket in a per-profile folder shared with the orchestrator | Nothing listens on a network, so a page or another container can't reach CDP. |
 | Profile storage | Bind-mounted folders in the data dir, not named Docker volumes | One directory to back up or move; export and downloads read files directly. The host path is detected from the orchestrator's own mounts. |
 | Chromium sandbox | On, with a seccomp profile that allows user namespaces | Pages are untrusted; the container is a second boundary, not the only one. |
