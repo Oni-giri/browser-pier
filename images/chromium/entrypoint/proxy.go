@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
@@ -24,28 +25,41 @@ import (
 // forwarderAddr is where Chromium finds its proxy when the profile has one.
 const forwarderAddr = "127.0.0.1:1080"
 
-// forwarder is the SOCKS5 proxy Chromium talks to when the profile has an
-// upstream proxy. Chrome's --proxy-server can't carry a username and
-// password, so this adds them, and counts traffic. Chromium sends host
-// names over SOCKS5 and they go on to the upstream proxy, which resolves
+// forwarder is the SOCKS5 proxy every connection Chromium makes goes
+// through. It refuses destinations the profile may not reach (egress.go).
+// When the profile has an upstream proxy, it adds the credentials (Chrome's
+// --proxy-server can't carry a username and password) and counts traffic.
+// Chromium sends host names over SOCKS5, and the upstream proxy resolves
 // them: nothing resolves DNS locally, so lookups don't leak around it.
+// Without one, the forwarder resolves names itself, checks every address
+// and connects to the ones it checked.
 type forwarder struct {
-	upstream *url.URL
+	upstream *url.URL // nil: connect directly
+	policy   egressPolicy
 	dialer   net.Dialer
-	up, down atomic.Int64 // bytes sent and received through the proxy
+	lookup   func(ctx context.Context, host string) ([]netip.Addr, error)
+	up, down atomic.Int64 // bytes sent and received
+	refused  atomic.Int64 // connections refused by the policy
 	log      *slog.Logger
 }
 
-func newForwarder(upstream *url.URL, log *slog.Logger) (*forwarder, error) {
-	switch upstream.Scheme {
-	case "http", "https", "socks5":
-	default:
-		return nil, fmt.Errorf("proxy scheme %q: want http, https or socks5", upstream.Scheme)
+func newForwarder(upstream *url.URL, policy egressPolicy, log *slog.Logger) (*forwarder, error) {
+	if upstream != nil {
+		switch upstream.Scheme {
+		case "http", "https", "socks5":
+		default:
+			return nil, fmt.Errorf("proxy scheme %q: want http, https or socks5", upstream.Scheme)
+		}
+		if upstream.Port() == "" {
+			return nil, errors.New("proxy: no port")
+		}
 	}
-	if upstream.Port() == "" {
-		return nil, errors.New("proxy: no port")
-	}
-	return &forwarder{upstream: upstream, dialer: net.Dialer{Timeout: 15 * time.Second}, log: log}, nil
+	return &forwarder{
+		upstream: upstream, policy: policy, dialer: net.Dialer{Timeout: 15 * time.Second}, log: log,
+		lookup: func(ctx context.Context, host string) ([]netip.Addr, error) {
+			return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+		},
+	}, nil
 }
 
 // readProxyFile reads the upstream proxy URL the orchestrator left in path
@@ -97,8 +111,16 @@ func (f *forwarder) handle(client net.Conn) {
 	up, err := f.dial(ctx, addr)
 	cancel()
 	if err != nil {
-		f.log.Warn("proxy: upstream refused a connection", "err", err)
-		_, _ = client.Write([]byte{0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+		code := byte(0x01) // general failure
+		switch {
+		case errors.Is(err, errRefused):
+			code = 0x02 // not allowed by ruleset
+			f.refused.Add(1)
+			f.log.Info("refused a connection to the local network", "to", addr)
+		case f.upstream != nil:
+			f.log.Warn("proxy: upstream refused a connection", "err", err)
+		}
+		_, _ = client.Write([]byte{0x05, code, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 		_ = client.Close()
 		return
 	}
@@ -181,8 +203,56 @@ func (f *forwarder) splice(client, up net.Conn) {
 	wg.Wait()
 }
 
-// dial opens a connection to addr (host:port) through the upstream proxy.
+// dial opens a connection for Chromium to addr (host:port), unless the
+// profile may not reach it.
 func (f *forwarder) dial(ctx context.Context, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		if !f.policy.allows(ip) {
+			return nil, fmt.Errorf("%w: %s", errRefused, host)
+		}
+		return f.connect(ctx, addr)
+	}
+	if localhostName(host) {
+		return nil, fmt.Errorf("%w: %s", errRefused, host)
+	}
+	if f.upstream != nil {
+		// The upstream resolves the name, on its own network, which is
+		// what the profile's proxy is for. Looking it up here to check it
+		// would send the lookup around the proxy.
+		return f.connect(ctx, addr)
+	}
+	ips, err := f.lookup(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	for _, ip := range ips {
+		if !f.policy.allows(ip) {
+			return nil, fmt.Errorf("%w: %s is %s", errRefused, host, ip)
+		}
+	}
+	// Connect to the addresses checked, not to the name: looked up again,
+	// it could answer differently.
+	var errs []error
+	for _, ip := range ips {
+		conn, err := f.dialer.DialContext(ctx, "tcp", net.JoinHostPort(ip.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		errs = append(errs, err)
+	}
+	return nil, errors.Join(errs...)
+}
+
+// connect opens a connection to addr through the upstream proxy, or
+// straight to it without one. It checks nothing: dial does, for pages.
+func (f *forwarder) connect(ctx context.Context, addr string) (net.Conn, error) {
+	if f.upstream == nil {
+		return f.dialer.DialContext(ctx, "tcp", addr)
+	}
 	conn, err := f.dialer.DialContext(ctx, "tcp", f.upstream.Host)
 	if err != nil {
 		return nil, err
@@ -342,8 +412,8 @@ func (c counter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// stats serves the traffic counters on the control socket.
+// stats serves the counters on the control socket.
 func (f *forwarder) stats(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]int64{"bytes_sent": f.up.Load(), "bytes_received": f.down.Load()})
+	_ = json.NewEncoder(w).Encode(map[string]int64{"bytes_sent": f.up.Load(), "bytes_received": f.down.Load(), "refused": f.refused.Load()})
 }

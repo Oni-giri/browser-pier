@@ -113,6 +113,20 @@ func newRealAPI(t *testing.T) agent {
 	return agent{t: t, base: srv.URL, token: secret, m: m}
 }
 
+// allowLocalNetwork lets the profile's pages reach the test sites, on the
+// Docker host; agents can't, so it goes past the API.
+func (a agent) allowLocalNetwork(t *testing.T, name string) {
+	t.Helper()
+	p, err := a.m.Profiles().Get(context.Background(), name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.LocalNetwork = true
+	if _, err := a.m.Profiles().Update(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func siteHost(t *testing.T) string {
 	if h := os.Getenv("BROWSERPIER_TEST_SITE_HOST"); h != "" {
 		return h
@@ -136,6 +150,7 @@ func TestAgentKeepsItsLoginThroughTheAPI(t *testing.T) {
 	if code := a.do(http.MethodPost, "/api/profiles", fmt.Sprintf(`{"name": %q, "default_mode": "api", "screen": {"width": 1280, "height": 800}}`, name), nil); code != http.StatusCreated {
 		t.Fatalf("create profile: %d", code)
 	}
+	a.allowLocalNetwork(t, name)
 	var s sessionJSON
 	if code := a.do(http.MethodPost, "/api/sessions", fmt.Sprintf(`{"profile": %q}`, name), &s); code != http.StatusCreated || s.State != "running" {
 		t.Fatalf("start: %d %+v", code, s)
@@ -217,6 +232,7 @@ func TestDownloadsAndUploads(t *testing.T) {
 	if code := a.do(http.MethodPost, "/api/profiles", fmt.Sprintf(`{"name": %q, "default_mode": "api", "screen": {"width": 1280, "height": 800}}`, name), nil); code != http.StatusCreated {
 		t.Fatalf("create profile: %d", code)
 	}
+	a.allowLocalNetwork(t, name)
 	var s sessionJSON
 	if code := a.do(http.MethodPost, "/api/sessions", fmt.Sprintf(`{"profile": %q}`, name), &s); code != http.StatusCreated {
 		t.Fatalf("start: %d", code)

@@ -160,3 +160,22 @@ func TestOverridesAndLocation(t *testing.T) {
 		t.Fatalf("update kept the location? %+v, %v", got, err)
 	}
 }
+
+func TestLocalNetworkIsOffUntilSet(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	if _, err := s.Create(ctx, New("router")); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := s.Get(ctx, "router")
+	if p.LocalNetwork {
+		t.Fatal("a new profile can reach the local network")
+	}
+	p.LocalNetwork = true
+	if got, err := s.Update(ctx, p); err != nil || !got.LocalNetwork {
+		t.Fatalf("update: %+v, %v", got, err)
+	}
+	if list, _ := s.List(ctx); len(list) != 1 || !list[0].LocalNetwork {
+		t.Fatalf("list: %+v", list)
+	}
+}

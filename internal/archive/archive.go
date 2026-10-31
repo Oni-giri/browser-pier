@@ -50,6 +50,7 @@ type Profile struct {
 	HandoffPolicy   string `json:"handoff_policy"`
 	TimeZone        string `json:"time_zone,omitempty"`
 	Locale          string `json:"locale,omitempty"`
+	LocalNetwork    bool   `json:"local_network,omitempty"`
 }
 
 // MinPassphrase and MaxPassphrase bound an export's passphrase.

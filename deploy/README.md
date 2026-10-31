@@ -116,7 +116,7 @@ Leave `BROWSERPIER_LISTEN` and `BROWSERPIER_WEBRTC_PORT` alone with this compose
 | Variable | Default | What |
 |---|---|---|
 | `BROWSERPIER_PUBLIC_URL` | the address used | How people and agents reach BrowserPier. An https URL makes cookies Secure. |
-| `BROWSERPIER_WEBRTC_IPS` | every local address | Addresses advertised to live viewers. |
+| `BROWSERPIER_WEBRTC_IPS` | every local address | Addresses advertised to live viewers. Pages can't open them, as they're this server's own. |
 | `BROWSERPIER_WEBRTC_PORT` | 7438 | The live-view port, UDP with TCP as the fallback. |
 | `BROWSERPIER_ADMIN_PASSWORD` | unset | The admin password. It wins over one changed in the UI. |
 | `BROWSERPIER_RAM_LIMIT_PERCENT` | 70 | The share of host memory all browsers may use together. Unset: set in Settings. |
@@ -154,6 +154,7 @@ To move one profile, use **Export** on its ⋯ menu instead. That gives an encry
 
 - **"can't reach Docker":** `DOCKER_GID` doesn't match the socket's group.
 - **"the data dir … isn't on a volume or bind mount":** keep the `./data:/data` mount.
+- **A page on your LAN or this server won't load:** pages can't reach private addresses, so a page can't get to your router, the server's other services or a VPS's metadata. To let one profile reach them, tick "Let pages reach the local network" in its settings.
 - **Live view never connects:** port 7438 isn't open (UDP, and TCP for the fallback), or `BROWSERPIER_WEBRTC_IPS` isn't the address the viewer reaches.
 - **"Pool overlaps with other one on this address space":** `10.247.74.0/24` is taken on this host. In `.env`, set `BROWSERPIER_NET` to other first three numbers (say `10.247.75`) and `BROWSERPIER_TRUSTED_PROXIES` to match (`10.247.75.3`).
 - **Handoff link says it needs HTTPS:** the phone opened it over plain HTTP from outside your network. Use Caddy, or open it on Tailscale.

@@ -364,6 +364,113 @@ func TestReconcileAfterRestart(t *testing.T) {
 	}
 }
 
+// A browser an older BrowserPier started (without the egress filter, say)
+// is stopped, not picked up, and its login kept by the usual stop.
+func TestReconcileStopsBrowsersFromAnOlderVersion(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	for _, name := range []string{"github", "gitlab"} {
+		if _, err := f.m.Profiles().Create(ctx, profiles.New(name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := f.start(f.m)
+	current, _, err := f.m.Start(ctx, "github", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One more, which the old BrowserPier was still starting.
+	starting, _, err := f.m.Start(ctx, "gitlab", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.m.Close()
+	starting.State = Starting
+	if err := updateSession(ctx, f.m.db, starting); err != nil {
+		t.Fatal(err)
+	}
+	f.rt.Mu.Lock()
+	f.rt.Containers[old.ContainerID].Version = "" // from before the label
+	f.rt.Containers[starting.ContainerID].Version = "1"
+	stops := f.rt.Stops
+	f.rt.Mu.Unlock()
+
+	m := f.manager()
+	if err := m.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if s, ok := m.Live("google"); ok {
+		t.Fatalf("the old browser was picked up: %+v", s)
+	}
+	if got := f.stored(old.ID); got.State != Stopped {
+		t.Fatalf("old session: %+v", got)
+	}
+	f.rt.Mu.Lock()
+	stopped := f.rt.Stops - stops
+	f.rt.Mu.Unlock()
+	if stopped != 2 {
+		t.Fatalf("%d containers stopped, want the two old ones", stopped)
+	}
+	if got := f.stored(starting.ID); got.State != Failed || !strings.Contains(got.Error, "updated") {
+		t.Fatalf("old starting session: %+v", got)
+	}
+	if _, ok := f.rt.Container(starting.ContainerID); ok {
+		t.Fatal("the old starting container is still there")
+	}
+	if s, ok := m.Live("github"); !ok || s.ID != current.ID {
+		t.Fatalf("the current browser wasn't picked up: %+v, %t", s, ok)
+	}
+	// Starting it again gets a browser from this version.
+	s, attached, err := m.Start(ctx, "google", "")
+	if err != nil || attached || s.ID == old.ID {
+		t.Fatalf("restart: %+v, %t, %v", s, attached, err)
+	}
+}
+
+// If an old browser won't stop, BrowserPier doesn't start with it running.
+func TestReconcileFailsIfAnOldBrowserWontStop(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	old := f.start(f.m)
+	f.m.Close()
+	f.rt.Mu.Lock()
+	f.rt.Containers[old.ContainerID].Version = ""
+	f.rt.StopErr = errors.New("docker is stuck")
+	f.rt.Mu.Unlock()
+	m := f.manager()
+	if err := m.Reconcile(ctx); err == nil || !strings.Contains(err.Error(), "docker is stuck") {
+		t.Fatalf("Reconcile = %v", err)
+	}
+}
+
+// One the old version was already stopping when it went down is waited
+// for too, not stopped in the background.
+func TestReconcileFailsIfAnOldStoppingBrowserWontStop(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	old := f.start(f.m)
+	f.m.Close()
+	if _, err := f.m.db.ExecContext(ctx, `UPDATE sessions SET state = ? WHERE id = ?`, Stopping, old.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.rt.Mu.Lock()
+	f.rt.Containers[old.ContainerID].Version = ""
+	f.rt.StopErr = errors.New("docker is stuck")
+	f.rt.Mu.Unlock()
+	if err := f.manager().Reconcile(ctx); err == nil || !strings.Contains(err.Error(), "docker is stuck") {
+		t.Fatalf("Reconcile = %v", err)
+	}
+
+	// Once Docker stops it, the session ends.
+	f.rt.Mu.Lock()
+	f.rt.StopErr = nil
+	f.rt.Mu.Unlock()
+	if err := f.manager().Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the session to end", func() bool { return f.stored(old.ID).State == Stopped })
+}
+
 func TestDeleteProfile(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
@@ -693,6 +800,7 @@ func TestProxyAndLocationHandover(t *testing.T) {
 	p, _ := f.m.Profiles().Get(ctx, "google")
 	p.Proxy = "socks5://user:s3cret@proxy.example:1080"
 	p.Locale = "de-DE"
+	p.LocalNetwork = true
 	if _, err := f.m.Profiles().Update(ctx, p); err != nil {
 		t.Fatal(err)
 	}
@@ -700,6 +808,7 @@ func TestProxyAndLocationHandover(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.m.SetGeoURL("https://geo.example/json")
+	f.m.SetHostIPs([]string{"203.0.113.4", "100.72.0.9"})
 
 	// The browser reads and deletes the proxy file itself; here the fake
 	// checks it while "starting", and reports a fresh lookup.
@@ -729,7 +838,7 @@ func TestProxyAndLocationHandover(t *testing.T) {
 	}
 	c, _ := f.rt.Container(s.ContainerID)
 	env := strings.Join(c.Spec.Env, "\n")
-	for _, want := range []string{"BROWSERPIER_GEOIP_URL=https://geo.example/json", "BROWSERPIER_GEO_COUNTRY=US", "BROWSERPIER_GEO_TZ=America/Chicago", "BROWSERPIER_LOCALE_OVERRIDE=de-DE", "BROWSERPIER_TZ_OVERRIDE="} {
+	for _, want := range []string{"BROWSERPIER_GEOIP_URL=https://geo.example/json", "BROWSERPIER_GEO_COUNTRY=US", "BROWSERPIER_GEO_TZ=America/Chicago", "BROWSERPIER_LOCALE_OVERRIDE=de-DE", "BROWSERPIER_TZ_OVERRIDE=", "BROWSERPIER_LOCAL_NETWORK=true", "BROWSERPIER_HOST_IPS=203.0.113.4,100.72.0.9"} {
 		if !strings.Contains(env, want) {
 			t.Errorf("env lacks %s:\n%s", want, env)
 		}

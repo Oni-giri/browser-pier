@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/netip"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -20,7 +22,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := config{Width: 1920, Height: 1080, ProfileDir: "/profile", ControlSocket: "/run/browserpier/control.sock", StopTimeout: 20 * time.Second, ProxyFile: "/run/browserpier/proxy.json"}
-	if c != want {
+	if !reflect.DeepEqual(c, want) {
 		t.Fatalf("got %+v, want %+v", c, want)
 	}
 }
@@ -32,12 +34,15 @@ func TestLoadConfigFromEnv(t *testing.T) {
 		"BROWSERPIER_CONTROL_SOCKET": "/s/c.sock",
 		"BROWSERPIER_STOP_TIMEOUT":   "45s",
 		"BROWSERPIER_MOUNT_CHECK":    "s1",
+		"BROWSERPIER_LOCAL_NETWORK":  "true",
+		"BROWSERPIER_HOST_IPS":       "203.0.113.4, 2001:db8::4",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := config{Width: 1280, Height: 800, ProfileDir: "/p", ControlSocket: "/s/c.sock", StopTimeout: 45 * time.Second, MountCheck: "s1", ProxyFile: "/run/browserpier/proxy.json"}
-	if c != want {
+	want := config{Width: 1280, Height: 800, ProfileDir: "/p", ControlSocket: "/s/c.sock", StopTimeout: 45 * time.Second, MountCheck: "s1", ProxyFile: "/run/browserpier/proxy.json", LocalNetwork: true,
+		HostIPs: []netip.Addr{netip.MustParseAddr("203.0.113.4"), netip.MustParseAddr("2001:db8::4")}}
+	if !reflect.DeepEqual(c, want) {
 		t.Fatalf("got %+v, want %+v", c, want)
 	}
 }
@@ -52,6 +57,8 @@ func TestLoadConfigRejectsBadValues(t *testing.T) {
 		{"BROWSERPIER_STOP_TIMEOUT": "0s"},
 		{"BROWSERPIER_PROFILE_DIR": ""},
 		{"BROWSERPIER_CONTROL_SOCKET": ""},
+		{"BROWSERPIER_LOCAL_NETWORK": "lan"},
+		{"BROWSERPIER_HOST_IPS": "example.com"},
 	} {
 		if _, err := loadConfig(env(vars)); err == nil {
 			t.Errorf("%v: want error, got nil", vars)
@@ -61,7 +68,7 @@ func TestLoadConfigRejectsBadValues(t *testing.T) {
 
 func TestChromiumArgs(t *testing.T) {
 	c := config{Width: 1280, Height: 800, ProfileDir: "/profile"}
-	args := chromiumArgs(c, false, false)
+	args := chromiumArgs(c, false)
 	for _, want := range []string{
 		"--user-data-dir=/profile",
 		"--password-store=basic",
@@ -87,7 +94,7 @@ func TestChromiumArgs(t *testing.T) {
 	if slices.Contains(args, "--disable-dev-shm-usage") {
 		t.Error("--disable-dev-shm-usage without a small /dev/shm")
 	}
-	if !slices.Contains(chromiumArgs(c, true, false), "--disable-dev-shm-usage") {
+	if !slices.Contains(chromiumArgs(c, true), "--disable-dev-shm-usage") {
 		t.Error("small /dev/shm: want --disable-dev-shm-usage")
 	}
 }

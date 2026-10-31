@@ -234,7 +234,7 @@ func TestCreateProfile(t *testing.T) {
 		t.Fatalf("create: %d %v", r.code, r.header)
 	}
 	p, err := f.m.Profiles().Get(context.Background(), "amazon")
-	if err != nil || p.HandoffPolicy != profiles.PolicyPIN || p.DefaultMode != profiles.ModeAPI || p.AutoStop != 30*time.Minute || p.Width != 1920 || p.Proxy != "socks5://u:secret@proxy.example:1080" {
+	if err != nil || p.HandoffPolicy != profiles.PolicyPIN || p.DefaultMode != profiles.ModeAPI || p.AutoStop != 30*time.Minute || p.Width != 1920 || p.Proxy != "socks5://u:secret@proxy.example:1080" || p.LocalNetwork {
 		t.Fatalf("created %+v, %v", p, err)
 	}
 	// The proxy password never reaches the page, and saving the masked
@@ -244,13 +244,20 @@ func TestCreateProfile(t *testing.T) {
 	if strings.Contains(edit.body, "secret") {
 		t.Fatal("the edit page shows the proxy password")
 	}
-	r = f.post("/profiles/amazon/edit", url.Values{"policy": {"signin"}, "proxy": {"socks5://u:••••@proxy.example:1080"}, "time_zone": {"Europe/Berlin"}, "locale": {"de-DE"}})
+	r = f.post("/profiles/amazon/edit", url.Values{"policy": {"signin"}, "proxy": {"socks5://u:••••@proxy.example:1080"}, "time_zone": {"Europe/Berlin"}, "locale": {"de-DE"},
+		"local_network": {"1"}})
 	if r.code != http.StatusSeeOther {
 		t.Fatalf("save: %d %s", r.code, r.body)
 	}
 	p, _ = f.m.Profiles().Get(context.Background(), "amazon")
-	if p.Proxy != "socks5://u:secret@proxy.example:1080" || p.HandoffPolicy != profiles.PolicySignIn || p.TimeZone != "Europe/Berlin" {
+	if p.Proxy != "socks5://u:secret@proxy.example:1080" || p.HandoffPolicy != profiles.PolicySignIn || p.TimeZone != "Europe/Berlin" || !p.LocalNetwork {
 		t.Fatalf("saved %+v", p)
+	}
+	want(t, f.get("/profiles/amazon/edit"), http.StatusOK, `name="local_network" value="1" checked`)
+	// Unticked, the box sends nothing, which turns it off.
+	f.post("/profiles/amazon/edit", url.Values{"policy": {"signin"}, "proxy": {"socks5://u:••••@proxy.example:1080"}})
+	if p, _ = f.m.Profiles().Get(context.Background(), "amazon"); p.LocalNetwork {
+		t.Fatal("unticking the local network kept it on")
 	}
 
 	// "Start it now" sends you to the live view, which starts the browser.

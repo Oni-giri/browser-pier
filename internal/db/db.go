@@ -110,6 +110,9 @@ var migrations = []string{
 
 	// The web UI reads each profile's latest session on every refresh.
 	`CREATE INDEX sessions_profile_created ON sessions(profile, created_at);`,
+
+	// Whether a profile's pages may reach the local network.
+	`ALTER TABLE profiles ADD COLUMN local_network INTEGER NOT NULL DEFAULT 0;`,
 }
 
 // Open opens (creating if needed) the database at path and migrates it.

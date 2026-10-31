@@ -75,6 +75,8 @@ func TestAgentLogsInThroughMCP(t *testing.T) {
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", "browserpier-"+name).Run() })
 	p := profiles.New(name)
 	p.Width, p.Height = 1280, 800
+	// The test site is on the Docker host: the local network.
+	p.LocalNetwork = true
 	if _, err := m.Profiles().Create(ctx, p); err != nil {
 		t.Fatal(err)
 	}

@@ -63,6 +63,10 @@ type Profile struct {
 	// locale such as de-DE.
 	TimeZone string
 	Locale   string
+	// LocalNetwork lets pages reach private addresses: the LAN, the Docker
+	// host and its other containers. Loopback and link-local addresses (the
+	// cloud metadata endpoint) stay out of reach. Only the admin sets it.
+	LocalNetwork bool
 	// Location is where the browser appeared to be the last time it ran.
 	// BrowserPier records it; it can't be set.
 	Location  Location
@@ -167,7 +171,7 @@ type Store struct {
 func NewStore(db *sql.DB) *Store { return &Store{db: db, now: time.Now} }
 
 const columns = `name, default_mode, auto_stop_minutes, screen_width, screen_height, proxy, handoff_policy, created_at, updated_at,
-	tz_override, locale_override, geo_country, geo_time_zone, geo_ip, geo_checked_at`
+	tz_override, locale_override, geo_country, geo_time_zone, geo_ip, geo_checked_at, local_network`
 
 // Create adds a new profile.
 func (s *Store) Create(ctx context.Context, p Profile) (Profile, error) {
@@ -177,10 +181,10 @@ func (s *Store) Create(ctx context.Context, p Profile) (Profile, error) {
 	now := s.now().Truncate(time.Millisecond)
 	p.CreatedAt, p.UpdatedAt = now, now
 	res, err := s.db.ExecContext(ctx, `INSERT INTO profiles (name, default_mode, auto_stop_minutes, screen_width, screen_height,
-		proxy, handoff_policy, created_at, updated_at, tz_override, locale_override) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		proxy, handoff_policy, created_at, updated_at, tz_override, locale_override, local_network) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (name) DO NOTHING`,
 		p.Name, p.DefaultMode, int(p.AutoStop/time.Minute), p.Width, p.Height, p.Proxy, p.HandoffPolicy,
-		now.UnixMilli(), now.UnixMilli(), p.TimeZone, p.Locale)
+		now.UnixMilli(), now.UnixMilli(), p.TimeZone, p.Locale, p.LocalNetwork)
 	if err != nil {
 		return Profile{}, err
 	}
@@ -197,8 +201,9 @@ func (s *Store) Update(ctx context.Context, p Profile) (Profile, error) {
 	}
 	now := s.now().Truncate(time.Millisecond)
 	res, err := s.db.ExecContext(ctx, `UPDATE profiles SET default_mode = ?, auto_stop_minutes = ?, screen_width = ?,
-		screen_height = ?, proxy = ?, handoff_policy = ?, tz_override = ?, locale_override = ?, updated_at = ? WHERE name = ?`,
-		p.DefaultMode, int(p.AutoStop/time.Minute), p.Width, p.Height, p.Proxy, p.HandoffPolicy, p.TimeZone, p.Locale, now.UnixMilli(), p.Name)
+		screen_height = ?, proxy = ?, handoff_policy = ?, tz_override = ?, locale_override = ?, local_network = ?, updated_at = ? WHERE name = ?`,
+		p.DefaultMode, int(p.AutoStop/time.Minute), p.Width, p.Height, p.Proxy, p.HandoffPolicy, p.TimeZone, p.Locale, p.LocalNetwork,
+		now.UnixMilli(), p.Name)
 	if err != nil {
 		return Profile{}, err
 	}
@@ -260,7 +265,7 @@ func scan(row interface{ Scan(...any) error }) (Profile, error) {
 	var autoStop int
 	var created, updated, checked int64
 	err := row.Scan(&p.Name, &p.DefaultMode, &autoStop, &p.Width, &p.Height, &p.Proxy, &p.HandoffPolicy, &created, &updated,
-		&p.TimeZone, &p.Locale, &p.Location.Country, &p.Location.TimeZone, &p.Location.IP, &checked)
+		&p.TimeZone, &p.Locale, &p.Location.Country, &p.Location.TimeZone, &p.Location.IP, &checked, &p.LocalNetwork)
 	p.AutoStop = time.Duration(autoStop) * time.Minute
 	p.CreatedAt, p.UpdatedAt = time.UnixMilli(created), time.UnixMilli(updated)
 	if checked != 0 {

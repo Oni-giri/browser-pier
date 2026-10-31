@@ -41,6 +41,7 @@ type FakeContainer struct {
 	ID, State string
 	Foreign   bool // not created by BrowserPier
 	Spec      docker.BrowserSpec
+	Version   string // the definition's version, docker.Spec when created here
 	Exited    chan struct{}
 	Status    int
 	srv       *http.Server
@@ -60,7 +61,7 @@ func (f *FakeRuntime) Create(_ context.Context, spec docker.BrowserSpec) (string
 	}
 	f.next++
 	f.Creates++
-	c := &FakeContainer{ID: fmt.Sprintf("c%d", f.next), State: "created", Spec: spec, Exited: make(chan struct{})}
+	c := &FakeContainer{ID: fmt.Sprintf("c%d", f.next), State: "created", Spec: spec, Version: docker.Spec, Exited: make(chan struct{})}
 	f.Containers[c.ID] = c
 	return c.ID, nil
 }
@@ -198,7 +199,7 @@ func (f *FakeRuntime) List(context.Context) ([]docker.Container, error) {
 		if c.Foreign {
 			continue // List filters on BrowserPier's label
 		}
-		out = append(out, docker.Container{ID: c.ID, Name: c.Spec.Name, Profile: c.Spec.Profile, Session: c.Spec.Session, State: c.State})
+		out = append(out, docker.Container{ID: c.ID, Name: c.Spec.Name, Profile: c.Spec.Profile, Session: c.Spec.Session, State: c.State, Spec: c.Version})
 	}
 	return out, nil
 }

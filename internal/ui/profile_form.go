@@ -31,8 +31,12 @@ func (f profileForm) Summary() string {
 	if f.Profile.Proxy != "" {
 		proxy = "proxy"
 	}
-	return fmt.Sprintf("%s · auto-stop %s · %d × %d · %s", modeLabel(f.Profile.DefaultMode),
+	s := fmt.Sprintf("%s · auto-stop %s · %d × %d · %s", modeLabel(f.Profile.DefaultMode),
 		strings.TrimSuffix(autoStopLabel(f.Profile.AutoStop), " idle"), f.Profile.Width, f.Profile.Height, proxy)
+	if f.Profile.LocalNetwork {
+		s += " · local network"
+	}
+	return s
 }
 
 // Policies are the handoff policies, least strict first.
@@ -183,6 +187,7 @@ func readProfileForm(r *http.Request, p *profiles.Profile, keepProxy string) str
 		proxy = keepProxy
 	}
 	p.Proxy = proxy
+	p.LocalNetwork = r.PostFormValue("local_network") == "1"
 	return ""
 }
 

@@ -251,6 +251,12 @@ func TestProfiles(t *testing.T) {
 	if code := f.call(f.all, http.MethodPost, "/api/profiles", `{"name": "y", "proxy": "http://evil:1"}`, nil); code != http.StatusBadRequest {
 		t.Fatalf("proxy through the API: %d", code)
 	}
+	if code := f.call(f.all, http.MethodPost, "/api/profiles", `{"name": "y", "local_network": true}`, nil); code != http.StatusBadRequest {
+		t.Fatalf("local network through the API: %d", code)
+	}
+	if code := f.call(f.all, http.MethodPost, "/api/profiles", `{"name": "y", "local_network": false}`, &p); code != http.StatusCreated || p.LocalNetwork {
+		t.Fatalf("local network off through the API: %d %+v", code, p)
+	}
 	if code := f.call(f.all, http.MethodPost, "/api/profiles", `{"name": "Bad Name"}`, nil); code != http.StatusBadRequest {
 		t.Fatalf("bad name: %d", code)
 	}

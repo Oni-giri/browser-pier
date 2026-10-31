@@ -63,7 +63,7 @@ func TestBrowserConfigLocksDownTheContainer(t *testing.T) {
 			t.Fatalf("env %v lacks %s", cfg.Env, want)
 		}
 	}
-	if cfg.Labels[LabelManaged] != "true" || cfg.Labels[LabelProfile] != "google" || cfg.Labels[LabelSession] != "s1" {
+	if cfg.Labels[LabelManaged] != "true" || cfg.Labels[LabelProfile] != "google" || cfg.Labels[LabelSession] != "s1" || cfg.Labels[LabelSpec] != Spec {
 		t.Fatalf("labels %v", cfg.Labels)
 	}
 }

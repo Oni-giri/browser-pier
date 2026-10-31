@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -101,6 +102,7 @@ type Manager struct {
 	readyTimeout time.Duration
 	now          func() time.Time
 	geoURL       string // where browsers look up their exit location; "" for nowhere
+	hostIPs      string // the Docker host's own addresses, comma separated
 	// mem is the memory cap, set by SetMemoryLimit; nil for none.
 	mem atomic.Pointer[memLimits]
 
@@ -233,6 +235,11 @@ func (m *Manager) Profiles() *profiles.Store { return m.profiles }
 // SetGeoURL sets the echoip-style endpoint browsers look up their exit
 // location with ("" turns the lookup off). Call it before Start.
 func (m *Manager) SetGeoURL(u string) { m.geoURL = u }
+
+// SetHostIPs gives the Docker host's own addresses (its public IP, say),
+// which pages may reach only with the profile's local-network opt-in, as
+// the host's private ones. Call it before Start.
+func (m *Manager) SetHostIPs(ips []string) { m.hostIPs = strings.Join(ips, ",") }
 
 func (m *Manager) Layout() Layout { return m.layout }
 
@@ -390,6 +397,8 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 			"BROWSERPIER_GEO_TZ=" + p.Location.TimeZone,
 			"BROWSERPIER_TZ_OVERRIDE=" + p.TimeZone,
 			"BROWSERPIER_LOCALE_OVERRIDE=" + p.Locale,
+			"BROWSERPIER_LOCAL_NETWORK=" + strconv.FormatBool(p.LocalNetwork),
+			"BROWSERPIER_HOST_IPS=" + m.hostIPs,
 		},
 	})
 	if err != nil {

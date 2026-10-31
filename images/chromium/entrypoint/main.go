@@ -54,27 +54,29 @@ func run(log *slog.Logger) error {
 		return err
 	}
 
-	// The proxy, if any, comes up before anything goes out: with no
-	// forwarder there is no browser.
+	// The forwarder comes up before anything goes out: every connection
+	// Chromium makes goes through it, so with no forwarder there is no browser.
 	upstream, err := readProxyFile(cfg.ProxyFile)
 	if err != nil {
 		return err
 	}
-	var fwd *forwarder
+	fwd, err := newForwarder(upstream, egressPolicy{localNetwork: cfg.LocalNetwork, host: cfg.HostIPs}, log)
+	if err != nil {
+		return err
+	}
+	fln, err := net.Listen("tcp", forwarderAddr)
+	if err != nil {
+		return fmt.Errorf("start the proxy forwarder: %w", err)
+	}
+	defer func() { _ = fln.Close() }()
+	go fwd.serve(fln)
+	// The location lookup goes out the way pages do, through the upstream
+	// proxy if any, but to the endpoint the admin set, so unchecked.
 	lookupClient := &http.Client{}
 	if upstream != nil {
-		if fwd, err = newForwarder(upstream, log); err != nil {
-			return err
-		}
-		fln, err := net.Listen("tcp", forwarderAddr)
-		if err != nil {
-			return fmt.Errorf("start the proxy forwarder: %w", err)
-		}
-		defer func() { _ = fln.Close() }()
-		go fwd.serve(fln)
-		lookupClient.Transport = &http.Transport{DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) { return fwd.dial(ctx, addr) }}
+		lookupClient.Transport = &http.Transport{DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) { return fwd.connect(ctx, addr) }}
 	}
-	where, err := decideGeo(cfg, fwd != nil, func() (string, string, string, error) {
+	where, err := decideGeo(cfg, upstream != nil, func() (string, string, string, error) {
 		return lookupGeo(ctx, lookupClient, cfg.GeoURL)
 	})
 	if err != nil {
@@ -101,7 +103,7 @@ func run(log *slog.Logger) error {
 		return fmt.Errorf("xvfb: %w", err)
 	}
 
-	chromium := exec.Command(chromiumBinary, chromiumArgs(cfg, smallShm(), fwd != nil)...)
+	chromium := exec.Command(chromiumBinary, chromiumArgs(cfg, smallShm())...)
 	chromium.Env = append(append(os.Environ(), "DISPLAY="+display), where.env()...)
 	browser, err := spawn(chromium)
 	if err != nil {
