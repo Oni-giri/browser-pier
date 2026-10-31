@@ -118,6 +118,7 @@ Self-hosted, persistent browsers for AI agents. Agents start a browser when they
   - **In use the whole time:** an open CDP connection, and a browser a person has during a handoff, are never idle.
   - **Stopping:** an idle browser is stopped gracefully, so its logins are kept.
 - A start takes a few seconds. The UI shows Starting… with a spinner and disables the action until the browser is ready.
+- **Orchestrator restarts:** browsers keep running while the orchestrator restarts, and it picks them up again. Each container is labelled with the version of its definition (`io.browserpier.spec`); a browser from an older one, such as one started before pages went through the egress filter, is stopped the usual way instead, logins kept, and the next start gets a current one.
 - Stopping never loses logins, because the profile is written continuously and Chrome is closed gracefully.
 
 ---
