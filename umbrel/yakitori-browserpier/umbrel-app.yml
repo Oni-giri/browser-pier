@@ -39,7 +39,9 @@ description: >-
 
   - Agents connect to /api, /cdp and /mcp, and phones open handoff links under /h,
   without an Umbrel login. BrowserPier checks their own tokens, PIN and links.
-releaseNotes: ""
+releaseNotes: >-
+  The first release. See the changelog at
+  https://github.com/Oni-giri/browser-pier/blob/main/CHANGELOG.md
 developer: Oni-giri
 website: https://github.com/Oni-giri/browser-pier
 dependencies: []

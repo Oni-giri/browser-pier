@@ -10,10 +10,9 @@ services:
       PROXY_AUTH_WHITELIST: "/api/*,/cdp/*,/mcp,/mcp/*,/h/*,/static/*"
 
   web:
-    # Pinned to a release once its images are published, as
-    # 0.1.0@sha256:…, with BROWSERPIER_BROWSER_IMAGE below to match
+    # Pinned to the release, with BROWSERPIER_BROWSER_IMAGE below to match
     # (RELEASING.md, step 6).
-    image: ghcr.io/oni-giri/browser-pier:edge
+    image: ghcr.io/oni-giri/browser-pier:0.1.0@sha256:c0e9c63d57875ef9da85c77927e336e2f1ef4b754c1c5a25248c045519f8560e
     restart: on-failure
     # Time to stop every browser gracefully on the way out (each gets 30s,
     # all at once).
@@ -30,6 +29,8 @@ services:
       # browser image. See "Good to know" in umbrel-app.yml.
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
+      # The browser image of the same release, pinned likewise.
+      BROWSERPIER_BROWSER_IMAGE: ghcr.io/oni-giri/browser-pier-chromium:0.1.0@sha256:de36ddc40c9c6ad3e2ec534c0022eb11e0fdb58fcea4ebf708047b9fd80f112e
       # The app password shown under Info.
       BROWSERPIER_ADMIN_PASSWORD: ${APP_PASSWORD}
       # Umbrel's proxy (in umbreld, umbrelOS 2.0) reaches BrowserPier from
