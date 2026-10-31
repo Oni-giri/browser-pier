@@ -29,6 +29,7 @@ jobs:
           version: v2.15.0
       - run: make test
       - run: make build
+      - run: make release-files
 
   # Pull requests build the orchestrator image without any package credentials.
   image:
@@ -86,6 +87,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      # Releases are vX.Y.Z only: the orchestrator picks its browser image
+      # by that form, and anything else would get edge.
+      - if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::release tags are vX.Y.Z, not $GITHUB_REF_NAME"; exit 1; }
       - id: version
         run: echo "version=$(git describe --tags --always)" >> "$GITHUB_OUTPUT"
       # The browser image installs packages for each platform, so arm64 needs emulation.
@@ -116,3 +122,37 @@ jobs:
           build-args: VERSION=${{ steps.version.outputs.version }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  # A v* tag also makes the GitHub release, once both images are published:
+  # the install files pinned to the version, and its CHANGELOG.md section.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - run: deploy/release-files.sh "${GITHUB_REF_NAME#v}" dist
+      - name: Both images exist, and their digests go in the notes
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          { echo; echo "**Images**, to pin as the Umbrel app does:"; echo; } >>dist/notes.md
+          for image in browser-pier browser-pier-chromium; do
+            ref="ghcr.io/oni-giri/$image:$v"
+            docker buildx imagetools inspect "$ref"
+            digest=$(docker buildx imagetools inspect --format '{{json .Manifest.Digest}}' "$ref" | tr -d '"' || true)
+            case $digest in
+            sha256:*) echo "- \`$ref@$digest\`" >>dist/notes.md ;;
+            *) echo "::warning::no digest for $ref" && echo "- \`$ref\`" >>dist/notes.md ;;
+            esac
+          done
+      - run: gh release create "$GITHUB_REF_NAME" --verify-tag --title "BrowserPier $GITHUB_REF_NAME" --notes-file dist/notes.md dist/docker-compose.yml dist/Caddyfile dist/env.example
+        env:
+          GH_TOKEN: ${{ github.token }}

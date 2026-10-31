@@ -14,7 +14,7 @@ Agents start a browser when they need one. It keeps its cookies and logins, and 
 
 ## Status
 
-🚧 Design and spec are done; the code hasn't been started yet.
+First release: **0.1.0**. See [CHANGELOG.md](CHANGELOG.md), and [deploy/README.md](deploy/README.md) to install it, or `umbrel/` for Umbrel.
 
 - Full spec: [SPEC.md](SPEC.md)
 - Task tracking: Jira epic [PROJ-1](https://geistlogic.atlassian.net/browse/PROJ-1). Tasks are labelled `v1`, `v1.1` or `later`.
@@ -82,7 +82,7 @@ curl -H "Authorization: Bearer $TOKEN" -X POST localhost:7437/api/sessions -d '{
 curl -H "Authorization: Bearer $TOKEN" -X DELETE localhost:7437/api/sessions/<id>
 ```
 
-CI lints, tests and builds every push and pull request, and publishes the orchestrator image to ghcr.io from `main` (tag `edge`) and from `v*` tags.
+CI lints, tests and builds every push and pull request, and publishes both images to ghcr.io from `main` (tag `edge`) and from `v*` tags, which also make the GitHub release. See [RELEASING.md](RELEASING.md).
 
 ## Security, in one paragraph
 

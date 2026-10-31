@@ -10,7 +10,7 @@
 
 services:
   browserpier:
-    image: ghcr.io/oni-giri/browser-pier:${BROWSERPIER_VERSION:-edge}
+    image: ghcr.io/oni-giri/browser-pier:${BROWSERPIER_VERSION:-latest}
     restart: unless-stopped
     # Your user, so the files in ./data are yours. Browsers run as it too.
     user: "${PUID:-1000}:${PGID:-1000}"

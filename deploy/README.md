@@ -20,11 +20,16 @@ Over the public internet, use HTTPS: a handoff link opened over plain HTTP from 
 ```sh
 umask 077   # .env and ./data hold secrets: yours only
 mkdir browserpier && cd browserpier
-curl -fsSLO https://raw.githubusercontent.com/Oni-giri/browser-pier/main/deploy/docker-compose.yml
-curl -fsSLO https://raw.githubusercontent.com/Oni-giri/browser-pier/main/deploy/Caddyfile
-curl -fsSL  https://raw.githubusercontent.com/Oni-giri/browser-pier/main/deploy/.env.example -o .env
+release=https://github.com/Oni-giri/browser-pier/releases/latest/download
+curl -fsSLO $release/docker-compose.yml
+curl -fsSLO $release/Caddyfile
+curl -fsSL  $release/env.example -o .env
 install -d -m 700 data
 ```
+
+While the repository is private, those downloads and the images need a GitHub sign-in: get the files with `gh release download --repo Oni-giri/browser-pier --pattern '*'` (rename `env.example` to `.env`), and run `docker login ghcr.io` with a token that can read packages.
+
+These come from the latest release and run that release. The files on the `main` branch are for development and may need a newer image than the latest release.
 
 Edit `.env`:
 - **`PUID`, `PGID`:** your user (`id -u`, `id -g`). `./data` belongs to it, and the browsers run as it.
@@ -123,7 +128,7 @@ Leave `BROWSERPIER_LISTEN` and `BROWSERPIER_WEBRTC_PORT` alone with this compose
 | `BROWSERPIER_FILES_LIMIT_MB` | 1024 | The cap on each profile's downloads and uploads. |
 | `BROWSERPIER_TRUSTED_PROXIES` | none (Caddy's `10.247.74.3` in compose) | Proxies whose `X-Forwarded-*` headers are believed: addresses, CIDRs, or `private`. |
 | `BROWSERPIER_NET` | `10.247.74` | The compose network's first three numbers (compose only). |
-| `BROWSERPIER_VERSION` | `edge` | The image tag (compose only): `edge` follows the main branch, a release such as `1.0.0` stays put. |
+| `BROWSERPIER_VERSION` | the release the files came from | The image tag (compose only): a release such as `0.1.0` stays put, `latest` follows each release, `edge` follows the main branch. |
 | `BROWSERPIER_COOKIE_SECURE` | auto | `always` or `never` to override. |
 | `BROWSERPIER_GEOIP_URL` | `https://ifconfig.co/json` | How browsers find their exit location, to match time zone and language. `off` disables it. |
 | `BROWSERPIER_LISTEN` | `:7437` | The app's address inside the container. |
@@ -134,11 +139,13 @@ Leave `BROWSERPIER_LISTEN` and `BROWSERPIER_WEBRTC_PORT` alone with this compose
 
 ## Updating and backups
 
+Set `BROWSERPIER_VERSION` in `.env` to the new release (see the [releases](https://github.com/Oni-giri/browser-pier/releases) and `CHANGELOG.md`), or to `latest` to follow every release, then:
+
 ```sh
 docker compose pull && docker compose up -d
 ```
 
-Running browsers keep running through an update, and the new orchestrator picks them up.
+Running browsers keep running through an update, and the new orchestrator picks them up. If the update changed how browsers are started, it stops them instead, the usual way with logins kept, and they start afresh next time.
 
 `./data` holds everything: the database and one folder per profile, with its logins. Back it up like a password manager's vault: anyone with a copy can use those logins.
 

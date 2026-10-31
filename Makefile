@@ -5,7 +5,7 @@ LDFLAGS := -s -w -X main.version=$(VERSION)
 IMAGE          ?= ghcr.io/oni-giri/browser-pier
 CHROMIUM_IMAGE ?= ghcr.io/oni-giri/browser-pier-chromium
 
-.PHONY: all build run test test-docker vet lint fmt image image-chromium push push-chromium clean
+.PHONY: all build run test test-docker vet lint fmt release-files image image-chromium push push-chromium clean
 
 all: lint test build
 
@@ -22,6 +22,13 @@ test:
 # against the browser image, so build it first.
 test-docker: image-chromium
 	BROWSERPIER_TEST_IMAGE=$(CHROMIUM_IMAGE):$(VERSION) $(GO) test -race -tags docker -timeout 20m -v ./...
+
+# The files a release of CHANGELOG.md's newest version would attach, in
+# dist/, checked as a compose file when Docker Compose is here.
+release-files:
+	rm -rf dist
+	deploy/release-files.sh $$(awk '/^## /{print $$2; exit}' CHANGELOG.md) dist
+	! docker compose version >/dev/null 2>&1 || docker compose -f dist/docker-compose.yml --env-file dist/env.example config >/dev/null
 
 vet:
 	$(GO) vet ./...
@@ -45,4 +52,4 @@ push-chromium: image-chromium
 	docker push $(CHROMIUM_IMAGE):$(VERSION)
 
 clean:
-	rm -rf bin/
+	rm -rf bin/ dist/

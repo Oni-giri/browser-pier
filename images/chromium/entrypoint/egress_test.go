@@ -27,7 +27,7 @@ func TestEgressPolicy(t *testing.T) {
 		{"172.31.255.254", false, true},
 		{"10.21.0.1", false, true},
 		{"192.168.1.1", false, true},
-		{"100.72.225.32", false, true},
+		{"100.101.102.103", false, true},
 		{"fd7a:115c:a1e0::1", false, true},
 		// Never: loopback, metadata and other link-local, the rest.
 		{"127.0.0.1", false, false},
@@ -56,12 +56,12 @@ func TestEgressPolicy(t *testing.T) {
 		{"2001:0:4136:e378:8000:63bf:3fff:fdd2", false, false}, // Teredo
 		{"64:ff9b:1::a9fe:a9fe", false, false},                 // local-use NAT64
 		// The host's own public address, as the admin gave it.
-		{"51.68.126.210", false, true},
-		{"::ffff:51.68.126.210", false, true},
-		{"51.68.126.211", true, true},
+		{"203.0.113.10", false, true},
+		{"::ffff:203.0.113.10", false, true},
+		{"203.0.113.11", true, true},
 	} {
 		ip := netip.MustParseAddr(c.ip)
-		host := []netip.Addr{netip.MustParseAddr("51.68.126.210")}
+		host := []netip.Addr{netip.MustParseAddr("203.0.113.10")}
 		if got := (egressPolicy{host: host}).allows(ip); got != c.plain {
 			t.Errorf("%s: allowed %t, want %t", c.ip, got, c.plain)
 		}
