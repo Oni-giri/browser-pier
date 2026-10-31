@@ -130,6 +130,7 @@ Leave `BROWSERPIER_LISTEN` and `BROWSERPIER_WEBRTC_PORT` alone with this compose
 | `BROWSERPIER_BROWSER_IMAGE` | this release's | The browser image. Only BrowserPier's own. |
 | `BROWSERPIER_HOST_DATA_DIR` | detected | The data folder's path on the host, if detection fails. |
 | `BROWSERPIER_USERNS_MODE` | unset | `keep-id` under rootless Podman. |
+| `BROWSERPIER_STOP_BROWSERS_ON_EXIT` | `false` | `true` stops every browser when BrowserPier stops. Otherwise they keep running through an update. |
 
 ## Updating and backups
 

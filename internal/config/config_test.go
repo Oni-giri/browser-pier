@@ -24,14 +24,18 @@ func TestLoadDefaults(t *testing.T) {
 	if c.DataDir != DefaultDataDir {
 		t.Errorf("DataDir = %q, want %q", c.DataDir, DefaultDataDir)
 	}
+	if c.StopBrowsersOnExit {
+		t.Error("browsers stop on exit by default")
+	}
 }
 
 func TestLoadFromEnv(t *testing.T) {
 	c, err := load(env(map[string]string{
-		"BROWSERPIER_LISTEN":        "127.0.0.1:9000",
-		"BROWSERPIER_DATA_DIR":      "/srv/browserpier",
-		"BROWSERPIER_HOST_DATA_DIR": "/home/u/bp",
-		"BROWSERPIER_BROWSER_IMAGE": "example/chromium:test",
+		"BROWSERPIER_LISTEN":                "127.0.0.1:9000",
+		"BROWSERPIER_DATA_DIR":              "/srv/browserpier",
+		"BROWSERPIER_HOST_DATA_DIR":         "/home/u/bp",
+		"BROWSERPIER_BROWSER_IMAGE":         "example/chromium:test",
+		"BROWSERPIER_STOP_BROWSERS_ON_EXIT": "true",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -44,6 +48,9 @@ func TestLoadFromEnv(t *testing.T) {
 	}
 	if c.HostDataDir != "/home/u/bp" || c.BrowserImage != "example/chromium:test" {
 		t.Errorf("HostDataDir = %q, BrowserImage = %q", c.HostDataDir, c.BrowserImage)
+	}
+	if !c.StopBrowsersOnExit {
+		t.Error("StopBrowsersOnExit not set")
 	}
 }
 
@@ -61,6 +68,7 @@ func TestLoadRejectsBadValues(t *testing.T) {
 		"bad ram limit":       {"BROWSERPIER_RAM_LIMIT_PERCENT": "150"},
 		"bad webrtc port":     {"BROWSERPIER_WEBRTC_PORT": "0"},
 		"bad webrtc ip":       {"BROWSERPIER_WEBRTC_IPS": "pier.example"},
+		"bad stop on exit":    {"BROWSERPIER_STOP_BROWSERS_ON_EXIT": "sometimes"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := load(env(vars)); err == nil {
