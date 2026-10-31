@@ -286,6 +286,11 @@ func (s *Site) state() (issued, seen string) {
 	return s.issued, s.seen
 }
 
+// Issued is the session token the last good login was given; Seen is the
+// one /account was last visited with ("" for none).
+func (s *Site) Issued() string { issued, _ := s.state(); return issued }
+func (s *Site) Seen() string   { _, seen := s.state(); return seen }
+
 // Login signs in through the page's form and returns once the cookie is set.
 func (s *Site) Login(t *testing.T, p *CDP) string {
 	t.Helper()

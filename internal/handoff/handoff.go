@@ -73,6 +73,7 @@ var (
 	ErrNotRunning   = errors.New("the browser isn't running")
 	ErrOpen         = errors.New("this browser already has a handoff open")
 	ErrOtherBrowser = errors.New("this link was opened in another browser")
+	ErrInUse        = errors.New("a person has opened this link; wait for them to hand back")
 )
 
 // Handoff is one request for help.
@@ -448,17 +449,42 @@ func (s *Service) Finish(ctx context.Context, h Handoff, status Status, note str
 	return s.finish(ctx, h, status, note)
 }
 
+// Withdraw cancels a pending handoff at the agent's request; the agent
+// gets its browser back. A handoff already over is returned as it is.
+//
+// Once a person has opened the link it is theirs until they hand back: an
+// agent taking the browser back then could read what they were typing.
+func (s *Service) Withdraw(ctx context.Context, h Handoff, note string) (Handoff, error) {
+	note = strings.TrimSpace(note)
+	if len(note) > 300 {
+		note = note[:300]
+	}
+	return s.end(ctx, h, Cancelled, note, true)
+}
+
 // finish ends a pending handoff, gives the browser back to the agent and
 // wakes anyone waiting.
 func (s *Service) finish(ctx context.Context, h Handoff, status Status, note string) (Handoff, error) {
-	res, err := s.db.ExecContext(ctx, `UPDATE handoffs SET status = ?, note = ?, finished_at = ? WHERE id = ? AND status = 'pending'`,
-		status, note, s.now().UnixMilli(), h.ID)
+	return s.end(ctx, h, status, note, false)
+}
+
+// end is finish; with unopened, only if no person has opened the link.
+func (s *Service) end(ctx context.Context, h Handoff, status Status, note string, unopened bool) (Handoff, error) {
+	query := `UPDATE handoffs SET status = ?, note = ?, finished_at = ? WHERE id = ? AND status = 'pending'`
+	if unopened {
+		query = `UPDATE handoffs SET status = ?, note = ?, finished_at = ? WHERE id = ? AND status = 'pending' AND browser_hash = ''`
+	}
+	res, err := s.db.ExecContext(ctx, query, status, note, s.now().UnixMilli(), h.ID)
 	if err != nil {
 		return h, err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		// Someone else finished it first.
-		return scan(s.db.QueryRowContext(ctx, `SELECT `+columns+` FROM handoffs WHERE id = ?`, h.ID))
+		// Someone else finished it first, or the condition didn't hold.
+		cur, err := scan(s.db.QueryRowContext(ctx, `SELECT `+columns+` FROM handoffs WHERE id = ?`, h.ID))
+		if err == nil && cur.Status == Pending {
+			return cur, ErrInUse
+		}
+		return cur, err
 	}
 	h.Status, h.Note = status, note
 	s.m.ReleaseControl(h.SessionID)

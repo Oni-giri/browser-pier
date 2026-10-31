@@ -28,6 +28,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/docker"
 	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/handoff"
+	"github.com/Oni-giri/browser-pier/internal/mcp"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/settings"
 	"github.com/Oni-giri/browser-pier/internal/ui"
@@ -201,7 +202,7 @@ func run(log *slog.Logger) error {
 			}
 		},
 	})
-	return serve(ctx, ln, newHandler(web, agentAPI, live, handoff.NewWeb(handoffs, web, live, mgr, log), app), log)
+	return serve(ctx, ln, newHandler(web, agentAPI, live, handoff.NewWeb(handoffs, web, live, mgr, log), app, log), log)
 }
 
 // perBrowser is the memory a new browser is expected to need when
@@ -273,7 +274,7 @@ func browserUser(uid, gid int) (int, int) {
 
 // newHandler is every route. Cross-origin form posts are refused, so a
 // page elsewhere can't act with the admin's cookie.
-func newHandler(web *auth.Web, agentAPI *api.API, live *webrtc.Handler, handoffs *handoff.Web, app *ui.UI) http.Handler {
+func newHandler(web *auth.Web, agentAPI *api.API, live *webrtc.Handler, handoffs *handoff.Web, app *ui.UI, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -281,6 +282,10 @@ func newHandler(web *auth.Web, agentAPI *api.API, live *webrtc.Handler, handoffs
 	})
 	web.Register(mux)
 	agentAPI.Register(mux)
+	// MCP tools call the agent API in-process, through routes of their own.
+	apiRoutes := http.NewServeMux()
+	agentAPI.Register(apiRoutes)
+	mcp.New(apiRoutes, web, log, version).Register(mux)
 	if live != nil {
 		live.Register(mux)
 	}

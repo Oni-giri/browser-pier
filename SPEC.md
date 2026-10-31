@@ -179,7 +179,12 @@ Typed so the UI can word the request well, each with a free-text detail:
 
 ### Handoff over MCP
 
-When the agent is an MCP client that supports URL elicitation (such as Claude), the handoff tool asks the client to show the link and pause the tool call until the human hands back. Clients without it fall back to the plain link plus long-poll flow above.
+`request_handoff` opens the handoff, then:
+- **Clients that can open URLs for their user** (URL elicitation, such as Claude) are asked to show the link. The tool call waits for the hand-back, up to 4 minutes at a time, then says it's still pending so the agent calls `wait_for_handoff`.
+  - If the client declines the link (headless clients, such as `claude -p`, do so without asking anyone) or fails to show it, the link stays open and the agent gets it to pass on itself, as below. The agent can call `cancel_handoff` if nobody will take it.
+  - The endpoint keeps MCP sessions (the 2025-11-25 protocol), since asking the client to show a link needs one. A client on the session-less 2026-07-28 protocol falls back to it.
+- **Other clients** get the link to pass on themselves, and wait with `wait_for_handoff`.
+- **The same rules as the API apply:** a PIN-policy handoff is refused while no handoff PIN is set.
 
 ---
 
@@ -197,7 +202,7 @@ All endpoints take `Authorization: Bearer <agent token>`. The same actions are e
 | GET | `/api/sessions/{id}/screenshot` | Visual mode: current screen |
 | POST | `/api/sessions/{id}/click` | Visual mode: OS-level click `{x, y}` |
 | POST | `/api/sessions/{id}/type` | Visual mode: OS-level typing `{text}` |
-| POST | `/api/sessions/{id}/computer` | Visual mode: scroll, key, drag, wait, zoom; optional screenshot per action |
+| POST | `/api/sessions/{id}/computer` | Visual mode: one action `{action, …, screenshot?, width?}`: click, type, scroll, key, drag, wait or zoom |
 | GET | `/api/profiles/{name}/files` | List downloaded files |
 | GET | `/api/profiles/{name}/files/{file}` | Fetch a file (DELETE to remove) |
 | POST | `/api/sessions/{id}/files` | Upload a file into the session |
@@ -205,6 +210,7 @@ All endpoints take `Authorization: Bearer <agent token>`. The same actions are e
 | WS | `/cdp/{profile}` | API mode: CDP, proxied and token-checked |
 | POST | `/api/sessions/{id}/handoff` | One-time link for a human: `{reason, detail, require?}` |
 | GET | `/api/handoffs/{id}` | Long-poll for done / can't, plus the human's note |
+| DELETE | `/api/handoffs/{id}` | Withdraw a request the agent no longer needs: `{note?}`. Refused (409) once a person has opened the link. |
 
 Starting a session returns its id, the CDP URL (proxied through the orchestrator) and the live view URL.
 
@@ -212,6 +218,7 @@ Starting a session returns its id, the CDP URL (proxied through the orchestrator
 - **What agents can't change:** an agent creating a profile can't set its proxy (a proxy sees where the browser goes, and an agent can be steered by the pages it reads), and can make its handoff policy stricter than the default but never looser.
 - **CDP:** `/cdp/{profile}` is the browser's WebSocket; `/cdp/{profile}/json/version` and `/json/list` work too, with their URLs pointing back through BrowserPier, so `connectOverCDP("https://…/cdp/{profile}")` works. Clients that can't set headers can pass the token as `?token=`. The token never reaches the browser. The proxy refuses a Visual-mode session (no CDP client may attach to the page) and a browser a person is using during a handoff.
 - **Visual mode:** screenshot, click and type go through the container's X display and xdotool. During a handoff, agents can still take screenshots but not click or type. Coordinates are screen pixels; a screenshot can be scaled down with `?width=`, and the response gives the screen size.
+- **Computer actions:** `/computer` takes one action. `click {x, y, button?, double?}` and `type {text}` work as above; `scroll {x, y, dx?, dy?}` scrolls by whole wheel notches at a point, at most 20 each way; `key {keys}` presses a combination like `"ctrl+l"` or a list of up to 10, each made of X keysym names (`Return`, `Tab`, `a`…, with aliases such as `Enter`, `Esc`, `Cmd`, `PageDown`) joined by `+`; `drag {from: {x, y}, to: {x, y}, button?}` presses, moves in steps and releases. These run through xdotool with the same checks as click, never as an xdotool script. `wait {ms}` pauses up to 10 s. `zoom {x, y, w, h}` returns that region of the screen as a PNG at full resolution, cut off at the screen's edges. With `screenshot: true` any other action answers with the screen afterwards (scaled to `width` if given) instead of 204. During a handoff, wait and zoom still work. The activity log names each action but never typed text: keys that could spell something are logged only as a count.
 - **Tokens without the UI:** `browserpier token create NAME [-profiles a,b]`, `token list` and `token revoke ID` manage tokens from the command line, e.g. through `docker exec`.
 
 ### Files
@@ -226,12 +233,22 @@ Downloads land in a per-profile folder. The API lists, fetches and deletes them,
 
 ### MCP tools
 
-- **Explicit handles:** `start` returns a `session_id` and every stateful tool takes it as an argument. Nothing depends on the MCP connection staying open, so several browsers can run in one conversation.
-- **Untrusted content:** every piece of page-derived text returned to an agent (snapshots, markdown, page titles) is handled the same way:
-  - wrapped in an untrusted-content fence that says it is data, not instructions
-  - stripped of invisible Unicode and HTML comments
-  - the values of password and one-time-code fields are redacted
-- **Visual-mode actions:** click, type, scroll, key, drag and wait, each optionally returning a screenshot. Screenshots are downscaled server-side to 1280×720, and a zoom action crops a region at full resolution.
+- **Endpoint:** `/mcp` speaks MCP over streamable HTTP and takes an agent token like the API. Each tool calls the API in-process with the caller's token, so scopes, refusals and the agent log are the API's. An MCP session belongs to the token that opened it.
+- **Tools:**
+  - `list_profiles`, `start_browser`, `stop_browser`
+  - `screenshot`, `click`, `type_text`, `press_keys`, `scroll`, `drag`, `wait`, `zoom`
+  - `list_files`
+  - `request_handoff`, `wait_for_handoff`, `cancel_handoff`
+- **Explicit handles:** `start_browser` returns a `session_id` and every stateful tool takes it as an argument. Nothing depends on the MCP connection staying open, so several browsers can run in one conversation.
+- **Untrusted content:** every piece of page-derived text returned to an agent (downloaded file names now; snapshots and markdown in v1.1) is handled the same way:
+  - wrapped in an `<untrusted-content-…>` fence whose tag name carries a random marker, so the page can't write the closing tag, saying it is data, not instructions (look-alike tags in the text are defused)
+  - stripped of invisible Unicode (zero-width, bidi, tag characters) and HTML comments
+  - password and one-time-code field values redacted (`internal/fence`)
+- **Visual-mode actions:**
+  - Each action can return a screenshot after it.
+  - Screenshots are downscaled server-side to fit 1280×720 (1440×900 becomes 1152×720). Tools take coordinates in the screenshot's pixels, and BrowserPier scales them to the screen.
+  - `zoom` returns a region at full resolution.
+  - Responses are kept short: one line of text, plus the image where there is one.
 
 ---
 

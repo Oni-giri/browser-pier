@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -70,5 +71,86 @@ func TestHandoffNeedsAPINToBeSet(t *testing.T) {
 	var h handoffJSON
 	if code := f.call(f.all, http.MethodPost, "/api/sessions/"+s.ID+"/handoff", `{"reason": "sensitive_input", "require": "signin"}`, &h); code != http.StatusCreated || h.Policy != "signin" {
 		t.Fatalf("sign-in handoff with no PIN set: %d %+v", code, h)
+	}
+}
+
+func TestWithdrawHandoff(t *testing.T) {
+	f := newFixture(t)
+	if err := f.web.Admin().SetPIN(context.Background(), "4821"); err != nil {
+		t.Fatal(err)
+	}
+	s := f.start(f.all, "github", "visual")
+	var h handoffJSON
+	if code := f.call(f.all, http.MethodPost, "/api/sessions/"+s.ID+"/handoff", `{"reason": "captcha"}`, &h); code != http.StatusCreated {
+		t.Fatalf("create: %d", code)
+	}
+	if code := f.call(f.scoped, http.MethodDelete, "/api/handoffs/"+h.ID, "", nil); code != http.StatusNotFound {
+		t.Fatalf("another profile's token withdrawing: %d", code)
+	}
+	var got handoffJSON
+	if code := f.call(f.all, http.MethodDelete, "/api/handoffs/"+h.ID, `{"note": "the person said no"}`, &got); code != http.StatusOK || got.Status != "cancelled" || !strings.Contains(got.Note, "the person said no") {
+		t.Fatalf("withdraw: %d %+v", code, got)
+	}
+	if live, _ := f.m.Live("github"); live.State != sessions.Running {
+		t.Fatalf("browser not given back: %s", live.State)
+	}
+	// Withdrawing again changes nothing.
+	if code := f.call(f.all, http.MethodDelete, "/api/handoffs/"+h.ID, "", &got); code != http.StatusOK || got.Status != "cancelled" {
+		t.Fatalf("second withdraw: %d %+v", code, got)
+	}
+}
+
+func TestCantWithdrawAHandoffAPersonOpened(t *testing.T) {
+	f := newFixture(t)
+	if err := f.web.Admin().SetPIN(context.Background(), "4821"); err != nil {
+		t.Fatal(err)
+	}
+	s := f.start(f.all, "github", "visual")
+	var h handoffJSON
+	if code := f.call(f.all, http.MethodPost, "/api/sessions/"+s.ID+"/handoff", `{"reason": "sensitive_input"}`, &h); code != http.StatusCreated {
+		t.Fatalf("create: %d", code)
+	}
+	// Asking again names the open one, so an agent that lost its ID can recover.
+	var e struct{ Error string }
+	if code := f.call(f.all, http.MethodPost, "/api/sessions/"+s.ID+"/handoff", `{"reason": "captcha"}`, &e); code != http.StatusConflict || !strings.Contains(e.Error, h.ID) {
+		t.Fatalf("second handoff: %d %s", code, e.Error)
+	}
+	hh, _ := f.handoffs.Get(context.Background(), h.ID)
+	if err := f.handoffs.Unlock(context.Background(), hh, "the person's browser"); err != nil {
+		t.Fatal(err)
+	}
+	if code := f.call(f.all, http.MethodDelete, "/api/handoffs/"+h.ID, "", nil); code != http.StatusConflict {
+		t.Fatalf("withdraw while a person has it: %d", code)
+	}
+	if got, _ := f.handoffs.Get(context.Background(), h.ID); got.Status != "pending" {
+		t.Fatalf("withdrawn anyway: %s", got.Status)
+	}
+}
+
+// A note sent chunked, with no length, is read all the same.
+func TestWithdrawReadsAChunkedNote(t *testing.T) {
+	f := newFixture(t)
+	if err := f.web.Admin().SetPIN(context.Background(), "4821"); err != nil {
+		t.Fatal(err)
+	}
+	s := f.start(f.all, "github", "visual")
+	var h handoffJSON
+	if code := f.call(f.all, http.MethodPost, "/api/sessions/"+s.ID+"/handoff", `{"reason": "captcha"}`, &h); code != http.StatusCreated {
+		t.Fatalf("create: %d", code)
+	}
+	pr, pw := io.Pipe()
+	go func() {
+		_, _ = io.WriteString(pw, `{"note": "not needed after all"}`)
+		_ = pw.Close()
+	}()
+	req, _ := http.NewRequest(http.MethodDelete, f.srv.URL+"/api/handoffs/"+h.ID, pr)
+	req.Header.Set("Authorization", "Bearer "+f.all)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if got, _ := f.handoffs.Get(context.Background(), h.ID); resp.StatusCode != http.StatusOK || !strings.Contains(got.Note, "not needed after all") {
+		t.Fatalf("withdraw with a chunked note: %d, note %q", resp.StatusCode, got.Note)
 	}
 }
