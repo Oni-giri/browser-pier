@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2
+
+**Fixed**
+- On a phone, the header no longer wraps the account menu onto a row of its own. The logo, the "needs you" chip and the account menu share the first row, and the navigation sits below them. Between 640 and 1000px the menu no longer drops to a second row either.
+- On a phone, no page scrolls sideways any more: Profiles, Agents and Settings each had something wider than the screen.
+- The account avatar keeps its colour while its menu is open.
+
 ## 0.1.1
 
 **Fixed**
