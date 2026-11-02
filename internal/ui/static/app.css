@@ -48,6 +48,11 @@ code,kbd,.mono{font-family:var(--mono)}
 @media (max-width:900px){.search{display:none}}
 @media (max-width:760px){
   .top-in{flex-wrap:wrap;min-height:0;padding-top:12px;padding-bottom:6px;gap:6px 12px}
+  .top-in>.grow{display:none}
+  .avatar{margin-left:auto}
+  #chip{flex:1 1 0;min-width:0}
+  .chip-help{display:inline-block;max-width:100%;vertical-align:middle;line-height:28px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .chip-help::before{display:inline-block;margin-right:6px;vertical-align:middle}
   .nav{order:1;flex-basis:100%;margin-left:-8px;overflow-x:auto}
   .nav a{padding:0 8px;white-space:nowrap}
 }
