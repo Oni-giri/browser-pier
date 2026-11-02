@@ -318,6 +318,9 @@ type pageData struct {
 func (w *Web) render(rw http.ResponseWriter, status int, name string, d pageData) {
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	rw.Header().Set("Cache-Control", "no-store")
+	// Not no-referrer: under it, browsers send "Origin: null" on form posts,
+	// which over plain HTTP (no Sec-Fetch-Site) the cross-origin check refuses.
+	rw.Header().Set("Referrer-Policy", "same-origin")
 	rw.Header().Set("X-Frame-Options", "DENY")
 	rw.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 	rw.WriteHeader(status)
