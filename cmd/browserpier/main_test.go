@@ -7,8 +7,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,6 +70,40 @@ func TestHealthz(t *testing.T) {
 		h.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
 		if rec.Code != tc.code {
 			t.Errorf("%s %s = %d, want %d", tc.method, tc.path, rec.Code, tc.code)
+		}
+	}
+}
+
+// Over plain HTTP on any address but localhost (a LAN or Tailscale IP),
+// browsers send no Sec-Fetch-Site, so the cross-origin check compares Origin
+// with Host. The sign-in page must let its form post carry its origin.
+func TestSignInOverPlainHTTP(t *testing.T) {
+	h := testHandler(t)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://100.64.0.7:7436/login", nil))
+	if p := rec.Header().Get("Referrer-Policy"); p != "same-origin" {
+		t.Errorf("Referrer-Policy = %q, want same-origin", p)
+	}
+	if strings.Contains(rec.Body.String(), "no-referrer") {
+		t.Error("the sign-in page sets no-referrer, under which its form posts Origin: null")
+	}
+
+	for _, tc := range []struct {
+		origin string
+		code   int
+	}{
+		{"http://100.64.0.7:7436", http.StatusSeeOther},
+		{"null", http.StatusForbidden},
+		{"http://elsewhere.example", http.StatusForbidden},
+	} {
+		form := url.Values{"password": {"the-admin-password"}}.Encode()
+		req := httptest.NewRequest(http.MethodPost, "http://100.64.0.7:7436/login", strings.NewReader(form))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Origin", tc.origin)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != tc.code {
+			t.Errorf("sign-in with Origin %s = %d, want %d", tc.origin, rec.Code, tc.code)
 		}
 	}
 }

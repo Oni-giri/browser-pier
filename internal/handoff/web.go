@@ -95,7 +95,9 @@ type view struct {
 func (w *Web) render(rw http.ResponseWriter, status int, v view) {
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	rw.Header().Set("Cache-Control", "no-store")
-	rw.Header().Set("Referrer-Policy", "no-referrer")
+	// Other sites never see the link. Not no-referrer, under which the PIN
+	// form posts "Origin: null", refused over plain HTTP.
+	rw.Header().Set("Referrer-Policy", "same-origin")
 	rw.Header().Set("X-Frame-Options", "DENY")
 	rw.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' blob:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 	rw.WriteHeader(status)

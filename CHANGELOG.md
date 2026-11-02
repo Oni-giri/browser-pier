@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1
+
+**Fixed**
+- Signing in, and unlocking a handoff with its PIN, failed over plain HTTP on any address but localhost (a LAN address, `umbrel.local`, a Tailscale address) with "cross-origin request detected". These pages' referrer policy made the browser send `Origin: null` on their forms.
+
 ## 0.1.0
 
 The first release: persistent, self-hosted browsers for AI agents.

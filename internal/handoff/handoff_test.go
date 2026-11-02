@@ -88,7 +88,8 @@ func newFixture(t *testing.T, policy profiles.HandoffPolicy, opts auth.WebOption
 	hmux := http.NewServeMux()
 	web.Register(hmux)
 	NewWeb(svc, web, webrtc.NewHandler(relay, m, web, log), m, log).Register(hmux)
-	srv := httptest.NewServer(hmux)
+	// As in production, form posts from other origins are refused.
+	srv := httptest.NewServer(new(http.CrossOriginProtection).Handler(hmux))
 	t.Cleanup(srv.Close)
 	return &fixture{t: t, m: m, svc: svc, admin: admin, srv: srv}
 }
@@ -328,6 +329,38 @@ func TestPlainHTTPFromOutsideAsksForNothing(t *testing.T) {
 	_, token = g.open("")
 	if p := g.do(browser(), "POST", "/h/"+token+"/pin", url.Values{"pin": {"4821"}}, http.Header{"X-Forwarded-For": {"203.0.113.5"}, "X-Forwarded-Proto": {"https"}}); p.code != http.StatusSeeOther {
 		t.Fatalf("PIN from outside over HTTPS: %d", p.code)
+	}
+}
+
+// Over plain HTTP on a LAN or Tailscale address, browsers send no
+// Sec-Fetch-Site, so the cross-origin check compares Origin with Host. The
+// page's referrer policy must let its PIN form post carry its origin.
+func TestPINFormKeepsItsOriginOverPlainHTTP(t *testing.T) {
+	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
+	h, token := f.open("")
+	phone := browser()
+	resp, err := phone.Get(f.srv.URL + "/h/" + token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if got := resp.Header.Get("Referrer-Policy"); got != "same-origin" {
+		t.Errorf("Referrer-Policy = %q, want same-origin", got)
+	}
+	if !strings.Contains(string(page), `<meta name="referrer" content="same-origin">`) || strings.Contains(string(page), "no-referrer") {
+		t.Error("the handoff page's meta referrer isn't same-origin; under no-referrer its PIN form posts Origin: null")
+	}
+	for _, origin := range []string{"null", "http://elsewhere.example"} {
+		if p := f.do(phone, "POST", "/h/"+token+"/pin", url.Values{"pin": {"4821"}}, http.Header{"Origin": {origin}}); p.code != http.StatusForbidden {
+			t.Fatalf("PIN with Origin %s: %d", origin, p.code)
+		}
+	}
+	if got, _ := f.svc.Get(context.Background(), h.ID); got.unlocked || got.PINFailures != 0 {
+		t.Fatalf("a refused cross-origin post unlocked the link or counted a try: %+v", got)
+	}
+	if p := f.do(phone, "POST", "/h/"+token+"/pin", url.Values{"pin": {"4821"}}, http.Header{"Origin": {f.srv.URL}}); p.code != http.StatusSeeOther {
+		t.Fatalf("PIN with the page's own origin: %d %s", p.code, p.body)
 	}
 }
 
