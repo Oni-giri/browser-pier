@@ -223,6 +223,9 @@ dialog.alert{width:min(420px,calc(100vw - 32px))}
 
 /* Profile cards */
 .toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+/* On a phone the filter tabs scroll rather than widen the page. */
+.toolbar .seg{max-width:100%;overflow-x:auto}
+.toolbar .seg a{white-space:nowrap}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
 .card{background:var(--surface);border-radius:16px;box-shadow:var(--ring);padding:8px 8px 12px;display:flex;flex-direction:column;min-width:0}
 .card.help{box-shadow:0 0 0 1.5px var(--orange),0 10px 30px rgba(255,106,61,.14)}
@@ -254,7 +257,7 @@ dialog.alert{width:min(420px,calc(100vw - 32px))}
 .table td.right,.table th.right{text-align:right}
 .table .who{display:flex;align-items:center;gap:10px}
 .table .who b{display:block;font-weight:500;color:var(--ink)}
-.table-wrap{overflow-x:auto;border-radius:16px}
+.table-wrap{position:relative;overflow-x:auto;border-radius:16px}
 .empty{display:flex;flex-direction:column;align-items:center;text-align:center;padding:64px 24px;gap:6px}
 .empty h2{margin:0;font-size:18px;font-weight:600}
 .empty p{margin:0 0 12px;max-width:420px;color:var(--ink-2)}
@@ -319,12 +322,12 @@ input[type=range]{width:100%;accent-color:var(--ink)}
 
 /* Agents */
 .endpoints{list-style:none;margin:0;padding:0}
-.endpoints li{display:grid;grid-template-columns:62px 1fr;gap:2px 10px;padding:6px 0;font-size:13px}
+.endpoints li{display:grid;grid-template-columns:62px minmax(0,1fr);gap:2px 10px;padding:6px 0;font-size:13px}
 .endpoints .m{grid-row:span 2;align-self:start;margin-top:2px;justify-self:start;font:500 10.5px/18px var(--mono);padding:0 6px;border-radius:4px;background:var(--blue-tint);color:var(--blue-text)}
 .endpoints .m.DELETE{background:var(--red-tint);color:var(--red-text)}
 .endpoints .m.GET{background:var(--green-tint);color:var(--green-text)}
 .endpoints .m.WS{background:#F3EEFF;color:#6D28D9}
-.endpoints code{font-size:12.5px;color:var(--ink)}
+.endpoints code{font-size:12.5px;color:var(--ink);overflow-wrap:anywhere}
 .endpoints span{color:var(--ink-3)}
 .checks{list-style:none;margin:0 0 16px;padding:0}
 .checks li{display:flex;gap:10px;padding:3px 0;color:var(--ink-body)}
@@ -336,6 +339,7 @@ input[type=range]{width:100%;accent-color:var(--ink)}
 /* Settings */
 .kv{list-style:none;margin:0;padding:0}
 .kv li{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--line-soft)}
+.kv li>.muted{min-width:0;overflow-wrap:anywhere;text-align:right}
 .kv li:first-child{border-top:0}
 .kv li>span:first-child{flex:1;color:var(--ink-2)}
 
