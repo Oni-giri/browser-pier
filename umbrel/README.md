@@ -12,13 +12,14 @@
 - **`exports.sh`:** read on the host when the app starts: the host's LAN and Tailscale addresses, for live viewers, and the Docker socket's group.
 - **Stopping:** with `BROWSERPIER_STOP_BROWSERS_ON_EXIT`, BrowserPier stops its browsers gracefully whenever Umbrel stops, restarts, updates or uninstalls the app. **`hooks/post-stop`** then stops any it missed, if it was killed, say.
 - **`data/`:** the app's data folder: the database and one folder per profile.
+- **`icon.svg`:** the listing's icon, a copy of `internal/ui/static/icon.svg`. `umbrel-app.yml` loads it from the store repository, which is public; this one is private for now.
 
 ## Publishing
 
 1. Pin the images to the release (see step 6 of `RELEASING.md`):
    - set `image:` to `ghcr.io/oni-giri/browser-pier:<version>@sha256:<digest>`, with the multi-arch index digest (`docker buildx imagetools inspect`)
    - set `BROWSERPIER_BROWSER_IMAGE` to `ghcr.io/oni-giri/browser-pier-chromium:<version>@sha256:<digest>`
-   - set `version:` in `umbrel-app.yml` to match
+   - set `version:` in `umbrel-app.yml` to match, and write `releaseNotes` as text: a link into this repository doesn't open while it's private
 2. Copy `yakitori-browserpier/` into the root of the store repository and push.
 3. On the Umbrel: App Store → ⋯ → Community App Stores → add `https://github.com/Oni-giri/yakitoris-app-store`, then install BrowserPier.
 
