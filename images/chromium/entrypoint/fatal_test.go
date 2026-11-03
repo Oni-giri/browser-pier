@@ -28,7 +28,7 @@ func TestFatalLineKeepsTheLastFatalAcrossWrites(t *testing.T) {
 	for _, chunk := range []string{"[1:1:0:FATAL:a.cc:1] first\n[1:1:0:ERR", "OR:b.cc:2] noise\n[1:1:0:FA", "TAL:c.cc:3] sec", "ond\nunfinished"} {
 		_, _ = f.Write([]byte(chunk))
 	}
-	if got := f.reason(); got != ": second (c.cc:3)" {
+	if got := f.reason(false); got != ": second (c.cc:3)" {
 		t.Fatalf("reason %q", got)
 	}
 }
@@ -44,7 +44,7 @@ func TestWatchFatalSeesAChildsFatalLine(t *testing.T) {
 	}
 	f.started()
 	_ = cmd.Wait()
-	if got := f.reason(); got != ": Check failed: boom (sandbox/x.cc:9)" {
+	if got := f.reason(true); got != ": Check failed: boom (sandbox/x.cc:9)" {
 		t.Fatalf("reason %q", got)
 	}
 }
@@ -53,10 +53,14 @@ func TestFatalLineFallsBackToTheLastError(t *testing.T) {
 	f := &fatalLine{copied: make(chan struct{})}
 	close(f.copied)
 	_, _ = f.Write([]byte("[1:1:0:ERROR:dbus.cc:1] noise\n[14:14:0:ERROR:zygote_host_impl_linux.cc:130] No usable sandbox!\nplain text\n"))
-	if got := f.reason(); got != ": No usable sandbox! (zygote_host_impl_linux.cc:130)" {
+	if got := f.reason(true); got != ": No usable sandbox! (zygote_host_impl_linux.cc:130)" {
 		t.Fatalf("reason %q", got)
 	}
-	if got := (&fatalLine{copied: f.copied}).reason(); got != "" {
+	// Once running, an ERROR line isn't taken for the cause of an exit.
+	if got := f.reason(false); got != "" {
+		t.Fatalf("reason after startup %q", got)
+	}
+	if got := (&fatalLine{copied: f.copied}).reason(true); got != "" {
 		t.Fatalf("reason with no lines %q", got)
 	}
 }

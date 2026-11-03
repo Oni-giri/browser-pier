@@ -67,9 +67,11 @@ func (f *fatalLine) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// reason is ": " and the last FATAL line, else the last ERROR line, or ""
-// if there was neither. It waits briefly for the output still in the pipe.
-func (f *fatalLine) reason() string {
+// reason is ": " and the last FATAL line, or "" if there was none. During
+// startup (startup true) the last ERROR line stands in for a missing FATAL
+// one: later on, ERROR lines are mostly ones Chromium recovered from. It
+// waits briefly for the output still in the pipe.
+func (f *fatalLine) reason(startup bool) string {
 	select {
 	case <-f.copied:
 	case <-time.After(time.Second):
@@ -79,7 +81,7 @@ func (f *fatalLine) reason() string {
 	switch {
 	case f.last != "":
 		return ": " + f.last
-	case f.error != "":
+	case startup && f.error != "":
 		return ": " + f.error
 	}
 	return ""
