@@ -603,8 +603,11 @@ func (m *Manager) finish(l *live, cid string, code int, waitErr error) {
 // when the entrypoint ended on one: `level=ERROR msg=exiting err="..."`.
 // It carries Chromium's FATAL line if there was one (PROJ-36).
 func entrypointError(lastLog string) string {
-	if _, rest, ok := strings.Cut(lastLog, " "); !strings.HasPrefix(lastLog, "level=ERROR ") &&
-		!(strings.HasPrefix(lastLog, "time=") && ok && strings.HasPrefix(rest, "level=ERROR ")) {
+	head := lastLog
+	if strings.HasPrefix(head, "time=") {
+		_, head, _ = strings.Cut(head, " ")
+	}
+	if !strings.HasPrefix(head, "level=ERROR ") {
 		return ""
 	}
 	_, v, ok := strings.Cut(lastLog, " err=")
