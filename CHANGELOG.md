@@ -3,6 +3,8 @@
 ## 0.1.2
 
 **Fixed**
+- Browsers wouldn't start on Debian 13 hosts, umbrelOS 2.0 among them: Chromium aborted at startup. Docker's default AppArmor profile refuses Chromium's sandbox there, so where Docker uses AppArmor, browser containers now run without an AppArmor profile. Every other restriction stays, and so does Chromium's sandbox. `BROWSERPIER_BROWSER_APPARMOR` names a profile to use instead.
+- A browser that fails to start now says why: Chromium's own error is shown with the failure, on the profile page and to agents.
 - On a phone, the header no longer wraps the account menu onto a row of its own. The logo, the "needs you" chip and the account menu share the first row, and the navigation sits below them. Between 640 and 1000px the menu no longer drops to a second row either.
 - On a phone, no page scrolls sideways any more: Profiles, Agents and Settings each had something wider than the screen.
 - The account avatar keeps its colour while its menu is open.
