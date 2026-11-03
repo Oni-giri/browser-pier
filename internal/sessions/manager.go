@@ -592,8 +592,38 @@ func (m *Manager) finish(l *live, cid string, code int, waitErr error) {
 			s.State, s.Error = Failed, fmt.Sprintf("the browser didn't close cleanly (exit status %d), so recent logins may be lost", code)
 		default:
 			s.State, s.Error = Failed, fmt.Sprintf("the browser exited unexpectedly (exit status %d)", code)
+			if why := entrypointError(lastLog); why != "" {
+				s.Error += ": " + why
+			}
 		}
 	})
+}
+
+// entrypointError is the err of the browser container's last log line,
+// when the entrypoint ended on one: `level=ERROR msg=exiting err="..."`.
+// It carries Chromium's FATAL line if there was one (PROJ-36).
+func entrypointError(lastLog string) string {
+	if _, rest, ok := strings.Cut(lastLog, " "); !strings.HasPrefix(lastLog, "level=ERROR ") &&
+		!(strings.HasPrefix(lastLog, "time=") && ok && strings.HasPrefix(rest, "level=ERROR ")) {
+		return ""
+	}
+	_, v, ok := strings.Cut(lastLog, " err=")
+	if !ok {
+		return ""
+	}
+	if !strings.HasPrefix(v, `"`) {
+		v, _, _ = strings.Cut(v, " ")
+		return v
+	}
+	q, err := strconv.QuotedPrefix(v)
+	if err != nil {
+		return ""
+	}
+	v, err = strconv.Unquote(q)
+	if err != nil {
+		return ""
+	}
+	return v
 }
 
 // abort fails a session whose container never got going.
