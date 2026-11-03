@@ -32,6 +32,10 @@ type Config struct {
 	// UsernsMode is the browser containers' user namespace mode
 	// (BROWSERPIER_USERNS_MODE): "keep-id" under rootless Podman.
 	UsernsMode string
+	// BrowserAppArmor names the browser containers' AppArmor profile
+	// (BROWSERPIER_BROWSER_APPARMOR). Empty means none where Docker uses
+	// AppArmor: its docker-default refuses Chromium's sandbox on AppArmor 4.
+	BrowserAppArmor string
 
 	// AdminPassword, when set (BROWSERPIER_ADMIN_PASSWORD), is the admin
 	// password; it wins over one set in the UI, at every start. Never log it.
@@ -125,11 +129,12 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		return def
 	}
 	c := Config{
-		Listen:       get("BROWSERPIER_LISTEN", DefaultListen),
-		DataDir:      get("BROWSERPIER_DATA_DIR", DefaultDataDir),
-		HostDataDir:  get("BROWSERPIER_HOST_DATA_DIR", ""),
-		BrowserImage: get("BROWSERPIER_BROWSER_IMAGE", ""),
-		UsernsMode:   get("BROWSERPIER_USERNS_MODE", ""),
+		Listen:          get("BROWSERPIER_LISTEN", DefaultListen),
+		DataDir:         get("BROWSERPIER_DATA_DIR", DefaultDataDir),
+		HostDataDir:     get("BROWSERPIER_HOST_DATA_DIR", ""),
+		BrowserImage:    get("BROWSERPIER_BROWSER_IMAGE", ""),
+		UsernsMode:      get("BROWSERPIER_USERNS_MODE", ""),
+		BrowserAppArmor: get("BROWSERPIER_BROWSER_APPARMOR", ""),
 		// Read once and never echoed back in errors.
 		AdminPassword: get("BROWSERPIER_ADMIN_PASSWORD", ""),
 		PublicURL:     get("BROWSERPIER_PUBLIC_URL", ""),

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -92,8 +93,12 @@ type Client struct {
 	// seccompOpt is the security option that applies it: the JSON itself
 	// for Docker, a host path for Podman (see UseDataDir).
 	seccompOpt string
-	userns     string
-	instance   string
+	// apparmorOpt sets the containers' AppArmor profile, or is empty for
+	// the daemon's default (see UseDataDir).
+	apparmorOpt string
+	apparmor    string // the profile asked for (Options.AppArmor)
+	userns      string
+	instance    string
 }
 
 // Options configure a Client.
@@ -106,6 +111,9 @@ type Options struct {
 	// Instance identifies this BrowserPier among others on the same
 	// Docker host; it only sees and removes its own containers.
 	Instance string
+	// AppArmor names the containers' AppArmor profile. Empty means none
+	// where the daemon uses AppArmor (see appArmorOpt).
+	AppArmor string
 }
 
 // New connects to the Docker daemon named by the usual DOCKER_* variables.
@@ -125,7 +133,7 @@ func New(o Options) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{api: api, image: image, seccomp: seccomp.String(), seccompOpt: "seccomp=" + seccomp.String(), userns: o.UsernsMode, instance: o.Instance}, nil
+	return &Client{api: api, image: image, seccomp: seccomp.String(), seccompOpt: "seccomp=" + seccomp.String(), apparmor: o.AppArmor, userns: o.UsernsMode, instance: o.Instance}, nil
 }
 
 // UseDataDir finishes setting up against the daemon, given the data dir as
@@ -133,6 +141,11 @@ func New(o Options) (*Client, error) {
 // seccomp profile as a path rather than inline, so for Podman the profile
 // is written into the data dir and passed by its host path.
 func (c *Client) UseDataDir(ctx context.Context, dataDir, hostDataDir string) error {
+	info, err := c.api.Info(ctx, client.InfoOptions{})
+	if err != nil {
+		return err
+	}
+	c.apparmorOpt = appArmorOpt(info.Info.SecurityOptions, c.apparmor, ubuntuUsernsRestriction())
 	v, err := c.api.ServerVersion(ctx, client.ServerVersionOptions{})
 	if err != nil {
 		return err
@@ -154,6 +167,64 @@ func (c *Client) UseDataDir(ctx context.Context, dataDir, hostDataDir string) er
 	c.seccompOpt = "seccomp=" + filepath.Join(hostDataDir, "seccomp.json")
 	return nil
 }
+
+// restrictSysctl is Ubuntu's switch for its user namespace restriction.
+// Other kernels don't have it. A container sees the host's.
+const restrictSysctl = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns"
+
+// RemoteDaemon reports whether DOCKER_HOST names a daemon on another
+// machine, whose kernel this process can't look at.
+func RemoteDaemon() bool {
+	h := os.Getenv("DOCKER_HOST")
+	return h != "" && !strings.HasPrefix(h, "unix://")
+}
+
+// ubuntuUsernsRestriction reports whether the Docker host's kernel has
+// Ubuntu's user namespace restriction: "absent", or "present" (on, off,
+// unreadable, or a remote daemon's kernel, which can't be checked).
+func ubuntuUsernsRestriction() string {
+	if RemoteDaemon() {
+		return "present"
+	}
+	if _, err := os.Stat(restrictSysctl); errors.Is(err, fs.ErrNotExist) {
+		return "absent"
+	}
+	return "present"
+}
+
+// appArmorOpt is the browser containers' AppArmor option, given the
+// daemon's security options, the profile asked for and Ubuntu's restriction
+// (see ubuntuUsernsRestriction). Chromium's sandbox needs a user namespace:
+//   - Under AppArmor 4 without Ubuntu's restriction (Debian 13, umbrelOS
+//     2), Docker's docker-default has no userns rule and refuses it, while
+//     an unconfined process may create one. Browsers run unconfined on any
+//     AppArmor host without that restriction, since the version isn't
+//     visible from here: on AppArmor 3 (Debian 12) that's needless.
+//   - With Ubuntu's restriction, it's the other way round: an unconfined
+//     process gets a namespace without the capabilities the sandbox needs,
+//     and docker-default works. Browsers keep Docker's profile.
+//
+// The seccomp profile, dropped capabilities and no-new-privileges apply
+// either way. PROJ-37: ship our own profile, docker-default plus userns.
+func appArmorOpt(daemonOpts []string, profile, ubuntuRestriction string) string {
+	if profile != "" {
+		return "apparmor=" + profile
+	}
+	if ubuntuRestriction != "absent" {
+		return ""
+	}
+	for _, o := range daemonOpts {
+		if o == "name=apparmor" || strings.HasPrefix(o, "name=apparmor,") {
+			return "apparmor=unconfined"
+		}
+	}
+	return ""
+}
+
+// AppArmor is the browser containers' AppArmor profile: "unconfined", a
+// profile's name, or empty for none on a daemon without AppArmor. Known
+// after UseDataDir.
+func (c *Client) AppArmor() string { return strings.TrimPrefix(c.apparmorOpt, "apparmor=") }
 
 func isPodman(components []system.ComponentVersion) bool {
 	for _, comp := range components {
@@ -178,7 +249,7 @@ func (c *Client) Ping(ctx context.Context) error {
 // Create creates a browser container, pulling the image first if Docker
 // doesn't have it.
 func (c *Client) Create(ctx context.Context, spec BrowserSpec) (string, error) {
-	cfg, host := browserConfig(c.image, c.seccompOpt, spec)
+	cfg, host := browserConfig(c.image, c.seccompOpt, c.apparmorOpt, spec)
 	cfg.Labels[LabelInstance] = c.instance
 	host.UsernsMode = container.UsernsMode(c.userns)
 	opts := client.ContainerCreateOptions{Name: spec.Name, Config: cfg, HostConfig: host}
@@ -208,7 +279,8 @@ func (c *Client) pull(ctx context.Context) error {
 }
 
 // browserConfig is the whole container definition. It publishes no ports.
-func browserConfig(image, seccompOpt string, spec BrowserSpec) (*container.Config, *container.HostConfig) {
+// apparmorOpt may be empty, for the daemon's default profile.
+func browserConfig(image, seccompOpt, apparmorOpt string, spec BrowserSpec) (*container.Config, *container.HostConfig) {
 	stop := int(StopTimeout / time.Second)
 	initProc := false // the image's entrypoint is PID 1 and reaps
 	cfg := &container.Config{
@@ -242,6 +314,9 @@ func browserConfig(image, seccompOpt string, spec BrowserSpec) (*container.Confi
 		ShmSize:     shmSize,
 		Init:        &initProc,
 	}
+	if apparmorOpt != "" {
+		host.SecurityOpt = append(host.SecurityOpt, apparmorOpt)
+	}
 	return cfg, host
 }
 
@@ -271,7 +346,9 @@ func (c *Client) Wait(ctx context.Context, id string) (int, error) {
 	}
 }
 
-// LastLogLine returns the container's last non-empty log line.
+// LastLogLine returns the container's last non-empty log line, or the
+// entrypoint's exiting line if one is near the end: Chromium output still
+// draining may follow it, and it says why the browser stopped.
 func (c *Client) LastLogLine(ctx context.Context, id string) (string, error) {
 	r, err := c.api.ContainerLogs(ctx, id, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Tail: "50"})
 	if err != nil {
@@ -285,16 +362,22 @@ func (c *Client) LastLogLine(ctx context.Context, id string) (string, error) {
 	return lastLine(buf.Bytes()), nil
 }
 
-const maxLogLine = 500
+const maxLogLine = 1000
 
 func lastLine(b []byte) string {
-	var last string
+	var last, exiting string
 	sc := bufio.NewScanner(bytes.NewReader(b))
 	sc.Buffer(make([]byte, 0, 64<<10), 1<<20)
 	for sc.Scan() {
 		if l := strings.TrimSpace(sc.Text()); l != "" {
 			last = l
+			if strings.Contains(l, " msg=exiting") {
+				exiting = l
+			}
 		}
+	}
+	if exiting != "" {
+		last = exiting
 	}
 	if len(last) > maxLogLine {
 		last = strings.ToValidUTF8(last[:maxLogLine], "") + "…"

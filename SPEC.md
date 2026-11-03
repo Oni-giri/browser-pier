@@ -65,6 +65,11 @@ Self-hosted, persistent browsers for AI agents. Agents start a browser when they
 - **Proxying:** CDP, the live stream and the visual endpoints are reached only through the orchestrator, behind token checks. Browser containers publish no ports.
 - **Control socket:** the container's entry process listens on a Unix socket in a folder shared only with the orchestrator (`profiles/<name>/run/`, so each container sees only its own), never on a network port, so neither pages nor other browser containers can reach it. It relays CDP (headful Chromium binds it to the container's own loopback), serves the H.264 stream and, later, Visual-mode input and screenshots.
 - **Sandbox:** Chromium's own sandbox stays on. It needs user namespaces, which Docker's default seccomp profile blocks, so the orchestrator starts browser containers with BrowserPier's seccomp profile: Docker's default plus namespace creation. Containers drop every capability except `SYS_CHROOT`, which the sandbox uses inside its own user namespace, and run with `no-new-privileges`. Never `--no-sandbox`.
+  - **AppArmor:** Docker's `docker-default` AppArmor profile has no `userns` rule. Under AppArmor 4 without Ubuntu's user namespace restriction (Debian 13, umbrelOS 2.0), that refuses the sandbox its user namespace, and Chromium aborts. So when the Docker daemon reports AppArmor and the kernel has no `kernel.apparmor_restrict_unprivileged_userns`, browser containers run with `apparmor=unconfined`; everything above still applies. The AppArmor version isn't visible from the orchestrator, so this also covers AppArmor 3 hosts (Debian 12), where Docker's profile would have worked.
+    - Ubuntu is the other way round: with that restriction, an unconfined process gets a user namespace without the capabilities the sandbox needs, while `docker-default` works. There, and wherever that sysctl exists, browsers keep Docker's profile.
+    - With a remote Docker daemon (`DOCKER_HOST` not a unix socket), its kernel can't be checked, so browsers keep Docker's profile.
+    - `BROWSERPIER_BROWSER_APPARMOR` names a profile to use instead.
+    - Decided 2026-11-03 (PROJ-35). BrowserPier's own profile, `docker-default` plus `userns`, is planned (PROJ-37).
 - **Chrome launch setup:**
   - Drop `--enable-automation` and set `--disable-blink-features=AutomationControlled`.
   - `--use-angle=swiftshader --enable-unsafe-swiftshader`, so WebGL works in a container (software rendering on SwiftShader; this combination is checked in CI).
@@ -382,6 +387,7 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 | Orchestrator ↔ browser container | A Unix socket in a per-profile folder shared with the orchestrator | Nothing listens on a network, so a page or another container can't reach CDP. |
 | Profile storage | Bind-mounted folders in the data dir, not named Docker volumes | One directory to back up or move; export and downloads read files directly. The host path is detected from the orchestrator's own mounts. |
 | Chromium sandbox | On, with a seccomp profile that allows user namespaces | Pages are untrusted; the container is a second boundary, not the only one. |
+| AppArmor for browser containers | Docker's, except none on AppArmor 4 hosts without Ubuntu's userns restriction (Debian 13, umbrelOS 2.0), until BrowserPier ships its own profile (PROJ-37) | Docker's profile refuses the sandbox there. Losing that backup layer costs less than losing Chromium's sandbox. |
 
 ### Still open
 
