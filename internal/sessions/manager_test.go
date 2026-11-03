@@ -457,9 +457,14 @@ func TestReconcileFailsIfAnOldStoppingBrowserWontStop(t *testing.T) {
 	f.rt.Containers[old.ContainerID].Version = ""
 	f.rt.StopErr = errors.New("docker is stuck")
 	f.rt.Mu.Unlock()
-	if err := f.manager().Reconcile(ctx); err == nil || !strings.Contains(err.Error(), "docker is stuck") {
+	// The orchestrator exits when Reconcile fails. A manager left open
+	// would watch the container and, once the next one removes it, record
+	// the session as lost (PROJ-38).
+	stuck := f.manager()
+	if err := stuck.Reconcile(ctx); err == nil || !strings.Contains(err.Error(), "docker is stuck") {
 		t.Fatalf("Reconcile = %v", err)
 	}
+	stuck.Close()
 
 	// Once Docker stops it, the session ends.
 	f.rt.Mu.Lock()
