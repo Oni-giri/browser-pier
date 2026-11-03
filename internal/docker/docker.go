@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -144,7 +145,7 @@ func (c *Client) UseDataDir(ctx context.Context, dataDir, hostDataDir string) er
 	if err != nil {
 		return err
 	}
-	c.apparmorOpt = appArmorOpt(info.Info.SecurityOptions, c.apparmor)
+	c.apparmorOpt = appArmorOpt(info.Info.SecurityOptions, c.apparmor, ubuntuUsernsRestriction())
 	v, err := c.api.ServerVersion(ctx, client.ServerVersionOptions{})
 	if err != nil {
 		return err
@@ -167,16 +168,37 @@ func (c *Client) UseDataDir(ctx context.Context, dataDir, hostDataDir string) er
 	return nil
 }
 
+// restrictSysctl is Ubuntu's switch for its user namespace restriction.
+// Other kernels don't have it. A container sees the host's.
+const restrictSysctl = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns"
+
+// ubuntuUsernsRestriction reports whether this kernel has Ubuntu's user
+// namespace restriction: "absent", or "present" (on, off, or unreadable).
+func ubuntuUsernsRestriction() string {
+	if _, err := os.Stat(restrictSysctl); errors.Is(err, fs.ErrNotExist) {
+		return "absent"
+	}
+	return "present"
+}
+
 // appArmorOpt is the browser containers' AppArmor option, given the
-// daemon's security options and the profile asked for. Docker's
-// docker-default has no userns rule, so under AppArmor 4 (Debian 13,
-// umbrelOS 2) it refuses Chromium's sandbox its user namespace and Chromium
-// aborts. Where the daemon uses AppArmor, browsers therefore run without a
-// profile unless one is named; the seccomp profile, dropped capabilities
-// and no-new-privileges still apply. PROJ-37: ship our own profile.
-func appArmorOpt(daemonOpts []string, profile string) string {
+// daemon's security options, the profile asked for and Ubuntu's restriction
+// (see ubuntuUsernsRestriction). Chromium's sandbox needs a user namespace:
+//   - Under AppArmor 4 without Ubuntu's restriction (Debian 13, umbrelOS
+//     2), Docker's docker-default has no userns rule and refuses it, while
+//     an unconfined process may create one. Browsers run unconfined there.
+//   - With Ubuntu's restriction, it's the other way round: an unconfined
+//     process gets a namespace without the capabilities the sandbox needs,
+//     and docker-default works. Browsers keep Docker's profile.
+//
+// The seccomp profile, dropped capabilities and no-new-privileges apply
+// either way. PROJ-37: ship our own profile, docker-default plus userns.
+func appArmorOpt(daemonOpts []string, profile, ubuntuRestriction string) string {
 	if profile != "" {
 		return "apparmor=" + profile
+	}
+	if ubuntuRestriction != "absent" {
+		return ""
 	}
 	for _, o := range daemonOpts {
 		if o == "name=apparmor" || strings.HasPrefix(o, "name=apparmor,") {

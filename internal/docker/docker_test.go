@@ -146,23 +146,28 @@ func TestLastLine(t *testing.T) {
 }
 
 func TestAppArmorOpt(t *testing.T) {
+	aa := []string{"name=apparmor", "name=seccomp,profile=builtin", "name=cgroupns"}
 	for _, c := range []struct {
-		daemon  []string
-		profile string
-		want    string
+		daemon      []string
+		profile     string
+		restriction string
+		want        string
 	}{
 		// Debian 13 and umbrelOS: docker-default would refuse the sandbox.
-		{[]string{"name=apparmor", "name=seccomp,profile=builtin", "name=cgroupns"}, "", "apparmor=unconfined"},
-		{[]string{"name=seccomp,profile=builtin", "name=apparmor,profile=x"}, "", "apparmor=unconfined"},
+		{aa, "", "absent", "apparmor=unconfined"},
+		{[]string{"name=seccomp,profile=builtin", "name=apparmor,profile=x"}, "", "absent", "apparmor=unconfined"},
+		// Ubuntu: unconfined would lose the sandbox, docker-default works.
+		{aa, "", "present", ""},
 		// No AppArmor on the daemon: leave the option out.
-		{[]string{"name=seccomp,profile=builtin", "name=selinux"}, "", ""},
-		{nil, "", ""},
+		{[]string{"name=seccomp,profile=builtin", "name=selinux"}, "", "absent", ""},
+		{nil, "", "absent", ""},
 		// A profile named in BROWSERPIER_BROWSER_APPARMOR wins.
-		{[]string{"name=apparmor"}, "browserpier", "apparmor=browserpier"},
-		{[]string{"name=apparmor"}, "docker-default", "apparmor=docker-default"},
+		{aa, "browserpier", "absent", "apparmor=browserpier"},
+		{aa, "unconfined", "present", "apparmor=unconfined"},
+		{aa, "docker-default", "absent", "apparmor=docker-default"},
 	} {
-		if got := appArmorOpt(c.daemon, c.profile); got != c.want {
-			t.Errorf("appArmorOpt(%v, %q) = %q, want %q", c.daemon, c.profile, got, c.want)
+		if got := appArmorOpt(c.daemon, c.profile, c.restriction); got != c.want {
+			t.Errorf("appArmorOpt(%v, %q, %q) = %q, want %q", c.daemon, c.profile, c.restriction, got, c.want)
 		}
 	}
 }
