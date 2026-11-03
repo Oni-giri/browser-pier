@@ -154,6 +154,9 @@ func (u *UI) view(r *http.Request, p profiles.Profile, s sessions.Session, asks 
 		v.Status = stFailed
 		v.Activity = "Crashed " + ago(s.UpdatedAt)
 		v.Error = s.Error
+		if why := sessions.CrashReason(s.LastLog); why != "" {
+			v.Error += ": " + why
+		}
 		if v.Error == "" {
 			v.Error = s.LastLog
 		}

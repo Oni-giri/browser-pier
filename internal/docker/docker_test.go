@@ -155,7 +155,8 @@ func TestAppArmorOpt(t *testing.T) {
 	}{
 		// Debian 13 and umbrelOS: docker-default would refuse the sandbox.
 		{aa, "", "absent", "apparmor=unconfined"},
-		{[]string{"name=seccomp,profile=builtin", "name=apparmor,profile=x"}, "", "absent", "apparmor=unconfined"},
+		// A default profile the admin set for the daemon may allow userns.
+		{[]string{"name=seccomp,profile=builtin", "name=apparmor,profile=/etc/docker/apparmor.profile"}, "", "absent", ""},
 		// Ubuntu: unconfined would lose the sandbox, docker-default works.
 		{aa, "", "present", ""},
 		// No AppArmor on the daemon: leave the option out.
@@ -194,7 +195,8 @@ func TestLastLinePrefersTheExitingLine(t *testing.T) {
 }
 
 func TestRemoteDaemon(t *testing.T) {
-	for host, want := range map[string]bool{"": false, "unix:///run/user/1001/podman/podman.sock": false, "tcp://10.0.0.5:2376": true, "ssh://me@box": true} {
+	// A unix socket can be forwarded from another machine too.
+	for host, want := range map[string]bool{"": false, "unix:///run/user/1001/podman/podman.sock": true, "tcp://10.0.0.5:2376": true, "ssh://me@box": true} {
 		t.Setenv("DOCKER_HOST", host)
 		if got := RemoteDaemon(); got != want {
 			t.Errorf("DOCKER_HOST=%q: remote %t", host, got)
@@ -202,6 +204,16 @@ func TestRemoteDaemon(t *testing.T) {
 		if want && ubuntuUsernsRestriction() != "present" {
 			t.Errorf("DOCKER_HOST=%q: a remote kernel must count as restricted", host)
 		}
+	}
+}
+
+func TestClientSpecCarriesTheAppArmorChoice(t *testing.T) {
+	if got := (&Client{}).Spec(); got != Spec {
+		t.Fatalf("no AppArmor option: %q", got)
+	}
+	unconfined, named := (&Client{apparmorOpt: "apparmor=unconfined"}).Spec(), (&Client{apparmorOpt: "apparmor=browserpier"}).Spec()
+	if unconfined == Spec || named == Spec || unconfined == named {
+		t.Fatalf("specs %q and %q don't tell the AppArmor choices apart", unconfined, named)
 	}
 }
 

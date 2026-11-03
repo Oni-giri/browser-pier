@@ -172,12 +172,10 @@ func (c *Client) UseDataDir(ctx context.Context, dataDir, hostDataDir string) er
 // Other kernels don't have it. A container sees the host's.
 const restrictSysctl = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns"
 
-// RemoteDaemon reports whether DOCKER_HOST names a daemon on another
-// machine, whose kernel this process can't look at.
-func RemoteDaemon() bool {
-	h := os.Getenv("DOCKER_HOST")
-	return h != "" && !strings.HasPrefix(h, "unix://")
-}
+// RemoteDaemon reports whether the daemon may run on another kernel than
+// this process: whenever DOCKER_HOST is set, since even a unix socket can
+// be forwarded from elsewhere. Only the default socket counts as local.
+func RemoteDaemon() bool { return os.Getenv("DOCKER_HOST") != "" }
 
 // ubuntuUsernsRestriction reports whether the Docker host's kernel has
 // Ubuntu's user namespace restriction: "absent", or "present" (on, off,
@@ -213,12 +211,25 @@ func appArmorOpt(daemonOpts []string, profile, ubuntuRestriction string) string 
 	if ubuntuRestriction != "absent" {
 		return ""
 	}
+	// Only Docker's stock profile: a default the admin set for the daemon
+	// ("name=apparmor,profile=...") may allow userns, and is kept.
 	for _, o := range daemonOpts {
-		if o == "name=apparmor" || strings.HasPrefix(o, "name=apparmor,") {
+		if o == "name=apparmor" {
 			return "apparmor=unconfined"
 		}
 	}
 	return ""
+}
+
+// Spec is the definition version this client labels its containers with:
+// docker.Spec, plus the AppArmor option when there is one, so that a
+// browser started under another AppArmor choice isn't picked up after a
+// restart (see sessions.Reconcile).
+func (c *Client) Spec() string {
+	if c.apparmorOpt == "" {
+		return Spec
+	}
+	return Spec + ";" + c.apparmorOpt
 }
 
 // AppArmor is the browser containers' AppArmor profile: "unconfined", a
@@ -251,6 +262,7 @@ func (c *Client) Ping(ctx context.Context) error {
 func (c *Client) Create(ctx context.Context, spec BrowserSpec) (string, error) {
 	cfg, host := browserConfig(c.image, c.seccompOpt, c.apparmorOpt, spec)
 	cfg.Labels[LabelInstance] = c.instance
+	cfg.Labels[LabelSpec] = c.Spec()
 	host.UsernsMode = container.UsernsMode(c.userns)
 	opts := client.ContainerCreateOptions{Name: spec.Name, Config: cfg, HostConfig: host}
 	res, err := c.api.ContainerCreate(ctx, opts)

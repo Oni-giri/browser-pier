@@ -219,3 +219,6 @@ func (f *FakeRuntime) Count() int {
 	defer f.Mu.Unlock()
 	return len(f.Containers)
 }
+
+// Spec is the definition version Create labels containers with.
+func (f *FakeRuntime) Spec() string { return docker.Spec }

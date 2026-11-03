@@ -35,6 +35,9 @@ type Runtime interface {
 	RemoveStale(ctx context.Context, name, profile string) error
 	List(ctx context.Context) ([]docker.Container, error)
 	MemoryUsage(ctx context.Context, id string) (int64, error)
+	// Spec is the definition version new containers get; one running under
+	// another is stopped by Reconcile.
+	Spec() string
 }
 
 // Layout is where profile folders live:
@@ -593,12 +596,21 @@ func (m *Manager) finish(l *live, cid string, code int, waitErr error) {
 			s.State, s.Error = Failed, fmt.Sprintf("the browser didn't close cleanly (exit status %d), so recent logins may be lost", code)
 		default:
 			s.State, s.Error = Failed, fmt.Sprintf("the browser exited unexpectedly (exit status %d)", code)
-			if why := entrypointError(lastLog); why != "" {
-				// Chromium's own words, which agents read: cleaned like page text.
-				s.Error += ": " + capRunes(fence.Clean(why), 400)
-			}
 		}
 	})
+}
+
+// CrashReason is why the browser's entrypoint says it exited, from the
+// container's last log line: Chromium's FATAL line, if there was one
+// (PROJ-36), cleaned and capped. A compromised page could have written it,
+// so it is never part of Session.Error: show it next to the error, and
+// fence it for agents.
+func CrashReason(lastLog string) string {
+	why := entrypointError(lastLog)
+	if why == "" {
+		return ""
+	}
+	return capRunes(fence.Clean(why), 400)
 }
 
 // entrypointError is the err of the browser container's last log line,
