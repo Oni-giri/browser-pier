@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
+	"github.com/Oni-giri/browser-pier/internal/fence"
 	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/handoff"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
@@ -253,7 +254,15 @@ func (a *API) sessionOut(r *http.Request, s sessions.Session, attached bool) ses
 	out := sessionJSON{
 		ID: s.ID, Profile: s.Profile, Mode: string(s.Mode), State: string(s.State), Attached: attached,
 		LiveViewURL: base + "/profiles/" + url.PathEscape(s.Profile),
-		InUseBy:     s.InUseBy, Error: s.Error, LastLog: s.LastLog, CreatedAt: s.CreatedAt,
+		InUseBy:     s.InUseBy, Error: s.Error, CreatedAt: s.CreatedAt,
+	}
+	// The browser container's words, which a compromised page could have
+	// written: fenced like page text.
+	if why := sessions.CrashReason(s.LastLog); why != "" {
+		out.Error += ": " + fence.Wrap("browser crash output", why)
+	}
+	if s.LastLog != "" {
+		out.LastLog = fence.Wrap("browser container log", s.LastLog)
 	}
 	if s.Mode == profiles.ModeAPI && s.State.Live() {
 		out.CDPURL = "ws" + strings.TrimPrefix(base, "http") + "/cdp/" + s.Profile

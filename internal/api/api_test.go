@@ -349,8 +349,11 @@ func TestFailedStartReportsWhy(t *testing.T) {
 	if code := f.call(f.all, http.MethodPost, "/api/sessions", `{"profile": "google"}`, &s); code != http.StatusBadGateway {
 		t.Fatalf("failed start: %d", code)
 	}
-	if s.State != "failed" || s.Error == "" || s.LastLog != f.rt.LastLog {
-		t.Fatalf("failed session %+v", s)
+	if s.State != "failed" || !strings.HasPrefix(s.Error, "the browser exited unexpectedly (exit status 1): <untrusted-content-") || !strings.Contains(s.Error, "profile /profile is not writable") {
+		t.Fatalf("failed session %+v; want the reason fenced after the error", s)
+	}
+	if !strings.HasPrefix(s.LastLog, "<untrusted-content-") || !strings.Contains(s.LastLog, f.rt.LastLog) {
+		t.Fatalf("last_log %q isn't fenced", s.LastLog)
 	}
 }
 
