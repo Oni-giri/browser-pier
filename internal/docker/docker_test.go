@@ -16,7 +16,7 @@ func TestBrowserConfigLocksDownTheContainer(t *testing.T) {
 		ProfileDir: "/srv/bp/profiles/google/chrome", ControlDir: "/srv/bp/profiles/google/run", FilesDir: "/srv/bp/profiles/google/files",
 		User: "1000:1000", Screen: "1440x900", MountCheck: "s1",
 	}
-	cfg, host := browserConfig("ghcr.io/oni-giri/browser-pier-chromium:1.0.0", `seccomp={"defaultAction":"SCMP_ACT_ERRNO"}`, spec)
+	cfg, host := browserConfig("ghcr.io/oni-giri/browser-pier-chromium:1.0.0", `seccomp={"defaultAction":"SCMP_ACT_ERRNO"}`, "", spec)
 
 	if cfg.Image != "ghcr.io/oni-giri/browser-pier-chromium:1.0.0" || cfg.User != "1000:1000" {
 		t.Fatalf("image %q, user %q", cfg.Image, cfg.User)
@@ -142,6 +142,39 @@ func TestLastLine(t *testing.T) {
 	long := strings.Repeat("é", 400) // 800 bytes
 	if got := lastLine([]byte(long)); len(got) > maxLogLine+len("…") || !strings.HasSuffix(got, "…") {
 		t.Fatalf("long line kept %d bytes", len(got))
+	}
+}
+
+func TestAppArmorOpt(t *testing.T) {
+	for _, c := range []struct {
+		daemon  []string
+		profile string
+		want    string
+	}{
+		// Debian 13 and umbrelOS: docker-default would refuse the sandbox.
+		{[]string{"name=apparmor", "name=seccomp,profile=builtin", "name=cgroupns"}, "", "apparmor=unconfined"},
+		{[]string{"name=seccomp,profile=builtin", "name=apparmor,profile=x"}, "", "apparmor=unconfined"},
+		// No AppArmor on the daemon: leave the option out.
+		{[]string{"name=seccomp,profile=builtin", "name=selinux"}, "", ""},
+		{nil, "", ""},
+		// A profile named in BROWSERPIER_BROWSER_APPARMOR wins.
+		{[]string{"name=apparmor"}, "browserpier", "apparmor=browserpier"},
+		{[]string{"name=apparmor"}, "docker-default", "apparmor=docker-default"},
+	} {
+		if got := appArmorOpt(c.daemon, c.profile); got != c.want {
+			t.Errorf("appArmorOpt(%v, %q) = %q, want %q", c.daemon, c.profile, got, c.want)
+		}
+	}
+}
+
+func TestBrowserConfigAppArmor(t *testing.T) {
+	spec := BrowserSpec{Name: "browserpier-google", Profile: "google", Session: "s1", User: "1000:1000", Screen: "1440x900"}
+	_, host := browserConfig("img", "seccomp={}", "apparmor=unconfined", spec)
+	if len(host.SecurityOpt) != 3 || host.SecurityOpt[0] != "seccomp={}" || host.SecurityOpt[1] != "no-new-privileges:true" || host.SecurityOpt[2] != "apparmor=unconfined" {
+		t.Fatalf("security opts %v; want the seccomp profile and no-new-privileges kept, AppArmor added", host.SecurityOpt)
+	}
+	if len(host.CapAdd) != 1 || host.CapDrop[0] != "ALL" || host.Privileged {
+		t.Fatalf("caps add %v drop %v privileged %t", host.CapAdd, host.CapDrop, host.Privileged)
 	}
 }
 

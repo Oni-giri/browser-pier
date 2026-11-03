@@ -99,7 +99,7 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	dc, err := docker.New(docker.Options{Image: image, UsernsMode: cfg.UsernsMode, Instance: instance})
+	dc, err := docker.New(docker.Options{Image: image, UsernsMode: cfg.UsernsMode, Instance: instance, AppArmor: cfg.BrowserAppArmor})
 	if err != nil {
 		return err
 	}
@@ -116,6 +116,9 @@ func run(log *slog.Logger) error {
 	}
 	if err := dc.UseDataDir(ctx, dataDir, hostDataDir); err != nil {
 		return err
+	}
+	if dc.AppArmor() == "unconfined" {
+		log.Info("browser containers run without an AppArmor profile: Docker's docker-default refuses Chromium's sandbox on AppArmor 4. Set BROWSERPIER_BROWSER_APPARMOR to use one")
 	}
 	uid, gid := browserUser(os.Getuid(), os.Getgid())
 	mgr, err := sessions.NewManager(database, dc, sessions.Layout{DataDir: dataDir, HostDataDir: hostDataDir, UID: uid, GID: gid}, log)

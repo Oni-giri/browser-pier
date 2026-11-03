@@ -92,8 +92,12 @@ type Client struct {
 	// seccompOpt is the security option that applies it: the JSON itself
 	// for Docker, a host path for Podman (see UseDataDir).
 	seccompOpt string
-	userns     string
-	instance   string
+	// apparmorOpt sets the containers' AppArmor profile, or is empty for
+	// the daemon's default (see UseDataDir).
+	apparmorOpt string
+	apparmor    string // the profile asked for (Options.AppArmor)
+	userns      string
+	instance    string
 }
 
 // Options configure a Client.
@@ -106,6 +110,9 @@ type Options struct {
 	// Instance identifies this BrowserPier among others on the same
 	// Docker host; it only sees and removes its own containers.
 	Instance string
+	// AppArmor names the containers' AppArmor profile. Empty means none
+	// where the daemon uses AppArmor (see appArmorOpt).
+	AppArmor string
 }
 
 // New connects to the Docker daemon named by the usual DOCKER_* variables.
@@ -125,7 +132,7 @@ func New(o Options) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{api: api, image: image, seccomp: seccomp.String(), seccompOpt: "seccomp=" + seccomp.String(), userns: o.UsernsMode, instance: o.Instance}, nil
+	return &Client{api: api, image: image, seccomp: seccomp.String(), seccompOpt: "seccomp=" + seccomp.String(), apparmor: o.AppArmor, userns: o.UsernsMode, instance: o.Instance}, nil
 }
 
 // UseDataDir finishes setting up against the daemon, given the data dir as
@@ -133,6 +140,11 @@ func New(o Options) (*Client, error) {
 // seccomp profile as a path rather than inline, so for Podman the profile
 // is written into the data dir and passed by its host path.
 func (c *Client) UseDataDir(ctx context.Context, dataDir, hostDataDir string) error {
+	info, err := c.api.Info(ctx, client.InfoOptions{})
+	if err != nil {
+		return err
+	}
+	c.apparmorOpt = appArmorOpt(info.Info.SecurityOptions, c.apparmor)
 	v, err := c.api.ServerVersion(ctx, client.ServerVersionOptions{})
 	if err != nil {
 		return err
@@ -154,6 +166,30 @@ func (c *Client) UseDataDir(ctx context.Context, dataDir, hostDataDir string) er
 	c.seccompOpt = "seccomp=" + filepath.Join(hostDataDir, "seccomp.json")
 	return nil
 }
+
+// appArmorOpt is the browser containers' AppArmor option, given the
+// daemon's security options and the profile asked for. Docker's
+// docker-default has no userns rule, so under AppArmor 4 (Debian 13,
+// umbrelOS 2) it refuses Chromium's sandbox its user namespace and Chromium
+// aborts. Where the daemon uses AppArmor, browsers therefore run without a
+// profile unless one is named; the seccomp profile, dropped capabilities
+// and no-new-privileges still apply. PROJ-37: ship our own profile.
+func appArmorOpt(daemonOpts []string, profile string) string {
+	if profile != "" {
+		return "apparmor=" + profile
+	}
+	for _, o := range daemonOpts {
+		if o == "name=apparmor" || strings.HasPrefix(o, "name=apparmor,") {
+			return "apparmor=unconfined"
+		}
+	}
+	return ""
+}
+
+// AppArmor is the browser containers' AppArmor profile: "unconfined", a
+// profile's name, or empty for none on a daemon without AppArmor. Known
+// after UseDataDir.
+func (c *Client) AppArmor() string { return strings.TrimPrefix(c.apparmorOpt, "apparmor=") }
 
 func isPodman(components []system.ComponentVersion) bool {
 	for _, comp := range components {
@@ -178,7 +214,7 @@ func (c *Client) Ping(ctx context.Context) error {
 // Create creates a browser container, pulling the image first if Docker
 // doesn't have it.
 func (c *Client) Create(ctx context.Context, spec BrowserSpec) (string, error) {
-	cfg, host := browserConfig(c.image, c.seccompOpt, spec)
+	cfg, host := browserConfig(c.image, c.seccompOpt, c.apparmorOpt, spec)
 	cfg.Labels[LabelInstance] = c.instance
 	host.UsernsMode = container.UsernsMode(c.userns)
 	opts := client.ContainerCreateOptions{Name: spec.Name, Config: cfg, HostConfig: host}
@@ -208,7 +244,8 @@ func (c *Client) pull(ctx context.Context) error {
 }
 
 // browserConfig is the whole container definition. It publishes no ports.
-func browserConfig(image, seccompOpt string, spec BrowserSpec) (*container.Config, *container.HostConfig) {
+// apparmorOpt may be empty, for the daemon's default profile.
+func browserConfig(image, seccompOpt, apparmorOpt string, spec BrowserSpec) (*container.Config, *container.HostConfig) {
 	stop := int(StopTimeout / time.Second)
 	initProc := false // the image's entrypoint is PID 1 and reaps
 	cfg := &container.Config{
@@ -241,6 +278,9 @@ func browserConfig(image, seccompOpt string, spec BrowserSpec) (*container.Confi
 		CapAdd:      []string{"SYS_CHROOT"},
 		ShmSize:     shmSize,
 		Init:        &initProc,
+	}
+	if apparmorOpt != "" {
+		host.SecurityOpt = append(host.SecurityOpt, apparmorOpt)
 	}
 	return cfg, host
 }
