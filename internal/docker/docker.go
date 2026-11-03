@@ -172,9 +172,20 @@ func (c *Client) UseDataDir(ctx context.Context, dataDir, hostDataDir string) er
 // Other kernels don't have it. A container sees the host's.
 const restrictSysctl = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns"
 
-// ubuntuUsernsRestriction reports whether this kernel has Ubuntu's user
-// namespace restriction: "absent", or "present" (on, off, or unreadable).
+// RemoteDaemon reports whether DOCKER_HOST names a daemon on another
+// machine, whose kernel this process can't look at.
+func RemoteDaemon() bool {
+	h := os.Getenv("DOCKER_HOST")
+	return h != "" && !strings.HasPrefix(h, "unix://")
+}
+
+// ubuntuUsernsRestriction reports whether the Docker host's kernel has
+// Ubuntu's user namespace restriction: "absent", or "present" (on, off,
+// unreadable, or a remote daemon's kernel, which can't be checked).
 func ubuntuUsernsRestriction() string {
+	if RemoteDaemon() {
+		return "present"
+	}
 	if _, err := os.Stat(restrictSysctl); errors.Is(err, fs.ErrNotExist) {
 		return "absent"
 	}
@@ -186,7 +197,9 @@ func ubuntuUsernsRestriction() string {
 // (see ubuntuUsernsRestriction). Chromium's sandbox needs a user namespace:
 //   - Under AppArmor 4 without Ubuntu's restriction (Debian 13, umbrelOS
 //     2), Docker's docker-default has no userns rule and refuses it, while
-//     an unconfined process may create one. Browsers run unconfined there.
+//     an unconfined process may create one. Browsers run unconfined on any
+//     AppArmor host without that restriction, since the version isn't
+//     visible from here: on AppArmor 3 (Debian 12) that's needless.
 //   - With Ubuntu's restriction, it's the other way round: an unconfined
 //     process gets a namespace without the capabilities the sandbox needs,
 //     and docker-default works. Browsers keep Docker's profile.
@@ -333,7 +346,9 @@ func (c *Client) Wait(ctx context.Context, id string) (int, error) {
 	}
 }
 
-// LastLogLine returns the container's last non-empty log line.
+// LastLogLine returns the container's last non-empty log line, or the
+// entrypoint's exiting line if one is near the end: Chromium output still
+// draining may follow it, and it says why the browser stopped.
 func (c *Client) LastLogLine(ctx context.Context, id string) (string, error) {
 	r, err := c.api.ContainerLogs(ctx, id, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Tail: "50"})
 	if err != nil {
@@ -347,16 +362,22 @@ func (c *Client) LastLogLine(ctx context.Context, id string) (string, error) {
 	return lastLine(buf.Bytes()), nil
 }
 
-const maxLogLine = 500
+const maxLogLine = 1000
 
 func lastLine(b []byte) string {
-	var last string
+	var last, exiting string
 	sc := bufio.NewScanner(bytes.NewReader(b))
 	sc.Buffer(make([]byte, 0, 64<<10), 1<<20)
 	for sc.Scan() {
 		if l := strings.TrimSpace(sc.Text()); l != "" {
 			last = l
+			if strings.Contains(l, " msg=exiting") {
+				exiting = l
+			}
 		}
+	}
+	if exiting != "" {
+		last = exiting
 	}
 	if len(last) > maxLogLine {
 		last = strings.ToValidUTF8(last[:maxLogLine], "") + "…"

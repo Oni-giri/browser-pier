@@ -139,7 +139,7 @@ func TestLastLine(t *testing.T) {
 	if got := lastLine(nil); got != "" {
 		t.Fatalf("got %q", got)
 	}
-	long := strings.Repeat("é", 400) // 800 bytes
+	long := strings.Repeat("é", maxLogLine) // twice the cap, in bytes
 	if got := lastLine([]byte(long)); len(got) > maxLogLine+len("…") || !strings.HasSuffix(got, "…") {
 		t.Fatalf("long line kept %d bytes", len(got))
 	}
@@ -180,6 +180,28 @@ func TestBrowserConfigAppArmor(t *testing.T) {
 	}
 	if len(host.CapAdd) != 1 || host.CapDrop[0] != "ALL" || host.Privileged {
 		t.Fatalf("caps add %v drop %v privileged %t", host.CapAdd, host.CapDrop, host.Privileged)
+	}
+}
+
+func TestLastLinePrefersTheExitingLine(t *testing.T) {
+	logs := "time=1 level=INFO msg=ready\ntime=2 level=ERROR msg=exiting err=\"chromium: boom\"\n[1:1:0:ERROR:dbus.cc:1] draining\n"
+	if got := lastLine([]byte(logs)); got != `time=2 level=ERROR msg=exiting err="chromium: boom"` {
+		t.Fatalf("lastLine = %q", got)
+	}
+	if got := lastLine([]byte("a\nb\n")); got != "b" {
+		t.Fatalf("without an exiting line: %q", got)
+	}
+}
+
+func TestRemoteDaemon(t *testing.T) {
+	for host, want := range map[string]bool{"": false, "unix:///run/user/1001/podman/podman.sock": false, "tcp://10.0.0.5:2376": true, "ssh://me@box": true} {
+		t.Setenv("DOCKER_HOST", host)
+		if got := RemoteDaemon(); got != want {
+			t.Errorf("DOCKER_HOST=%q: remote %t", host, got)
+		}
+		if want && ubuntuUsernsRestriction() != "present" {
+			t.Errorf("DOCKER_HOST=%q: a remote kernel must count as restricted", host)
+		}
 	}
 }
 

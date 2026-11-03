@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/docker"
+	"github.com/Oni-giri/browser-pier/internal/fence"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 )
 
@@ -593,7 +594,8 @@ func (m *Manager) finish(l *live, cid string, code int, waitErr error) {
 		default:
 			s.State, s.Error = Failed, fmt.Sprintf("the browser exited unexpectedly (exit status %d)", code)
 			if why := entrypointError(lastLog); why != "" {
-				s.Error += ": " + why
+				// Chromium's own words, which agents read: cleaned like page text.
+				s.Error += ": " + capRunes(fence.Clean(why), 400)
 			}
 		}
 	})
@@ -620,13 +622,21 @@ func entrypointError(lastLog string) string {
 	}
 	q, err := strconv.QuotedPrefix(v)
 	if err != nil {
-		return ""
+		// Cut short by the log line cap: keep what there is.
+		return strings.TrimSuffix(v[1:], "…")
 	}
 	v, err = strconv.Unquote(q)
 	if err != nil {
 		return ""
 	}
 	return v
+}
+
+func capRunes(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return s
 }
 
 // abort fails a session whose container never got going.

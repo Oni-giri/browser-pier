@@ -4,6 +4,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestChromiumLine(t *testing.T) {
@@ -17,8 +18,8 @@ func TestChromiumLine(t *testing.T) {
 			t.Errorf("chromiumLine(%q) = %q, want %q", line, got, want)
 		}
 	}
-	if got := chromiumLine("[1:1:0:FATAL:a.cc:1] "+strings.Repeat("x", 400), "FATAL"); len(got) > 310 {
-		t.Errorf("not truncated: %d bytes", len(got))
+	if got := chromiumLine("[1:1:0:FATAL:a.cc:1] "+strings.Repeat("é", 400), "FATAL"); len([]rune(got)) != 201 || !utf8.ValidString(got) {
+		t.Errorf("truncated to %d runes, valid %t", len([]rune(got)), utf8.ValidString(got))
 	}
 }
 

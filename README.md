@@ -52,7 +52,7 @@ Configuration is through `BROWSERPIER_*` environment variables:
 | `BROWSERPIER_HOST_DATA_DIR` | detected | The data dir's path on the Docker host, for bind mounts into browser containers. In a container BrowserPier reads it from its own mounts; set it only if that fails. |
 | `BROWSERPIER_BROWSER_IMAGE` | the image built with this version (`edge` for dev builds) | Browser image. BrowserPier starts containers from this image only. |
 | `BROWSERPIER_USERNS_MODE` | none | `keep-id` under rootless Podman, so browsers write profile files as your user |
-| `BROWSERPIER_BROWSER_APPARMOR` | none | The browser containers' AppArmor profile. Unset, they keep Docker's, except on Debian 13 and similar AppArmor 4 hosts, where Docker's refuses Chromium's sandbox and they run without one |
+| `BROWSERPIER_BROWSER_APPARMOR` | none | The browser containers' AppArmor profile. Unset, they keep Docker's, except on AppArmor hosts without Ubuntu's user namespace restriction (Debian, umbrelOS), where they run without one: there, from Debian 13 on, Docker's refuses Chromium's sandbox |
 | `BROWSERPIER_ADMIN_PASSWORD` | none | Admin password (at least 8 characters). Wins over one set in the UI at every start, so changing it is how to reset a lost one. Without it, the first visit goes to a setup page that asks for a code printed in the log. |
 | `BROWSERPIER_PUBLIC_URL` | none | How people reach BrowserPier, e.g. `https://pier.example.com`. An https URL makes cookies Secure. |
 | `BROWSERPIER_COOKIE_SECURE` | `auto` | `auto` (Secure when served over HTTPS), `always` or `never` |

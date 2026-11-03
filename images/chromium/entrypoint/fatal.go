@@ -102,9 +102,11 @@ func chromiumLine(line, level string) string {
 	return truncate(strings.TrimSpace(msg) + " (" + where + ")")
 }
 
+// truncate keeps the reason short enough to survive slog's quoting within
+// the orchestrator's log line cap.
 func truncate(s string) string {
-	if len(s) > 300 {
-		return s[:300] + "…"
+	if r := []rune(s); len(r) > 200 {
+		return string(r[:200]) + "…"
 	}
 	return s
 }

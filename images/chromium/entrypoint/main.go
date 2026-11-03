@@ -274,6 +274,13 @@ func spawn(cmd *exec.Cmd) (*process, error) {
 	if cmd.Stderr == nil {
 		cmd.Stderr = os.Stderr
 	}
+	// Any other writer makes exec copy in a goroutine that only cmd.Wait
+	// ends, and the reaper never calls it.
+	_, out := cmd.Stdout.(*os.File)
+	_, errOut := cmd.Stderr.(*os.File)
+	if !out || !errOut {
+		return nil, errors.New("spawn: output must go to a file")
+	}
 	exited, err := procs.start(cmd)
 	if err != nil {
 		return nil, err
