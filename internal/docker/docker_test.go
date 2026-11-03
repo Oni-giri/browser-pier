@@ -155,6 +155,7 @@ func TestAppArmorOpt(t *testing.T) {
 	}{
 		// Debian 13 and umbrelOS: docker-default would refuse the sandbox.
 		{aa, "", "absent", "apparmor=unconfined"},
+		{[]string{"name=apparmor,profile=default", "name=seccomp,profile=builtin"}, "", "absent", "apparmor=unconfined"},
 		// A default profile the admin set for the daemon may allow userns.
 		{[]string{"name=seccomp,profile=builtin", "name=apparmor,profile=/etc/docker/apparmor.profile"}, "", "absent", ""},
 		// Ubuntu: unconfined would lose the sandbox, docker-default works.

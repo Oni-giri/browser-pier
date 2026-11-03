@@ -211,10 +211,12 @@ func appArmorOpt(daemonOpts []string, profile, ubuntuRestriction string) string 
 	if ubuntuRestriction != "absent" {
 		return ""
 	}
-	// Only Docker's stock profile: a default the admin set for the daemon
-	// ("name=apparmor,profile=...") may allow userns, and is kept.
+	// Only Docker's stock profile, reported as "name=apparmor" before Docker
+	// 29.x and "name=apparmor,profile=default" since. A default the admin
+	// set for the daemon ("name=apparmor,profile=/path") may allow userns,
+	// and is kept.
 	for _, o := range daemonOpts {
-		if o == "name=apparmor" {
+		if o == "name=apparmor" || o == "name=apparmor,profile=default" {
 			return "apparmor=unconfined"
 		}
 	}
