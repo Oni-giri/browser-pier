@@ -16,7 +16,7 @@ func TestBrowserConfigLocksDownTheContainer(t *testing.T) {
 		ProfileDir: "/srv/bp/profiles/google/chrome", ControlDir: "/srv/bp/profiles/google/run", FilesDir: "/srv/bp/profiles/google/files",
 		User: "1000:1000", Screen: "1440x900", MountCheck: "s1",
 	}
-	cfg, host := browserConfig("ghcr.io/oni-giri/browser-pier-chromium:1.0.0", `seccomp={"defaultAction":"SCMP_ACT_ERRNO"}`, spec)
+	cfg, host := browserConfig("ghcr.io/oni-giri/browser-pier-chromium:1.0.0", `seccomp={"defaultAction":"SCMP_ACT_ERRNO"}`, "", spec)
 
 	if cfg.Image != "ghcr.io/oni-giri/browser-pier-chromium:1.0.0" || cfg.User != "1000:1000" {
 		t.Fatalf("image %q, user %q", cfg.Image, cfg.User)
@@ -139,9 +139,82 @@ func TestLastLine(t *testing.T) {
 	if got := lastLine(nil); got != "" {
 		t.Fatalf("got %q", got)
 	}
-	long := strings.Repeat("é", 400) // 800 bytes
+	long := strings.Repeat("é", maxLogLine) // twice the cap, in bytes
 	if got := lastLine([]byte(long)); len(got) > maxLogLine+len("…") || !strings.HasSuffix(got, "…") {
 		t.Fatalf("long line kept %d bytes", len(got))
+	}
+}
+
+func TestAppArmorOpt(t *testing.T) {
+	aa := []string{"name=apparmor", "name=seccomp,profile=builtin", "name=cgroupns"}
+	for _, c := range []struct {
+		daemon      []string
+		profile     string
+		restriction string
+		want        string
+	}{
+		// Debian 13 and umbrelOS: docker-default would refuse the sandbox.
+		{aa, "", "absent", "apparmor=unconfined"},
+		{[]string{"name=apparmor,profile=default", "name=seccomp,profile=builtin"}, "", "absent", "apparmor=unconfined"},
+		// A default profile the admin set for the daemon may allow userns.
+		{[]string{"name=seccomp,profile=builtin", "name=apparmor,profile=/etc/docker/apparmor.profile"}, "", "absent", ""},
+		// Ubuntu: unconfined would lose the sandbox, docker-default works.
+		{aa, "", "present", ""},
+		// No AppArmor on the daemon: leave the option out.
+		{[]string{"name=seccomp,profile=builtin", "name=selinux"}, "", "absent", ""},
+		{nil, "", "absent", ""},
+		// A profile named in BROWSERPIER_BROWSER_APPARMOR wins.
+		{aa, "browserpier", "absent", "apparmor=browserpier"},
+		{aa, "unconfined", "present", "apparmor=unconfined"},
+		{aa, "docker-default", "absent", "apparmor=docker-default"},
+	} {
+		if got := appArmorOpt(c.daemon, c.profile, c.restriction); got != c.want {
+			t.Errorf("appArmorOpt(%v, %q, %q) = %q, want %q", c.daemon, c.profile, c.restriction, got, c.want)
+		}
+	}
+}
+
+func TestBrowserConfigAppArmor(t *testing.T) {
+	spec := BrowserSpec{Name: "browserpier-google", Profile: "google", Session: "s1", User: "1000:1000", Screen: "1440x900"}
+	_, host := browserConfig("img", "seccomp={}", "apparmor=unconfined", spec)
+	if len(host.SecurityOpt) != 3 || host.SecurityOpt[0] != "seccomp={}" || host.SecurityOpt[1] != "no-new-privileges:true" || host.SecurityOpt[2] != "apparmor=unconfined" {
+		t.Fatalf("security opts %v; want the seccomp profile and no-new-privileges kept, AppArmor added", host.SecurityOpt)
+	}
+	if len(host.CapAdd) != 1 || host.CapDrop[0] != "ALL" || host.Privileged {
+		t.Fatalf("caps add %v drop %v privileged %t", host.CapAdd, host.CapDrop, host.Privileged)
+	}
+}
+
+func TestLastLinePrefersTheExitingLine(t *testing.T) {
+	logs := "time=1 level=INFO msg=ready\ntime=2 level=ERROR msg=exiting err=\"chromium: boom\"\n[1:1:0:ERROR:dbus.cc:1] draining\n"
+	if got := lastLine([]byte(logs)); got != `time=2 level=ERROR msg=exiting err="chromium: boom"` {
+		t.Fatalf("lastLine = %q", got)
+	}
+	if got := lastLine([]byte("a\nb\n")); got != "b" {
+		t.Fatalf("without an exiting line: %q", got)
+	}
+}
+
+func TestRemoteDaemon(t *testing.T) {
+	// A unix socket can be forwarded from another machine too.
+	for host, want := range map[string]bool{"": false, "unix:///run/user/1001/podman/podman.sock": true, "tcp://10.0.0.5:2376": true, "ssh://me@box": true} {
+		t.Setenv("DOCKER_HOST", host)
+		if got := RemoteDaemon(); got != want {
+			t.Errorf("DOCKER_HOST=%q: remote %t", host, got)
+		}
+		if want && ubuntuUsernsRestriction() != "present" {
+			t.Errorf("DOCKER_HOST=%q: a remote kernel must count as restricted", host)
+		}
+	}
+}
+
+func TestClientSpecCarriesTheAppArmorChoice(t *testing.T) {
+	if got := (&Client{}).Spec(); got != Spec {
+		t.Fatalf("no AppArmor option: %q", got)
+	}
+	unconfined, named := (&Client{apparmorOpt: "apparmor=unconfined"}).Spec(), (&Client{apparmorOpt: "apparmor=browserpier"}).Spec()
+	if unconfined == Spec || named == Spec || unconfined == named {
+		t.Fatalf("specs %q and %q don't tell the AppArmor choices apart", unconfined, named)
 	}
 }
 

@@ -105,7 +105,12 @@ func run(log *slog.Logger) error {
 
 	chromium := exec.Command(chromiumBinary, chromiumArgs(cfg, smallShm())...)
 	chromium.Env = append(append(os.Environ(), "DISPLAY="+display), where.env()...)
+	fatal, err := watchFatal(chromium)
+	if err != nil {
+		return fmt.Errorf("start Chromium: %w", err)
+	}
 	browser, err := spawn(chromium)
+	fatal.started()
 	if err != nil {
 		return fmt.Errorf("start Chromium: %w", err)
 	}
@@ -119,7 +124,7 @@ func run(log *slog.Logger) error {
 		return resp.StatusCode == http.StatusOK
 	}); err != nil {
 		_ = closeChromium(browser, cdpAddr, cfg.StopTimeout)
-		return fmt.Errorf("chromium: %w", err)
+		return fmt.Errorf("chromium: %w%s", err, fatal.reason(true))
 	}
 
 	ln, err := listenControl(cfg.ControlSocket)
@@ -140,7 +145,7 @@ func run(log *slog.Logger) error {
 	select {
 	case <-browser.done:
 		_ = srv.Close()
-		return fmt.Errorf("chromium exited on its own: %s", describe(browser.status))
+		return fmt.Errorf("chromium exited on its own: %s%s", describe(browser.status), fatal.reason(false))
 	case <-ctx.Done():
 	}
 
@@ -263,7 +268,19 @@ type process struct {
 }
 
 func spawn(cmd *exec.Cmd) (*process, error) {
-	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+	if cmd.Stdout == nil {
+		cmd.Stdout = os.Stderr
+	}
+	if cmd.Stderr == nil {
+		cmd.Stderr = os.Stderr
+	}
+	// Any other writer makes exec copy in a goroutine that only cmd.Wait
+	// ends, and the reaper never calls it.
+	_, out := cmd.Stdout.(*os.File)
+	_, errOut := cmd.Stderr.(*os.File)
+	if !out || !errOut {
+		return nil, errors.New("spawn: output must go to a file")
+	}
 	exited, err := procs.start(cmd)
 	if err != nil {
 		return nil, err

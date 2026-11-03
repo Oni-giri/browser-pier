@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/docker"
+	"github.com/Oni-giri/browser-pier/internal/fence"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 )
 
@@ -34,6 +35,9 @@ type Runtime interface {
 	RemoveStale(ctx context.Context, name, profile string) error
 	List(ctx context.Context) ([]docker.Container, error)
 	MemoryUsage(ctx context.Context, id string) (int64, error)
+	// Spec is the definition version new containers get; one running under
+	// another is stopped by Reconcile.
+	Spec() string
 }
 
 // Layout is where profile folders live:
@@ -594,6 +598,57 @@ func (m *Manager) finish(l *live, cid string, code int, waitErr error) {
 			s.State, s.Error = Failed, fmt.Sprintf("the browser exited unexpectedly (exit status %d)", code)
 		}
 	})
+}
+
+// CrashReason is why the browser's entrypoint says it exited, from the
+// container's last log line: Chromium's FATAL line, if there was one
+// (PROJ-36), cleaned and capped. A compromised page could have written it,
+// so it is never part of Session.Error: show it next to the error, and
+// fence it for agents.
+func CrashReason(lastLog string) string {
+	why := entrypointError(lastLog)
+	if why == "" {
+		return ""
+	}
+	return capRunes(fence.Clean(why), 400)
+}
+
+// entrypointError is the err of the browser container's last log line,
+// when the entrypoint ended on one: `level=ERROR msg=exiting err="..."`.
+// It carries Chromium's FATAL line if there was one (PROJ-36).
+func entrypointError(lastLog string) string {
+	head := lastLog
+	if strings.HasPrefix(head, "time=") {
+		_, head, _ = strings.Cut(head, " ")
+	}
+	if !strings.HasPrefix(head, "level=ERROR ") {
+		return ""
+	}
+	_, v, ok := strings.Cut(lastLog, " err=")
+	if !ok {
+		return ""
+	}
+	if !strings.HasPrefix(v, `"`) {
+		v, _, _ = strings.Cut(v, " ")
+		return v
+	}
+	q, err := strconv.QuotedPrefix(v)
+	if err != nil {
+		// Cut short by the log line cap: keep what there is.
+		return strings.TrimSuffix(v[1:], "…")
+	}
+	v, err = strconv.Unquote(q)
+	if err != nil {
+		return ""
+	}
+	return v
+}
+
+func capRunes(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return s
 }
 
 // abort fails a session whose container never got going.

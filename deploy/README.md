@@ -135,6 +135,7 @@ Leave `BROWSERPIER_LISTEN` and `BROWSERPIER_WEBRTC_PORT` alone with this compose
 | `BROWSERPIER_BROWSER_IMAGE` | this release's | The browser image. Only BrowserPier's own. |
 | `BROWSERPIER_HOST_DATA_DIR` | detected | The data folder's path on the host, if detection fails. |
 | `BROWSERPIER_USERNS_MODE` | unset | `keep-id` under rootless Podman. |
+| `BROWSERPIER_BROWSER_APPARMOR` | unset | The browser containers' AppArmor profile. Unset, they keep Docker's, except on AppArmor hosts without Ubuntu's user namespace restriction (Debian, umbrelOS), where they run without one: there, from Debian 13 on, Docker's refuses Chromium's sandbox. With `DOCKER_HOST` set, Docker's default is kept, since that daemon's kernel can't be checked: set `unconfined` if browsers then fail with a sandbox error. |
 | `BROWSERPIER_STOP_BROWSERS_ON_EXIT` | `false` | `true` stops every browser when BrowserPier stops. Otherwise they keep running through an update. |
 
 ## Updating and backups

@@ -26,6 +26,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	spec := m.rt.Spec()
 	byID := make(map[string]docker.Container, len(containers))
 	for _, c := range containers {
 		byID[c.ID] = c
@@ -60,10 +61,10 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			m.abort(l, c.ID, "BrowserPier restarted before the browser started")
 			m.mu.Lock()
 			continue
-		case c.Spec != docker.Spec && s.State == Starting:
+		case c.Spec != spec && s.State == Starting:
 			outdatedStarting = append(outdatedStarting, starting{l, c.ID})
 			continue
-		case c.Spec != docker.Spec && (s.State == Running || s.State == NeedsHelp):
+		case c.Spec != spec && (s.State == Running || s.State == NeedsHelp):
 			outdated = append(outdated, s.ID)
 		}
 		l.lastActivity = m.now() // idle time restarts with the orchestrator
@@ -76,7 +77,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			m.spawn(func() { m.awaitReady(l, cid) })
 		case Stopping:
 			l.markReady()
-			if c.Spec != docker.Spec {
+			if c.Spec != spec {
 				// Waited for below; the watcher ends the session.
 				outdatedStopping = append(outdatedStopping, c.ID)
 			} else {
