@@ -5,7 +5,9 @@ LDFLAGS := -s -w -X main.version=$(VERSION)
 IMAGE          ?= ghcr.io/oni-giri/browser-pier
 CHROMIUM_IMAGE ?= ghcr.io/oni-giri/browser-pier-chromium
 
-.PHONY: all build run test test-docker vet lint fmt release-files image image-chromium push push-chromium clean
+DOCKER_TEST_PKGS = $(sort $(dir $(shell grep -rl --include='*_test.go' '^//go:build docker' .)))
+
+.PHONY: all build run test test-docker test-docker-only vet lint fmt release-files image image-chromium push push-chromium clean
 
 all: lint test build
 
@@ -19,9 +21,14 @@ test:
 	$(GO) test -race ./...
 
 # Tests that need a Docker daemon are tagged `//go:build docker`. They run
-# against the browser image, so build it first.
+# against the browser image, so build it first. Only the packages that have
+# such tests run; `make test` covers the others.
 test-docker: image-chromium
-	BROWSERPIER_TEST_IMAGE=$(CHROMIUM_IMAGE):$(VERSION) $(GO) test -race -tags docker -timeout 20m -v ./...
+	BROWSERPIER_TEST_IMAGE=$(CHROMIUM_IMAGE):$(VERSION) $(MAKE) test-docker-only
+
+# The same against an image that's built already, named by BROWSERPIER_TEST_IMAGE.
+test-docker-only:
+	$(GO) test -race -tags docker -timeout 20m -v $(DOCKER_TEST_PKGS)
 
 # The files a release of CHANGELOG.md's newest version would attach, in
 # dist/, checked as a compose file when Docker Compose is here.
