@@ -11,32 +11,32 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
 <style>
-body{margin:0;background:#FAFAFA}
-a{color:#09090B}a:hover{color:#000000}
+body{margin:0;background:#EAF1FF}
+a{color:#0F172A}a:hover{color:#000000}
 .g-cell{grid-column:span var(--s)}
 @media (max-width: 960px){.g-cell{grid-column:1 / -1}}
 </style>
 </helmet>
-<div style="min-height: 100vh; background: #FAFAFA; color: #09090B; font-family: 'Geist', system-ui, sans-serif">
+<div style="min-height: 100vh; background: radial-gradient(1000px 480px at 15% -140px, rgba(47,107,255,0.22), rgba(47,107,255,0) 70%), radial-gradient(800px 420px at 90% -180px, rgba(56,189,248,0.18), rgba(56,189,248,0) 70%), url('data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20width%3D%27180%27%20height%3D%27180%27%3E%3Cfilter%20id%3D%27n%27%3E%3CfeTurbulence%20type%3D%27fractalNoise%27%20baseFrequency%3D%27.85%27%20numOctaves%3D%272%27%20stitchTiles%3D%27stitch%27%2F%3E%3CfeColorMatrix%20values%3D%270%200%200%200%200.12%200%200%200%200%200.18%200%200%200%200%200.45%200%200%200%200.06%200%27%2F%3E%3C%2Ffilter%3E%3Crect%20width%3D%27100%25%27%20height%3D%27100%25%27%20filter%3D%27url%28%23n%29%27%2F%3E%3C%2Fsvg%3E') 0 0 / 180px 180px, linear-gradient(to bottom, rgba(234,241,255,0) 0, rgba(234,241,255,0.6) 260px, rgb(234,241,255) 560px), linear-gradient(rgba(47,107,255,0.07) 1px, transparent 1px) 0 0 / 48px 48px, linear-gradient(90deg, rgba(47,107,255,0.07) 1px, transparent 1px) 0 0 / 48px 48px, #EAF1FF; color: #0F172A; font-family: 'Geist', system-ui, sans-serif">
 
-  <header style="background: #FFFFFF; border-bottom: 1px solid #E4E4E7">
+  <header style="position: sticky; top: 0; z-index: 10; background: rgba(255,255,255,0.72); backdrop-filter: blur(14px) saturate(160%); -webkit-backdrop-filter: blur(14px) saturate(160%); box-shadow: 0 1px 0 rgba(37,64,140,0.08)">
     <div style="max-width: 1320px; margin: 0 auto; padding: 0 28px; min-height: 56px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 24px">
       <a href="overview.html" style="display: flex; align-items: center; gap: 9px; font-size: 15px; font-weight: 600; letter-spacing: -0.3px; text-decoration: none">
-        <svg width="22" height="22" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7" fill="#09090B"></rect><path d="M5 12h18M8 12v9M14 12v9M20 12v9" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"></path><circle cx="20" cy="6.5" r="2.2" fill="#2F6BFF"></circle></svg>
+        <svg width="22" height="22" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7" fill="#0F172A"></rect><path d="M5 12h18M8 12v9M14 12v9M20 12v9" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"></path><circle cx="20" cy="6.5" r="2.2" fill="#2F6BFF"></circle></svg>
         BrowserPier
       </a>
       <nav aria-label="Main" style="display: flex; gap: 2px; font-size: 14px">
-        <a href="overview.html" aria-current="page" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; background: #F4F4F5; font-weight: 500; text-decoration: none">Overview</a>
-        <a href="profiles.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; color: #52525B; text-decoration: none">Profiles</a>
-        <a href="agents.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; color: #52525B; text-decoration: none">Agents</a>
-        <a href="settings.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; color: #52525B; text-decoration: none">Settings</a>
+        <a href="overview.html" aria-current="page" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; background: #F1F5F9; font-weight: 500; text-decoration: none">Overview</a>
+        <a href="profiles.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; color: #475569; text-decoration: none">Profiles</a>
+        <a href="agents.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; color: #475569; text-decoration: none">Agents</a>
+        <a href="settings.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; color: #475569; text-decoration: none">Settings</a>
       </nav>
       <a href="live-view.html" style="min-height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 10px; border-radius: 999px; background: #FFF1EB; color: #C2410C; font-size: 13px; font-weight: 500; text-decoration: none"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #FF6A3D"></span>1 needs you</a>
       <div style="flex: 1 1 40px"></div>
-      <span style="min-width: 200px; height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-radius: 8px; box-shadow: 0 0 0 1px #E4E4E7; font-size: 13px; color: #71717A">
+      <span style="min-width: 200px; height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; font-size: 13px; color: #64748B">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
         <span style="flex: 1">Search…</span>
-        <span style="font-family: 'Geist Mono', monospace; font-size: 11px; padding: 0 5px; border-radius: 4px; background: #F4F4F5; color: #52525B">⌘K</span>
+        <span style="font-family: 'Geist Mono', monospace; font-size: 11px; padding: 0 5px; border-radius: 4px; background: #F1F5F9; color: #475569">⌘K</span>
       </span>
       <a href="login.html" aria-label="Account and sign out" style="width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, #2F6BFF, #8AA8FF); display: flex; align-items: center; justify-content: center; color: #FFFFFF; font-size: 12px; font-weight: 600; text-decoration: none">Y</a>
     </div>
@@ -46,126 +46,126 @@ a{color:#09090B}a:hover{color:#000000}
     <div style="display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px">
       <div style="display: flex; flex-direction: column; gap: 4px">
         <h1 style="margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -0.8px">Overview</h1>
-        <p style="margin: 0; font-size: 14px; color: #52525B">5 profiles · 3 running · 1 waiting for you</p>
+        <p style="margin: 0; font-size: 14px; color: #475569">5 profiles · 3 running · 1 waiting for you</p>
       </div>
-      <a href="new-profile.html" style="min-height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 14px; background: #09090B; color: #FFFFFF; border-radius: 8px; font-size: 14px; font-weight: 500; text-decoration: none; box-shadow: 0 1px 2px rgba(9,9,11,0.2), inset 0 1px 0 rgba(255,255,255,0.12)">New profile<span aria-hidden="true" style="font-family: 'Geist Mono', monospace; font-size: 11px; padding: 0 5px; border-radius: 4px; background: rgba(255,255,255,0.14)">N</span></a>
+      <a href="new-profile.html" style="min-height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 14px; background: #0F172A; color: #FFFFFF; border-radius: 8px; font-size: 14px; font-weight: 500; text-decoration: none; box-shadow: 0 1px 2px rgba(15,23,42,0.2), inset 0 1px 0 rgba(255,255,255,0.12)">New profile<span aria-hidden="true" style="font-family: 'Geist Mono', monospace; font-size: 11px; padding: 0 5px; border-radius: 4px; background: rgba(255,255,255,0.14)">N</span></a>
     </div>
 
     <div style="display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 14px">
 
-      <section class="g-cell" style="--s: 7; padding: 18px; background: #FFFFFF; border-radius: 16px; box-shadow: 0 0 0 1px #E4E4E7, 0 1px 2px rgba(9,9,11,0.04); display: flex; flex-direction: column; gap: 14px">
+      <section class="g-cell" style="--s: 7; padding: 18px; background: linear-gradient(180deg, #FFF4EE 0, #FFFFFF 140px); border-radius: 16px; box-shadow: 0 0 0 1px rgba(255,106,61,0.30), 0 1px 2px rgba(37,64,140,0.06), 0 12px 30px -12px rgba(255,106,61,0.30); display: flex; flex-direction: column; gap: 14px">
         <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px">
           <span style="display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; background: #FFF1EB; color: #C2410C; font-size: 12px; font-weight: 500"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #FF6A3D"></span>Needs you</span>
           <h2 style="margin: 0; font-size: 16px; font-weight: 600">google</h2>
-          <span style="font-size: 13px; color: #71717A">research-bot · 3 min ago</span>
+          <span style="font-size: 13px; color: #64748B">research-bot · 3 min ago</span>
           <div style="flex: 1"></div>
           <a href="live-view.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 12px; border-radius: 8px; background: #2F6BFF; color: #FFFFFF; font-size: 13px; font-weight: 500; text-decoration: none; box-shadow: 0 1px 2px rgba(47,107,255,0.4), inset 0 1px 0 rgba(255,255,255,0.18)">Take control</a>
         </div>
-        <div aria-hidden="true" style="position: relative; aspect-ratio: 16 / 8; border-radius: 10px; overflow: hidden; background: #F4F5F7; box-shadow: inset 0 0 0 1px #ECECEF">
-          <div style="height: 30px; display: flex; align-items: center; gap: 8px; padding: 0 10px; background: #FFFFFF; border-bottom: 1px solid #ECECEF">
-            <span style="display: flex; gap: 5px"><span style="width: 8px; height: 8px; border-radius: 50%; background: #E4E4E7"></span><span style="width: 8px; height: 8px; border-radius: 50%; background: #E4E4E7"></span><span style="width: 8px; height: 8px; border-radius: 50%; background: #E4E4E7"></span></span>
-            <span style="flex: 1; max-width: 340px; height: 18px; display: flex; align-items: center; padding: 0 8px; border-radius: 5px; background: #F4F4F5; font-family: 'Geist Mono', monospace; font-size: 11px; color: #71717A">accounts.google.com/signin/challenge</span>
+        <div aria-hidden="true" style="position: relative; aspect-ratio: 16 / 8; border-radius: 10px; overflow: hidden; background: #F1F5F9; box-shadow: inset 0 0 0 1px #E8EDF4">
+          <div style="height: 30px; display: flex; align-items: center; gap: 8px; padding: 0 10px; background: #FFFFFF; border-bottom: 1px solid #E8EDF4">
+            <span style="display: flex; gap: 5px"><span style="width: 8px; height: 8px; border-radius: 50%; background: #E2E8F0"></span><span style="width: 8px; height: 8px; border-radius: 50%; background: #E2E8F0"></span><span style="width: 8px; height: 8px; border-radius: 50%; background: #E2E8F0"></span></span>
+            <span style="flex: 1; max-width: 340px; height: 18px; display: flex; align-items: center; padding: 0 8px; border-radius: 5px; background: #F1F5F9; font-family: 'Geist Mono', monospace; font-size: 11px; color: #64748B">accounts.google.com/signin/challenge</span>
           </div>
           <div style="position: absolute; inset: 30px 0 0 0; display: flex; align-items: center; justify-content: center">
-            <div style="width: 44%; padding: 22px; background: #FFFFFF; border-radius: 10px; box-shadow: 0 0 0 1px #E4E4E7, 0 10px 30px rgba(9,9,11,0.06); display: flex; flex-direction: column; gap: 10px">
-              <span style="height: 9px; width: 40%; border-radius: 5px; background: #E4E4E7"></span>
-              <span style="height: 14px; width: 75%; border-radius: 5px; background: #D4D4D8"></span>
-              <span style="display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; margin-top: 4px"><span style="height: 32px; border-radius: 6px; box-shadow: inset 0 0 0 1.5px #2F6BFF, 0 0 0 3px rgba(47,107,255,0.15)"></span><span style="height: 32px; border-radius: 6px; box-shadow: inset 0 0 0 1px #E4E4E7"></span><span style="height: 32px; border-radius: 6px; box-shadow: inset 0 0 0 1px #E4E4E7"></span><span style="height: 32px; border-radius: 6px; box-shadow: inset 0 0 0 1px #E4E4E7"></span><span style="height: 32px; border-radius: 6px; box-shadow: inset 0 0 0 1px #E4E4E7"></span><span style="height: 32px; border-radius: 6px; box-shadow: inset 0 0 0 1px #E4E4E7"></span></span>
+            <div style="width: 44%; padding: 22px; background: #FFFFFF; border-radius: 10px; box-shadow: 0 0 0 1px #E2E8F0, 0 10px 30px rgba(15,23,42,0.06); display: flex; flex-direction: column; gap: 10px">
+              <span style="height: 9px; width: 40%; border-radius: 5px; background: #E2E8F0"></span>
+              <span style="height: 14px; width: 75%; border-radius: 5px; background: #CBD5E1"></span>
+              <span style="display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; margin-top: 4px"><span style="height: 32px; border-radius: 6px; box-shadow: inset 0 0 0 1.5px #2F6BFF, 0 0 0 3px rgba(47,107,255,0.15)"></span><span style="height: 32px; border-radius: 6px; box-shadow: inset 0 0 0 1px #E2E8F0"></span><span style="height: 32px; border-radius: 6px; box-shadow: inset 0 0 0 1px #E2E8F0"></span><span style="height: 32px; border-radius: 6px; box-shadow: inset 0 0 0 1px #E2E8F0"></span><span style="height: 32px; border-radius: 6px; box-shadow: inset 0 0 0 1px #E2E8F0"></span><span style="height: 32px; border-radius: 6px; box-shadow: inset 0 0 0 1px #E2E8F0"></span></span>
             </div>
           </div>
-          <span style="position: absolute; left: 12px; bottom: 12px; max-width: 70%; padding: 8px 12px; border-radius: 10px; background: rgba(9,9,11,0.88); color: #FAFAFA; font-size: 13px; box-shadow: 0 8px 20px rgba(9,9,11,0.2)">“Enter the 2FA code Google just sent to your phone.”</span>
+          <span style="position: absolute; left: 12px; bottom: 12px; max-width: 70%; padding: 8px 12px; border-radius: 10px; background: rgba(15,23,42,0.88); color: #F8FAFC; font-size: 13px; box-shadow: 0 8px 20px rgba(15,23,42,0.2)">“Enter the 2FA code Google just sent to your phone.”</span>
         </div>
         <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; font-size: 13px">
-          <span style="display: flex; flex-direction: column; gap: 2px; color: #71717A">Mode<span style="color: #09090B; font-weight: 500">Visual</span></span>
-          <span style="display: flex; flex-direction: column; gap: 2px; color: #71717A">Memory<span style="color: #09090B; font-weight: 500">1.4 GB</span></span>
-          <span style="display: flex; flex-direction: column; gap: 2px; color: #71717A">Policy<span style="color: #09090B; font-weight: 500">Link + PIN</span></span>
-          <span style="display: flex; flex-direction: column; gap: 2px; color: #71717A">Link expires<span style="color: #09090B; font-weight: 500; font-variant-numeric: tabular-nums">in 12 min</span></span>
+          <span style="display: flex; flex-direction: column; gap: 2px; color: #64748B">Mode<span style="color: #0F172A; font-weight: 500">Visual</span></span>
+          <span style="display: flex; flex-direction: column; gap: 2px; color: #64748B">Memory<span style="color: #0F172A; font-weight: 500">1.4 GB</span></span>
+          <span style="display: flex; flex-direction: column; gap: 2px; color: #64748B">Policy<span style="color: #0F172A; font-weight: 500">Link + PIN</span></span>
+          <span style="display: flex; flex-direction: column; gap: 2px; color: #64748B">Link expires<span style="color: #0F172A; font-weight: 500; font-variant-numeric: tabular-nums">in 12 min</span></span>
         </div>
       </section>
 
-      <section class="g-cell" style="--s: 5; padding: 18px; background: #FFFFFF; border-radius: 16px; box-shadow: 0 0 0 1px #E4E4E7, 0 1px 2px rgba(9,9,11,0.04); display: flex; flex-direction: column; gap: 16px">
-        <div style="display: flex; justify-content: space-between; align-items: center"><h2 style="margin: 0; font-size: 14px; font-weight: 500; color: #52525B">Memory</h2><a href="settings.html" style="font-size: 12px; color: #71717A; text-decoration: none">limit 70% · 11.2 GB</a></div>
-        <div style="display: flex; align-items: baseline; gap: 8px"><span style="font-size: 48px; line-height: 1; font-weight: 600; letter-spacing: -2px">7.1</span><span style="font-size: 16px; color: #71717A">/ 16 GB</span></div>
+      <section class="g-cell" style="--s: 5; padding: 18px; background: #FFFFFF; border-radius: 16px; box-shadow: 0 0 0 1px rgba(37,64,140,0.07), 0 1px 2px rgba(37,64,140,0.06), 0 10px 28px -12px rgba(37,64,140,0.20); display: flex; flex-direction: column; gap: 16px">
+        <div style="display: flex; justify-content: space-between; align-items: center"><h2 style="margin: 0; font-size: 14px; font-weight: 500; color: #475569">Memory</h2><a href="settings.html" style="font-size: 12px; color: #64748B; text-decoration: none">limit 70% · 11.2 GB</a></div>
+        <div style="display: flex; align-items: baseline; gap: 8px"><span style="font-size: 48px; line-height: 1; font-weight: 600; letter-spacing: -2px">7.1</span><span style="font-size: 16px; color: #64748B">/ 16 GB</span></div>
         <div aria-hidden="true" style="display: flex; gap: 3px; height: 10px">
-          <span style="flex: 14; border-radius: 3px; background: #FF6A3D"></span><span style="flex: 9; border-radius: 3px; background: #2F6BFF"></span><span style="flex: 6; border-radius: 3px; background: #8AA8FF"></span><span style="flex: 42; border-radius: 3px; background: #D4D4D8"></span><span style="flex: 89; border-radius: 3px; background: #F4F4F5; box-shadow: inset 0 0 0 1px #E4E4E7"></span>
+          <span style="flex: 14; border-radius: 3px; background: #FF6A3D"></span><span style="flex: 9; border-radius: 3px; background: #2F6BFF"></span><span style="flex: 6; border-radius: 3px; background: #8AA8FF"></span><span style="flex: 42; border-radius: 3px; background: #CBD5E1"></span><span style="flex: 89; border-radius: 3px; background: #F1F5F9; box-shadow: inset 0 0 0 1px #E2E8F0"></span>
         </div>
         <ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 9px; font-size: 13px">
           <sc-for list="{{mem}}" as="m" hint-placeholder-count="5">
             <li style="display: flex; align-items: center; gap: 10px">
               <span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 2px; background: {{m.c}}; box-shadow: {{m.ring}}"></span>
-              <span style="flex: 1; color: #3F3F46">{{m.k}}</span>
-              <span style="color: #09090B; font-variant-numeric: tabular-nums">{{m.v}}</span>
+              <span style="flex: 1; color: #334155">{{m.k}}</span>
+              <span style="color: #0F172A; font-variant-numeric: tabular-nums">{{m.v}}</span>
             </li>
           </sc-for>
         </ul>
-        <p style="margin: auto 0 0; padding-top: 12px; border-top: 1px solid #F0F0F2; font-size: 13px; color: #52525B">Room for about <span style="color: #09090B; font-weight: 500">4 more</span> browsers before idle ones are stopped.</p>
+        <p style="margin: auto 0 0; padding-top: 12px; border-top: 1px solid #EEF2F7; font-size: 13px; color: #475569">Room for about <span style="color: #0F172A; font-weight: 500">4 more</span> browsers before idle ones are stopped.</p>
       </section>
 
-      <section class="g-cell" style="--s: 5; padding: 18px; background: #FFFFFF; border-radius: 16px; box-shadow: 0 0 0 1px #E4E4E7, 0 1px 2px rgba(9,9,11,0.04); display: flex; flex-direction: column; gap: 10px">
-        <div style="display: flex; justify-content: space-between; align-items: center"><h2 style="margin: 0; font-size: 14px; font-weight: 500; color: #52525B">Profiles</h2><a href="profiles.html" style="font-size: 13px; color: #1D4ED8; text-decoration: none">View all →</a></div>
+      <section class="g-cell" style="--s: 5; padding: 18px; background: #FFFFFF; border-radius: 16px; box-shadow: 0 0 0 1px rgba(37,64,140,0.07), 0 1px 2px rgba(37,64,140,0.06), 0 10px 28px -12px rgba(37,64,140,0.20); display: flex; flex-direction: column; gap: 10px">
+        <div style="display: flex; justify-content: space-between; align-items: center"><h2 style="margin: 0; font-size: 14px; font-weight: 500; color: #475569">Profiles</h2><a href="profiles.html" style="font-size: 13px; color: #1D4ED8; text-decoration: none">View all →</a></div>
         <ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column">
           <sc-for list="{{fleet}}" as="f" hint-placeholder-count="5">
             <li style="border-top: {{f.rule}}"><a href="{{f.href}}" style="min-height: 48px; display: flex; align-items: center; gap: 12px; text-decoration: none">
-              <span aria-hidden="true" style="width: 28px; height: 28px; border-radius: 7px; background: #F4F4F5; box-shadow: inset 0 0 0 1px #E4E4E7; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: #3F3F46">{{f.i}}</span>
+              <span aria-hidden="true" style="width: 28px; height: 28px; border-radius: 7px; background: #F1F5F9; box-shadow: inset 0 0 0 1px #E2E8F0; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: #334155">{{f.i}}</span>
               <span style="flex: 1; font-size: 14px; font-weight: 500">{{f.name}}</span>
               <span style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: {{f.fg}}"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{f.dot}}"></span>{{f.status}}</span>
-              <span style="width: 56px; text-align: right; font-size: 13px; color: #52525B; font-variant-numeric: tabular-nums">{{f.mem}}</span>
+              <span style="width: 56px; text-align: right; font-size: 13px; color: #475569; font-variant-numeric: tabular-nums">{{f.mem}}</span>
             </a></li>
           </sc-for>
         </ul>
       </section>
 
-      <section class="g-cell" style="--s: 4; padding: 18px; background: #FFFFFF; border-radius: 16px; box-shadow: 0 0 0 1px #E4E4E7, 0 1px 2px rgba(9,9,11,0.04); display: flex; flex-direction: column; gap: 12px">
-        <div style="display: flex; justify-content: space-between; align-items: center"><h2 style="margin: 0; font-size: 14px; font-weight: 500; color: #52525B">Browser hours</h2><span style="font-size: 12px; color: #71717A">last 24h</span></div>
-        <div style="display: flex; align-items: baseline; gap: 8px"><span style="font-size: 32px; font-weight: 600; letter-spacing: -1.2px">9.4h</span><span style="font-size: 13px; color: #71717A">peak 3 at once</span></div>
+      <section class="g-cell" style="--s: 4; padding: 18px; background: #FFFFFF; border-radius: 16px; box-shadow: 0 0 0 1px rgba(37,64,140,0.07), 0 1px 2px rgba(37,64,140,0.06), 0 10px 28px -12px rgba(37,64,140,0.20); display: flex; flex-direction: column; gap: 12px">
+        <div style="display: flex; justify-content: space-between; align-items: center"><h2 style="margin: 0; font-size: 14px; font-weight: 500; color: #475569">Browser hours</h2><span style="font-size: 12px; color: #64748B">last 24h</span></div>
+        <div style="display: flex; align-items: baseline; gap: 8px"><span style="font-size: 32px; font-weight: 600; letter-spacing: -1.2px">9.4h</span><span style="font-size: 13px; color: #64748B">peak 3 at once</span></div>
         <svg viewBox="0 0 300 110" role="img" aria-label="Running browsers over the last 24 hours, peaking mid-afternoon" style="width: 100%; height: auto">
           <defs><linearGradient id="g-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2F6BFF" stop-opacity="0.22"></stop><stop offset="1" stop-color="#2F6BFF" stop-opacity="0"></stop></linearGradient></defs>
-          <g stroke="#F0F0F2"><path d="M0 20H300M0 55H300M0 90H300"></path></g>
+          <g stroke="#EEF2F7"><path d="M0 20H300M0 55H300M0 90H300"></path></g>
           <path d="M0 90 L25 88 L50 90 L75 82 L100 70 L125 48 L150 56 L175 34 L200 22 L225 40 L250 30 L275 52 L300 46 L300 90 Z" fill="url(#g-area)"></path>
           <path d="M0 90 L25 88 L50 90 L75 82 L100 70 L125 48 L150 56 L175 34 L200 22 L225 40 L250 30 L275 52 L300 46" fill="none" stroke="#2F6BFF" stroke-width="2" stroke-linejoin="round"></path>
           <circle cx="200" cy="22" r="4" fill="#FFFFFF" stroke="#2F6BFF" stroke-width="2"></circle>
-          <g font-family="Geist, sans-serif" font-size="9" fill="#71717A"><text x="0" y="106">00</text><text x="96" y="106">08</text><text x="196" y="106">16</text><text x="284" y="106">now</text></g>
+          <g font-family="Geist, sans-serif" font-size="9" fill="#64748B"><text x="0" y="106">00</text><text x="96" y="106">08</text><text x="196" y="106">16</text><text x="284" y="106">now</text></g>
         </svg>
       </section>
 
-      <section class="g-cell" style="--s: 3; padding: 18px; background: #09090B; color: #FAFAFA; border-radius: 16px; display: flex; flex-direction: column; gap: 12px">
-        <div role="tablist" aria-label="Connect with" style="display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: #18181B; font-size: 12px">
-          <span role="tab" aria-selected="true" style="flex: 1; text-align: center; padding: 5px 0; border-radius: 6px; background: #27272A">CDP</span>
-          <span role="tab" aria-selected="false" style="flex: 1; text-align: center; padding: 5px 0; color: #A1A1AA">MCP</span>
-          <span role="tab" aria-selected="false" style="flex: 1; text-align: center; padding: 5px 0; color: #A1A1AA">REST</span>
+      <section class="g-cell" style="--s: 3; padding: 18px; background: #0F172A; color: #F8FAFC; border-radius: 16px; display: flex; flex-direction: column; gap: 12px">
+        <div role="tablist" aria-label="Connect with" style="display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: #0F172A; font-size: 12px">
+          <span role="tab" aria-selected="true" style="flex: 1; text-align: center; padding: 5px 0; border-radius: 6px; background: #1E293B">CDP</span>
+          <span role="tab" aria-selected="false" style="flex: 1; text-align: center; padding: 5px 0; color: #94A3B8">MCP</span>
+          <span role="tab" aria-selected="false" style="flex: 1; text-align: center; padding: 5px 0; color: #94A3B8">REST</span>
         </div>
-        <pre style="margin: 0; flex: 1; font-family: 'Geist Mono', monospace; font-size: 12px; line-height: 1.7; color: #D4D4D8; white-space: pre-wrap"><span style="color: #71717A">// playwright</span>
+        <pre style="margin: 0; flex: 1; font-family: 'Geist Mono', monospace; font-size: 12px; line-height: 1.7; color: #CBD5E1; white-space: pre-wrap"><span style="color: #64748B">// playwright</span>
 const b = await chromium
   .connectOverCDP(
   <span style="color: #8AA8FF">"wss://pier.local/cdp/linkedin"</span>,
   { headers: auth })</pre>
-        <a href="agents.html" style="min-height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 8px; background: #FAFAFA; color: #09090B; font-size: 13px; font-weight: 500; text-decoration: none">Quick start →</a>
+        <a href="agents.html" style="min-height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 8px; background: #F8FAFC; color: #0F172A; font-size: 13px; font-weight: 500; text-decoration: none">Quick start →</a>
       </section>
 
-      <section class="g-cell" style="--s: 4; padding: 18px; background: #FFFFFF; border-radius: 16px; box-shadow: 0 0 0 1px #E4E4E7, 0 1px 2px rgba(9,9,11,0.04); display: flex; flex-direction: column; gap: 10px">
-        <div style="display: flex; justify-content: space-between; align-items: center"><h2 style="margin: 0; font-size: 14px; font-weight: 500; color: #52525B">Agents</h2><a href="agents.html" style="font-size: 13px; color: #1D4ED8; text-decoration: none">Manage →</a></div>
+      <section class="g-cell" style="--s: 4; padding: 18px; background: #FFFFFF; border-radius: 16px; box-shadow: 0 0 0 1px rgba(37,64,140,0.07), 0 1px 2px rgba(37,64,140,0.06), 0 10px 28px -12px rgba(37,64,140,0.20); display: flex; flex-direction: column; gap: 10px">
+        <div style="display: flex; justify-content: space-between; align-items: center"><h2 style="margin: 0; font-size: 14px; font-weight: 500; color: #475569">Agents</h2><a href="agents.html" style="font-size: 13px; color: #1D4ED8; text-decoration: none">Manage →</a></div>
         <ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px">
           <sc-for list="{{agents}}" as="a" hint-placeholder-count="3">
             <li style="display: flex; align-items: center; gap: 10px">
               <span aria-hidden="true" style="width: 28px; height: 28px; border-radius: 50%; background: {{a.bg}}; display: flex; align-items: center; justify-content: center; color: #FFFFFF; font-size: 11px; font-weight: 600">{{a.i}}</span>
-              <span style="flex: 1; display: flex; flex-direction: column"><span style="font-size: 14px; font-weight: 500">{{a.name}}</span><span style="font-size: 12px; color: #71717A">{{a.scope}}</span></span>
-              <span style="font-size: 12px; color: #71717A">{{a.used}}</span>
+              <span style="flex: 1; display: flex; flex-direction: column"><span style="font-size: 14px; font-weight: 500">{{a.name}}</span><span style="font-size: 12px; color: #64748B">{{a.scope}}</span></span>
+              <span style="font-size: 12px; color: #64748B">{{a.used}}</span>
             </li>
           </sc-for>
         </ul>
       </section>
 
-      <section class="g-cell" style="--s: 4; padding: 18px; background: #FFFFFF; border-radius: 16px; box-shadow: 0 0 0 1px #E4E4E7, 0 1px 2px rgba(9,9,11,0.04); display: flex; flex-direction: column; gap: 12px">
-        <div style="display: flex; justify-content: space-between; align-items: center"><h2 style="margin: 0; font-size: 14px; font-weight: 500; color: #52525B">Handoffs <span style="font-weight: 400; color: #71717A">· this week</span></h2><a href="agents.html" style="font-size: 13px; color: #1D4ED8; text-decoration: none">Links →</a></div>
+      <section class="g-cell" style="--s: 4; padding: 18px; background: #FFFFFF; border-radius: 16px; box-shadow: 0 0 0 1px rgba(37,64,140,0.07), 0 1px 2px rgba(37,64,140,0.06), 0 10px 28px -12px rgba(37,64,140,0.20); display: flex; flex-direction: column; gap: 12px">
+        <div style="display: flex; justify-content: space-between; align-items: center"><h2 style="margin: 0; font-size: 14px; font-weight: 500; color: #475569">Handoffs <span style="font-weight: 400; color: #64748B">· this week</span></h2><a href="agents.html" style="font-size: 13px; color: #1D4ED8; text-decoration: none">Links →</a></div>
         <div style="display: flex; align-items: flex-end; justify-content: space-between; gap: 16px">
-          <span style="display: flex; flex-direction: column; gap: 4px"><span style="font-size: 32px; font-weight: 600; letter-spacing: -1.2px">12</span><span style="font-size: 13px; color: #52525B">48s median to hand back</span></span>
-          <svg width="150" height="64" viewBox="0 0 150 64" role="img" aria-label="Handoffs per day, highest on Saturday"><g fill="#2F6BFF"><rect x="0" y="40" width="16" height="16" rx="3" opacity="0.3"></rect><rect x="22" y="30" width="16" height="26" rx="3" opacity="0.4"></rect><rect x="44" y="44" width="16" height="12" rx="3" opacity="0.3"></rect><rect x="66" y="22" width="16" height="34" rx="3" opacity="0.55"></rect><rect x="88" y="32" width="16" height="24" rx="3" opacity="0.4"></rect><rect x="110" y="8" width="16" height="48" rx="3"></rect><rect x="132" y="26" width="16" height="30" rx="3" opacity="0.5"></rect></g><g font-family="Geist, sans-serif" font-size="8" fill="#71717A"><text x="5" y="64">M</text><text x="27" y="64">T</text><text x="49" y="64">W</text><text x="71" y="64">T</text><text x="94" y="64">F</text><text x="115" y="64">S</text><text x="137" y="64">S</text></g></svg>
+          <span style="display: flex; flex-direction: column; gap: 4px"><span style="font-size: 32px; font-weight: 600; letter-spacing: -1.2px">12</span><span style="font-size: 13px; color: #475569">48s median to hand back</span></span>
+          <svg width="150" height="64" viewBox="0 0 150 64" role="img" aria-label="Handoffs per day, highest on Saturday"><g fill="#2F6BFF"><rect x="0" y="40" width="16" height="16" rx="3" opacity="0.3"></rect><rect x="22" y="30" width="16" height="26" rx="3" opacity="0.4"></rect><rect x="44" y="44" width="16" height="12" rx="3" opacity="0.3"></rect><rect x="66" y="22" width="16" height="34" rx="3" opacity="0.55"></rect><rect x="88" y="32" width="16" height="24" rx="3" opacity="0.4"></rect><rect x="110" y="8" width="16" height="48" rx="3"></rect><rect x="132" y="26" width="16" height="30" rx="3" opacity="0.5"></rect></g><g font-family="Geist, sans-serif" font-size="8" fill="#64748B"><text x="5" y="64">M</text><text x="27" y="64">T</text><text x="49" y="64">W</text><text x="71" y="64">T</text><text x="94" y="64">F</text><text x="115" y="64">S</text><text x="137" y="64">S</text></g></svg>
         </div>
       </section>
 
-      <a href="new-profile.html" class="g-cell" style="--s: 4; min-height: 150px; box-sizing: border-box; padding: 18px; border-radius: 16px; border: 1.5px dashed #D4D4D8; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-decoration: none; color: #52525B">
-        <span aria-hidden="true" style="width: 36px; height: 36px; border-radius: 10px; background: #FFFFFF; box-shadow: 0 0 0 1px #E4E4E7, 0 1px 2px rgba(9,9,11,0.05); display: flex; align-items: center; justify-content: center; font-size: 18px; color: #09090B">+</span>
-        <span style="font-size: 14px; font-weight: 500; color: #09090B">New profile</span>
+      <a href="new-profile.html" class="g-cell" style="--s: 4; min-height: 150px; box-sizing: border-box; padding: 18px; border-radius: 16px; border: 1.5px dashed rgba(37,64,140,0.25); background: rgba(255,255,255,0.55); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-decoration: none; color: #475569">
+        <span aria-hidden="true" style="width: 36px; height: 36px; border-radius: 10px; background: #FFFFFF; box-shadow: 0 0 0 1px #E2E8F0, 0 1px 2px rgba(15,23,42,0.05); display: flex; align-items: center; justify-content: center; font-size: 18px; color: #0F172A">+</span>
+        <span style="font-size: 14px; font-weight: 500; color: #0F172A">New profile</span>
         <span style="font-size: 13px">Log in once, agents reuse it</span>
       </a>
     </div>
@@ -181,20 +181,20 @@ class Component extends DCLogic {
         { k: 'google', v: '1.4 GB', c: '#FF6A3D', ring: none },
         { k: 'linkedin', v: '0.9 GB', c: '#2F6BFF', ring: none },
         { k: 'github', v: '0.6 GB', c: '#8AA8FF', ring: none },
-        { k: 'System & orchestrator', v: '4.2 GB', c: '#D4D4D8', ring: none },
-        { k: 'Free', v: '8.9 GB', c: '#F4F4F5', ring: 'inset 0 0 0 1px #D4D4D8' }
+        { k: 'System & orchestrator', v: '4.2 GB', c: '#CBD5E1', ring: none },
+        { k: 'Free', v: '8.9 GB', c: '#F1F5F9', ring: 'inset 0 0 0 1px #CBD5E1' }
       ],
       fleet: [
         { i: 'G', name: 'google', status: 'Needs you', fg: '#C2410C', dot: '#FF6A3D', mem: '1.4 GB' },
         { i: 'L', name: 'linkedin', status: 'Running', fg: '#15803D', dot: '#16A34A', mem: '0.9 GB' },
         { i: 'G', name: 'github', status: 'Starting', fg: '#1D4ED8', dot: '#2F6BFF', mem: '0.6 GB' },
         { i: 'N', name: 'notion', status: 'Failed', fg: '#B91C1C', dot: '#DC2626', mem: '—' },
-        { i: 'X', name: 'x-com', status: 'Stopped', fg: '#52525B', dot: '#A1A1AA', mem: '—' }
-      ].map((f, i) => ({ ...f, rule: i === 0 ? '0' : '1px solid #F0F0F2', href: i === 0 ? 'LiveView.dc.html' : 'Sessions.dc.html' })),
+        { i: 'X', name: 'x-com', status: 'Stopped', fg: '#475569', dot: '#94A3B8', mem: '—' }
+      ].map((f, i) => ({ ...f, rule: i === 0 ? '0' : '1px solid #EEF2F7', href: i === 0 ? 'LiveView.dc.html' : 'Sessions.dc.html' })),
       agents: [
         { i: 'RB', name: 'research-bot', scope: 'all profiles', used: '2m ago', bg: '#2F6BFF' },
-        { i: 'LP', name: 'linkedin-poster', scope: 'linkedin', used: '3m ago', bg: '#09090B' },
-        { i: 'CC', name: 'claude-code', scope: 'github, notion', used: 'now', bg: '#71717A' }
+        { i: 'LP', name: 'linkedin-poster', scope: 'linkedin', used: '3m ago', bg: '#0F172A' },
+        { i: 'CC', name: 'claude-code', scope: 'github, notion', used: 'now', bg: '#64748B' }
       ]
     };
   }
