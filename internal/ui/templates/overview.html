@@ -51,11 +51,12 @@
 {{define "memory-cell"}}  <section class="cell {{.Span}}" aria-labelledby="mem-title">
     <div class="cell-head"><h2 class="cell-title" id="mem-title">Memory</h2>{{if .Mem.Limit}}<span class="caption num">limit {{gb .Mem.Limit}}</span>{{end}}</div>
     <div class="big-num num">{{gb .Mem.Used}}{{if .Mem.Host}}<small>of {{gb .Mem.Host}}</small>{{end}}</div>
-    <div class="bar" role="img" aria-label="Memory used by each browser">{{range .Mem.Parts}}<i style="width:{{pct .Bytes $.Mem.Host}}%;background:{{.Color}}"></i>{{end}}</div>
-    {{if .Mem.Parts}}
-    <ul class="legend">{{range .Mem.Parts}}<li><span style="background:{{.Color}}"></span><span>{{.Name}}</span><span class="num">{{gb .Bytes}}</span></li>{{end}}</ul>
-    {{else}}<p class="small muted" style="margin:0">No browser is running.</p>{{end}}
-    {{if ge .Mem.Room 0}}{{if .Mem.Limit}}<p class="small" style="margin:14px 0 0;padding-top:12px;border-top:1px solid var(--line-soft)">Room for about <b>{{.Mem.Room}} more</b> before idle browsers are stopped.</p>{{end}}{{end}}
+    <div class="bar" role="img" aria-label="Memory used by each browser{{if .Mem.Others}}, and by other apps{{end}}">{{range .Mem.Parts}}<i style="width:{{pct .Bytes $.Mem.Host}}%;background:{{.Color}}"></i>{{end}}{{if .Mem.Others}}<i class="others" style="width:{{pct .Mem.Others .Mem.Host}}%"></i>{{end}}</div>
+    {{if not .Mem.Parts}}<p class="small muted" style="margin:0">No browser is running.</p>{{end}}
+    {{if or .Mem.Parts .Mem.Others}}
+    <ul class="legend">{{range .Mem.Parts}}<li><span style="background:{{.Color}}"></span><span>{{.Name}}</span><span class="num">{{gb .Bytes}}</span></li>{{end}}{{if .Mem.Others}}<li class="others"><span></span><span>Other apps</span><span class="num">{{gb .Mem.Others}}</span></li>{{end}}</ul>
+    {{end}}
+    {{if ge .Mem.Room 0}}{{if .Mem.Limit}}<p class="small" style="margin:14px 0 0;padding-top:12px;border-top:1px solid var(--line-soft)">Room for about <b>{{.Mem.Room}} more</b> {{if .Mem.FreeBound}}in what other apps leave free.{{else}}before idle browsers are stopped.{{end}}</p>{{end}}{{end}}
   </section>
 {{end}}
 {{define "profiles-cell"}}  <section class="cell {{.Span}}" aria-labelledby="prof-title">

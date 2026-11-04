@@ -47,12 +47,18 @@ var policyChoices = []policyChoice{
 // AutoStopChoices are the idle timeouts offered, in minutes; 0 is never.
 func (settingsData) AutoStopChoices() []int { return profiles.AutoStopChoices }
 
-// Fits is how many browsers the limit holds at about 1 GB each.
-func (d settingsData) Fits() int64 {
+// Fits is how many browsers the limit holds at about 1 GB each, counting
+// only memory other apps leave: what the host has free plus what the
+// browsers already use.
+func (d settingsData) Fits() int {
 	if d.Mem.Each <= 0 {
 		return 0
 	}
-	return d.Mem.Host * int64(d.RAMPercent) / 100 / d.Mem.Each
+	limit := d.Mem.Host * int64(d.RAMPercent) / 100
+	if d.Mem.Free > 0 {
+		limit = min(limit, d.Mem.Usable())
+	}
+	return int(limit / d.Mem.Each)
 }
 
 func (u *UI) settingsData(r *http.Request) (settingsData, error) {

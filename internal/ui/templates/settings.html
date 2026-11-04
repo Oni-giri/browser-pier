@@ -39,9 +39,9 @@
         <output class="big-num num" id="ram-out" for="ram" style="font-size:34px">{{.RAMPercent}}%</output>
       </div>
       <label class="sr-only" for="ram">Memory limit, percent of host memory</label>
-      <input id="ram" name="ram" type="range" min="10" max="100" step="5" value="{{.RAMPercent}}" form="defaults" data-host="{{.Mem.Host}}" data-each="{{.Mem.Each}}"{{if .RAMFromEnv}} disabled{{end}}>
+      <input id="ram" name="ram" type="range" min="10" max="100" step="5" value="{{.RAMPercent}}" form="defaults" data-host="{{.Mem.Host}}" data-each="{{.Mem.Each}}"{{if .Mem.Free}} data-room="{{.Mem.Usable}}"{{end}}{{if .RAMFromEnv}} disabled{{end}}>
       <div class="meter" aria-hidden="true"><i style="width:{{pct .Mem.Used .Mem.Host}}%"></i><b id="ram-mark" style="left:{{.RAMPercent}}%"></b></div>
-      <p class="small num" style="margin:0;color:var(--ink-2)">Limit <b id="ram-gb">{{gb (ramBytes .Mem.Host .RAMPercent)}}</b>{{if .Mem.Host}} of {{gb .Mem.Host}}{{end}} · In use now <b>{{gb .Mem.Used}}</b> · Fits about <b id="ram-fits">{{.Fits}}</b> browsers</p>
+      <p class="small num" style="margin:0;color:var(--ink-2)">Limit <b id="ram-gb">{{gb (ramBytes .Mem.Host .RAMPercent)}}</b>{{if .Mem.Host}} of {{gb .Mem.Host}}{{end}} · In use now <b>{{gb .Mem.Used}}</b>{{if .Mem.Others}} · Other apps <b>{{gb .Mem.Others}}</b>{{end}} · Fits about <b id="ram-fits">{{.Fits}}</b> <span id="ram-fits-word">{{plural .Fits "browser" "browsers"}}</span></p>
       {{if .RAMFromEnv}}<p class="notice" style="margin:12px 0 0">Set by <code>BROWSERPIER_RAM_LIMIT_PERCENT</code>. Remove it from the environment to change the limit here.</p>{{end}}
     </section>
 

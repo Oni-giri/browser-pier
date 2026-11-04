@@ -35,6 +35,7 @@ type fixture struct {
 	srv      *httptest.Server
 	client   *http.Client
 	ram      int
+	free     int64 // what the host has available, for HostFree
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -75,7 +76,7 @@ func newFixture(t *testing.T) *fixture {
 	tokens := auth.NewTokens(d)
 	web := auth.NewWeb(admin, tokens, log, auth.WebOptions{CookieSecure: "auto"})
 	f := &fixture{t: t, m: m, handoffs: handoff.New(d, m, log), tokens: tokens, settings: settings.New(d)}
-	app := New(m, web, f.handoffs, f.settings, log, Options{HostMemory: 16 << 30, SetRAMLimit: func(p int) { f.ram = p }})
+	app := New(m, web, f.handoffs, f.settings, log, Options{HostMemory: 16 << 30, HostFree: func() int64 { return f.free }, SetRAMLimit: func(p int) { f.ram = p }})
 	mux := http.NewServeMux()
 	web.Register(mux)
 	app.Register(mux)
@@ -477,5 +478,41 @@ func TestExportAndImport(t *testing.T) {
 	left, _ := filepath.Glob(filepath.Join(f.m.Layout().DataDir, "profiles", sessions.ImportPrefix+"*"))
 	if len(left) != 0 {
 		t.Fatalf("failed imports left folders: %v", left)
+	}
+}
+
+func TestMemoryCountsOtherApps(t *testing.T) {
+	f := newFixture(t)
+	// Nothing known about other apps: the limit alone, 50% of 16 GB.
+	want(t, f.get("/settings"), http.StatusOK, `<b id="ram-fits">8</b>`)
+	if strings.Contains(f.get("/").body, "Other apps") {
+		t.Fatal("other apps shown without knowing the host's free memory")
+	}
+	// Other apps leave 3 GB: three browsers fit, whatever the limit says.
+	f.free = 3 << 30
+	want(t, f.get("/settings"), http.StatusOK, `<b id="ram-fits">3</b>`, "Other apps <b>13.0 GB</b>", `data-room="3221225472"`)
+	want(t, f.get("/"), http.StatusOK, "Other apps", `class="others"`)
+	// Plenty free: the limit is what counts again.
+	f.free = 15 << 30
+	want(t, f.get("/settings"), http.StatusOK, `<b id="ram-fits">8</b>`)
+}
+
+func TestMemoryRoom(t *testing.T) {
+	gb := int64(1 << 30)
+	for _, c := range []struct {
+		limit, used, free int64
+		room              int
+		freeBound         bool
+	}{
+		{limit: 10 * gb, used: 2 * gb, room: 8},                                // free unknown
+		{limit: 10 * gb, used: 2 * gb, free: 20 * gb, room: 8},                 // the limit holds it
+		{limit: 10 * gb, used: 2 * gb, free: 3 * gb, room: 3, freeBound: true}, // other apps do
+		{free: 5 * gb, room: 5, freeBound: true},                               // no limit
+		{room: -1},
+	} {
+		mv := memoryView{MemoryReport: sessions.MemoryReport{Limit: c.limit, Used: c.used, Each: gb}, Free: c.free}
+		if mv.Room() != c.room || mv.FreeBound() != c.freeBound {
+			t.Errorf("%+v: room %d, free-bound %v", c, mv.Room(), mv.FreeBound())
+		}
 	}
 }

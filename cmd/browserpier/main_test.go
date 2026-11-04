@@ -175,12 +175,15 @@ func TestInstanceIDIsKept(t *testing.T) {
 	}
 }
 
-func TestParseMemTotal(t *testing.T) {
-	n, err := parseMemTotal("MemTotal:       16303512 kB\nMemFree:  1 kB\n")
+func TestParseMeminfo(t *testing.T) {
+	n, err := parseMeminfo("MemTotal:       16303512 kB\nMemFree:  1 kB\n", "MemTotal")
 	if err != nil || n != 16303512*1024 {
-		t.Fatalf("parseMemTotal = %d, %v", n, err)
+		t.Fatalf("parseMeminfo = %d, %v", n, err)
 	}
-	if _, err := parseMemTotal("nothing"); err == nil {
+	if n, err := parseMeminfo("MemTotal: 1 kB\nMemAvailable:  2048 kB\n", "MemAvailable"); n != 2<<20 || err != nil {
+		t.Fatalf("MemAvailable = %d, %v", n, err)
+	}
+	if _, err := parseMeminfo("nothing", "MemTotal"); err == nil {
 		t.Fatal("want an error")
 	}
 	if n, err := hostMemory(); err != nil || n <= 0 {
