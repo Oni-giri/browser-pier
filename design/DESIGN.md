@@ -73,6 +73,26 @@ The header is frosted: `rgba(255,255,255,0.72)` with `backdrop-filter: blur(14px
 
 **Layout:** content max width 1320px with 28px side padding. Pages use a 12-column bento grid with a 14px gap; cells span with `grid-column: span N` and go full width under 960px.
 
+## Blue and orange
+
+The whole UI rests on one split: **blue is the agents' side, orange is you.**
+
+- **Orange means "a human is needed", and nothing else.** Needs-you statuses, the header chip, the emphasis card. Profile icons, charts and illustrations never use orange.
+- **Blue is the machine and your action on it.** The page, links, focus, and "Take control". "Take control" and "Unlock and take control" carry a blue glow (`0 8px 22px -6px rgba(47,107,255,0.6)`), so orange (the request) → blue (your answer) reads as one move.
+- **The page light follows the human.** When at least one profile needs you, the page gets a warm light near where you're needed (`radial-gradient(760px 420px at 24% -150px, rgba(255,106,61,0.20), transparent 70%)` on app pages, behind the phone on the landing page) alongside the agents' blue light. With nothing waiting, both lights are blue (the cyan right-hand light from the base recipe).
+- **The emphasis surface is warm frosted glass:** `linear-gradient(180deg, rgba(255,234,223,0.94) 0, rgba(255,247,243,0.9) 120px, rgba(255,255,255,0.9) 240px)` with `backdrop-filter: blur(16px) saturate(140%)`, ring `rgba(255,106,61,0.38)` and glow `0 22px 48px -20px rgba(255,106,61,0.55)`. One per screen.
+- **The header chip** is frosted orange (`rgba(255,106,61,0.12)` + blur, inset ring `rgba(255,106,61,0.35)`, soft orange glow) with a slowly pulsing dot. No pulse under `prefers-reduced-motion`.
+
+## Profile icons
+
+Every profile shows an icon next to its name (Overview list 28px, Profiles cards 36px, table 28px).
+
+- **Source:** the site's own favicon, read from the favicon cache Chrome keeps inside the profile (`Favicons` SQLite database), for the profile's main site. Local, no network request, always the real icon. Read it while the browser is stopped, or from a copy.
+- **Fallback:** an icon and colour chosen in New profile (pre-filled from the main site's category), on a tile tinted in that colour.
+- **Tile:** rounded (28% of the size), tint background with a ring in the icon's own hue at ~18% alpha; glyph at 57% of the tile.
+- Icon colours come from the cool range (blue, sky, violet, teal, slate). Never orange.
+- The mockups use generic stand-in glyphs (envelope, briefcase, code, document, speech bubble); the real app shows favicons.
+
 ## Rules
 
 1. **One header on every app page:** logo (→ Overview), nav (Overview · Profiles · Agents · Settings), the orange "N needs you" chip (→ the waiting profile's live view; hidden at zero), search (⌘K), and an avatar linking to account and sign-out.
@@ -91,9 +111,11 @@ The header is frosted: `rgba(255,255,255,0.72)` with `backdrop-filter: blur(14px
 - Header (with the needs-you chip)
 - Cell (card) with title row and optional "→" link
 - Buttons: primary, secondary, blue (take control), destructive
+- Profile icon tile (favicon or fallback)
 - Status pill
 - Segmented control (filters, mode, policy)
 - Profile card with live preview, plus the table row variant
 - Centred modal and alert dialog
+- Frosted needs-you chip and warm emphasis card
 - Toast (bottom centre, `ink`) and unsaved-changes bar (Settings)
 - Code block (dark, with tabs and a Copy button)
