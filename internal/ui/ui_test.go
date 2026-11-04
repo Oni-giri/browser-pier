@@ -189,7 +189,13 @@ func TestEveryPageRenders(t *testing.T) {
 	want(t, f.get("/profiles/new"), http.StatusOK, "Create profile")
 	want(t, f.get("/profiles/new", "HX-Request", "true"), http.StatusOK, "<dialog data-open")
 	want(t, f.get("/profiles/google"), http.StatusOK, `id="stage"`, "/static/live.js", "Enter the 2FA code", "Done, hand back", "Paused, waiting for you")
-	want(t, f.get("/profiles/github"), http.StatusOK, "Start browser", "This browser is stopped")
+	want(t, f.get("/profiles/github"), http.StatusOK, "Start browser", "This browser is stopped",
+		`data-dialog="export-dialog" data-name="github"`, `data-dialog="delete-dialog" data-name="github"`)
+	if r := f.get("/profiles/google"); !strings.Contains(r.body, `href="/profiles/google/edit"`) || !strings.Contains(r.body, `data-dialog="delete-dialog"`) {
+		t.Fatal("a running profile's page has no menu with Edit settings and Delete")
+	} else if strings.Contains(r.body, "Copy CDP URL") {
+		t.Fatal("the profile page's menu repeats its Connection card")
+	}
 	want(t, f.get("/profiles/google/side"), http.StatusOK, "Agent log")
 	want(t, f.get("/profiles/github/edit"), http.StatusOK, "Profile settings", "Time zone")
 	want(t, f.get("/agents"), http.StatusOK, "research-bot", "bp_live_…", "Quick start")
