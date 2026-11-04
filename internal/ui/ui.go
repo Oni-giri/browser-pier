@@ -306,7 +306,8 @@ var funcs = template.FuncMap{
 	"lastUsed":    lastUsed,
 	"minutesOf":   func(d time.Duration) int { return int(d / time.Minute) },
 	"screenLabel": func(s string) string { return strings.Replace(s, "x", " × ", 1) },
-	"menuData":    func(v profileView, up bool) menuView { return menuView{v, up} },
+	"menuData":    func(v profileView, up bool) menuView { return menuView{profileView: v, Up: up} },
+	"pageMenu":    func(d profilePageData) menuView { return menuView{profileView: d.profileView, Page: true} },
 	"span":        func(d overviewData, span string) spanned { return spanned{d, span} },
 	"list":        func(s ...string) []string { return s },
 	"ramBytes":    func(host int64, percent int) int64 { return host * int64(percent) / 100 },
@@ -337,6 +338,10 @@ var funcs = template.FuncMap{
 type menuView struct {
 	profileView
 	Up bool
+	// Page: the menu on the profile's own page, which has its own Stop
+	// button, Connection card and, while stopped, Edit settings button, so
+	// it leaves those out.
+	Page bool
 }
 
 func formatBytes(n int64) string {

@@ -20,9 +20,11 @@
 <details class="menu">
   <summary class="btn icon" aria-label="More for {{.Name}}">⋯</summary>
   <div class="menu-list{{if .Up}} up{{end}}">
+    {{- if not .Page}}
     <button type="button" data-copy="{{.CDPURL}}" data-copied="Copied CDP URL for {{.Name}}">Copy CDP URL</button>
     {{if .Live}}<button type="button" data-dialog="stop-dialog" data-name="{{.Name}}" data-agent="{{if .Session.InUseBy}}{{join .Session.InUseBy ", "}}{{end}}">Stop browser</button>{{else}}<button type="button" disabled>Stop browser</button>{{end}}
-    <a href="/profiles/{{.Name}}/edit">Edit settings</a>
+    {{- end}}
+    {{if or (not .Page) .Live}}<a href="/profiles/{{.Name}}/edit">Edit settings</a>{{end}}
     {{if .Live}}<button type="button" disabled title="Stop the browser first">Export profile…</button>{{else}}<button type="button" data-dialog="export-dialog" data-name="{{.Name}}">Export profile…</button>{{end}}
     <hr>
     <button type="button" class="danger" data-dialog="delete-dialog" data-name="{{.Name}}">Delete profile…</button>
