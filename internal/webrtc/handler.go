@@ -16,10 +16,13 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
+	"github.com/Oni-giri/browser-pier/internal/static"
 )
 
 //go:embed live.js
 var liveJS []byte
+
+var liveTag = static.Tag(liveJS)
 
 // Handler serves the live view to the signed-in admin: the page, its
 // status, and the WebRTC offer.
@@ -41,10 +44,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("GET /live/{profile}", admin(h.page))
 	mux.Handle("GET /live/{profile}/status", admin(h.status))
 	mux.Handle("POST /live/{profile}/offer", admin(h.offer))
-	mux.HandleFunc("GET /static/live.js", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /static/live.js", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-cache")
-		_, _ = w.Write(liveJS)
+		static.Header(w, r, liveTag)
+		http.ServeContent(w, r, "live.js", time.Time{}, bytes.NewReader(liveJS))
 	})
 }
 

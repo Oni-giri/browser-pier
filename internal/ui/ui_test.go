@@ -205,6 +205,18 @@ func TestEveryPageRenders(t *testing.T) {
 	r := f.get("/static/app.css")
 	want(t, r, http.StatusOK, "--blue:#2F6BFF")
 	want(t, f.get("/static/htmx.min.js"), http.StatusOK)
+
+	// Pages link their CSS and scripts by version, which browsers keep.
+	link := regexp.MustCompile(`href="(/static/app\.css\?v=[0-9a-f]{12})"`).FindStringSubmatch(f.get("/").body)
+	if link == nil {
+		t.Fatal("the page doesn't link app.css by version")
+	}
+	if r := f.get(link[1]); r.code != http.StatusOK || r.header.Get("Cache-Control") != "public, max-age=31536000, immutable" {
+		t.Fatalf("versioned app.css: %d %q", r.code, r.header.Get("Cache-Control"))
+	}
+	if r := f.get("/static/app.css", "If-None-Match", f.get("/static/app.css").header.Get("ETag")); r.code != http.StatusNotModified {
+		t.Fatalf("revalidating app.css: %d", r.code)
+	}
 }
 
 func TestSignedOutIsSentToLogin(t *testing.T) {

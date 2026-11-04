@@ -1,6 +1,7 @@
 package handoff
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
@@ -16,6 +17,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
+	"github.com/Oni-giri/browser-pier/internal/static"
 	"github.com/Oni-giri/browser-pier/internal/webrtc"
 )
 
@@ -24,6 +26,8 @@ var pageHTML string
 
 //go:embed handoff.js
 var pageJS []byte
+
+var pageJSTag = static.Tag(pageJS)
 
 var page = template.Must(template.New("handoff").Funcs(template.FuncMap{"initials": initials}).Parse(pageHTML))
 
@@ -74,10 +78,10 @@ func (w *Web) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /h/{token}/offer", w.offer)
 	mux.HandleFunc("GET /h/{token}/status", w.status)
 	mux.HandleFunc("POST /h/{token}/finish", w.finish)
-	mux.HandleFunc("GET /static/handoff.js", func(rw http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /static/handoff.js", func(rw http.ResponseWriter, r *http.Request) {
 		rw.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-		rw.Header().Set("Cache-Control", "no-cache")
-		_, _ = rw.Write(pageJS)
+		static.Header(rw, r, pageJSTag)
+		http.ServeContent(rw, r, "handoff.js", time.Time{}, bytes.NewReader(pageJS))
 	})
 }
 
