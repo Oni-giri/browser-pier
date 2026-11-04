@@ -217,6 +217,9 @@ func TestEveryPageRenders(t *testing.T) {
 	if r := f.get("/static/app.css", "If-None-Match", f.get("/static/app.css").header.Get("ETag")); r.code != http.StatusNotModified {
 		t.Fatalf("revalidating app.css: %d", r.code)
 	}
+	if r := f.get("/static/not-yet.js"); r.code != http.StatusNotFound || strings.Contains(r.header.Get("Cache-Control"), "immutable") {
+		t.Fatalf("a missing file: %d %q", r.code, r.header.Get("Cache-Control"))
+	}
 }
 
 func TestSignedOutIsSentToLogin(t *testing.T) {

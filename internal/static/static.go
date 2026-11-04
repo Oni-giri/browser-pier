@@ -18,8 +18,13 @@ func Tag(b []byte) string {
 // http.ServeContent or a file server, which then answer a matching
 // If-None-Match with 304. A link that carries the file's tag as ?v= changes
 // whenever the file does, so it may be kept for a year; any other link has to
-// check back each time.
+// check back each time. With no tag, for a file that isn't there, the answer
+// isn't kept either.
 func Header(w http.ResponseWriter, r *http.Request, tag string) {
+	if tag == "" {
+		w.Header().Set("Cache-Control", "no-cache")
+		return
+	}
 	w.Header().Set("ETag", `"`+tag+`"`)
 	if r.URL.Query().Get("v") == tag {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
