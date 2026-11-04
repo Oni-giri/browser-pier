@@ -113,6 +113,13 @@ var migrations = []string{
 
 	// Whether a profile's pages may reach the local network.
 	`ALTER TABLE profiles ADD COLUMN local_network INTEGER NOT NULL DEFAULT 0;`,
+
+	// A profile's main site, as set and as read from its history, and the
+	// icon it falls back to when the site's favicon isn't known.
+	`ALTER TABLE profiles ADD COLUMN site TEXT NOT NULL DEFAULT '';
+	ALTER TABLE profiles ADD COLUMN site_inferred TEXT NOT NULL DEFAULT '';
+	ALTER TABLE profiles ADD COLUMN icon_glyph TEXT NOT NULL DEFAULT '';
+	ALTER TABLE profiles ADD COLUMN icon_color TEXT NOT NULL DEFAULT '';`,
 }
 
 // Open opens (creating if needed) the database at path and migrates it.
