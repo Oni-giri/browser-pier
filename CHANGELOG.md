@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.3
+
+**Fixed**
+- Pages load faster, most of all behind a proxy like Umbrel's: the stylesheet, scripts and icon were fetched again on every page. They are now linked by version and kept by the browser until they change.
+- Memory estimates count what other apps use. Overview shows their share in the memory bar, and Overview, Profiles and Settings say how many more browsers fit in what the host has free, when that is less than the memory limit leaves. The limit itself works as before.
+- A profile's ⋯ menu on its own page offers Export and Delete, and Edit while its browser runs, instead of repeating the buttons beside it.
+- The Agents page says agents can connect over MCP, as well as the REST API and CDP.
+
 ## 0.1.2
 
 **Fixed**
