@@ -11,37 +11,37 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
 <style>
-body{margin:0;background:#FAFAFA}
-a{color:#09090B}a:hover{color:#000000}
+body{margin:0;background:#EAF1FF}
+a{color:#0F172A}a:hover{color:#000000}
 th{font-weight:500}
 @keyframes bp-spin{to{transform:rotate(360deg)}}
 .bp-spin{animation:bp-spin 0.9s linear infinite}
 @keyframes bp-shim{0%{background-position:-240px 0}100%{background-position:240px 0}}
-.bp-shim{background:linear-gradient(90deg,#ECECEF 0%,#F7F7F8 50%,#ECECEF 100%);background-size:480px 100%;animation:bp-shim 1.4s linear infinite}
+.bp-shim{background:linear-gradient(90deg,#E8EDF4 0%,#F5F7FB 50%,#E8EDF4 100%);background-size:480px 100%;animation:bp-shim 1.4s linear infinite}
 </style>
 </helmet>
-<div style="position: relative; min-height: 100vh; background: #FAFAFA; color: #09090B; font-family: 'Geist', system-ui, sans-serif">
+<div style="position: relative; min-height: 100vh; background: radial-gradient(1000px 480px at 15% -140px, rgba(47,107,255,0.22), rgba(47,107,255,0) 70%), radial-gradient(800px 420px at 90% -180px, rgba(56,189,248,0.18), rgba(56,189,248,0) 70%), url('data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20width%3D%27180%27%20height%3D%27180%27%3E%3Cfilter%20id%3D%27n%27%3E%3CfeTurbulence%20type%3D%27fractalNoise%27%20baseFrequency%3D%27.85%27%20numOctaves%3D%272%27%20stitchTiles%3D%27stitch%27%2F%3E%3CfeColorMatrix%20values%3D%270%200%200%200%200.12%200%200%200%200%200.18%200%200%200%200%200.45%200%200%200%200.06%200%27%2F%3E%3C%2Ffilter%3E%3Crect%20width%3D%27100%25%27%20height%3D%27100%25%27%20filter%3D%27url%28%23n%29%27%2F%3E%3C%2Fsvg%3E') 0 0 / 180px 180px, linear-gradient(to bottom, rgba(234,241,255,0) 0, rgba(234,241,255,0.6) 260px, rgb(234,241,255) 560px), linear-gradient(rgba(47,107,255,0.07) 1px, transparent 1px) 0 0 / 48px 48px, linear-gradient(90deg, rgba(47,107,255,0.07) 1px, transparent 1px) 0 0 / 48px 48px, #EAF1FF; color: #0F172A; font-family: 'Geist', system-ui, sans-serif">
 
-  <header style="background: #FFFFFF; border-bottom: 1px solid #E4E4E7">
+  <header style="position: sticky; top: 0; z-index: 10; background: rgba(255,255,255,0.72); backdrop-filter: blur(14px) saturate(160%); -webkit-backdrop-filter: blur(14px) saturate(160%); box-shadow: 0 1px 0 rgba(37,64,140,0.08)">
     <div style="max-width: 1320px; margin: 0 auto; padding: 0 28px; min-height: 56px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 24px">
       <a href="overview.html" style="display: flex; align-items: center; gap: 9px; font-size: 15px; font-weight: 600; letter-spacing: -0.3px; text-decoration: none">
-        <svg width="22" height="22" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7" fill="#09090B"></rect><path d="M5 12h18M8 12v9M14 12v9M20 12v9" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"></path><circle cx="20" cy="6.5" r="2.2" fill="#2F6BFF"></circle></svg>
+        <svg width="22" height="22" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7" fill="#0F172A"></rect><path d="M5 12h18M8 12v9M14 12v9M20 12v9" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"></path><circle cx="20" cy="6.5" r="2.2" fill="#2F6BFF"></circle></svg>
         BrowserPier
       </a>
       <nav aria-label="Main" style="display: flex; gap: 2px; font-size: 14px">
-        <a href="overview.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; color: #52525B; text-decoration: none">Overview</a>
-        <a href="profiles.html" aria-current="page" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; background: #F4F4F5; font-weight: 500; text-decoration: none">Profiles</a>
-        <a href="agents.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; color: #52525B; text-decoration: none">Agents</a>
-        <a href="settings.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; color: #52525B; text-decoration: none">Settings</a>
+        <a href="overview.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; color: #475569; text-decoration: none">Overview</a>
+        <a href="profiles.html" aria-current="page" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; background: #F1F5F9; font-weight: 500; text-decoration: none">Profiles</a>
+        <a href="agents.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; color: #475569; text-decoration: none">Agents</a>
+        <a href="settings.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; color: #475569; text-decoration: none">Settings</a>
       </nav>
       <sc-if value="{{hasHelp}}" hint-placeholder-val="{{true}}">
         <a href="live-view.html" style="min-height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 10px; border-radius: 999px; background: #FFF1EB; color: #C2410C; font-size: 13px; font-weight: 500; text-decoration: none"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #FF6A3D"></span>{{helpCount}} needs you</a>
       </sc-if>
       <div style="flex: 1 1 40px"></div>
-      <span style="min-width: 200px; height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-radius: 8px; box-shadow: 0 0 0 1px #E4E4E7; font-size: 13px; color: #71717A">
+      <span style="min-width: 200px; height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; font-size: 13px; color: #64748B">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
         <span style="flex: 1">Search…</span>
-        <span style="font-family: 'Geist Mono', monospace; font-size: 11px; padding: 0 5px; border-radius: 4px; background: #F4F4F5; color: #52525B">⌘K</span>
+        <span style="font-family: 'Geist Mono', monospace; font-size: 11px; padding: 0 5px; border-radius: 4px; background: #F1F5F9; color: #475569">⌘K</span>
       </span>
       <a href="login.html" aria-label="Account and sign out" style="width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, #2F6BFF, #8AA8FF); display: flex; align-items: center; justify-content: center; color: #FFFFFF; font-size: 12px; font-weight: 600; text-decoration: none">Y</a>
     </div>
@@ -53,39 +53,39 @@ th{font-weight:500}
       <div style="display: flex; flex-direction: column; gap: 4px">
         <h1 style="margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -0.8px">Profiles</h1>
         <sc-if value="{{notEmpty}}" hint-placeholder-val="{{true}}">
-          <p style="margin: 0; font-size: 14px; color: #52525B">{{summary}}</p>
+          <p style="margin: 0; font-size: 14px; color: #475569">{{summary}}</p>
         </sc-if>
       </div>
       <sc-if value="{{notEmpty}}" hint-placeholder-val="{{true}}">
         <div style="display: flex; gap: 8px">
-          <a href="profiles.html" style="min-height: 36px; display: flex; align-items: center; padding: 0 14px; background: #FFFFFF; border-radius: 8px; font-size: 14px; font-weight: 500; text-decoration: none; box-shadow: 0 0 0 1px #E4E4E7, 0 1px 2px rgba(9,9,11,0.05)">Import</a>
-          <a href="new-profile.html" style="min-height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 14px; background: #09090B; color: #FFFFFF; border-radius: 8px; font-size: 14px; font-weight: 500; text-decoration: none; box-shadow: 0 1px 2px rgba(9,9,11,0.2), inset 0 1px 0 rgba(255,255,255,0.12)">New profile<span aria-hidden="true" style="font-family: 'Geist Mono', monospace; font-size: 11px; padding: 0 5px; border-radius: 4px; background: rgba(255,255,255,0.14)">N</span></a>
+          <a href="profiles.html" style="min-height: 36px; display: flex; align-items: center; padding: 0 14px; background: #FFFFFF; border-radius: 8px; font-size: 14px; font-weight: 500; text-decoration: none; box-shadow: 0 0 0 1px #E2E8F0, 0 1px 2px rgba(15,23,42,0.05)">Import</a>
+          <a href="new-profile.html" style="min-height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 14px; background: #0F172A; color: #FFFFFF; border-radius: 8px; font-size: 14px; font-weight: 500; text-decoration: none; box-shadow: 0 1px 2px rgba(15,23,42,0.2), inset 0 1px 0 rgba(255,255,255,0.12)">New profile<span aria-hidden="true" style="font-family: 'Geist Mono', monospace; font-size: 11px; padding: 0 5px; border-radius: 4px; background: rgba(255,255,255,0.14)">N</span></a>
         </div>
       </sc-if>
     </div>
 
     <sc-if value="{{notEmpty}}" hint-placeholder-val="{{true}}">
       <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px">
-        <div role="tablist" aria-label="Filter" style="display: flex; gap: 2px; padding: 3px; background: #F4F4F5; border-radius: 9px; font-size: 13px">
-          <span role="tab" aria-selected="true" style="padding: 6px 12px; background: #FFFFFF; border-radius: 6px; font-weight: 500; box-shadow: 0 0 0 1px #E4E4E7, 0 1px 2px rgba(9,9,11,0.05)">All <span style="color: #71717A">5</span></span>
-          <span role="tab" aria-selected="false" style="padding: 6px 12px; color: #52525B">Needs you <span style="color: #71717A">1</span></span>
-          <span role="tab" aria-selected="false" style="padding: 6px 12px; color: #52525B">Running <span style="color: #71717A">2</span></span>
-          <span role="tab" aria-selected="false" style="padding: 6px 12px; color: #52525B">Stopped <span style="color: #71717A">2</span></span>
+        <div role="tablist" aria-label="Filter" style="display: flex; gap: 2px; padding: 3px; background: #F1F5F9; border-radius: 9px; font-size: 13px">
+          <span role="tab" aria-selected="true" style="padding: 6px 12px; background: #FFFFFF; border-radius: 6px; font-weight: 500; box-shadow: 0 0 0 1px #E2E8F0, 0 1px 2px rgba(15,23,42,0.05)">All <span style="color: #64748B">5</span></span>
+          <span role="tab" aria-selected="false" style="padding: 6px 12px; color: #475569">Needs you <span style="color: #64748B">1</span></span>
+          <span role="tab" aria-selected="false" style="padding: 6px 12px; color: #475569">Running <span style="color: #64748B">2</span></span>
+          <span role="tab" aria-selected="false" style="padding: 6px 12px; color: #475569">Stopped <span style="color: #64748B">2</span></span>
         </div>
-        <div role="radiogroup" aria-label="Layout" style="display: flex; gap: 2px; padding: 3px; background: #F4F4F5; border-radius: 9px">
-          <button type="button" role="radio" onClick="{{showGrid}}" aria-checked="{{gridChecked}}" aria-label="Grid" style="width: 34px; height: 30px; display: flex; align-items: center; justify-content: center; background: {{gridBg}}; border: 0; border-radius: 6px; box-shadow: {{gridRing}}; color: #3F3F46; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"></rect><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"></rect><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"></rect><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"></rect></svg></button>
-          <button type="button" role="radio" onClick="{{showTable}}" aria-checked="{{tableChecked}}" aria-label="Table" style="width: 34px; height: 30px; display: flex; align-items: center; justify-content: center; background: {{tableBg}}; border: 0; border-radius: 6px; box-shadow: {{tableRing}}; color: #3F3F46; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"></path></svg></button>
+        <div role="radiogroup" aria-label="Layout" style="display: flex; gap: 2px; padding: 3px; background: #F1F5F9; border-radius: 9px">
+          <button type="button" role="radio" onClick="{{showGrid}}" aria-checked="{{gridChecked}}" aria-label="Grid" style="width: 34px; height: 30px; display: flex; align-items: center; justify-content: center; background: {{gridBg}}; border: 0; border-radius: 6px; box-shadow: {{gridRing}}; color: #334155; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"></rect><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"></rect><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"></rect><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"></rect></svg></button>
+          <button type="button" role="radio" onClick="{{showTable}}" aria-checked="{{tableChecked}}" aria-label="Table" style="width: 34px; height: 30px; display: flex; align-items: center; justify-content: center; background: {{tableBg}}; border: 0; border-radius: 6px; box-shadow: {{tableRing}}; color: #334155; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"></path></svg></button>
         </div>
       </div>
     </sc-if>
 
     <sc-if value="{{isEmpty}}" hint-placeholder-val="{{false}}">
-      <div style="position: relative; overflow: hidden; padding: 72px 24px; background: #FFFFFF; border-radius: 16px; box-shadow: 0 0 0 1px #E4E4E7; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 14px">
+      <div style="position: relative; overflow: hidden; padding: 72px 24px; background: #FFFFFF; border-radius: 16px; box-shadow: 0 0 0 1px #E2E8F0; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 14px">
         <div style="position: absolute; left: 50%; top: -160px; width: 600px; height: 320px; transform: translateX(-50%); background: radial-gradient(closest-side, rgba(47,107,255,0.14), rgba(47,107,255,0))"></div>
-        <span aria-hidden="true" style="position: relative; width: 44px; height: 44px; border-radius: 12px; background: #FFFFFF; box-shadow: 0 0 0 1px #E4E4E7, 0 4px 12px rgba(9,9,11,0.06); display: flex; align-items: center; justify-content: center; font-size: 20px">+</span>
+        <span aria-hidden="true" style="position: relative; width: 44px; height: 44px; border-radius: 12px; background: #FFFFFF; box-shadow: 0 0 0 1px #E2E8F0, 0 4px 12px rgba(15,23,42,0.06); display: flex; align-items: center; justify-content: center; font-size: 20px">+</span>
         <h2 style="position: relative; margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.5px">Create your first profile</h2>
-        <p style="position: relative; margin: 0; max-width: 46ch; font-size: 15px; line-height: 1.55; color: #52525B">A profile is a saved browser that stays signed in. Log into a service once, and your agents can use it from then on.</p>
-        <a href="new-profile.html" style="position: relative; min-height: 36px; display: flex; align-items: center; padding: 0 16px; background: #09090B; color: #FFFFFF; border-radius: 8px; font-size: 14px; font-weight: 500; text-decoration: none">New profile</a>
+        <p style="position: relative; margin: 0; max-width: 46ch; font-size: 15px; line-height: 1.55; color: #475569">A profile is a saved browser that stays signed in. Log into a service once, and your agents can use it from then on.</p>
+        <a href="new-profile.html" style="position: relative; min-height: 36px; display: flex; align-items: center; padding: 0 16px; background: #0F172A; color: #FFFFFF; border-radius: 8px; font-size: 14px; font-weight: 500; text-decoration: none">New profile</a>
       </div>
     </sc-if>
 
@@ -93,30 +93,30 @@ th{font-weight:500}
       <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px">
         <sc-for list="{{rows}}" as="r" hint-placeholder-count="5">
           <article style="background: #FFFFFF; border-radius: 16px; box-shadow: {{r.cardRing}}; display: flex; flex-direction: column">
-            <div aria-hidden="true" style="position: relative; margin: 8px 8px 0; aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden; background: #F4F5F7; box-shadow: inset 0 0 0 1px #ECECEF">
+            <div aria-hidden="true" style="position: relative; margin: 8px 8px 0; aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden; background: #F1F5F9; box-shadow: inset 0 0 0 1px #E8EDF4">
               <sc-if value="{{r.vOtp}}" hint-placeholder-val="{{false}}">
                 <div style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center">
-                  <div style="width: 56%; padding: 14px; background: #FFFFFF; border-radius: 8px; box-shadow: 0 0 0 1px #E4E4E7, 0 8px 20px rgba(9,9,11,0.06); display: flex; flex-direction: column; gap: 8px">
-                    <span style="height: 7px; width: 45%; border-radius: 4px; background: #E4E4E7"></span>
-                    <span style="height: 10px; width: 80%; border-radius: 4px; background: #D4D4D8"></span>
-                    <span style="display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px"><span style="height: 20px; border-radius: 4px; box-shadow: inset 0 0 0 1.5px #2F6BFF"></span><span style="height: 20px; border-radius: 4px; box-shadow: inset 0 0 0 1px #E4E4E7"></span><span style="height: 20px; border-radius: 4px; box-shadow: inset 0 0 0 1px #E4E4E7"></span><span style="height: 20px; border-radius: 4px; box-shadow: inset 0 0 0 1px #E4E4E7"></span><span style="height: 20px; border-radius: 4px; box-shadow: inset 0 0 0 1px #E4E4E7"></span><span style="height: 20px; border-radius: 4px; box-shadow: inset 0 0 0 1px #E4E4E7"></span></span>
+                  <div style="width: 56%; padding: 14px; background: #FFFFFF; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0, 0 8px 20px rgba(15,23,42,0.06); display: flex; flex-direction: column; gap: 8px">
+                    <span style="height: 7px; width: 45%; border-radius: 4px; background: #E2E8F0"></span>
+                    <span style="height: 10px; width: 80%; border-radius: 4px; background: #CBD5E1"></span>
+                    <span style="display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px"><span style="height: 20px; border-radius: 4px; box-shadow: inset 0 0 0 1.5px #2F6BFF"></span><span style="height: 20px; border-radius: 4px; box-shadow: inset 0 0 0 1px #E2E8F0"></span><span style="height: 20px; border-radius: 4px; box-shadow: inset 0 0 0 1px #E2E8F0"></span><span style="height: 20px; border-radius: 4px; box-shadow: inset 0 0 0 1px #E2E8F0"></span><span style="height: 20px; border-radius: 4px; box-shadow: inset 0 0 0 1px #E2E8F0"></span><span style="height: 20px; border-radius: 4px; box-shadow: inset 0 0 0 1px #E2E8F0"></span></span>
                   </div>
                 </div>
-                <span style="position: absolute; left: 10px; bottom: 10px; padding: 5px 9px; border-radius: 8px; background: rgba(9,9,11,0.86); color: #FAFAFA; font-size: 12px">“Enter the 2FA code”</span>
+                <span style="position: absolute; left: 10px; bottom: 10px; padding: 5px 9px; border-radius: 8px; background: rgba(15,23,42,0.86); color: #F8FAFC; font-size: 12px">“Enter the 2FA code”</span>
               </sc-if>
               <sc-if value="{{r.vFeed}}" hint-placeholder-val="{{true}}">
                 <div style="position: absolute; inset: 0; display: flex">
-                  <div style="width: 24%; padding: 12px; display: flex; flex-direction: column; gap: 7px; background: #FFFFFF; border-right: 1px solid #ECECEF"><span style="width: 28px; height: 28px; border-radius: 50%; background: #DCE5FF"></span><span style="height: 6px; width: 80%; border-radius: 3px; background: #E4E4E7"></span><span style="height: 6px; width: 60%; border-radius: 3px; background: #ECECEF"></span></div>
+                  <div style="width: 24%; padding: 12px; display: flex; flex-direction: column; gap: 7px; background: #FFFFFF; border-right: 1px solid #E8EDF4"><span style="width: 28px; height: 28px; border-radius: 50%; background: #DCE5FF"></span><span style="height: 6px; width: 80%; border-radius: 3px; background: #E2E8F0"></span><span style="height: 6px; width: 60%; border-radius: 3px; background: #E8EDF4"></span></div>
                   <div style="flex: 1; padding: 12px; display: flex; flex-direction: column; gap: 8px">
-                    <div style="padding: 9px; background: #FFFFFF; border-radius: 7px; box-shadow: 0 0 0 1px #ECECEF; display: flex; flex-direction: column; gap: 5px"><span style="height: 6px; width: 40%; border-radius: 3px; background: #D4D4D8"></span><span style="height: 6px; width: 90%; border-radius: 3px; background: #ECECEF"></span><span style="height: 36px; border-radius: 5px; background: #E8EEFF"></span></div>
-                    <div style="padding: 9px; background: #FFFFFF; border-radius: 7px; box-shadow: 0 0 0 1px #ECECEF; display: flex; flex-direction: column; gap: 5px"><span style="height: 6px; width: 55%; border-radius: 3px; background: #D4D4D8"></span><span style="height: 6px; width: 75%; border-radius: 3px; background: #ECECEF"></span></div>
+                    <div style="padding: 9px; background: #FFFFFF; border-radius: 7px; box-shadow: 0 0 0 1px #E8EDF4; display: flex; flex-direction: column; gap: 5px"><span style="height: 6px; width: 40%; border-radius: 3px; background: #CBD5E1"></span><span style="height: 6px; width: 90%; border-radius: 3px; background: #E8EDF4"></span><span style="height: 36px; border-radius: 5px; background: #E8EEFF"></span></div>
+                    <div style="padding: 9px; background: #FFFFFF; border-radius: 7px; box-shadow: 0 0 0 1px #E8EDF4; display: flex; flex-direction: column; gap: 5px"><span style="height: 6px; width: 55%; border-radius: 3px; background: #CBD5E1"></span><span style="height: 6px; width: 75%; border-radius: 3px; background: #E8EDF4"></span></div>
                   </div>
                 </div>
               </sc-if>
               <sc-if value="{{r.vList}}" hint-placeholder-val="{{false}}">
                 <div style="position: absolute; inset: 0; display: flex; flex-direction: column; background: #FFFFFF">
-                  <div style="height: 26px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid #ECECEF"><span style="width: 12px; height: 12px; border-radius: 3px; background: #09090B"></span><span style="height: 6px; width: 30%; border-radius: 3px; background: #D4D4D8"></span></div>
-                  <div style="flex: 1; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px"><span style="height: 7px; width: 85%; border-radius: 3px; background: #E4E4E7"></span><span style="height: 7px; width: 70%; border-radius: 3px; background: #ECECEF"></span><span style="height: 7px; width: 80%; border-radius: 3px; background: #E4E4E7"></span><span style="height: 7px; width: 55%; border-radius: 3px; background: #ECECEF"></span><span style="height: 7px; width: 75%; border-radius: 3px; background: #E4E4E7"></span></div>
+                  <div style="height: 26px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid #E8EDF4"><span style="width: 12px; height: 12px; border-radius: 3px; background: #0F172A"></span><span style="height: 6px; width: 30%; border-radius: 3px; background: #CBD5E1"></span></div>
+                  <div style="flex: 1; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px"><span style="height: 7px; width: 85%; border-radius: 3px; background: #E2E8F0"></span><span style="height: 7px; width: 70%; border-radius: 3px; background: #E8EDF4"></span><span style="height: 7px; width: 80%; border-radius: 3px; background: #E2E8F0"></span><span style="height: 7px; width: 55%; border-radius: 3px; background: #E8EDF4"></span><span style="height: 7px; width: 75%; border-radius: 3px; background: #E2E8F0"></span></div>
                 </div>
               </sc-if>
               <sc-if value="{{r.vLoading}}" hint-placeholder-val="{{false}}">
@@ -125,7 +125,7 @@ th{font-weight:500}
                   <span class="bp-shim" style="height: 52px; border-radius: 8px"></span>
                   <span class="bp-shim" style="height: 9px; width: 70%; border-radius: 4px"></span>
                 </div>
-                <span style="position: absolute; left: 10px; bottom: 10px; font-size: 12px; color: #52525B">Booting Chromium…</span>
+                <span style="position: absolute; left: 10px; bottom: 10px; font-size: 12px; color: #475569">Booting Chromium…</span>
               </sc-if>
               <sc-if value="{{r.vCrash}}" hint-placeholder-val="{{false}}">
                 <div style="position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; background: #FEF2F2">
@@ -135,11 +135,11 @@ th{font-weight:500}
               </sc-if>
               <sc-if value="{{r.vParked}}" hint-placeholder-val="{{false}}">
                 <div style="position: absolute; inset: 0; padding: 14px; display: flex; flex-direction: column; gap: 8px; opacity: 0.4; filter: grayscale(1)">
-                  <span style="height: 8px; width: 30%; border-radius: 4px; background: #D4D4D8"></span>
-                  <span style="height: 8px; width: 85%; border-radius: 4px; background: #E4E4E7"></span>
-                  <span style="height: 60px; border-radius: 6px; background: #E4E4E7"></span>
+                  <span style="height: 8px; width: 30%; border-radius: 4px; background: #CBD5E1"></span>
+                  <span style="height: 8px; width: 85%; border-radius: 4px; background: #E2E8F0"></span>
+                  <span style="height: 60px; border-radius: 6px; background: #E2E8F0"></span>
                 </div>
-                <span style="position: absolute; left: 10px; bottom: 10px; font-size: 12px; color: #52525B">Last frame · {{r.lastSeen}}</span>
+                <span style="position: absolute; left: 10px; bottom: 10px; font-size: 12px; color: #475569">Last frame · {{r.lastSeen}}</span>
               </sc-if>
             </div>
 
@@ -147,7 +147,7 @@ th{font-weight:500}
               <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px">
                 <div style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
                   <h2 style="margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.2px">{{r.name}}</h2>
-                  <span style="font-size: 13px; color: #71717A; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{r.activity}}</span>
+                  <span style="font-size: 13px; color: #64748B; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{r.activity}}</span>
                 </div>
                 <span style="flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; background: {{r.pillBg}}; color: {{r.fg}}; font-size: 12px; font-weight: 500">
                   <sc-if value="{{r.isStarting}}" hint-placeholder-val="{{false}}"><svg class="bp-spin" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9"></path></svg></sc-if>
@@ -155,27 +155,27 @@ th{font-weight:500}
                   {{r.status}}
                 </span>
               </div>
-              <div style="display: flex; gap: 16px; font-size: 13px; color: #71717A">
-                <span>{{r.mode}}</span><span>{{r.agent}}</span><span style="margin-left: auto; color: #3F3F46">{{r.mem}}</span>
+              <div style="display: flex; gap: 16px; font-size: 13px; color: #64748B">
+                <span>{{r.mode}}</span><span>{{r.agent}}</span><span style="margin-left: auto; color: #334155">{{r.mem}}</span>
               </div>
               <div style="position: relative; display: flex; gap: 6px">
                 <sc-if value="{{r.isHelp}}" hint-placeholder-val="{{false}}"><a href="live-view.html" style="flex: 1; min-height: 34px; display: flex; align-items: center; justify-content: center; background: #2F6BFF; border-radius: 8px; color: #FFFFFF; font-size: 13px; font-weight: 500; text-decoration: none; box-shadow: 0 1px 2px rgba(47,107,255,0.4), inset 0 1px 0 rgba(255,255,255,0.18)">Take control</a></sc-if>
-                <sc-if value="{{r.isRunning}}" hint-placeholder-val="{{true}}"><a href="live-view.html" style="flex: 1; min-height: 34px; display: flex; align-items: center; justify-content: center; background: #FFFFFF; border-radius: 8px; font-size: 13px; font-weight: 500; text-decoration: none; box-shadow: 0 0 0 1px #E4E4E7, 0 1px 2px rgba(9,9,11,0.05)">Live view</a></sc-if>
-                <sc-if value="{{r.isStarting}}" hint-placeholder-val="{{false}}"><button type="button" disabled style="flex: 1; min-height: 34px; background: #F4F4F5; border: 0; border-radius: 8px; color: #71717A; font-family: inherit; font-size: 13px">Starting…</button></sc-if>
-                <sc-if value="{{r.isStopped}}" hint-placeholder-val="{{false}}"><button type="button" onClick="{{r.start}}" style="flex: 1; min-height: 34px; background: #09090B; border: 0; border-radius: 8px; color: #FFFFFF; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer; box-shadow: inset 0 1px 0 rgba(255,255,255,0.12)">Start</button></sc-if>
-                <sc-if value="{{r.isFailed}}" hint-placeholder-val="{{false}}"><button type="button" onClick="{{r.start}}" style="flex: 1; min-height: 34px; background: #09090B; border: 0; border-radius: 8px; color: #FFFFFF; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer; box-shadow: inset 0 1px 0 rgba(255,255,255,0.12)">Retry</button></sc-if>
-                <button type="button" onClick="{{r.toggleMenu}}" aria-label="More actions for {{r.name}}" aria-expanded="{{r.menuExpanded}}" style="width: 34px; min-height: 34px; display: flex; align-items: center; justify-content: center; background: {{r.menuBtnBg}}; border: 0; border-radius: 8px; color: #52525B; cursor: pointer; box-shadow: 0 0 0 1px #E4E4E7">
+                <sc-if value="{{r.isRunning}}" hint-placeholder-val="{{true}}"><a href="live-view.html" style="flex: 1; min-height: 34px; display: flex; align-items: center; justify-content: center; background: #FFFFFF; border-radius: 8px; font-size: 13px; font-weight: 500; text-decoration: none; box-shadow: 0 0 0 1px #E2E8F0, 0 1px 2px rgba(15,23,42,0.05)">Live view</a></sc-if>
+                <sc-if value="{{r.isStarting}}" hint-placeholder-val="{{false}}"><button type="button" disabled style="flex: 1; min-height: 34px; background: #F1F5F9; border: 0; border-radius: 8px; color: #64748B; font-family: inherit; font-size: 13px">Starting…</button></sc-if>
+                <sc-if value="{{r.isStopped}}" hint-placeholder-val="{{false}}"><button type="button" onClick="{{r.start}}" style="flex: 1; min-height: 34px; background: #0F172A; border: 0; border-radius: 8px; color: #FFFFFF; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer; box-shadow: inset 0 1px 0 rgba(255,255,255,0.12)">Start</button></sc-if>
+                <sc-if value="{{r.isFailed}}" hint-placeholder-val="{{false}}"><button type="button" onClick="{{r.start}}" style="flex: 1; min-height: 34px; background: #0F172A; border: 0; border-radius: 8px; color: #FFFFFF; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer; box-shadow: inset 0 1px 0 rgba(255,255,255,0.12)">Retry</button></sc-if>
+                <button type="button" onClick="{{r.toggleMenu}}" aria-label="More actions for {{r.name}}" aria-expanded="{{r.menuExpanded}}" style="width: 34px; min-height: 34px; display: flex; align-items: center; justify-content: center; background: {{r.menuBtnBg}}; border: 0; border-radius: 8px; color: #475569; cursor: pointer; box-shadow: 0 0 0 1px #E2E8F0">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="19" cy="12" r="1.8"></circle></svg>
                 </button>
                 <sc-if value="{{r.menuOpen}}" hint-placeholder-val="{{false}}">
-                  <div role="menu" style="position: absolute; bottom: 40px; right: 0; z-index: 5; width: 220px; padding: 4px; background: #FFFFFF; border-radius: 10px; box-shadow: 0 0 0 1px #E4E4E7, 0 12px 32px rgba(9,9,11,0.12); display: flex; flex-direction: column; text-align: left">
+                  <div role="menu" style="position: absolute; bottom: 40px; right: 0; z-index: 5; width: 220px; padding: 4px; background: #FFFFFF; border-radius: 10px; box-shadow: 0 0 0 1px #E2E8F0, 0 12px 32px rgba(15,23,42,0.12); display: flex; flex-direction: column; text-align: left">
                     <sc-if value="{{r.isLive}}" hint-placeholder-val="{{true}}">
-                      <button type="button" role="menuitem" onClick="{{r.copy}}" style="min-height: 34px; padding: 0 10px; display: flex; align-items: center; justify-content: space-between; background: transparent; border: 0; border-radius: 6px; color: #09090B; font-family: inherit; font-size: 13px; text-align: left; cursor: pointer">Copy CDP URL<span style="font-family: 'Geist Mono', monospace; font-size: 11px; color: #71717A">C</span></button>
-                      <button type="button" role="menuitem" onClick="{{r.askStop}}" style="min-height: 34px; padding: 0 10px; display: flex; align-items: center; justify-content: space-between; background: transparent; border: 0; border-radius: 6px; color: #09090B; font-family: inherit; font-size: 13px; text-align: left; cursor: pointer">Stop browser<span style="font-family: 'Geist Mono', monospace; font-size: 11px; color: #71717A">S</span></button>
+                      <button type="button" role="menuitem" onClick="{{r.copy}}" style="min-height: 34px; padding: 0 10px; display: flex; align-items: center; justify-content: space-between; background: transparent; border: 0; border-radius: 6px; color: #0F172A; font-family: inherit; font-size: 13px; text-align: left; cursor: pointer">Copy CDP URL<span style="font-family: 'Geist Mono', monospace; font-size: 11px; color: #64748B">C</span></button>
+                      <button type="button" role="menuitem" onClick="{{r.askStop}}" style="min-height: 34px; padding: 0 10px; display: flex; align-items: center; justify-content: space-between; background: transparent; border: 0; border-radius: 6px; color: #0F172A; font-family: inherit; font-size: 13px; text-align: left; cursor: pointer">Stop browser<span style="font-family: 'Geist Mono', monospace; font-size: 11px; color: #64748B">S</span></button>
                     </sc-if>
-                    <button type="button" role="menuitem" style="min-height: 34px; padding: 0 10px; background: transparent; border: 0; border-radius: 6px; color: #09090B; font-family: inherit; font-size: 13px; text-align: left; cursor: pointer">Edit settings</button>
-                    <button type="button" role="menuitem" style="min-height: 34px; padding: 0 10px; background: transparent; border: 0; border-radius: 6px; color: #09090B; font-family: inherit; font-size: 13px; text-align: left; cursor: pointer">Export profile…</button>
-                    <div aria-hidden="true" style="height: 1px; margin: 4px 0; background: #F0F0F2"></div>
+                    <button type="button" role="menuitem" style="min-height: 34px; padding: 0 10px; background: transparent; border: 0; border-radius: 6px; color: #0F172A; font-family: inherit; font-size: 13px; text-align: left; cursor: pointer">Edit settings</button>
+                    <button type="button" role="menuitem" style="min-height: 34px; padding: 0 10px; background: transparent; border: 0; border-radius: 6px; color: #0F172A; font-family: inherit; font-size: 13px; text-align: left; cursor: pointer">Export profile…</button>
+                    <div aria-hidden="true" style="height: 1px; margin: 4px 0; background: #EEF2F7"></div>
                     <button type="button" role="menuitem" onClick="{{r.askDelete}}" style="min-height: 34px; padding: 0 10px; background: transparent; border: 0; border-radius: 6px; color: #B91C1C; font-family: inherit; font-size: 13px; text-align: left; cursor: pointer">Delete profile…</button>
                   </div>
                 </sc-if>
@@ -183,43 +183,43 @@ th{font-weight:500}
             </div>
           </article>
         </sc-for>
-        <a href="new-profile.html" style="min-height: 300px; box-sizing: border-box; border-radius: 16px; border: 1.5px dashed #D4D4D8; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: #52525B; text-decoration: none">
-          <span aria-hidden="true" style="width: 36px; height: 36px; border-radius: 10px; background: #FFFFFF; box-shadow: 0 0 0 1px #E4E4E7, 0 1px 2px rgba(9,9,11,0.05); display: flex; align-items: center; justify-content: center; font-size: 18px; color: #09090B">+</span>
-          <span style="font-size: 14px; font-weight: 500; color: #09090B">New profile</span>
+        <a href="new-profile.html" style="min-height: 300px; box-sizing: border-box; border-radius: 16px; border: 1.5px dashed rgba(37,64,140,0.25); background: rgba(255,255,255,0.55); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: #475569; text-decoration: none">
+          <span aria-hidden="true" style="width: 36px; height: 36px; border-radius: 10px; background: #FFFFFF; box-shadow: 0 0 0 1px #E2E8F0, 0 1px 2px rgba(15,23,42,0.05); display: flex; align-items: center; justify-content: center; font-size: 18px; color: #0F172A">+</span>
+          <span style="font-size: 14px; font-weight: 500; color: #0F172A">New profile</span>
           <span style="font-size: 13px">Log in once, agents reuse it</span>
         </a>
       </div>
     </sc-if>
 
     <sc-if value="{{showTableView}}" hint-placeholder-val="{{false}}">
-      <div style="background: #FFFFFF; border-radius: 16px; box-shadow: 0 0 0 1px #E4E4E7, 0 1px 2px rgba(9,9,11,0.04); overflow-x: auto">
+      <div style="background: #FFFFFF; border-radius: 16px; box-shadow: 0 0 0 1px rgba(37,64,140,0.07), 0 1px 2px rgba(37,64,140,0.06), 0 10px 28px -12px rgba(37,64,140,0.20); overflow-x: auto">
         <table style="width: 100%; min-width: 960px; border-collapse: collapse; font-size: 14px">
           <thead>
-            <tr style="text-align: left; font-size: 12px; color: #71717A">
-              <th scope="col" style="padding: 12px 18px; border-bottom: 1px solid #F0F0F2">Profile</th>
-              <th scope="col" style="padding: 12px; border-bottom: 1px solid #F0F0F2">Status</th>
-              <th scope="col" style="padding: 12px; border-bottom: 1px solid #F0F0F2">Mode</th>
-              <th scope="col" style="padding: 12px; border-bottom: 1px solid #F0F0F2">Agent</th>
-              <th scope="col" style="padding: 12px; border-bottom: 1px solid #F0F0F2; text-align: right">Memory</th>
-              <th scope="col" style="padding: 12px; border-bottom: 1px solid #F0F0F2">Activity</th>
-              <th scope="col" style="padding: 12px 18px 12px 12px; border-bottom: 1px solid #F0F0F2; text-align: right"><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Actions</span></th>
+            <tr style="text-align: left; font-size: 12px; color: #64748B">
+              <th scope="col" style="padding: 12px 18px; border-bottom: 1px solid #EEF2F7">Profile</th>
+              <th scope="col" style="padding: 12px; border-bottom: 1px solid #EEF2F7">Status</th>
+              <th scope="col" style="padding: 12px; border-bottom: 1px solid #EEF2F7">Mode</th>
+              <th scope="col" style="padding: 12px; border-bottom: 1px solid #EEF2F7">Agent</th>
+              <th scope="col" style="padding: 12px; border-bottom: 1px solid #EEF2F7; text-align: right">Memory</th>
+              <th scope="col" style="padding: 12px; border-bottom: 1px solid #EEF2F7">Activity</th>
+              <th scope="col" style="padding: 12px 18px 12px 12px; border-bottom: 1px solid #EEF2F7; text-align: right"><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Actions</span></th>
             </tr>
           </thead>
           <tbody>
             <sc-for list="{{rows}}" as="r" hint-placeholder-count="5">
               <tr style="background: {{r.rowBg}}">
-                <td style="padding: 14px 18px; border-bottom: 1px solid #F0F0F2"><span style="display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 500">{{r.name}}</span><span style="font-size: 13px; color: #71717A">{{r.note}}</span></span></td>
-                <td style="padding: 14px 12px; border-bottom: 1px solid #F0F0F2"><span style="display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; background: {{r.pillBg}}; color: {{r.fg}}; font-size: 12px; font-weight: 500; white-space: nowrap"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{r.dot}}"></span>{{r.status}}</span></td>
-                <td style="padding: 14px 12px; border-bottom: 1px solid #F0F0F2; color: #3F3F46">{{r.mode}}</td>
-                <td style="padding: 14px 12px; border-bottom: 1px solid #F0F0F2; color: #3F3F46">{{r.agent}}</td>
-                <td style="padding: 14px 12px; border-bottom: 1px solid #F0F0F2; text-align: right; white-space: nowrap">{{r.mem}}</td>
-                <td style="padding: 14px 12px; border-bottom: 1px solid #F0F0F2"><span style="display: flex; flex-direction: column; gap: 2px"><span>{{r.activity}}</span><span style="font-size: 12px; color: #71717A">Auto-stop {{r.idle}}</span></span></td>
-                <td style="padding: 12px 18px 12px 12px; border-bottom: 1px solid #F0F0F2; text-align: right">
+                <td style="padding: 14px 18px; border-bottom: 1px solid #EEF2F7"><span style="display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 500">{{r.name}}</span><span style="font-size: 13px; color: #64748B">{{r.note}}</span></span></td>
+                <td style="padding: 14px 12px; border-bottom: 1px solid #EEF2F7"><span style="display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; background: {{r.pillBg}}; color: {{r.fg}}; font-size: 12px; font-weight: 500; white-space: nowrap"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{r.dot}}"></span>{{r.status}}</span></td>
+                <td style="padding: 14px 12px; border-bottom: 1px solid #EEF2F7; color: #334155">{{r.mode}}</td>
+                <td style="padding: 14px 12px; border-bottom: 1px solid #EEF2F7; color: #334155">{{r.agent}}</td>
+                <td style="padding: 14px 12px; border-bottom: 1px solid #EEF2F7; text-align: right; white-space: nowrap">{{r.mem}}</td>
+                <td style="padding: 14px 12px; border-bottom: 1px solid #EEF2F7"><span style="display: flex; flex-direction: column; gap: 2px"><span>{{r.activity}}</span><span style="font-size: 12px; color: #64748B">Auto-stop {{r.idle}}</span></span></td>
+                <td style="padding: 12px 18px 12px 12px; border-bottom: 1px solid #EEF2F7; text-align: right">
                   <sc-if value="{{r.isHelp}}" hint-placeholder-val="{{false}}"><a href="live-view.html" style="display: inline-flex; min-height: 32px; align-items: center; padding: 0 12px; background: #2F6BFF; border-radius: 8px; color: #FFFFFF; font-size: 13px; font-weight: 500; text-decoration: none">Take control</a></sc-if>
-                  <sc-if value="{{r.isRunning}}" hint-placeholder-val="{{true}}"><a href="live-view.html" style="display: inline-flex; min-height: 32px; align-items: center; padding: 0 12px; background: #FFFFFF; border-radius: 8px; font-size: 13px; font-weight: 500; text-decoration: none; box-shadow: 0 0 0 1px #E4E4E7">Live view</a></sc-if>
-                  <sc-if value="{{r.isStarting}}" hint-placeholder-val="{{false}}"><span style="font-size: 13px; color: #71717A">Starting…</span></sc-if>
-                  <sc-if value="{{r.isStopped}}" hint-placeholder-val="{{false}}"><button type="button" onClick="{{r.start}}" style="min-height: 32px; padding: 0 12px; background: #09090B; border: 0; border-radius: 8px; color: #FFFFFF; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Start</button></sc-if>
-                  <sc-if value="{{r.isFailed}}" hint-placeholder-val="{{false}}"><button type="button" onClick="{{r.start}}" style="min-height: 32px; padding: 0 12px; background: #09090B; border: 0; border-radius: 8px; color: #FFFFFF; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Retry</button></sc-if>
+                  <sc-if value="{{r.isRunning}}" hint-placeholder-val="{{true}}"><a href="live-view.html" style="display: inline-flex; min-height: 32px; align-items: center; padding: 0 12px; background: #FFFFFF; border-radius: 8px; font-size: 13px; font-weight: 500; text-decoration: none; box-shadow: 0 0 0 1px #E2E8F0">Live view</a></sc-if>
+                  <sc-if value="{{r.isStarting}}" hint-placeholder-val="{{false}}"><span style="font-size: 13px; color: #64748B">Starting…</span></sc-if>
+                  <sc-if value="{{r.isStopped}}" hint-placeholder-val="{{false}}"><button type="button" onClick="{{r.start}}" style="min-height: 32px; padding: 0 12px; background: #0F172A; border: 0; border-radius: 8px; color: #FFFFFF; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Start</button></sc-if>
+                  <sc-if value="{{r.isFailed}}" hint-placeholder-val="{{false}}"><button type="button" onClick="{{r.start}}" style="min-height: 32px; padding: 0 12px; background: #0F172A; border: 0; border-radius: 8px; color: #FFFFFF; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Retry</button></sc-if>
                 </td>
               </tr>
             </sc-for>
@@ -229,17 +229,17 @@ th{font-weight:500}
     </sc-if>
 
     <sc-if value="{{notEmpty}}" hint-placeholder-val="{{true}}">
-      <p style="margin: 0; font-size: 13px; color: #71717A">One browser per profile. An agent asking for a running profile attaches to it.</p>
+      <p style="margin: 0; font-size: 13px; color: #64748B">One browser per profile. An agent asking for a running profile attaches to it.</p>
     </sc-if>
   </main>
 
   <sc-if value="{{dialogOpen}}" hint-placeholder-val="{{false}}">
-    <div style="position: fixed; inset: 0; z-index: 20; background: rgba(9,9,11,0.4); backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); display: flex; align-items: center; justify-content: center; padding: 16px">
-      <section role="alertdialog" aria-modal="true" aria-labelledby="bp-dlg-title" style="width: 100%; max-width: 420px; padding: 24px; background: #FFFFFF; border-radius: 16px; box-shadow: 0 0 0 1px #E4E4E7, 0 24px 60px rgba(9,9,11,0.2); display: flex; flex-direction: column; gap: 10px">
+    <div style="position: fixed; inset: 0; z-index: 20; background: rgba(15,23,42,0.4); backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); display: flex; align-items: center; justify-content: center; padding: 16px">
+      <section role="alertdialog" aria-modal="true" aria-labelledby="bp-dlg-title" style="width: 100%; max-width: 420px; padding: 24px; background: #FFFFFF; border-radius: 16px; box-shadow: 0 0 0 1px #E2E8F0, 0 24px 60px rgba(15,23,42,0.2); display: flex; flex-direction: column; gap: 10px">
         <h2 id="bp-dlg-title" style="margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.4px">{{dlg.title}}</h2>
-        <p style="margin: 0; font-size: 14px; line-height: 1.6; color: #52525B">{{dlg.body}}</p>
+        <p style="margin: 0; font-size: 14px; line-height: 1.6; color: #475569">{{dlg.body}}</p>
         <div style="display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 10px">
-          <button type="button" onClick="{{closeDialog}}" style="min-height: 36px; padding: 0 14px; background: #FFFFFF; border: 0; border-radius: 8px; color: #09090B; font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer; box-shadow: 0 0 0 1px #E4E4E7">Cancel</button>
+          <button type="button" onClick="{{closeDialog}}" style="min-height: 36px; padding: 0 14px; background: #FFFFFF; border: 0; border-radius: 8px; color: #0F172A; font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer; box-shadow: 0 0 0 1px #E2E8F0">Cancel</button>
           <button type="button" onClick="{{confirmDialog}}" style="min-height: 36px; padding: 0 14px; background: {{dlg.btnBg}}; border: 0; border-radius: 8px; color: #FFFFFF; font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer">{{dlg.cta}}</button>
         </div>
       </section>
@@ -247,7 +247,7 @@ th{font-weight:500}
   </sc-if>
 
   <sc-if value="{{toastOn}}" hint-placeholder-val="{{false}}">
-    <div role="status" style="position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 30; padding: 10px 14px; display: flex; align-items: center; gap: 8px; background: #09090B; color: #FAFAFA; border-radius: 10px; font-size: 13px; box-shadow: 0 12px 32px rgba(9,9,11,0.25)"><span aria-hidden="true" style="color: #4ADE80">✓</span>{{toast}}</div>
+    <div role="status" style="position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 30; padding: 10px 14px; display: flex; align-items: center; gap: 8px; background: #0F172A; color: #F8FAFC; border-radius: 10px; font-size: 13px; box-shadow: 0 12px 32px rgba(15,23,42,0.25)"><span aria-hidden="true" style="color: #4ADE80">✓</span>{{toast}}</div>
   </sc-if>
 </div>
 </x-dc>
@@ -283,10 +283,10 @@ class Component extends DCLogic {
     ];
     const LOOK = {
       help:     { status: 'Needs you', dot: '#FF6A3D', fg: '#C2410C', pillBg: '#FFF1EB', rowBg: '#FFFAF7', cardRing: '0 0 0 1.5px #FF6A3D, 0 10px 30px rgba(255,106,61,0.14)' },
-      running:  { status: 'Running',   dot: '#16A34A', fg: '#15803D', pillBg: '#ECFDF3', rowBg: 'transparent', cardRing: '0 0 0 1px #E4E4E7, 0 1px 2px rgba(9,9,11,0.04)' },
-      starting: { status: 'Starting',  dot: '#2F6BFF', fg: '#1D4ED8', pillBg: '#EEF3FF', rowBg: 'transparent', cardRing: '0 0 0 1px #E4E4E7, 0 1px 2px rgba(9,9,11,0.04)' },
-      stopped:  { status: 'Stopped',   dot: '#A1A1AA', fg: '#52525B', pillBg: '#F4F4F5', rowBg: 'transparent', cardRing: '0 0 0 1px #E4E4E7' },
-      failed:   { status: 'Failed',    dot: '#DC2626', fg: '#B91C1C', pillBg: '#FEF2F2', rowBg: 'transparent', cardRing: '0 0 0 1px #E4E4E7, 0 1px 2px rgba(9,9,11,0.04)' }
+      running:  { status: 'Running',   dot: '#16A34A', fg: '#15803D', pillBg: '#ECFDF3', rowBg: 'transparent', cardRing: '0 0 0 1px rgba(37,64,140,0.07), 0 1px 2px rgba(37,64,140,0.06), 0 10px 28px -12px rgba(37,64,140,0.20)' },
+      starting: { status: 'Starting',  dot: '#2F6BFF', fg: '#1D4ED8', pillBg: '#EEF3FF', rowBg: 'transparent', cardRing: '0 0 0 1px rgba(37,64,140,0.07), 0 1px 2px rgba(37,64,140,0.06), 0 10px 28px -12px rgba(37,64,140,0.20)' },
+      stopped:  { status: 'Stopped',   dot: '#94A3B8', fg: '#475569', pillBg: '#F1F5F9', rowBg: 'transparent', cardRing: '0 0 0 1px #E2E8F0' },
+      failed:   { status: 'Failed',    dot: '#DC2626', fg: '#B91C1C', pillBg: '#FEF2F2', rowBg: 'transparent', cardRing: '0 0 0 1px rgba(37,64,140,0.07), 0 1px 2px rgba(37,64,140,0.06), 0 10px 28px -12px rgba(37,64,140,0.20)' }
     };
     const order = { help: 0, failed: 1, running: 2, starting: 3, stopped: 4 };
     const rows = base.map((r) => {
@@ -303,7 +303,7 @@ class Component extends DCLogic {
         isHelp: s === 'help', isRunning: s === 'running', isStarting: s === 'starting',
         isStopped: s === 'stopped', isFailed: s === 'failed', isLive: live,
         showDot: s !== 'starting',
-        menuOpen: open, menuExpanded: open ? 'true' : 'false', menuBtnBg: open ? '#F4F4F5' : '#FFFFFF',
+        menuOpen: open, menuExpanded: open ? 'true' : 'false', menuBtnBg: open ? '#F1F5F9' : '#FFFFFF',
         _o: order[s],
         start: () => this.start(r.name),
         toggleMenu: () => this.setState({ menu: open ? null : r.name }),
@@ -314,12 +314,12 @@ class Component extends DCLogic {
     }).sort((a, b) => a._o - b._o);
 
     const d = this.state.dialog;
-    let dlg = { title: '', body: '', cta: '', btnBg: '#09090B' };
+    let dlg = { title: '', body: '', cta: '', btnBg: '#0F172A' };
     if (d && d.kind === 'stop') {
       dlg = {
         title: 'Stop ' + d.name + '?',
         body: (d.agent ? d.agent + ' is using this browser right now and will lose its session. ' : '') + 'Cookies and logins are kept; you can start it again any time.',
-        cta: 'Stop browser', btnBg: '#09090B'
+        cta: 'Stop browser', btnBg: '#0F172A'
       };
     }
     if (d && d.kind === 'delete') {
@@ -333,7 +333,7 @@ class Component extends DCLogic {
     const helpCount = rows.filter((r) => r.isHelp).length;
     const empty = this.props.empty ?? false;
     const view = this.state.view || this.props.layout || 'grid';
-    const on = '0 0 0 1px #E4E4E7, 0 1px 2px rgba(9,9,11,0.06)';
+    const on = '0 0 0 1px #E2E8F0, 0 1px 2px rgba(15,23,42,0.06)';
     return {
       rows,
       isEmpty: empty, notEmpty: !empty,

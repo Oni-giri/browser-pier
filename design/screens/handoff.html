@@ -11,30 +11,30 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
 <style>
-body{margin:0;background:#FAFAFA}
-a{color:#09090B}a:hover{color:#000000}
+body{margin:0;background:#EAF1FF}
+a{color:#0F172A}a:hover{color:#000000}
 input:focus,textarea:focus{outline:none;box-shadow:0 0 0 1px #2F6BFF,0 0 0 4px rgba(47,107,255,0.18)!important}
 </style>
 </helmet>
-<div style="position: relative; width: 390px; height: 844px; box-sizing: border-box; overflow: hidden; background: #FAFAFA; color: #09090B; font-family: 'Geist', system-ui, sans-serif; display: flex; flex-direction: column">
+<div style="position: relative; width: 390px; height: 844px; box-sizing: border-box; overflow: hidden; background: linear-gradient(180deg, #F3F7FF 0, #EAF1FF 100%); color: #0F172A; font-family: 'Geist', system-ui, sans-serif; display: flex; flex-direction: column">
   <div aria-hidden="true" style="position: absolute; left: 50%; top: -200px; width: 560px; height: 380px; transform: translateX(-50%); background: radial-gradient(closest-side, rgba(47,107,255,0.16), rgba(47,107,255,0)); pointer-events: none"></div>
 
   <header style="position: relative; padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px">
     <span style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600">
-      <svg width="22" height="22" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7" fill="#09090B"></rect><path d="M5 12h18M8 12v9M14 12v9M20 12v9" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"></path><circle cx="20" cy="6.5" r="2.2" fill="#2F6BFF"></circle></svg>
+      <svg width="22" height="22" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7" fill="#0F172A"></rect><path d="M5 12h18M8 12v9M14 12v9M20 12v9" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"></path><circle cx="20" cy="6.5" r="2.2" fill="#2F6BFF"></circle></svg>
       BrowserPier
     </span>
     <sc-if value="{{showTimer}}" hint-placeholder-val="{{true}}">
-      <span style="padding: 3px 9px; border-radius: 999px; background: #FFFFFF; box-shadow: 0 0 0 1px #E4E4E7; font-size: 12px; font-variant-numeric: tabular-nums; color: #3F3F46">14:32 left</span>
+      <span style="padding: 3px 9px; border-radius: 999px; background: #FFFFFF; box-shadow: 0 0 0 1px #E2E8F0; font-size: 12px; font-variant-numeric: tabular-nums; color: #334155">14:32 left</span>
     </sc-if>
   </header>
 
   <sc-if value="{{isPin}}" hint-placeholder-val="{{true}}">
     <div style="position: relative; flex: 1; padding: 12px 20px 24px; display: flex; flex-direction: column; gap: 22px">
-      <section style="padding: 18px; background: #FFFFFF; border-radius: 16px; box-shadow: 0 0 0 1px #E4E4E7, 0 8px 24px rgba(9,9,11,0.06); display: flex; flex-direction: column; gap: 12px">
+      <section style="padding: 18px; background: #FFFFFF; border-radius: 16px; box-shadow: 0 0 0 1px #E2E8F0, 0 8px 24px rgba(15,23,42,0.06); display: flex; flex-direction: column; gap: 12px">
         <div style="display: flex; align-items: center; gap: 10px">
           <span aria-hidden="true" style="width: 30px; height: 30px; border-radius: 50%; background: #2F6BFF; display: flex; align-items: center; justify-content: center; color: #FFFFFF; font-size: 11px; font-weight: 600">RB</span>
-          <span style="flex: 1; display: flex; flex-direction: column"><span style="font-size: 14px; font-weight: 500">research-bot needs you</span><span style="font-size: 12px; color: #71717A">google · accounts.google.com</span></span>
+          <span style="flex: 1; display: flex; flex-direction: column"><span style="font-size: 14px; font-weight: 500">research-bot needs you</span><span style="font-size: 12px; color: #64748B">google · accounts.google.com</span></span>
           <span style="padding: 2px 8px; border-radius: 999px; background: #FFF1EB; color: #C2410C; font-size: 11px; font-weight: 500">2FA</span>
         </div>
         <p style="margin: 0; font-size: 20px; line-height: 1.3; font-weight: 500; letter-spacing: -0.4px">Enter the 2FA code Google just sent to your phone.</p>
@@ -54,7 +54,7 @@ input:focus,textarea:focus{outline:none;box-shadow:0 0 0 1px #2F6BFF,0 0 0 4px r
           <p role="alert" style="margin: 0; font-size: 13px; color: #B91C1C">Wrong PIN. 4 tries left before this link is cancelled.</p>
         </sc-if>
         <sc-if value="{{pinOk}}" hint-placeholder-val="{{true}}">
-          <p style="margin: 0; font-size: 13px; color: #71717A">The agent never sees your PIN.</p>
+          <p style="margin: 0; font-size: 13px; color: #64748B">The agent never sees your PIN.</p>
         </sc-if>
       </div>
 
@@ -65,47 +65,47 @@ input:focus,textarea:focus{outline:none;box-shadow:0 0 0 1px #2F6BFF,0 0 0 4px r
 
   <sc-if value="{{isControl}}" hint-placeholder-val="{{false}}">
     <div style="position: relative; flex: 1; min-height: 0; padding: 4px 16px 0; display: flex; flex-direction: column; gap: 12px">
-      <div style="padding: 10px 12px; display: flex; align-items: center; gap: 10px; background: #FFFFFF; border-radius: 12px; box-shadow: 0 0 0 1px #E4E4E7">
+      <div style="padding: 10px 12px; display: flex; align-items: center; gap: 10px; background: #FFFFFF; border-radius: 12px; box-shadow: 0 0 0 1px #E2E8F0">
         <span aria-hidden="true" style="width: 8px; height: 8px; flex: none; border-radius: 50%; background: #2F6BFF"></span>
-        <span style="font-size: 13px; line-height: 1.4"><span style="font-weight: 500">You’re driving.</span> <span style="color: #52525B">Enter the 2FA code Google just sent.</span></span>
+        <span style="font-size: 13px; line-height: 1.4"><span style="font-weight: 500">You’re driving.</span> <span style="color: #475569">Enter the 2FA code Google just sent.</span></span>
       </div>
 
       <div style="padding: 6px; background: #FFFFFF; border-radius: 14px; box-shadow: 0 0 0 2px #2F6BFF, 0 0 0 6px rgba(47,107,255,0.14)">
-        <div aria-hidden="true" style="aspect-ratio: 16 / 10; border-radius: 9px; background: #F4F5F7; box-shadow: inset 0 0 0 1px #ECECEF; display: flex; align-items: center; justify-content: center">
-          <div style="width: 62%; padding: 14px; background: #FFFFFF; border-radius: 8px; box-shadow: 0 0 0 1px #E4E4E7; display: flex; flex-direction: column; gap: 7px">
-            <span style="height: 6px; width: 45%; border-radius: 3px; background: #E4E4E7"></span>
-            <span style="display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px"><span style="height: 18px; border-radius: 4px; box-shadow: inset 0 0 0 1.5px #2F6BFF"></span><span style="height: 18px; border-radius: 4px; box-shadow: inset 0 0 0 1px #E4E4E7"></span><span style="height: 18px; border-radius: 4px; box-shadow: inset 0 0 0 1px #E4E4E7"></span><span style="height: 18px; border-radius: 4px; box-shadow: inset 0 0 0 1px #E4E4E7"></span><span style="height: 18px; border-radius: 4px; box-shadow: inset 0 0 0 1px #E4E4E7"></span><span style="height: 18px; border-radius: 4px; box-shadow: inset 0 0 0 1px #E4E4E7"></span></span>
+        <div aria-hidden="true" style="aspect-ratio: 16 / 10; border-radius: 9px; background: #F1F5F9; box-shadow: inset 0 0 0 1px #E8EDF4; display: flex; align-items: center; justify-content: center">
+          <div style="width: 62%; padding: 14px; background: #FFFFFF; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; display: flex; flex-direction: column; gap: 7px">
+            <span style="height: 6px; width: 45%; border-radius: 3px; background: #E2E8F0"></span>
+            <span style="display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px"><span style="height: 18px; border-radius: 4px; box-shadow: inset 0 0 0 1.5px #2F6BFF"></span><span style="height: 18px; border-radius: 4px; box-shadow: inset 0 0 0 1px #E2E8F0"></span><span style="height: 18px; border-radius: 4px; box-shadow: inset 0 0 0 1px #E2E8F0"></span><span style="height: 18px; border-radius: 4px; box-shadow: inset 0 0 0 1px #E2E8F0"></span><span style="height: 18px; border-radius: 4px; box-shadow: inset 0 0 0 1px #E2E8F0"></span><span style="height: 18px; border-radius: 4px; box-shadow: inset 0 0 0 1px #E2E8F0"></span></span>
           </div>
         </div>
       </div>
-      <div style="display: flex; gap: 2px; padding: 3px; background: #F4F4F5; border-radius: 10px">
-        <button type="button" style="flex: 1; min-height: 40px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E4E4E7, 0 1px 2px rgba(9,9,11,0.05); color: #09090B; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Keyboard</button>
-        <button type="button" style="flex: 1; min-height: 40px; background: transparent; border: 0; border-radius: 8px; color: #3F3F46; font-family: inherit; font-size: 13px; cursor: pointer">Fit</button>
-        <button type="button" style="flex: 1; min-height: 40px; background: transparent; border: 0; border-radius: 8px; color: #3F3F46; font-family: inherit; font-size: 13px; cursor: pointer">Reload</button>
+      <div style="display: flex; gap: 2px; padding: 3px; background: #F1F5F9; border-radius: 10px">
+        <button type="button" style="flex: 1; min-height: 40px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0, 0 1px 2px rgba(15,23,42,0.05); color: #0F172A; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Keyboard</button>
+        <button type="button" style="flex: 1; min-height: 40px; background: transparent; border: 0; border-radius: 8px; color: #334155; font-family: inherit; font-size: 13px; cursor: pointer">Fit</button>
+        <button type="button" style="flex: 1; min-height: 40px; background: transparent; border: 0; border-radius: 8px; color: #334155; font-family: inherit; font-size: 13px; cursor: pointer">Reload</button>
       </div>
 
       <div style="display: flex; flex-direction: column; gap: 8px">
-        <label for="ho-note" style="font-size: 14px; font-weight: 500">Note for the agent <span style="font-weight: 400; color: #71717A">· optional</span></label>
-        <textarea id="ho-note" rows="2" placeholder="e.g. used a backup code" style="box-sizing: border-box; padding: 10px 12px; background: #FFFFFF; border: 0; border-radius: 10px; box-shadow: 0 0 0 1px #E4E4E7; color: #09090B; font-family: inherit; font-size: 16px; resize: none"></textarea>
+        <label for="ho-note" style="font-size: 14px; font-weight: 500">Note for the agent <span style="font-weight: 400; color: #64748B">· optional</span></label>
+        <textarea id="ho-note" rows="2" placeholder="e.g. used a backup code" style="box-sizing: border-box; padding: 10px 12px; background: #FFFFFF; border: 0; border-radius: 10px; box-shadow: 0 0 0 1px #E2E8F0; color: #0F172A; font-family: inherit; font-size: 16px; resize: none"></textarea>
       </div>
 
       <div style="flex: 1"></div>
-      <div style="margin: 0 -16px; padding: 12px 16px 22px; background: #FFFFFF; border-top: 1px solid #E4E4E7; display: flex; gap: 8px">
-        <button type="button" onClick="{{cant}}" style="flex: 1; min-height: 50px; background: #FFFFFF; border: 0; border-radius: 12px; box-shadow: 0 0 0 1px #E4E4E7; color: #09090B; font-family: inherit; font-size: 15px; font-weight: 500; cursor: pointer">Can’t do this</button>
-        <button type="button" onClick="{{done}}" style="flex: 1.4; min-height: 50px; background: #09090B; border: 0; border-radius: 12px; color: #FFFFFF; font-family: inherit; font-size: 15px; font-weight: 500; cursor: pointer; box-shadow: inset 0 1px 0 rgba(255,255,255,0.12)">Done, hand back</button>
+      <div style="margin: 0 -16px; padding: 12px 16px 22px; background: #FFFFFF; border-top: 1px solid #E2E8F0; display: flex; gap: 8px">
+        <button type="button" onClick="{{cant}}" style="flex: 1; min-height: 50px; background: #FFFFFF; border: 0; border-radius: 12px; box-shadow: 0 0 0 1px #E2E8F0; color: #0F172A; font-family: inherit; font-size: 15px; font-weight: 500; cursor: pointer">Can’t do this</button>
+        <button type="button" onClick="{{done}}" style="flex: 1.4; min-height: 50px; background: #0F172A; border: 0; border-radius: 12px; color: #FFFFFF; font-family: inherit; font-size: 15px; font-weight: 500; cursor: pointer; box-shadow: inset 0 1px 0 rgba(255,255,255,0.12)">Done, hand back</button>
       </div>
     </div>
   </sc-if>
 
   <sc-if value="{{isFinished}}" hint-placeholder-val="{{false}}">
     <div style="position: relative; flex: 1; padding: 40px 24px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 14px">
-      <span aria-hidden="true" style="width: 52px; height: 52px; border-radius: 16px; background: #FFFFFF; box-shadow: 0 0 0 1px #E4E4E7, 0 8px 24px rgba(9,9,11,0.08); display: flex; align-items: center; justify-content: center; color: {{endFg}}">
+      <span aria-hidden="true" style="width: 52px; height: 52px; border-radius: 16px; background: #FFFFFF; box-shadow: 0 0 0 1px #E2E8F0, 0 8px 24px rgba(15,23,42,0.08); display: flex; align-items: center; justify-content: center; color: {{endFg}}">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="{{endIcon}}"></path></svg>
       </span>
       <h1 style="margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -0.6px">{{endTitle}}</h1>
-      <p style="margin: 0; max-width: 30ch; font-size: 15px; line-height: 1.55; color: #52525B">{{endBody}}</p>
+      <p style="margin: 0; max-width: 30ch; font-size: 15px; line-height: 1.55; color: #475569">{{endBody}}</p>
       <sc-if value="{{isExpired}}" hint-placeholder-val="{{false}}">
-        <a href="login.html" style="margin-top: 8px; min-height: 46px; display: flex; align-items: center; padding: 0 20px; background: #09090B; color: #FFFFFF; border-radius: 12px; font-size: 15px; font-weight: 500; text-decoration: none">Sign in to BrowserPier</a>
+        <a href="login.html" style="margin-top: 8px; min-height: 46px; display: flex; align-items: center; padding: 0 20px; background: #0F172A; color: #FFFFFF; border-radius: 12px; font-size: 15px; font-weight: 500; text-decoration: none">Sign in to BrowserPier</a>
       </sc-if>
     </div>
   </sc-if>
@@ -121,7 +121,7 @@ class Component extends DCLogic {
     const step = this.state.step || this.props.start || 'pin';
     const END = {
       done: { t: 'Handed back', b: 'research-bot has your note and is carrying on. This link no longer works.', fg: '#15803D', i: 'M5 12l5 5L20 7' },
-      cancelled: { t: 'Told the agent you couldn’t', b: 'research-bot will stop this task and report back. This link no longer works.', fg: '#52525B', i: 'M6 6l12 12M18 6L6 18' },
+      cancelled: { t: 'Told the agent you couldn’t', b: 'research-bot will stop this task and report back. This link no longer works.', fg: '#475569', i: 'M6 6l12 12M18 6L6 18' },
       expired: { t: 'This link has expired', b: 'Handoff links last 15 minutes and work once. You can still help from the full app.', fg: '#B91C1C', i: 'M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z' }
     };
     const e = END[step] || END.done;
@@ -129,7 +129,7 @@ class Component extends DCLogic {
     const filled = wrong ? 0 : 4;
     const cells = [0, 1, 2, 3, 4, 5].map((i) => ({
       v: i < filled ? '•' : '',
-      ring: wrong ? '0 0 0 1px #DC2626' : (i === filled ? '0 0 0 1.5px #2F6BFF, 0 0 0 4px rgba(47,107,255,0.15)' : '0 0 0 1px #E4E4E7')
+      ring: wrong ? '0 0 0 1px #DC2626' : (i === filled ? '0 0 0 1.5px #2F6BFF, 0 0 0 4px rgba(47,107,255,0.15)' : '0 0 0 1px #E2E8F0')
     }));
     return {
       isPin: step === 'pin', isControl: step === 'control',
