@@ -19,10 +19,25 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/handoff"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/settings"
+	"github.com/Oni-giri/browser-pier/internal/static"
 )
 
 //go:embed templates static
 var embedded embed.FS
+
+// staticTags is each file under static/ by its path there, with its version.
+var staticTags = func() map[string]string {
+	tags := map[string]string{}
+	_ = fs.WalkDir(embedded, "static", func(name string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := embedded.ReadFile(name)
+		tags[strings.TrimPrefix(name, "static/")] = static.Tag(b)
+		return err
+	})
+	return tags
+}()
 
 // Options are what the UI needs from the server's configuration.
 type Options struct {
@@ -77,13 +92,13 @@ func New(m *sessions.Manager, web *auth.Web, handoffs *handoff.Service, st *sett
 // Register adds the UI's routes.
 func (u *UI) Register(mux *http.ServeMux) {
 	admin := func(f http.HandlerFunc) http.Handler { return u.web.RequireAdmin(f) }
-	static, _ := fs.Sub(embedded, "static")
-	files := http.FileServerFS(static)
+	sub, _ := fs.Sub(embedded, "static")
+	files := http.FileServerFS(sub)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		static.Header(w, r, staticTags[r.URL.Path])
+		// app.css links the fonts without a version; they don't change.
 		if strings.HasPrefix(r.URL.Path, "fonts/") {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-		} else {
-			w.Header().Set("Cache-Control", "no-cache")
 		}
 		files.ServeHTTP(w, r)
 	})))
@@ -301,6 +316,9 @@ func (u *UI) cdpURL(r *http.Request, profile string) string {
 }
 
 var funcs = template.FuncMap{
+	// static links a file under static/ with its version, so the browser
+	// keeps it until it changes.
+	"static":      func(name string) string { return "/static/" + name + "?v=" + staticTags[name] },
 	"gb":          formatBytes,
 	"ago":         ago,
 	"lastUsed":    lastUsed,

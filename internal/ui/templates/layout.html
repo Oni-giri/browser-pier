@@ -6,10 +6,10 @@
 <meta name="referrer" content="same-origin">
 <meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false,"includeIndicatorStyles":false,"historyCacheSize":0,"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"422","swap":true},{"code":"[45]..","swap":false,"error":true}]}'>
 <title>{{.Title}} · BrowserPier</title>
-<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="/static/app.css">
-<script src="/static/htmx.min.js" defer></script>
-<script src="/static/app.js" defer></script>
+<link rel="icon" href="{{static "icon.svg"}}" type="image/svg+xml">
+<link rel="stylesheet" href="{{static "app.css"}}">
+<script src="{{static "htmx.min.js"}}" defer></script>
+<script src="{{static "app.js"}}" defer></script>
 </head>
 <body>
 <a class="sr-only" href="#main">Skip to content</a>
