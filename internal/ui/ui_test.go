@@ -162,6 +162,7 @@ func TestEveryPageRenders(t *testing.T) {
 	for _, name := range []string{"google", "github", "notion"} {
 		f.profile(name)
 	}
+	want(t, f.get("/agents"), http.StatusOK, "No agent tokens yet", "It works with the REST API, CDP and MCP.")
 	s, _, err := f.m.Start(ctx, "google", "")
 	if err != nil {
 		t.Fatal(err)
