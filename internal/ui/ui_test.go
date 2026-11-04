@@ -544,3 +544,51 @@ func TestMemoryRoom(t *testing.T) {
 		}
 	}
 }
+
+func TestOrangeOnlyWhenSomeoneIsNeeded(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	for _, name := range []string{"google", "notion", "github"} {
+		f.profile(name)
+	}
+	for _, path := range []string{"/", "/profiles"} {
+		if r := f.get(path); strings.Contains(r.body, "has-help") || strings.Contains(r.body, "emph") {
+			t.Fatalf("%s is warm with nobody needed", path)
+		}
+	}
+	var first handoff.Handoff
+	for _, name := range []string{"google", "notion"} {
+		s, _, err := f.m.Start(ctx, name, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, _, err := f.handoffs.Create(ctx, s.ID, "research-bot", handoff.SensitiveInput, "Enter the 2FA code", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if name == "google" {
+			first = h
+		}
+	}
+	// Two need you: the page is warm, and only one card is emphasised.
+	r := f.get("/")
+	want(t, r, http.StatusOK, `<body class="has-help">`, `class="cell emph`, `<li class="help">`)
+	if n := strings.Count(r.body, " emph"); n != 1 {
+		t.Fatalf("overview has %d emphasis cards", n)
+	}
+	r = f.get("/profiles")
+	want(t, r, http.StatusOK, `class="card help emph"`, `class="card help"`)
+	if n := strings.Count(r.body, " emph"); n != 1 {
+		t.Fatalf("profiles has %d emphasis cards", n)
+	}
+	want(t, f.get("/chip"), http.StatusOK, `class="chip-help"`, "2 need you")
+	// Back to nobody: the chip, which app.js reads to turn the light off, goes.
+	if _, err := f.handoffs.Withdraw(ctx, first, ""); err != nil {
+		t.Fatal(err)
+	}
+	want(t, f.get("/chip"), http.StatusOK, "1 needs you")
+	want(t, f.get("/static/grain.svg"), http.StatusOK, "feTurbulence")
+	if r := f.get("/static/grain.svg"); r.header.Get("Cache-Control") != "public, max-age=31536000, immutable" {
+		t.Fatalf("grain.svg: %q", r.header.Get("Cache-Control"))
+	}
+}

@@ -32,7 +32,7 @@
 {{end}}
 
 {{define "help-cell"}}  {{with .Help}}
-  <section class="cell span-8" aria-label="{{.Name}} needs you">
+  <section class="cell emph span-8" aria-label="{{.Name}} needs you">
     <div class="cell-head">
       <div class="actions"><span class="pill help">Needs you</span><b style="font-size:16px">{{.Name}}</b>{{with .Ask}}<span class="small muted">{{.Agent}} · {{ago .CreatedAt}}</span>{{end}}</div>
       <a class="btn blue" href="/profiles/{{.Name}}">Take control</a>
@@ -63,7 +63,7 @@
     <div class="cell-head"><h2 class="cell-title" id="prof-title">Profiles</h2><a class="cell-link" href="/profiles">View all →</a></div>
     {{if .Profiles}}
     <ul class="rows">{{range $i, $p := .Profiles}}{{if lt $i 6}}
-      <li><span class="initial">{{initials .Name}}</span><a class="name" href="/profiles/{{.Name}}">{{.Name}}</a><span class="dot-text {{.Status.Key}}">{{.Status.Label}}</span><span class="num small muted" style="width:64px;text-align:right">{{if .Live}}{{gb .Memory}}{{else}}—{{end}}</span></li>
+      <li{{if eq .Status.Key "help"}} class="help"{{end}}><span class="initial">{{initials .Name}}</span><a class="name" href="/profiles/{{.Name}}">{{.Name}}</a><span class="dot-text {{.Status.Key}}">{{.Status.Label}}</span><span class="num small muted" style="width:64px;text-align:right">{{if .Live}}{{gb .Memory}}{{else}}—{{end}}</span></li>
     {{end}}{{end}}</ul>
     {{else}}<p class="small muted" style="margin:0">No profiles yet. Create one, log in once, and agents can use it.</p>{{end}}
   </section>

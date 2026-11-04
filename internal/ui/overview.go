@@ -66,7 +66,7 @@ type memoryPart struct {
 }
 
 // partColors tell browsers apart in the memory bar; the needs-you one is orange.
-var partColors = []string{"#2F6BFF", "#8AA8FF", "#16A34A", "#7C3AED", "#0EA5E9", "#A1A1AA"}
+var partColors = []string{"#2F6BFF", "#8AA8FF", "#16A34A", "#7C3AED", "#0EA5E9", "#94A3B8"}
 
 func (u *UI) memoryView(r *http.Request, views []profileView) memoryView {
 	mv := memoryView{Host: u.o.HostMemory}
@@ -89,7 +89,7 @@ func (u *UI) memoryView(r *http.Request, views []profileView) memoryView {
 	slices.SortFunc(browsers, func(a, b sessions.Usage) int { return cmp.Compare(b.Bytes, a.Bytes) })
 	i := 0
 	for _, b := range browsers {
-		c := "#A1A1AA"
+		c := "#94A3B8"
 		switch {
 		case help[b.Profile]:
 			c = "#FF6A3D"
