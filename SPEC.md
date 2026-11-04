@@ -276,7 +276,7 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 |---|---|
 | 1 · Login | Admin password, keep signed in, lockout message, help text pointing to where the password lives (Umbrel app Info, or the first-run setup). |
 | 2 · Overview | Summary only, each cell linking to its page: the profile waiting for you (with Take control), memory use against the limit, profiles list, browser hours, connect snippet, agents, handoffs this week. |
-| 3 · Profiles | Grid of profile cards with a live preview per state (default), or a table. Status, mode, agent, memory, activity, auto-stop. ⋯ menu (copy CDP URL, stop, edit, export, delete), stop and delete confirmations, empty state. |
+| 3 · Profiles | Grid of profile cards with a live preview per state (default), or a table. Each profile has an icon: its main site's favicon, read locally from the profile's own favicon cache, or a chosen icon and colour as fallback. Status, mode, agent, memory, activity, auto-stop. ⋯ menu (copy CDP URL, stop, edit, export, delete), stop and delete confirmations, empty state. |
 | 4 · New profile | Centred modal over Profiles: name, handoff policy, "start and log in now"; Advanced holds mode, auto-stop, screen size, proxy and local network access. |
 | 5 · Live view | Streamed browser, take or hand back control, controls locked while the agent drives, connection details, agent activity log, help request. |
 | 6 · Agents | Agent tokens (create with scope, shown once, revoke), handoff link rules, quick start, endpoint list, MCP. |

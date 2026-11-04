@@ -18,9 +18,10 @@ th{font-weight:500}
 .bp-spin{animation:bp-spin 0.9s linear infinite}
 @keyframes bp-shim{0%{background-position:-240px 0}100%{background-position:240px 0}}
 .bp-shim{background:linear-gradient(90deg,#E8EDF4 0%,#F5F7FB 50%,#E8EDF4 100%);background-size:480px 100%;animation:bp-shim 1.4s linear infinite}
+@keyframes pp-pulse{0%{box-shadow:0 0 0 0 rgba(255,106,61,0.55)}70%{box-shadow:0 0 0 7px rgba(255,106,61,0)}100%{box-shadow:0 0 0 0 rgba(255,106,61,0)}}.pp-pulse{animation:pp-pulse 1.8s ease-out infinite}@media (prefers-reduced-motion: reduce){.pp-pulse{animation:none}}
 </style>
 </helmet>
-<div style="position: relative; min-height: 100vh; background: radial-gradient(1000px 480px at 15% -140px, rgba(47,107,255,0.22), rgba(47,107,255,0) 70%), radial-gradient(800px 420px at 90% -180px, rgba(56,189,248,0.18), rgba(56,189,248,0) 70%), url('data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20width%3D%27180%27%20height%3D%27180%27%3E%3Cfilter%20id%3D%27n%27%3E%3CfeTurbulence%20type%3D%27fractalNoise%27%20baseFrequency%3D%27.85%27%20numOctaves%3D%272%27%20stitchTiles%3D%27stitch%27%2F%3E%3CfeColorMatrix%20values%3D%270%200%200%200%200.12%200%200%200%200%200.18%200%200%200%200%200.45%200%200%200%200.06%200%27%2F%3E%3C%2Ffilter%3E%3Crect%20width%3D%27100%25%27%20height%3D%27100%25%27%20filter%3D%27url%28%23n%29%27%2F%3E%3C%2Fsvg%3E') 0 0 / 180px 180px, linear-gradient(to bottom, rgba(234,241,255,0) 0, rgba(234,241,255,0.6) 260px, rgb(234,241,255) 560px), linear-gradient(rgba(47,107,255,0.07) 1px, transparent 1px) 0 0 / 48px 48px, linear-gradient(90deg, rgba(47,107,255,0.07) 1px, transparent 1px) 0 0 / 48px 48px, #EAF1FF; color: #0F172A; font-family: 'Geist', system-ui, sans-serif">
+<div style="position: relative; min-height: 100vh; background: radial-gradient(760px 420px at 24% -150px, rgba(255,106,61,0.20), rgba(255,106,61,0) 70%), radial-gradient(900px 460px at 88% -150px, rgba(47,107,255,0.22), rgba(47,107,255,0) 70%), url('data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20width%3D%27180%27%20height%3D%27180%27%3E%3Cfilter%20id%3D%27n%27%3E%3CfeTurbulence%20type%3D%27fractalNoise%27%20baseFrequency%3D%27.85%27%20numOctaves%3D%272%27%20stitchTiles%3D%27stitch%27%2F%3E%3CfeColorMatrix%20values%3D%270%200%200%200%200.12%200%200%200%200%200.18%200%200%200%200%200.45%200%200%200%200.06%200%27%2F%3E%3C%2Ffilter%3E%3Crect%20width%3D%27100%25%27%20height%3D%27100%25%27%20filter%3D%27url%28%23n%29%27%2F%3E%3C%2Fsvg%3E') 0 0 / 180px 180px, linear-gradient(to bottom, rgba(234,241,255,0) 0, rgba(234,241,255,0.6) 260px, rgb(234,241,255) 560px), linear-gradient(rgba(47,107,255,0.07) 1px, transparent 1px) 0 0 / 48px 48px, linear-gradient(90deg, rgba(47,107,255,0.07) 1px, transparent 1px) 0 0 / 48px 48px, #EAF1FF; color: #0F172A; font-family: 'Geist', system-ui, sans-serif">
 
   <header style="position: sticky; top: 0; z-index: 10; background: rgba(255,255,255,0.72); backdrop-filter: blur(14px) saturate(160%); -webkit-backdrop-filter: blur(14px) saturate(160%); box-shadow: 0 1px 0 rgba(37,64,140,0.08)">
     <div style="max-width: 1320px; margin: 0 auto; padding: 0 28px; min-height: 56px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 24px">
@@ -35,7 +36,7 @@ th{font-weight:500}
         <a href="settings.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; color: #475569; text-decoration: none">Settings</a>
       </nav>
       <sc-if value="{{hasHelp}}" hint-placeholder-val="{{true}}">
-        <a href="live-view.html" style="min-height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 10px; border-radius: 999px; background: #FFF1EB; color: #C2410C; font-size: 13px; font-weight: 500; text-decoration: none"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #FF6A3D"></span>{{helpCount}} needs you</a>
+        <a href="live-view.html" style="min-height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 10px; border-radius: 999px; background: rgba(255,106,61,0.12); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); box-shadow: inset 0 0 0 1px rgba(255,106,61,0.35), 0 6px 16px -6px rgba(255,106,61,0.55); color: #C2410C; font-size: 13px; font-weight: 500; text-decoration: none"><span aria-hidden="true" class="pp-pulse" style="width: 6px; height: 6px; border-radius: 50%; background: #FF6A3D"></span>{{helpCount}} needs you</a>
       </sc-if>
       <div style="flex: 1 1 40px"></div>
       <span style="min-width: 200px; height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; font-size: 13px; color: #64748B">
@@ -92,7 +93,7 @@ th{font-weight:500}
     <sc-if value="{{showGridView}}" hint-placeholder-val="{{true}}">
       <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px">
         <sc-for list="{{rows}}" as="r" hint-placeholder-count="5">
-          <article style="background: #FFFFFF; border-radius: 16px; box-shadow: {{r.cardRing}}; display: flex; flex-direction: column">
+          <article style="{{r.cardStyle}}; display: flex; flex-direction: column">
             <div aria-hidden="true" style="position: relative; margin: 8px 8px 0; aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden; background: #F1F5F9; box-shadow: inset 0 0 0 1px #E8EDF4">
               <sc-if value="{{r.vOtp}}" hint-placeholder-val="{{false}}">
                 <div style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center">
@@ -145,10 +146,10 @@ th{font-weight:500}
 
             <div style="padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 12px">
               <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px">
-                <div style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
+                <div style="display: flex; align-items: center; gap: 12px; min-width: 0"><span aria-hidden="true" style="position: relative; flex: none; width: 36px; height: 36px; border-radius: 10px; background: {{r.iconBg}}; box-shadow: inset 0 0 0 1px {{r.iconRing}}; display: flex; align-items: center; justify-content: center"><img src="{{r.icon}}" alt="" style="width: 21px; height: 21px"></span><div style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
                   <h2 style="margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.2px">{{r.name}}</h2>
                   <span style="font-size: 13px; color: #64748B; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{r.activity}}</span>
-                </div>
+                </div></div>
                 <span style="flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; background: {{r.pillBg}}; color: {{r.fg}}; font-size: 12px; font-weight: 500">
                   <sc-if value="{{r.isStarting}}" hint-placeholder-val="{{false}}"><svg class="bp-spin" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9"></path></svg></sc-if>
                   <sc-if value="{{r.showDot}}" hint-placeholder-val="{{true}}"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{r.dot}}"></span></sc-if>
@@ -159,7 +160,7 @@ th{font-weight:500}
                 <span>{{r.mode}}</span><span>{{r.agent}}</span><span style="margin-left: auto; color: #334155">{{r.mem}}</span>
               </div>
               <div style="position: relative; display: flex; gap: 6px">
-                <sc-if value="{{r.isHelp}}" hint-placeholder-val="{{false}}"><a href="live-view.html" style="flex: 1; min-height: 34px; display: flex; align-items: center; justify-content: center; background: #2F6BFF; border-radius: 8px; color: #FFFFFF; font-size: 13px; font-weight: 500; text-decoration: none; box-shadow: 0 1px 2px rgba(47,107,255,0.4), inset 0 1px 0 rgba(255,255,255,0.18)">Take control</a></sc-if>
+                <sc-if value="{{r.isHelp}}" hint-placeholder-val="{{false}}"><a href="live-view.html" style="flex: 1; min-height: 34px; display: flex; align-items: center; justify-content: center; background: #2F6BFF; border-radius: 8px; color: #FFFFFF; font-size: 13px; font-weight: 500; text-decoration: none; box-shadow: 0 1px 2px rgba(47,107,255,0.4), 0 8px 22px -6px rgba(47,107,255,0.6), inset 0 1px 0 rgba(255,255,255,0.18)">Take control</a></sc-if>
                 <sc-if value="{{r.isRunning}}" hint-placeholder-val="{{true}}"><a href="live-view.html" style="flex: 1; min-height: 34px; display: flex; align-items: center; justify-content: center; background: #FFFFFF; border-radius: 8px; font-size: 13px; font-weight: 500; text-decoration: none; box-shadow: 0 0 0 1px #E2E8F0, 0 1px 2px rgba(15,23,42,0.05)">Live view</a></sc-if>
                 <sc-if value="{{r.isStarting}}" hint-placeholder-val="{{false}}"><button type="button" disabled style="flex: 1; min-height: 34px; background: #F1F5F9; border: 0; border-radius: 8px; color: #64748B; font-family: inherit; font-size: 13px">Starting…</button></sc-if>
                 <sc-if value="{{r.isStopped}}" hint-placeholder-val="{{false}}"><button type="button" onClick="{{r.start}}" style="flex: 1; min-height: 34px; background: #0F172A; border: 0; border-radius: 8px; color: #FFFFFF; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer; box-shadow: inset 0 1px 0 rgba(255,255,255,0.12)">Start</button></sc-if>
@@ -208,7 +209,7 @@ th{font-weight:500}
           <tbody>
             <sc-for list="{{rows}}" as="r" hint-placeholder-count="5">
               <tr style="background: {{r.rowBg}}">
-                <td style="padding: 14px 18px; border-bottom: 1px solid #EEF2F7"><span style="display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 500">{{r.name}}</span><span style="font-size: 13px; color: #64748B">{{r.note}}</span></span></td>
+                <td style="padding: 14px 18px; border-bottom: 1px solid #EEF2F7"><span style="display: flex; align-items: center; gap: 12px"><span aria-hidden="true" style="position: relative; flex: none; width: 28px; height: 28px; border-radius: 8px; background: {{r.iconBg}}; box-shadow: inset 0 0 0 1px {{r.iconRing}}; display: flex; align-items: center; justify-content: center"><img src="{{r.icon}}" alt="" style="width: 16px; height: 16px"></span><span style="display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 500">{{r.name}}</span><span style="font-size: 13px; color: #64748B">{{r.note}}</span></span></span></td>
                 <td style="padding: 14px 12px; border-bottom: 1px solid #EEF2F7"><span style="display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; background: {{r.pillBg}}; color: {{r.fg}}; font-size: 12px; font-weight: 500; white-space: nowrap"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{r.dot}}"></span>{{r.status}}</span></td>
                 <td style="padding: 14px 12px; border-bottom: 1px solid #EEF2F7; color: #334155">{{r.mode}}</td>
                 <td style="padding: 14px 12px; border-bottom: 1px solid #EEF2F7; color: #334155">{{r.agent}}</td>
@@ -275,11 +276,11 @@ class Component extends DCLogic {
   componentDidMount() { setTimeout(() => this.set('github', 'running'), 2500); }
   renderVals() {
     const base = [
-      { name: 'google', note: 'Gmail, Drive', screen: 'list', mode: 'Visual', agent: 'research-bot', mem: '1.4 GB', activity: 'Waiting on 2FA · 3 min', idle: '15 min', lastSeen: 'today' },
-      { name: 'linkedin', note: 'Posting agent', screen: 'feed', mode: 'API', agent: 'linkedin-poster', mem: '0.9 GB', activity: 'Idle for 1 min', idle: '10 min', lastSeen: 'today' },
-      { name: 'github', note: 'Releases and issues', screen: 'list', mode: 'API', agent: 'claude-code', mem: '0.6 GB', activity: 'Just requested', idle: '15 min', lastSeen: 'today' },
-      { name: 'x-com', note: 'Research scraping', screen: 'feed', mode: 'Visual', agent: '—', mem: '—', activity: 'Last used yesterday', idle: '30 min', lastSeen: 'yesterday 18:40' },
-      { name: 'notion', note: 'Workspace notes', screen: 'list', mode: 'API', agent: '—', mem: '—', activity: 'Crashed 10 min ago', idle: 'off', lastSeen: '10 min ago' }
+      { name: 'google', icon: 'data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27%232563EB%27%20stroke-width%3D%271.9%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Crect%20x%3D%273%27%20y%3D%275%27%20width%3D%2718%27%20height%3D%2714%27%20rx%3D%272.5%27%2F%3E%3Cpath%20d%3D%27M4%207l8%206%208-6%27%2F%3E%3C%2Fsvg%3E', iconBg: '#EFF4FF', iconRing: '#2563EB2E', note: 'Gmail, Drive', screen: 'list', mode: 'Visual', agent: 'research-bot', mem: '1.4 GB', activity: 'Waiting on 2FA · 3 min', idle: '15 min', lastSeen: 'today' },
+      { name: 'linkedin', icon: 'data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27%230284C7%27%20stroke-width%3D%271.9%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Crect%20x%3D%273%27%20y%3D%277%27%20width%3D%2718%27%20height%3D%2713%27%20rx%3D%272.5%27%2F%3E%3Cpath%20d%3D%27M9%207V5.5A1.5%201.5%200%200%201%2010.5%204h3A1.5%201.5%200%200%201%2015%205.5V7M3%2012.5h18%27%2F%3E%3C%2Fsvg%3E', iconBg: '#EAF6FD', iconRing: '#0284C72E', note: 'Posting agent', screen: 'feed', mode: 'API', agent: 'linkedin-poster', mem: '0.9 GB', activity: 'Idle for 1 min', idle: '10 min', lastSeen: 'today' },
+      { name: 'github', icon: 'data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27%237C3AED%27%20stroke-width%3D%271.9%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Cpath%20d%3D%27M8.5%208L4.5%2012l4%204M15.5%208l4%204-4%204M13.5%205.5l-3%2013%27%2F%3E%3C%2Fsvg%3E', iconBg: '#F3EEFF', iconRing: '#7C3AED2E', note: 'Releases and issues', screen: 'list', mode: 'API', agent: 'claude-code', mem: '0.6 GB', activity: 'Just requested', idle: '15 min', lastSeen: 'today' },
+      { name: 'x-com', icon: 'data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27%23475569%27%20stroke-width%3D%271.9%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Cpath%20d%3D%27M20%2011.5a7.5%207.5%200%200%201-11.2%206.5L4%2019.5l1.5-4.3A7.5%207.5%200%201%201%2020%2011.5z%27%2F%3E%3C%2Fsvg%3E', iconBg: '#F1F5F9', iconRing: '#4755692E', note: 'Research scraping', screen: 'feed', mode: 'Visual', agent: '—', mem: '—', activity: 'Last used yesterday', idle: '30 min', lastSeen: 'yesterday 18:40' },
+      { name: 'notion', icon: 'data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27%230F766E%27%20stroke-width%3D%271.9%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Cpath%20d%3D%27M6.5%203.5h7.5l4.5%204.5v11a1.5%201.5%200%200%201-1.5%201.5h-10.5A1.5%201.5%200%200%201%205%2019V5a1.5%201.5%200%200%201%201.5-1.5z%27%2F%3E%3Cpath%20d%3D%27M13.5%203.5V8h4.5M8.5%2012.5h7M8.5%2016h5%27%2F%3E%3C%2Fsvg%3E', iconBg: '#E9F7F5', iconRing: '#0F766E2E', note: 'Workspace notes', screen: 'list', mode: 'API', agent: '—', mem: '—', activity: 'Crashed 10 min ago', idle: 'off', lastSeen: '10 min ago' }
     ];
     const LOOK = {
       help:     { status: 'Needs you', dot: '#FF6A3D', fg: '#C2410C', pillBg: '#FFF1EB', rowBg: '#FFFAF7', cardRing: '0 0 0 1.5px #FF6A3D, 0 10px 30px rgba(255,106,61,0.14)' },
@@ -290,11 +291,13 @@ class Component extends DCLogic {
     };
     const order = { help: 0, failed: 1, running: 2, starting: 3, stopped: 4 };
     const rows = base.map((r) => {
+      const helpGlass = 'background: linear-gradient(180deg, rgba(255,234,223,0.94) 0, rgba(255,247,243,0.9) 120px, rgba(255,255,255,0.9) 240px); backdrop-filter: blur(16px) saturate(140%); -webkit-backdrop-filter: blur(16px) saturate(140%); border-radius: 16px; box-shadow: inset 0 1px 0 rgba(255,255,255,0.8), 0 0 0 1px rgba(255,106,61,0.38), 0 22px 48px -20px rgba(255,106,61,0.55)';
+      const plain = 'background: #FFFFFF; border-radius: 16px; box-shadow: ';
       const s = this.state.st[r.name];
       const live = s === 'help' || s === 'running';
       const open = this.state.menu === r.name;
       return {
-        ...r, ...LOOK[s],
+        ...r, ...LOOK[s], cardStyle: s === 'help' ? helpGlass : plain + LOOK[s].cardRing,
         agent: live || s === 'starting' ? r.agent : 'No agent',
         mem: live || s === 'starting' ? (r.mem === '—' ? '0.6 GB' : r.mem) : '0 MB',
         error: 'chromium exited (139)',
