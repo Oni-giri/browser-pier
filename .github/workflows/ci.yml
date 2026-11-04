@@ -34,7 +34,6 @@ jobs:
   # Pull requests build the orchestrator image without any package credentials.
   image:
     if: github.event_name == 'pull_request'
-    needs: go
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -48,9 +47,9 @@ jobs:
 
   # Builds the browser image (amd64) and runs the tests that need Docker
   # against it: login persistence across stop, start and rebuild, sandbox,
-  # WebGL, window placement, xdotool and the H.264 stream.
+  # WebGL, window placement, xdotool and the H.264 stream. It runs alongside
+  # go, which covers the other tests.
   chromium:
-    needs: go
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -58,6 +57,8 @@ jobs:
         with:
           go-version-file: go.mod
       - run: mkdir -p "$RUNNER_TEMP/artifacts"
+      # A plain docker build, not buildx: the rebuild test builds the image
+      # again and needs this build's layers in the daemon's cache.
       - run: make test-docker
         env:
           BROWSERPIER_TEST_ARTIFACTS: ${{ runner.temp }}/artifacts
