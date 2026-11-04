@@ -204,6 +204,7 @@ func run(log *slog.Logger) error {
 	app := ui.New(mgr, web, handoffs, prefs, log, ui.Options{
 		PublicURL:       cfg.PublicURL,
 		HostMemory:      total,
+		HostFree:        localFree(),
 		RAMLimitFromEnv: cfg.RAMLimitFromEnv,
 		Version:         version,
 		SetRAMLimit: func(percent int) {
@@ -242,23 +243,42 @@ const perBrowser = 1 << 30
 
 // hostMemory reads the host's total memory. In a container,
 // /proc/meminfo still shows the host's.
-func hostMemory() (int64, error) {
+func hostMemory() (int64, error) { return meminfo("MemTotal") }
+
+// localFree is hostFree when the browsers run on this kernel. A daemon behind
+// DOCKER_HOST may run elsewhere, and this host's free memory says nothing of
+// its own.
+func localFree() func() int64 {
+	if docker.RemoteDaemon() {
+		return nil
+	}
+	return hostFree
+}
+
+// hostFree is how much memory the host could give a new process now, other
+// apps included; 0 if unknown.
+func hostFree() int64 {
+	n, _ := meminfo("MemAvailable")
+	return n
+}
+
+func meminfo(field string) (int64, error) {
 	b, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
 		return 0, err
 	}
-	return parseMemTotal(string(b))
+	return parseMeminfo(string(b), field)
 }
 
-func parseMemTotal(meminfo string) (int64, error) {
+func parseMeminfo(meminfo, field string) (int64, error) {
 	for _, line := range strings.Split(meminfo, "\n") {
 		f := strings.Fields(line)
-		if len(f) >= 2 && f[0] == "MemTotal:" {
+		if len(f) >= 2 && f[0] == field+":" {
 			kb, err := strconv.ParseInt(f[1], 10, 64)
 			return kb << 10, err
 		}
 	}
-	return 0, errors.New("no MemTotal in /proc/meminfo")
+	return 0, errors.New("no " + field + " in /proc/meminfo")
 }
 
 // instanceID is this BrowserPier's ID, made on first start and kept in the

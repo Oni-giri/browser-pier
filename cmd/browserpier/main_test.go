@@ -175,12 +175,15 @@ func TestInstanceIDIsKept(t *testing.T) {
 	}
 }
 
-func TestParseMemTotal(t *testing.T) {
-	n, err := parseMemTotal("MemTotal:       16303512 kB\nMemFree:  1 kB\n")
+func TestParseMeminfo(t *testing.T) {
+	n, err := parseMeminfo("MemTotal:       16303512 kB\nMemFree:  1 kB\n", "MemTotal")
 	if err != nil || n != 16303512*1024 {
-		t.Fatalf("parseMemTotal = %d, %v", n, err)
+		t.Fatalf("parseMeminfo = %d, %v", n, err)
 	}
-	if _, err := parseMemTotal("nothing"); err == nil {
+	if n, err := parseMeminfo("MemTotal: 1 kB\nMemAvailable:  2048 kB\n", "MemAvailable"); n != 2<<20 || err != nil {
+		t.Fatalf("MemAvailable = %d, %v", n, err)
+	}
+	if _, err := parseMeminfo("nothing", "MemTotal"); err == nil {
 		t.Fatal("want an error")
 	}
 	if n, err := hostMemory(); err != nil || n <= 0 {
@@ -196,5 +199,16 @@ func TestPrivateDir(t *testing.T) {
 	privateDir(slog.New(slog.DiscardHandler), dir)
 	if info, _ := os.Stat(dir); info.Mode().Perm() != 0o700 {
 		t.Fatalf("mode %v", info.Mode().Perm())
+	}
+}
+
+func TestLocalFree(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "")
+	if localFree() == nil {
+		t.Fatal("no free memory for a local daemon")
+	}
+	t.Setenv("DOCKER_HOST", "tcp://elsewhere:2375")
+	if localFree() != nil {
+		t.Fatal("this host's free memory used for a remote daemon")
 	}
 }

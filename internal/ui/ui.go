@@ -46,6 +46,9 @@ type Options struct {
 	PublicURL string
 	// HostMemory is the host's total memory in bytes; 0 if unknown.
 	HostMemory int64
+	// HostFree reads how much memory the host has available now, other
+	// apps included; nil or 0 if unknown.
+	HostFree func() int64
 	// RAMLimitFromEnv: BROWSERPIER_RAM_LIMIT_PERCENT is set, so the memory
 	// limit can't be changed here.
 	RAMLimitFromEnv bool

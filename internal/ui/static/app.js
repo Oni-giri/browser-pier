@@ -153,7 +153,13 @@
     if (host) {
       const limit = host * pct / 100;
       $("#ram-gb").textContent = limit >= 2 ** 30 ? (limit / 2 ** 30).toFixed(1) + " GB" : Math.floor(limit / 2 ** 20) + " MB";
-      if (each) $("#ram-fits").textContent = Math.floor(limit / each);
+      // Other apps share the host: count only what they leave.
+      const room = +ram.dataset.room || Infinity;
+      if (each) {
+        const fits = Math.floor(Math.min(limit, room) / each);
+        $("#ram-fits").textContent = fits;
+        $("#ram-fits-word").textContent = fits === 1 ? "browser" : "browsers";
+      }
     }
   }
   const tracked = $("form[data-track]");

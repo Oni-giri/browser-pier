@@ -28,8 +28,35 @@ type overviewData struct {
 // memoryView is the memory report as the Overview and Settings show it.
 type memoryView struct {
 	sessions.MemoryReport
-	Host  int64
-	Parts []memoryPart
+	Host int64
+	// Free is what the host has available now, other apps included; 0 if
+	// unknown. Others is what the rest of the host uses: other apps and the
+	// system.
+	Free, Others int64
+	Parts        []memoryPart
+}
+
+// Room is how many more browsers fit: under the limit, and in what the host
+// has free, since other apps share its memory. -1 when neither is known.
+func (mv memoryView) Room() int {
+	room := mv.MemoryReport.Room()
+	if mv.FreeBound() {
+		room = int(mv.Free / mv.Each)
+	}
+	return room
+}
+
+// Usable is the memory other apps leave BrowserPier: what its browsers use
+// plus what the host has free.
+func (mv memoryView) Usable() int64 { return mv.Used + mv.Free }
+
+// FreeBound: the host's free memory, not the limit, is what holds Room down.
+func (mv memoryView) FreeBound() bool {
+	if mv.Free <= 0 || mv.Each <= 0 {
+		return false
+	}
+	room := mv.MemoryReport.Room()
+	return room < 0 || int(mv.Free/mv.Each) < room
 }
 
 type memoryPart struct {
@@ -47,6 +74,12 @@ func (u *UI) memoryView(r *http.Request, views []profileView) memoryView {
 		mv.MemoryReport = u.memory(r.Context())
 	} else {
 		mv.Limit = u.m.MemoryLimit()
+	}
+	if u.o.HostFree != nil {
+		mv.Free = u.o.HostFree()
+	}
+	if mv.Free > 0 && mv.Host > 0 {
+		mv.Others = max(mv.Host-mv.Free-mv.Used, 0)
 	}
 	help := map[string]bool{}
 	for _, v := range views {

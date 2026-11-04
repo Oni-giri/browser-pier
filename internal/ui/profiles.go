@@ -176,7 +176,7 @@ type profilesData struct {
 	All, Shown        []profileView
 	Show, View, Query string
 	Counts            map[string]int
-	Mem               sessions.MemoryReport
+	Mem               memoryView
 	Running           int
 }
 
@@ -212,7 +212,7 @@ func (u *UI) profilesPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if d.Running > 0 {
-		d.Mem = u.memory(r.Context())
+		d.Mem = u.memoryView(r, all)
 	}
 	if r.Header.Get("HX-Request") == "true" {
 		u.fragment(w, http.StatusOK, "profiles", "list-poll", d)
