@@ -204,7 +204,7 @@ func run(log *slog.Logger) error {
 	app := ui.New(mgr, web, handoffs, prefs, log, ui.Options{
 		PublicURL:       cfg.PublicURL,
 		HostMemory:      total,
-		HostFree:        hostFree,
+		HostFree:        localFree(),
 		RAMLimitFromEnv: cfg.RAMLimitFromEnv,
 		Version:         version,
 		SetRAMLimit: func(percent int) {
@@ -244,6 +244,16 @@ const perBrowser = 1 << 30
 // hostMemory reads the host's total memory. In a container,
 // /proc/meminfo still shows the host's.
 func hostMemory() (int64, error) { return meminfo("MemTotal") }
+
+// localFree is hostFree when the browsers run on this kernel. A daemon behind
+// DOCKER_HOST may run elsewhere, and this host's free memory says nothing of
+// its own.
+func localFree() func() int64 {
+	if docker.RemoteDaemon() {
+		return nil
+	}
+	return hostFree
+}
 
 // hostFree is how much memory the host could give a new process now, other
 // apps included; 0 if unknown.

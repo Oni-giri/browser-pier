@@ -492,6 +492,12 @@ func TestMemoryCountsOtherApps(t *testing.T) {
 	f.free = 3 << 30
 	want(t, f.get("/settings"), http.StatusOK, `<b id="ram-fits">3</b>`, "Other apps <b>13.0 GB</b>", `data-room="3221225472"`)
 	want(t, f.get("/"), http.StatusOK, "Other apps", `class="others"`)
+	// The profiles list says the same, once a browser runs.
+	f.profile("google")
+	if _, _, err := f.m.Start(context.Background(), "google", ""); err != nil {
+		t.Fatal(err)
+	}
+	want(t, f.get("/profiles"), http.StatusOK, "room for about 3 more")
 	// Plenty free: the limit is what counts again.
 	f.free = 15 << 30
 	want(t, f.get("/settings"), http.StatusOK, `<b id="ram-fits">8</b>`)

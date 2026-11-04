@@ -201,3 +201,14 @@ func TestPrivateDir(t *testing.T) {
 		t.Fatalf("mode %v", info.Mode().Perm())
 	}
 }
+
+func TestLocalFree(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "")
+	if localFree() == nil {
+		t.Fatal("no free memory for a local daemon")
+	}
+	t.Setenv("DOCKER_HOST", "tcp://elsewhere:2375")
+	if localFree() != nil {
+		t.Fatal("this host's free memory used for a remote daemon")
+	}
+}
