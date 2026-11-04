@@ -112,9 +112,9 @@ func TestSiteGivenBeatsHistory(t *testing.T) {
 	wantColor(t, icon(t, res.PNG), 32, 32, yellow)
 }
 
-func TestReadsAWriteAheadLog(t *testing.T) {
-	// The browser still has the database open: the newest rows are in
-	// its -wal. The copy must include them.
+func TestIgnoresAWriteAheadLog(t *testing.T) {
+	// The browser had the database open: everything is still in its
+	// -wal. That isn't replayed, so the read fails cleanly.
 	dir := filepath.Join(t.TempDir(), "chrome")
 	if err := os.MkdirAll(filepath.Join(dir, "Default"), 0o700); err != nil {
 		t.Fatal(err)
@@ -124,7 +124,88 @@ func TestReadsAWriteAheadLog(t *testing.T) {
 	if st, err := os.Stat(filepath.Join(dir, "Default", "Favicons-wal")); err != nil || st.Size() == 0 {
 		t.Fatalf("no -wal to test with: %v", err)
 	}
-	wantColor(t, icon(t, read(t, dir, "wal.test").PNG), 32, 32, teal)
+	res, err := Read(context.Background(), dir, "wal.test", t.TempDir())
+	if err == nil && res.PNG != nil {
+		t.Fatal("the -wal was applied")
+	}
+}
+
+// A hot journal names a super-journal, which SQLite deletes when its
+// child journals are gone. The browser writes the journal, so it must not
+// get to choose a file for the orchestrator to delete. This one also says
+// the database had one page: replayed, it would cut the copy short and
+// the read would fail.
+func TestHotJournalCantDeleteFiles(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "chrome")
+	if err := os.MkdirAll(filepath.Join(dir, "Default"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(fixtureDir, "Default", "Favicons"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Default", "Favicons"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(t.TempDir(), "precious")
+	if err := os.WriteFile(victim, []byte(filepath.Join(t.TempDir(), "gone-journal")+"\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Default", "Favicons-journal"), hotJournal(victim), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Read(context.Background(), dir, "mail.example.com", t.TempDir())
+	if _, serr := os.Stat(victim); serr != nil {
+		t.Fatalf("the super-journal the journal named is gone: %v", serr)
+	}
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	wantColor(t, icon(t, res.PNG), 32, 32, green)
+}
+
+// hotJournal is a rollback journal with no pages and a super-journal
+// name, in SQLite's format (pager.c): a header padded to the sector,
+// then the name, its length, its checksum and the magic again.
+func hotJournal(super string) []byte {
+	magic := []byte{0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7}
+	hdr := append([]byte{}, magic...)
+	hdr = binary.BigEndian.AppendUint32(hdr, 0)    // records
+	hdr = binary.BigEndian.AppendUint32(hdr, 0)    // checksum nonce
+	hdr = binary.BigEndian.AppendUint32(hdr, 1)    // pages before: replayed, it would cut the database short
+	hdr = binary.BigEndian.AppendUint32(hdr, 512)  // sector size
+	hdr = binary.BigEndian.AppendUint32(hdr, 4096) // page size
+	b := append(hdr, make([]byte, 512-len(hdr))...)
+	// The super-journal record starts with a page number, the lock page's.
+	b = binary.BigEndian.AppendUint32(b, uint32(1<<30/4096+1))
+	b = append(b, super...)
+	sum := uint32(0)
+	for _, c := range []byte(super) {
+		sum += uint32(c)
+	}
+	b = binary.BigEndian.AppendUint32(b, uint32(len(super)))
+	b = binary.BigEndian.AppendUint32(b, sum)
+	return append(b, magic...)
+}
+
+func TestRefusesAViewForATable(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "chrome")
+	if err := os.MkdirAll(filepath.Join(dir, "Default"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var schema []string
+	for _, q := range faviconsSchema {
+		if !strings.Contains(q, "favicon_bitmaps") {
+			schema = append(schema, q)
+		}
+	}
+	d := create(t, filepath.Join(dir, "Default", "Favicons"), append(schema,
+		`CREATE VIEW favicon_bitmaps AS SELECT 1 AS id, 1 AS icon_id, 0 AS last_updated, randomblob(16) AS image_data, 16 AS width, 16 AS height`,
+		`INSERT INTO icon_mapping (page_url, icon_id) VALUES ('https://view.test/', 1)`), "")
+	_ = d.Close()
+	if _, err := Read(context.Background(), dir, "view.test", t.TempDir()); err == nil || !strings.Contains(err.Error(), "isn't a table") {
+		t.Fatalf("Read = %v, want a refusal", err)
+	}
 }
 
 func TestSkipsBlobsOverTheCap(t *testing.T) {

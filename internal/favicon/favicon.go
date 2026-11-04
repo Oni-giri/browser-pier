@@ -6,7 +6,8 @@
 //
 // Both databases are written by the browser, so they are treated as
 // hostile: read only once the browser has exited, through os.Root, from a
-// private copy, with size and row caps. The image found is decoded,
+// private copy of the main file only, opened read-only and immutable, with
+// size, row and time caps. The image found is decoded,
 // checked and drawn again as a 64×64 PNG; its own bytes are never kept.
 package favicon
 
@@ -23,6 +24,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/net/publicsuffix"
 	_ "modernc.org/sqlite" // the driver BrowserPier's own database uses
@@ -38,6 +40,7 @@ const (
 	maxPages    = 20_000   // icon mappings, or history rows, looked at
 	maxIcons    = 5        // icons tried for the site
 	maxTries    = 8        // bitmaps decoded at most
+	readTimeout = 10 * time.Second
 )
 
 // Result is what Read found.
@@ -51,8 +54,11 @@ type Result struct {
 
 // Read finds the icon for site in chromeDir, a stopped browser's user data
 // dir. With site "", it infers the site from the history first. scratch
-// is an empty folder for the copies, which the caller removes.
+// is an empty folder for the copies, which the caller removes. It gives up
+// after readTimeout.
 func Read(ctx context.Context, chromeDir, site, scratch string) (Result, error) {
+	ctx, cancel := context.WithTimeout(ctx, readTimeout)
+	defer cancel()
 	var res Result
 	root, err := os.OpenRoot(chromeDir)
 	if errors.Is(err, os.ErrNotExist) {
@@ -68,7 +74,7 @@ func Read(ctx context.Context, chromeDir, site, scratch string) (Result, error) 
 			return res, fmt.Errorf("copying History: %w", err)
 		}
 		if ok {
-			if res.Site, err = InferSite(ctx, path); err != nil {
+			if res.Site, err = inferSite(ctx, path); err != nil {
 				return res, fmt.Errorf("reading History: %w", err)
 			}
 		}
@@ -84,14 +90,18 @@ func Read(ctx context.Context, chromeDir, site, scratch string) (Result, error) 
 	if !ok {
 		return res, nil
 	}
-	if res.PNG, err = Find(ctx, path, site); err != nil {
+	if res.PNG, err = find(ctx, path, site); err != nil {
 		return res, fmt.Errorf("reading Favicons: %w", err)
 	}
 	return res, nil
 }
 
-// copyDB copies the database at name in root, with its -journal or -wal
-// if there is one, into dir. ok is false if there's no database.
+// copyDB copies the database at name in root into dir. ok is false if
+// there's no database. Its -journal and -wal are left behind on purpose:
+// the browser could have written them, and a hot journal can make SQLite
+// delete the file it names (its super-journal) as the orchestrator's user.
+// After a clean exit there's nothing in them to apply; a stale one costs
+// at worst the last few writes, which an icon can do without.
 func copyDB(root *os.Root, name, dir string, limit int64) (path string, ok bool, err error) {
 	path = filepath.Join(dir, filepath.Base(name))
 	if err := copyFile(root, name, path, limit); err != nil {
@@ -99,11 +109,6 @@ func copyDB(root *os.Root, name, dir string, limit int64) (path string, ok bool,
 			return "", false, nil
 		}
 		return "", false, err
-	}
-	for _, side := range []string{"-journal", "-wal"} {
-		if err := copyFile(root, name+side, path+side, limit); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return "", false, err
-		}
 	}
 	return path, true, nil
 }
@@ -127,9 +132,6 @@ func copyFile(root *os.Root, name, dst string, limit int64) error {
 	if info.Size() > limit {
 		return fmt.Errorf("%s is over %d MiB", name, limit>>20)
 	}
-	if info.Size() == 0 {
-		return os.ErrNotExist // an empty journal: nothing to apply
-	}
 	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
@@ -141,34 +143,42 @@ func copyFile(root *os.Root, name, dst string, limit int64) error {
 	return out.Close()
 }
 
-// open opens a copied database. With no journal or WAL beside it, it's
-// opened read-only and immutable; with one, read-write, so SQLite can
-// apply it to the copy. Either way the schema is untrusted and no query
-// writes.
-func open(path string) (*sql.DB, error) {
+// open opens a copied database read-only and immutable: SQLite then looks
+// for no journal, WAL or lock beside it, and writes nothing. The schema is
+// untrusted, so its functions don't run and no query writes; tables lists
+// the tables to be read, which must be tables, not views a crafted
+// database could put in their place.
+func open(ctx context.Context, path string, tables ...string) (*sql.DB, error) {
 	q := url.Values{}
+	q.Set("mode", "ro")
+	q.Set("immutable", "1")
 	q.Add("_pragma", "query_only(1)")
 	q.Add("_pragma", "trusted_schema(0)")
 	q.Add("_pragma", "cell_size_check(1)")
-	_, errJ := os.Stat(path + "-journal")
-	_, errW := os.Stat(path + "-wal")
-	if errors.Is(errJ, os.ErrNotExist) && errors.Is(errW, os.ErrNotExist) {
-		q.Set("mode", "ro")
-		q.Set("immutable", "1")
-	}
 	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: q.Encode()}).String()
 	d, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
 	d.SetMaxOpenConns(1)
+	for _, t := range tables {
+		var n int
+		err := d.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, t).Scan(&n)
+		if err == nil && n != 1 {
+			err = fmt.Errorf("%s isn't a table", t)
+		}
+		if err != nil {
+			_ = d.Close()
+			return nil, err
+		}
+	}
 	return d, nil
 }
 
-// InferSite returns the registrable domain (see Registrable) of the web
-// pages visited most in the History database at path, or "" if none.
-func InferSite(ctx context.Context, path string) (string, error) {
-	d, err := open(path)
+// inferSite returns the registrable domain (see Registrable) of the web
+// pages visited most in the copied History database at path, or "" if none.
+func inferSite(ctx context.Context, path string) (string, error) {
+	d, err := open(ctx, path, "urls")
 	if err != nil {
 		return "", err
 	}
@@ -202,10 +212,10 @@ func InferSite(ctx context.Context, path string) (string, error) {
 	return best, nil
 }
 
-// Find returns the favicon for site from the Favicons database at path,
-// as a sanitised PNG, or nil if it holds none that passes.
-func Find(ctx context.Context, path, site string) ([]byte, error) {
-	d, err := open(path)
+// find returns the favicon for site from the copied Favicons database at
+// path, as a sanitised PNG, or nil if it holds none that passes.
+func find(ctx context.Context, path, site string) ([]byte, error) {
+	d, err := open(ctx, path, "icon_mapping", "favicons", "favicon_bitmaps")
 	if err != nil {
 		return nil, err
 	}
@@ -224,9 +234,19 @@ func Find(ctx context.Context, path, site string) ([]byte, error) {
 			if tries++; tries > maxTries {
 				return nil, nil
 			}
+			// The cap is checked again by the query that fetches the
+			// blob, and once more on what came back.
 			var blob []byte
-			if err := d.QueryRowContext(ctx, `SELECT image_data FROM favicon_bitmaps WHERE id = ?`, id).Scan(&blob); err != nil {
+			err := d.QueryRowContext(ctx, `SELECT image_data FROM favicon_bitmaps WHERE id = ? AND length(image_data) BETWEEN 1 AND ?`,
+				id, MaxBytes).Scan(&blob)
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			if err != nil {
 				return nil, err
+			}
+			if len(blob) > MaxBytes {
+				continue
 			}
 			if png, err := Sanitize(blob); err == nil {
 				return png, nil
