@@ -33,7 +33,7 @@
 {{end}}
 
 {{define "card"}}
-<article class="card{{if eq .Status.Key "help"}} help{{end}}" id="card-{{.Name}}">
+<article class="card{{if eq .Status.Key "help"}} help{{if .Emph}} emph{{end}}{{end}}" id="card-{{.Name}}">
   {{template "shot" .}}
   <div class="card-body">
     <div class="card-title">

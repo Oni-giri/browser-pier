@@ -43,6 +43,7 @@ type profileView struct {
 	Memory   int64
 	Error    string // why it failed
 	Ask      *handoff.Handoff
+	Emph     bool // the screen's one emphasis card: the first that needs you
 	// Preview is set while the browser can show a screenshot.
 	Preview  bool
 	PreviewV int64 // changes every 10 s, so cached previews refresh
@@ -208,6 +209,7 @@ func (u *UI) profilesPage(w http.ResponseWriter, r *http.Request) {
 			d.Running++
 		}
 		if (d.Show == "" || d.Show == k) && (q == "" || strings.Contains(v.Name, q)) {
+			v.Emph = v.Status.Key == "help" && !emphasised(d.Shown)
 			d.Shown = append(d.Shown, v)
 		}
 	}
@@ -354,4 +356,9 @@ func backTo(r *http.Request, fallback string) string {
 		return b
 	}
 	return fallback
+}
+
+// emphasised reports whether one of vs already has the emphasis card.
+func emphasised(vs []profileView) bool {
+	return slices.ContainsFunc(vs, func(v profileView) bool { return v.Emph })
 }
