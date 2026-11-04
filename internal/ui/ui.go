@@ -114,6 +114,7 @@ func (u *UI) Register(mux *http.ServeMux) {
 	mux.Handle("GET /profiles/{name}", admin(u.profilePage))
 	mux.Handle("GET /profiles/{name}/side", admin(u.profileSide))
 	mux.Handle("GET /profiles/{name}/preview.png", admin(u.preview))
+	mux.Handle("GET /profiles/{name}/icon", admin(u.icon))
 	mux.Handle("GET /profiles/{name}/edit", admin(u.editProfile))
 	mux.Handle("POST /profiles/{name}/edit", admin(u.saveProfile))
 	mux.Handle("POST /profiles/{name}/start", admin(u.startProfile))

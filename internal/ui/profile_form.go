@@ -24,6 +24,8 @@ type profileForm struct {
 	Screens []string
 	Error   string
 	Running bool
+	// IconURL is the profile's favicon when editing one that has it.
+	IconURL string
 }
 
 func (f profileForm) Summary() string {
@@ -44,6 +46,11 @@ func (profileForm) Policies() []policyChoice { return policyChoices }
 
 // AutoStopChoices are the idle timeouts offered, in minutes; 0 is never.
 func (f profileForm) AutoStopChoices() []int { return profiles.AutoStopChoices }
+
+// Glyphs and Colors are the fallback icon's choices; "" in the form picks
+// one from the name (.Profile.Glyph and .Profile.Color resolve it).
+func (profileForm) Glyphs() []string { return profiles.Glyphs }
+func (profileForm) Colors() []string { return profiles.Colors }
 
 func (u *UI) newProfile(w http.ResponseWriter, r *http.Request) {
 	defaults, err := u.settings.Get(r.Context())
@@ -109,7 +116,7 @@ func (u *UI) editProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, running := u.m.Live(p.Name)
-	f := profileForm{Profile: p, Proxy: maskProxy(p.Proxy), Screens: withScreen(p), Running: running}
+	f := profileForm{Profile: p, Proxy: maskProxy(p.Proxy), Screens: withScreen(p), Running: running, IconURL: u.IconURL(p.Name)}
 	u.render(w, r, http.StatusOK, "profile-form", "Edit "+p.Name, "profiles", f)
 }
 
@@ -121,7 +128,8 @@ func (u *UI) saveProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	_, running := u.m.Live(p.Name)
-	f := profileForm{Screens: withScreen(p), Running: running}
+	f := profileForm{Screens: withScreen(p), Running: running, IconURL: u.IconURL(p.Name)}
+	oldSite := p.Site
 	f.Error = readProfileForm(r, &p, p.Proxy)
 	p.TimeZone = strings.TrimSpace(r.PostFormValue("time_zone"))
 	p.Locale = strings.TrimSpace(r.PostFormValue("locale"))
@@ -142,6 +150,13 @@ func (u *UI) saveProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u.log.Info("profile settings changed from the UI", "profile", p.Name)
+	if p.Site != oldSite && !running {
+		// The icon follows the new site now, not at the next stop. A
+		// browser starting meanwhile refreshes it when it stops.
+		if err := u.m.RefreshIcon(p.Name); err != nil {
+			u.log.Debug("refreshing the profile's icon", "profile", p.Name, "err", err)
+		}
+	}
 	msg := p.Name + " saved"
 	if running {
 		msg += ". Changes apply the next time it starts"
@@ -188,6 +203,16 @@ func readProfileForm(r *http.Request, p *profiles.Profile, keepProxy string) str
 	}
 	p.Proxy = proxy
 	p.LocalNetwork = r.PostFormValue("local_network") == "1"
+	// A form without the icon fields leaves them as they are.
+	if _, ok := r.PostForm["site"]; ok {
+		p.Site = profiles.NormalizeSite(r.PostFormValue("site"))
+	}
+	if _, ok := r.PostForm["icon_glyph"]; ok {
+		p.IconGlyph = r.PostFormValue("icon_glyph")
+	}
+	if _, ok := r.PostForm["icon_color"]; ok {
+		p.IconColor = r.PostFormValue("icon_color")
+	}
 	return ""
 }
 

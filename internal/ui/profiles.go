@@ -47,6 +47,9 @@ type profileView struct {
 	Preview  bool
 	PreviewV int64 // changes every 10 s, so cached previews refresh
 	CDPURL   string
+	// IconURL is the site's favicon, versioned; "" for the fallback glyph
+	// (.Glyph and .Color, from the profile).
+	IconURL string
 }
 
 func (p profileView) Live() bool { return p.Session.State.Live() }
@@ -122,7 +125,7 @@ func (u *UI) views(ctx context.Context, r *http.Request) ([]profileView, error) 
 }
 
 func (u *UI) view(r *http.Request, p profiles.Profile, s sessions.Session, asks map[string]*handoff.Handoff, mem map[string]int64) profileView {
-	v := profileView{Profile: p, Session: s, Agent: "No agent", Memory: mem[p.Name], CDPURL: u.cdpURL(r, p.Name)}
+	v := profileView{Profile: p, Session: s, Agent: "No agent", Memory: mem[p.Name], CDPURL: u.cdpURL(r, p.Name), IconURL: u.IconURL(p.Name)}
 	if len(s.InUseBy) > 0 {
 		v.Agent = strings.Join(s.InUseBy, ", ")
 	}

@@ -67,6 +67,7 @@ func (u *UI) exportProfile(w http.ResponseWriter, r *http.Request) {
 		Name: p.Name, DefaultMode: string(p.DefaultMode), AutoStopMinutes: int(p.AutoStop / time.Minute),
 		Width: p.Width, Height: p.Height, Proxy: p.Proxy, HandoffPolicy: string(p.HandoffPolicy),
 		TimeZone: p.TimeZone, Locale: p.Locale, LocalNetwork: p.LocalNetwork,
+		Site: p.Site, SiteInferred: p.SiteInferred, IconGlyph: p.IconGlyph, IconColor: p.IconColor,
 	}}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+"-"+time.Now().Format("2006-01-02")+`.browserpier.age"`)
@@ -177,6 +178,11 @@ func (u *UI) importArchive(r io.Reader, name, pass string) (string, string) {
 	p.Proxy, p.HandoffPolicy = m.Profile.Proxy, profiles.HandoffPolicy(m.Profile.HandoffPolicy)
 	p.TimeZone, p.Locale = m.Profile.TimeZone, m.Profile.Locale
 	p.LocalNetwork = m.Profile.LocalNetwork
+	// The icon is cosmetic: what this version doesn't know (a glyph added
+	// later, say) falls back to the default rather than failing the import.
+	p.Site, p.SiteInferred = m.Profile.Site, m.Profile.SiteInferred
+	p.IconGlyph, p.IconColor = m.Profile.IconGlyph, m.Profile.IconColor
+	p.DropInvalidIcon()
 	if err := p.Validate(); err != nil {
 		_ = os.RemoveAll(tmp)
 		return "", "Couldn't import: " + sentence(err.Error())

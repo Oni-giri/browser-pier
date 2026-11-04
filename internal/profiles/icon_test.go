@@ -151,3 +151,15 @@ func TestStoreKeepsSiteAndIcon(t *testing.T) {
 		t.Fatal("Update took an invalid site")
 	}
 }
+
+func TestDropInvalidIcon(t *testing.T) {
+	p := New("p")
+	p.Site, p.SiteInferred, p.IconGlyph, p.IconColor = "Bad Site", "google.com", "unicorn", "teal"
+	p.DropInvalidIcon()
+	if p.Site != "" || p.SiteInferred != "google.com" || p.IconGlyph != "" || p.IconColor != "teal" {
+		t.Fatalf("got %+v", p)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}

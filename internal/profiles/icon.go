@@ -77,6 +77,24 @@ func NormalizeSite(raw string) string {
 	return strings.TrimSuffix(s, ".")
 }
 
+// DropInvalidIcon clears the site and fallback icon fields that wouldn't
+// pass Validate, for settings from elsewhere (an archive from a later
+// version, say), where the icon isn't worth refusing them for.
+func (p *Profile) DropInvalidIcon() {
+	if validSite(p.Site) != nil {
+		p.Site = ""
+	}
+	if validSite(p.SiteInferred) != nil {
+		p.SiteInferred = ""
+	}
+	if validIcon(p.IconGlyph, "") != nil {
+		p.IconGlyph = ""
+	}
+	if validIcon("", p.IconColor) != nil {
+		p.IconColor = ""
+	}
+}
+
 func validSite(s string) error {
 	if s == "" {
 		return nil
