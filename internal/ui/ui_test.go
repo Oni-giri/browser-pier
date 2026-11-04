@@ -556,7 +556,7 @@ func TestOrangeOnlyWhenSomeoneIsNeeded(t *testing.T) {
 			t.Fatalf("%s is warm with nobody needed", path)
 		}
 	}
-	var first handoff.Handoff
+	var open []handoff.Handoff
 	for _, name := range []string{"google", "notion"} {
 		s, _, err := f.m.Start(ctx, name, "")
 		if err != nil {
@@ -566,9 +566,7 @@ func TestOrangeOnlyWhenSomeoneIsNeeded(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if name == "google" {
-			first = h
-		}
+		open = append(open, h)
 	}
 	// Two need you: the page is warm, and only one card is emphasised.
 	r := f.get("/")
@@ -582,11 +580,20 @@ func TestOrangeOnlyWhenSomeoneIsNeeded(t *testing.T) {
 		t.Fatalf("profiles has %d emphasis cards", n)
 	}
 	want(t, f.get("/chip"), http.StatusOK, `class="chip-help"`, "2 need you")
-	// Back to nobody: the chip, which app.js reads to turn the light off, goes.
-	if _, err := f.handoffs.Withdraw(ctx, first, ""); err != nil {
+	if _, err := f.handoffs.Withdraw(ctx, open[0], ""); err != nil {
 		t.Fatal(err)
 	}
 	want(t, f.get("/chip"), http.StatusOK, "1 needs you")
+	// Back to nobody: the chip, which app.js reads to turn the light off, goes.
+	if _, err := f.handoffs.Withdraw(ctx, open[1], ""); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.get("/chip"); r.code != http.StatusOK || strings.Contains(r.body, "chip-help") {
+		t.Fatalf("the chip stays with nobody needed: %d %q", r.code, r.body)
+	}
+	if r := f.get("/"); strings.Contains(r.body, "has-help") || strings.Contains(r.body, " emph") {
+		t.Fatal("the overview stays warm with nobody needed")
+	}
 	want(t, f.get("/static/grain.svg"), http.StatusOK, "feTurbulence")
 	if r := f.get("/static/grain.svg"); r.header.Get("Cache-Control") != "public, max-age=31536000, immutable" {
 		t.Fatalf("grain.svg: %q", r.header.Get("Cache-Control"))
