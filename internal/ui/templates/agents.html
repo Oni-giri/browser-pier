@@ -73,7 +73,7 @@ with sync_playwright() as p:
 requests.delete("{{.Base}}/api/sessions/" + s["id"], headers=auth)</pre>
       <pre data-panel="MCP" hidden><span class="c"># Claude Code</span>
 claude mcp add --transport http browserpier {{.Base}}/mcp \
-  --header "Authorization: Bearer $PIER_TOKEN"
+  --header 'Authorization: Bearer ${PIER_TOKEN}'
 
 <span class="c"># any MCP client that speaks streamable HTTP</span>
 {"mcpServers": {"browserpier": {

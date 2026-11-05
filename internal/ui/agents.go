@@ -52,14 +52,15 @@ func (u *UI) agentsData(r *http.Request) (agentsData, error) {
 
 // AgentMessage is what to paste into an agent's chat for it to add
 // BrowserPier's MCP server itself. The token stays in PIER_TOKEN, out of
-// the chat.
+// the chat and the agent's config, which refers to the variable.
 func (d agentsData) AgentMessage() string {
 	return strings.ReplaceAll(`Please add BrowserPier to your MCP servers. BrowserPier runs my persistent Chromium browsers, one per profile, already signed in to my sites.
 
 1. Check that the PIER_TOKEN environment variable is set, without printing it. If it isn't, stop and ask me to create a token under Agents in BrowserPier and set PIER_TOKEN. Don't ask me to paste the token here.
 2. If you are Claude Code, run:
-   claude mcp add --transport http browserpier {base}/mcp --header "Authorization: Bearer $PIER_TOKEN"
-   Otherwise, add an MCP server named browserpier to your config: streamable HTTP at {base}/mcp, with the header "Authorization: Bearer <the PIER_TOKEN value>".
+   claude mcp add --transport http browserpier {base}/mcp --header 'Authorization: Bearer ${PIER_TOKEN}'
+   The single quotes matter: Claude Code reads the variable when it connects, so the token isn't written into its config.
+   Otherwise, add an MCP server named browserpier to your config: streamable HTTP at {base}/mcp, with the header "Authorization: Bearer ${PIER_TOKEN}", in your config's way of reading an environment variable. If it can't read one, tell me instead of writing the token into the file.
 3. Call list_profiles to check it works. If the tools don't show up yet, tell me to restart you.
 
 How to use it:

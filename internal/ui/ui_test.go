@@ -202,7 +202,7 @@ func TestEveryPageRenders(t *testing.T) {
 	want(t, f.get("/agents"), http.StatusOK, "research-bot", "bp_live_…", "Quick start")
 	// The Agent tab's message, shown and copied, names this BrowserPier's MCP
 	// endpoint and keeps the token in PIER_TOKEN.
-	mcp := "claude mcp add --transport http browserpier " + f.srv.URL + "/mcp --header &#34;Authorization: Bearer $PIER_TOKEN&#34;"
+	mcp := "claude mcp add --transport http browserpier " + f.srv.URL + "/mcp --header &#39;Authorization: Bearer ${PIER_TOKEN}&#39;"
 	if body := f.get("/agents").body; strings.Count(body, mcp) != 2 || !strings.Contains(body, `data-tab="Agent"`) || !strings.Contains(body, "Copy message") {
 		t.Fatal("the Agent tab's message isn't shown and copyable")
 	}
