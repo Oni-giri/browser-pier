@@ -102,6 +102,8 @@
   });
   document.addEventListener("htmx:afterSwap", (e) => {
     openMarked();
+    // The page light follows the header's "needs you" chip.
+    if (e.target.id === "chip") document.body.classList.toggle("has-help", !!$(".chip-help", e.target));
     // The live view reloads when its browser starts or stops.
     const page = $("[data-profile][data-state]");
     const side = $("[data-side-state]", e.target);
