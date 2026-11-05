@@ -595,6 +595,20 @@ func TestNoRoomNamesOnlyVisibleProfiles(t *testing.T) {
 	}
 }
 
+// With nothing running to stop, the refusal doesn't tell the agent to stop one.
+func TestNoRoomOnAShortHost(t *testing.T) {
+	f := newFixture(t)
+	f.m.SetMemoryLimit(0, 1<<30)
+	f.m.SetHostFree(func() (int64, error) { return 1 << 29, nil })
+	var e map[string]string
+	if code := f.call(f.all, http.MethodPost, "/api/sessions", `{"profile": "google"}`, &e); code != http.StatusServiceUnavailable {
+		t.Fatalf("start on a short host: %d %v", code, e)
+	}
+	if want := "not enough memory for another browser: the host has 0.5 GB free, other apps included, and a browser needs about 1.0 GB, with no browser running to stop"; e["error"] != want {
+		t.Fatalf("error = %q, want %q", e["error"], want)
+	}
+}
+
 // A profile being exported can't start; an agent is told why.
 func TestStartWhileHeldIsAConflict(t *testing.T) {
 	f := newFixture(t)

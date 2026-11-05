@@ -110,6 +110,9 @@ type Manager struct {
 	hostIPs      string // the Docker host's own addresses, comma separated
 	// mem is the memory cap, set by SetMemoryLimit; nil for none.
 	mem atomic.Pointer[memLimits]
+	// hostFree reads what the host has free, set by SetHostFree; nil to
+	// leave the host unchecked.
+	hostFree func() (int64, error)
 
 	ctx    context.Context // ends with Close
 	cancel context.CancelFunc
