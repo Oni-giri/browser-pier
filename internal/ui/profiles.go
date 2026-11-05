@@ -292,11 +292,15 @@ func (u *UI) startProfile(w http.ResponseWriter, r *http.Request) {
 	var noRoom *sessions.NoRoomError
 	switch {
 	case errors.As(err, &noRoom):
-		list := make([]string, len(noRoom.Running))
-		for i, b := range noRoom.Running {
-			list[i] = b.String()
+		msg := "Not enough memory to start " + name + ": " + noRoom.Why() + "."
+		if len(noRoom.Running) > 0 {
+			list := make([]string, len(noRoom.Running))
+			for i, b := range noRoom.Running {
+				list[i] = b.String()
+			}
+			msg += " In use: " + strings.Join(list, "; ")
 		}
-		done(w, r, back, "Not enough memory to start "+name+". In use: "+strings.Join(list, "; "), true)
+		done(w, r, back, msg, true)
 	case err != nil:
 		u.log.Warn("starting a browser from the UI", "profile", name, "err", err)
 		done(w, r, back, "Couldn't start "+name+": "+err.Error(), true)

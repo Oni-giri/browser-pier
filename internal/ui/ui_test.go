@@ -322,6 +322,18 @@ func TestStartStopDelete(t *testing.T) {
 	}
 }
 
+// A start refused because the host is short says so, and why.
+func TestStartRefusedWhenTheHostIsShort(t *testing.T) {
+	f := newFixture(t)
+	f.m.SetHostFree(func() int64 { return 800 << 20 })
+	f.profile("google")
+	f.post("/profiles/google/start", nil)
+	if _, ok := f.m.Live("google"); ok {
+		t.Fatal("started with the host short of memory")
+	}
+	want(t, f.get("/profiles"), http.StatusOK, "Not enough memory to start google: the host has 0.8 GB free, other apps included, and a browser needs about 1.0 GB, with no browser running to stop.")
+}
+
 func TestPreviewDoesNotCountAsUse(t *testing.T) {
 	f := newFixture(t)
 	f.profile("google")

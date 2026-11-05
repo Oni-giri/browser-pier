@@ -376,7 +376,11 @@ func noRoomMessage(err error, tok auth.Token) string {
 			others++
 		}
 	}
-	msg := full.Error() + ". Stop a browser you don't need (DELETE /api/sessions/{id})"
+	msg := full.Error()
+	if len(full.Running) == 0 {
+		return msg
+	}
+	msg += ". Stop a browser you don't need (DELETE /api/sessions/{id})"
 	if len(mine) > 0 {
 		msg += "; yours: " + strings.Join(mine, ", ")
 	}
