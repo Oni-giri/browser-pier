@@ -132,7 +132,7 @@ func copyFile(root *os.Root, name, dst string, limit int64) error {
 	if info.Size() > limit {
 		return fmt.Errorf("%s is over %d MiB", name, limit>>20)
 	}
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // dst is in our own scratch folder
 	if err != nil {
 		return err
 	}

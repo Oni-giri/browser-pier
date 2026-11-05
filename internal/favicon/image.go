@@ -135,6 +135,15 @@ func decodeICO(b []byte) (image.Image, error) {
 	return nil, err
 }
 
+// signed32 reads a little-endian int32, as BMP headers store sides.
+func signed32(b []byte) int {
+	v := int64(binary.LittleEndian.Uint32(b))
+	if v >= 1<<31 {
+		v -= 1 << 32
+	}
+	return int(v)
+}
+
 // decodeDIB decodes an ICO's BMP image: a BITMAPINFOHEADER with twice the
 // height, uncompressed 32-bit BGRA or 24-bit BGR rows from the bottom up,
 // then a 1-bit transparency mask.
@@ -143,8 +152,8 @@ func decodeDIB(b []byte) (image.Image, error) {
 		return nil, errors.New("ico: bmp too short")
 	}
 	hdr := int(binary.LittleEndian.Uint32(b))
-	w := int(int32(binary.LittleEndian.Uint32(b[4:])))
-	h := int(int32(binary.LittleEndian.Uint32(b[8:]))) / 2
+	w := signed32(b[4:])
+	h := signed32(b[8:]) / 2
 	bpp := int(binary.LittleEndian.Uint16(b[14:]))
 	compression := binary.LittleEndian.Uint32(b[16:])
 	if hdr < 40 || hdr > len(b) || compression != 0 || (bpp != 32 && bpp != 24) {
