@@ -297,6 +297,9 @@ func TestStartingBrowserCountsAgainstTheHost(t *testing.T) {
 	if !errors.As(err, &full) || !full.Host || full.Free != gib/2 {
 		t.Fatalf("second browser while the first boots = %v (%+v)", err, full)
 	}
+	if !strings.Contains(err.Error(), "the host has 0.5 GB free, other apps included, once browsers starting now have their share and") {
+		t.Fatalf("error = %q", err)
+	}
 }
 
 func TestUnknownHostFreeIsntChecked(t *testing.T) {

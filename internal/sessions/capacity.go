@@ -141,10 +141,11 @@ var ErrNoRoom = errors.New("not enough memory for another browser")
 type NoRoomError struct {
 	Limit, Used int64
 	// Host is set when the host is what's short: it has Free left for a
-	// browser expected to need Each.
-	Host       bool
-	Free, Each int64
-	Running    []Usage
+	// browser expected to need Each, once browsers still booting have
+	// their share (Booting).
+	Host, Booting bool
+	Free, Each    int64
+	Running       []Usage
 }
 
 // Usage is one live browser's share of memory.
@@ -164,7 +165,11 @@ func (e *NoRoomError) Why() string {
 	if e.Host {
 		// Rounded down: 0.96 GB shown as 1.0 GB would look like enough.
 		free := math.Floor(float64(e.Free)/(1<<30)*10) / 10
-		why = fmt.Sprintf("the host has %.1f GB free, other apps included, and a browser needs about %s", free, gb(e.Each))
+		booting := ""
+		if e.Booting {
+			booting = " once browsers starting now have their share"
+		}
+		why = fmt.Sprintf("the host has %.1f GB free, other apps included,%s and a browser needs about %s", free, booting, gb(e.Each))
 	}
 	if len(e.Running) == 0 {
 		return why + ", with no browser running to stop"
@@ -207,7 +212,7 @@ func (m *Manager) makeRoom(ctx context.Context) error {
 			for i, u := range running {
 				list[i] = u.String()
 			}
-			full := &NoRoomError{Limit: limit, Used: used, Host: underLimit, Free: free, Each: each, Running: running}
+			full := &NoRoomError{Limit: limit, Used: used, Host: underLimit, Booting: growing > 0, Free: free, Each: each, Running: running}
 			m.log.Warn("refused a browser: no room", "why", full.Why(), "running", strings.Join(list, "; "))
 			return full
 		}
