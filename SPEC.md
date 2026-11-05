@@ -227,6 +227,7 @@ All endpoints take `Authorization: Bearer <agent token>`. The same actions are e
 Starting a session returns its id, the CDP URL (proxied through the orchestrator) and the live view URL.
 
 - **Scopes:** a token sees only the profiles it is scoped to; anything else answers 404, as if it didn't exist. Only a token for all profiles can create one.
+- **Main site and icon:** creating a profile takes `site`, the main site whose favicon is the profile's icon in the web UI (a hostname such as `mail.google.com`, at most 253 characters; a URL is cut down to its host), and `icon_glyph` and `icon_color`, the fallback icon (see Profile icons in §9). Profiles are listed with them. The site BrowserPier infers from the browser's history isn't returned (it is read from pages, and says which sites a profile uses), and the icon itself is served only to the admin.
 - **What agents can't change:** an agent creating a profile can't set its proxy (a proxy sees where the browser goes, and an agent can be steered by the pages it reads) or open the local network to its pages, and can make its handoff policy stricter than the default but never looser.
 - **CDP:** `/cdp/{profile}` is the browser's WebSocket; `/cdp/{profile}/json/version` and `/json/list` work too, with their URLs pointing back through BrowserPier, so `connectOverCDP("https://…/cdp/{profile}")` works. The token never reaches the browser.
   - **Clients that can't set headers** get a ticket from `POST /api/sessions/{id}/cdp-ticket`, with the token in the header, and connect to the `cdp_url` it returns (`wss://…/cdp/{profile}?ticket=…`), as a WebSocket or as the `http(s)` URL Playwright fetches `/json/version` from.
@@ -277,7 +278,7 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 | 1 · Login | Admin password, keep signed in, lockout message, help text pointing to where the password lives (Umbrel app Info, or the first-run setup). |
 | 2 · Overview | Summary only, each cell linking to its page: the profile waiting for you (with Take control), memory use against the limit, profiles list, browser hours, connect snippet, agents, handoffs this week. |
 | 3 · Profiles | Grid of profile cards with a live preview per state (default), or a table. Each profile has an icon: its main site's favicon, read locally from the profile's own favicon cache, or a chosen icon and colour as fallback. Status, mode, agent, memory, activity, auto-stop. ⋯ menu (copy CDP URL, stop, edit, export, delete), stop and delete confirmations, empty state. |
-| 4 · New profile | Centred modal over Profiles: name, handoff policy, "start and log in now"; Advanced holds mode, auto-stop, screen size, proxy and local network access. |
+| 4 · New profile | Centred modal over Profiles: name, main site (optional, used for the icon), handoff policy, "start and log in now"; Advanced holds mode, auto-stop, screen size, proxy, local network access and the fallback icon and colour, with a live preview. |
 | 5 · Live view | Streamed browser, take or hand back control, controls locked while the agent drives, connection details, agent activity log, help request. |
 | 6 · Agents | Agent tokens (create with scope, shown once, revoke), handoff link rules, quick start, endpoint list, MCP. |
 | 7 · Settings | Handoff PIN, default handoff policy, memory limit, default auto-stop, default proxy, admin account and sign-out. |
@@ -292,10 +293,19 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 - **Agent log:** the profile page lists what agents did in the current session (attached, clicked, typed N characters, took a screenshot, asked for help). It never shows typed text, and it is kept in memory only.
 - **Previews:** profile cards show a small screenshot of each running browser. Taking one doesn't count as use, so an open page never keeps a browser from stopping when idle.
 
+### Profile icons
+
+- **Source, in order:** the main site's favicon from the profile's own favicon cache; else the fallback icon and colour chosen in New profile or Edit settings; else a glyph and colour picked from a hash of the profile's name, so it stays the same.
+- **Main site:** the one set (`Site`), or, while none is set, the registrable domain (per the Public Suffix List) visited most in the browser's history (`SiteInferred`), recorded at each graceful stop. The inferred one never replaces the one set. A favicon counts for the site when its page is on the site's host or a subdomain of it.
+- **Reading:** only after the browser has closed cleanly, at each graceful stop (and when the main site is changed while it's stopped), never while Chromium holds the databases, and never from the network. `chrome/Default/Favicons` and `History` are browser-written, so they're read as hostile: through `os.Root`, as private copies of the main file only (a `-journal` or `-wal` the browser left is ignored, never replayed), opened read-only and immutable, tables checked to be tables, with caps on size (32 and 64 MiB), rows and time (10 s). A failure leaves the cached icon as it was and never fails the stop.
+- **The image:** the largest bitmap up to 64 px, else the smallest above, from the icon of most of the site's pages. A PNG, or an ICO holding PNG or 24/32-bit BMP images, of at most 256 KB and 256×256, is decoded and drawn again as a 64×64 PNG; nothing else of the file is kept, and SVG is never taken. It's cached as `profiles/<name>/icon.png`, beside `chrome/`, where the browser can't write.
+- **Serving:** `GET /profiles/{name}/icon`, to the admin session only (agent tokens can't), as `image/png` with `nosniff`, `Cache-Control: private, max-age=3600` and an ETag; pages link it with its version.
+- **Fallback choices:** glyphs envelope, briefcase, code, document, chat, cart, globe, bank, calendar, cloud, chart, key; colours blue, sky, violet, indigo, teal, cyan, slate. Never orange (a person is needed) or red (failure).
+
 ### Export and import
 
 - **Export:** a stopped profile can be exported from Profiles' ⋯ menu, by the admin only (never through the agent API or MCP: an archive is live cookies).
-  - **Format:** a gzipped tar encrypted with age and a passphrase of at least 10 characters (`age -d` opens it too). It starts with `manifest.json`: the format version, the BrowserPier version and the profile's settings.
+  - **Format:** a gzipped tar encrypted with age and a passphrase of at least 10 characters (`age -d` opens it too). It starts with `manifest.json`: the format version, the BrowserPier version and the profile's settings, main site and fallback icon included, and its cached icon. On import the icon is drawn again like one read from the browser, and one that doesn't pass is dropped; an icon choice this version doesn't know falls back to the default instead of failing the import.
   - **Contents:** the profile's `chrome/` and `files/`, without `run/` (the control socket, and briefly proxy credentials), Chromium's caches and locks, or the mount markers. Only regular files and folders are read, through `os.Root`.
   - **The proxy:** it comes with the archive, password included, since the archive is a secret anyway. So does local network access.
   - **Streaming:** the archive is streamed as it's made, with no temporary file. If anything fails midway, the download is cut off, and an age archive cut short doesn't decrypt.
