@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"image"
 	"image/png"
 	"net/http"
@@ -147,13 +148,53 @@ func TestFormSavesSiteAndIcon(t *testing.T) {
 		t.Fatalf("after clearing: %+v", p)
 	}
 
-	for field, value := range map[string]string{"site": "not a site", "icon_glyph": "<svg>", "icon_color": "orange"} {
+	for field, value := range map[string]string{"site": "not a site", "icon_glyph": "<svg onload=x>", "icon_color": "orange"} {
 		r := f.post("/profiles/mail/edit", url.Values{field: {value}})
 		if r.code != http.StatusUnprocessableEntity {
 			t.Errorf("%s %q: %d, want 422", field, value, r.code)
 		}
-		if strings.Contains(r.body, "<svg>") {
+		if strings.Contains(r.body, "<svg onload=x>") {
 			t.Errorf("%s: echoed unescaped", field)
 		}
 	}
+}
+
+func TestProfilesShowTheirIcon(t *testing.T) {
+	f := newFixture(t)
+	for _, name := range []string{"google", "notion"} {
+		f.profile(name)
+	}
+	ctx := context.Background()
+	if _, _, err := f.m.Start(ctx, "google", ""); err != nil {
+		t.Fatal(err)
+	}
+	f.writeIcon("google")
+	if _, _, err := f.tokens.Create(ctx, "research-bot", true, nil); err != nil {
+		t.Fatal(err)
+	}
+	notion, _ := f.m.Profiles().Get(ctx, "notion")
+	fallback := fmt.Sprintf(`<span class="icon c-%s"><svg><use href="#g-%s"/>`, notion.Color(), notion.Glyph())
+	for _, path := range []string{"/", "/profiles", "/profiles?view=table"} {
+		r := f.get(path)
+		want(t, r, http.StatusOK, `<span class="icon fav"><img src="/profiles/google/icon?v=`, fallback, `<symbol id="g-envelope"`)
+		if strings.Contains(r.body, `class="initial"`) {
+			t.Errorf("%s: a profile still has initials", path)
+		}
+	}
+	want(t, f.get("/profiles/google"), http.StatusOK, `<span class="icon fav"><img src="/profiles/google/icon?v=`)
+	want(t, f.get("/profiles/notion"), http.StatusOK, fallback)
+	// Agents keep their initials.
+	want(t, f.get("/agents"), http.StatusOK, `>RB</span>`)
+	// The picker offers every glyph and colour, never orange or red.
+	r := f.get("/profiles/notion/edit")
+	for _, g := range profiles.Glyphs {
+		want(t, r, http.StatusOK, `name="icon_glyph" value="`+g+`"`)
+	}
+	for _, c := range profiles.Colors {
+		want(t, r, http.StatusOK, `name="icon_color" value="`+c+`"`)
+	}
+	if strings.Contains(r.body, `value="orange"`) || strings.Contains(r.body, `value="red"`) {
+		t.Fatal("the picker offers a warm colour")
+	}
+	want(t, r, http.StatusOK, `id="icon-preview"`, `name="site"`)
 }
