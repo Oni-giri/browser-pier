@@ -150,7 +150,9 @@ func (u *UI) saveProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u.log.Info("profile settings changed from the UI", "profile", p.Name)
-	if p.Site != oldSite && !running {
+	// Asked again now that the site is saved: a browser stopping meanwhile
+	// reads its icon for the site saved.
+	if _, live := u.m.Live(p.Name); p.Site != oldSite && !live {
 		// The icon follows the new site now, not at the next stop. A
 		// browser starting meanwhile refreshes it when it stops.
 		if err := u.m.RefreshIcon(p.Name); err != nil {

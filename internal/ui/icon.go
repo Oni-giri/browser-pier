@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bytes"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -24,12 +25,18 @@ type iconTag struct {
 // readIcon returns a profile's cached icon and its tag (see static.Tag);
 // nil if it has none.
 func (u *UI) readIcon(name string) ([]byte, string, time.Time) {
-	path := u.m.Layout().IconFile(name)
-	b, err := os.ReadFile(path) //nolint:gosec // an existing profile's name: [a-z0-9-] only
+	// One open file for the bytes and their size and time: an icon
+	// replaced in between can't pair the old tag with the new file.
+	f, err := os.Open(u.m.Layout().IconFile(name)) //nolint:gosec // an existing profile's name: [a-z0-9-] only
 	if err != nil {
 		return nil, "", time.Time{}
 	}
-	st, err := os.Stat(path)
+	defer func() { _ = f.Close() }()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, "", time.Time{}
+	}
+	b, err := io.ReadAll(io.LimitReader(f, 1<<20))
 	if err != nil {
 		return nil, "", time.Time{}
 	}

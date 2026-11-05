@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/favicon"
+	"github.com/Oni-giri/browser-pier/internal/profiles"
 )
 
 // IconFile is a profile's cached icon, as the orchestrator sees it. It sits
@@ -36,10 +37,23 @@ func (m *Manager) RefreshIcon(profile string) error {
 func (m *Manager) refreshIcon(profile string) {
 	ctx, cancel := context.WithTimeout(context.Background(), iconTimeout)
 	defer cancel()
-	p, err := m.profiles.Get(ctx, profile)
-	if err != nil {
-		return
+	// The main site may change in Edit settings while the icon is read:
+	// read again for the new one.
+	for range 3 {
+		p, err := m.profiles.Get(ctx, profile)
+		if err != nil {
+			return
+		}
+		m.readIcon(ctx, p)
+		if now, err := m.profiles.Get(ctx, profile); err != nil || now.Site == p.Site {
+			return
+		}
 	}
+}
+
+// readIcon is refreshIcon for the profile's settings as given.
+func (m *Manager) readIcon(ctx context.Context, p profiles.Profile) {
+	profile := p.Name
 	dir := m.layout.dir(profile)
 	if _, err := os.Stat(filepath.Join(dir, "chrome")); err != nil {
 		return // never started: nothing to read
