@@ -211,7 +211,7 @@ func TestConcurrentStartsAtTheLimitShareOneBrowser(t *testing.T) {
 // hostWith has the host start with free bytes free, each live browser
 // taking a GiB of it.
 func (f *fixture) hostWith(free int64) {
-	f.m.SetHostFree(func() int64 { return free - int64(len(f.m.List()))<<30 })
+	f.m.SetHostFree(func() (int64, error) { return free - int64(len(f.m.List()))<<30, nil })
 }
 
 func TestHostShortOfMemoryStopsTheLongestIdle(t *testing.T) {
@@ -282,7 +282,7 @@ func TestStartingBrowserCountsAgainstTheHost(t *testing.T) {
 	f.rt.Unhealthy = true
 	f.m.readyTimeout = time.Hour
 	f.m.SetMemoryLimit(0, gib)
-	f.m.SetHostFree(func() int64 { return gib + gib/2 }) // not yet taken
+	f.m.SetHostFree(func() (int64, error) { return gib + gib/2, nil }) // not yet taken
 	f.profile("a", 0)
 	f.profile("b", 0)
 	go func() { _, _, _ = f.m.Start(context.Background(), "a", "") }()
@@ -302,10 +302,26 @@ func TestStartingBrowserCountsAgainstTheHost(t *testing.T) {
 	}
 }
 
-func TestUnknownHostFreeIsntChecked(t *testing.T) {
+func TestUnreadableHostFreeIsntChecked(t *testing.T) {
 	f := newFixture(t)
 	f.m.SetMemoryLimit(0, 1<<30)
-	f.m.SetHostFree(func() int64 { return 0 })
+	f.m.SetHostFree(func() (int64, error) { return 0, errors.New("no /proc/meminfo") })
 	f.profile("a", 0)
 	f.startProfile("a")
+}
+
+// A host with nothing free is short, not unknown.
+func TestHostWithNothingFreeRefuses(t *testing.T) {
+	f := newFixture(t)
+	f.m.SetMemoryLimit(0, 1<<30)
+	f.m.SetHostFree(func() (int64, error) { return 0, nil })
+	f.profile("a", 0)
+	_, _, err := f.m.Start(context.Background(), "a", "")
+	var full *NoRoomError
+	if !errors.As(err, &full) || !full.Host || full.Free != 0 {
+		t.Fatalf("Start = %v (%+v)", err, full)
+	}
+	if len(f.rt.Containers) != 0 {
+		t.Fatal("a container was created on a host with nothing free")
+	}
 }

@@ -325,7 +325,7 @@ func TestStartStopDelete(t *testing.T) {
 // A start refused because the host is short says so, and why.
 func TestStartRefusedWhenTheHostIsShort(t *testing.T) {
 	f := newFixture(t)
-	f.m.SetHostFree(func() int64 { return 1000 << 20 }) // 0.98 GB, shown as 0.9
+	f.m.SetHostFree(func() (int64, error) { return 1000 << 20, nil }) // 0.98 GB, shown as 0.9
 	f.profile("google")
 	f.post("/profiles/google/start", nil)
 	if _, ok := f.m.Live("google"); ok {

@@ -149,7 +149,9 @@ func run(log *slog.Logger) error {
 	}
 	// With no limit (0), a new browser must still fit in what the host has free.
 	mgr.SetMemoryLimit(total*int64(ramPercent)/100, perBrowser)
-	mgr.SetHostFree(localFree())
+	if !docker.RemoteDaemon() {
+		mgr.SetHostFree(func() (int64, error) { return meminfo("MemAvailable") })
+	}
 	go mgr.WatchIdle(ctx, 30*time.Second)
 	if err := mgr.Reconcile(ctx); err != nil {
 		return fmt.Errorf("checking browsers left running: %w", err)

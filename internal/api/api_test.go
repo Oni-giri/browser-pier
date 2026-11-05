@@ -599,7 +599,7 @@ func TestNoRoomNamesOnlyVisibleProfiles(t *testing.T) {
 func TestNoRoomOnAShortHost(t *testing.T) {
 	f := newFixture(t)
 	f.m.SetMemoryLimit(0, 1<<30)
-	f.m.SetHostFree(func() int64 { return 1 << 29 })
+	f.m.SetHostFree(func() (int64, error) { return 1 << 29, nil })
 	var e map[string]string
 	if code := f.call(f.all, http.MethodPost, "/api/sessions", `{"profile": "google"}`, &e); code != http.StatusServiceUnavailable {
 		t.Fatalf("start on a short host: %d %v", code, e)

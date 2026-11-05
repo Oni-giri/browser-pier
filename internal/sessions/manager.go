@@ -112,7 +112,7 @@ type Manager struct {
 	mem atomic.Pointer[memLimits]
 	// hostFree reads what the host has free, set by SetHostFree; nil to
 	// leave the host unchecked.
-	hostFree func() int64
+	hostFree func() (int64, error)
 
 	ctx    context.Context // ends with Close
 	cancel context.CancelFunc

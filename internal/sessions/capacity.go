@@ -81,10 +81,10 @@ func (m *Manager) stopIdle(ctx context.Context) {
 type memLimits struct{ limit, each int64 }
 
 // SetHostFree has a new browser fit in what the host has free, as well as
-// under the memory limit. free reads it now, other apps included; 0 means
-// unknown, and the host isn't checked. It must be called before any
-// browser starts.
-func (m *Manager) SetHostFree(free func() int64) { m.hostFree = free }
+// under the memory limit. free reads it now, other apps included; when it
+// can't, the host isn't checked. It must be called before any browser
+// starts.
+func (m *Manager) SetHostFree(free func() (int64, error)) { m.hostFree = free }
 
 // SetMemoryLimit caps the memory all browsers may use together (0: no
 // cap), expecting each new browser to need perBrowser. It can be called
@@ -198,7 +198,9 @@ func (m *Manager) makeRoom(ctx context.Context) error {
 		// yet: what it has free must cover theirs too.
 		free, inHost := int64(0), true
 		if m.hostFree != nil {
-			if n := m.hostFree(); n > 0 {
+			if n, err := m.hostFree(); err != nil {
+				m.log.Warn("reading the host's free memory; starting without checking it", "err", err)
+			} else {
 				free = max(n-growing, 0)
 				inHost = each <= free
 			}
