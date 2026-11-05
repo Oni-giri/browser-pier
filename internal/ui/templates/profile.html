@@ -2,7 +2,7 @@
 <div class="page" data-profile="{{.Name}}" data-state="{{.Session.State}}">
   <div class="page-head" style="align-items:center">
     <div class="crumbs">
-      <a href="/profiles">Profiles</a><span class="sep">/</span><h1>{{.Name}}</h1>
+      <a href="/profiles">Profiles</a><span class="sep">/</span>{{template "icon" .}}<h1>{{.Name}}</h1>
       <span class="pill {{.Status.Key}}">{{.Status.Label}}{{with .Ask}} · {{.Reason.Label}}{{end}}</span>
     </div>
     <div class="actions">

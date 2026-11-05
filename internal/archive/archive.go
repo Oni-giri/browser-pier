@@ -6,7 +6,8 @@
 // Inside: manifest.json first, then a gzipped tar of the profile's
 // chrome/ (Chromium's user data) and files/ folders, regular files and
 // folders only. run/ (the control socket, and briefly proxy credentials)
-// and Chromium's caches stay out.
+// and Chromium's caches stay out. The profile's cached icon travels in the
+// manifest, so archives stay readable by versions from before icons.
 package archive
 
 import (
@@ -25,6 +26,8 @@ import (
 	"time"
 
 	"filippo.io/age"
+
+	"github.com/Oni-giri/browser-pier/internal/favicon"
 )
 
 // Format is the archive format's version, in the manifest.
@@ -51,6 +54,14 @@ type Profile struct {
 	TimeZone        string `json:"time_zone,omitempty"`
 	Locale          string `json:"locale,omitempty"`
 	LocalNetwork    bool   `json:"local_network,omitempty"`
+	Site            string `json:"site,omitempty"`
+	SiteInferred    string `json:"site_inferred,omitempty"`
+	IconGlyph       string `json:"icon_glyph,omitempty"`
+	IconColor       string `json:"icon_color,omitempty"`
+	// Icon is the cached icon (favicon.FileName), a PNG. Export reads it
+	// from the folder and Import writes it back, drawn again: Export's
+	// caller needn't set it.
+	Icon []byte `json:"icon_png,omitempty"`
 }
 
 // MinPassphrase and MaxPassphrase bound an export's passphrase.
@@ -88,6 +99,7 @@ func Export(w io.Writer, dir string, m Manifest, passphrase string) error {
 	gz := gzip.NewWriter(enc)
 	tw := tar.NewWriter(gz)
 	m.Format = Format
+	m.Profile.Icon = readIcon(dir)
 	if err := writeManifest(tw, m); err != nil {
 		return err
 	}
@@ -108,6 +120,30 @@ func Export(w io.Writer, dir string, m Manifest, passphrase string) error {
 		return err
 	}
 	return enc.Close()
+}
+
+// readIcon reads dir's cached icon, nil if it has none or it can't be
+// read: the icon is optional, and the browser reading it again at its next
+// stop brings it back.
+func readIcon(dir string) []byte {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = root.Close() }()
+	f, err := root.OpenFile(favicon.FileName, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = f.Close() }()
+	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
+		return nil
+	}
+	b, err := io.ReadAll(io.LimitReader(f, favicon.MaxBytes+1))
+	if err != nil || len(b) > favicon.MaxBytes {
+		return nil
+	}
+	return b
 }
 
 func writeManifest(tw *tar.Writer, m Manifest) error {
@@ -297,6 +333,18 @@ func Import(r io.Reader, passphrase, dest string, lim Limits) (Manifest, error) 
 	}
 	if m.Format == 0 {
 		return m, errors.New("not a BrowserPier export: empty")
+	}
+	// The icon is drawn again, as one read from the browser is; one that
+	// doesn't pass is dropped, and the profile falls back to its glyph.
+	icon := m.Profile.Icon
+	m.Profile.Icon = nil
+	if icon != nil {
+		if png, err := favicon.Sanitize(icon); err == nil {
+			if err := favicon.WriteFile(dest, png); err != nil {
+				return m, err
+			}
+			m.Profile.Icon = png
+		}
 	}
 	return m, nil
 }

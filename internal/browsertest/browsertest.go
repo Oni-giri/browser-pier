@@ -3,9 +3,12 @@
 package browsertest
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"net"
 	"net/http"
@@ -189,6 +192,27 @@ type Site struct {
 	// request's Accept-Language.
 	requests       int
 	acceptLanguage string
+	// iconServed is set once the browser fetched /icon.png.
+	iconServed bool
+}
+
+// IconServed reports whether the browser has fetched the /icon page's
+// favicon.
+func (s *Site) IconServed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.iconServed
+}
+
+// Icon is the favicon of the site's /icon page: a 32×32 PNG in one colour.
+func Icon() []byte {
+	img := image.NewNRGBA(image.Rect(0, 0, 32, 32))
+	for i := 0; i < len(img.Pix); i += 4 {
+		img.Pix[i], img.Pix[i+1], img.Pix[i+2], img.Pix[i+3] = 0x2f, 0x6b, 0xff, 0xff
+	}
+	var b bytes.Buffer
+	_ = png.Encode(&b, img)
+	return b.Bytes()
 }
 
 // Requests counts the requests the site has served.
@@ -240,6 +264,18 @@ func NewSite(t *testing.T, host string) *Site {
 			return
 		}
 		_, _ = io.WriteString(w, "<h1>Signed in as pier</h1><p>BrowserPier persistence test</p>")
+	})
+	// A page with a favicon of its own, so others keep asking for the
+	// missing /favicon.ico as before.
+	mux.HandleFunc("GET /icon", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `<link rel="icon" href="/icon.png" type="image/png"><h1>A page with an icon</h1>`)
+	})
+	mux.HandleFunc("GET /icon.png", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(Icon())
+		s.mu.Lock()
+		s.iconServed = true
+		s.mu.Unlock()
 	})
 	mux.HandleFunc("GET /geo", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

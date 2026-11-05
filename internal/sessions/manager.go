@@ -45,6 +45,7 @@ type Runtime interface {
 //	<data dir>/profiles/<name>/chrome  Chromium's user data dir, mounted at /profile
 //	<data dir>/profiles/<name>/run     the control socket, mounted at /run/browserpier
 //	<data dir>/profiles/<name>/files   downloads/ and uploads/, mounted at /files
+//	<data dir>/profiles/<name>/icon.png  the icon read from chrome/ at each stop, not mounted
 type Layout struct {
 	DataDir     string // absolute, as the orchestrator sees it
 	HostDataDir string // the same folder as the Docker daemon sees it
@@ -584,6 +585,16 @@ func (m *Manager) watch(l *live, cid string) {
 // finish records how the session ended and removes its container.
 func (m *Manager) finish(l *live, cid string, code int, waitErr error) {
 	lastLog := m.cleanup(cid)
+	// A browser that closed cleanly has written and let go of its
+	// databases: read its icon now, while the session is still Stopping,
+	// so nothing can start it again or export it meanwhile.
+	m.mu.Lock()
+	graceful := l.failure == "" && waitErr == nil && code == 0 && l.sess.State == Stopping
+	profile := l.sess.Profile
+	m.mu.Unlock()
+	if graceful {
+		m.refreshIcon(profile)
+	}
 	m.end(l, lastLog, func(s *Session) {
 		switch {
 		case l.failure != "":

@@ -433,6 +433,7 @@ func TestExportAndImport(t *testing.T) {
 	ctx := context.Background()
 	p := profiles.New("google")
 	p.DefaultMode, p.Width, p.Height = profiles.ModeAPI, 1280, 800
+	p.Site, p.IconGlyph, p.IconColor = "mail.google.com", "envelope", "sky"
 	if _, err := f.m.Profiles().Create(ctx, p); err != nil {
 		t.Fatal(err)
 	}
@@ -458,6 +459,7 @@ func TestExportAndImport(t *testing.T) {
 	if _, err := f.m.Stop(ctx, s.ID); err != nil {
 		t.Fatal(err)
 	}
+	f.writeIcon("google")
 	exp := f.post("/profiles/google/export", url.Values{"passphrase": {pass}, "confirm": {pass}})
 	if exp.code != http.StatusOK || !strings.Contains(exp.header.Get("Content-Disposition"), "attachment") || strings.Contains(exp.body, "session=abc") {
 		t.Fatalf("export: %d %v", exp.code, exp.header)
@@ -490,8 +492,12 @@ func TestExportAndImport(t *testing.T) {
 		t.Fatalf("import: %d %s", r.code, r.location)
 	}
 	copied, err := f.m.Profiles().Get(ctx, "google-copy")
-	if err != nil || copied.DefaultMode != profiles.ModeAPI || copied.Width != 1280 {
+	if err != nil || copied.DefaultMode != profiles.ModeAPI || copied.Width != 1280 ||
+		copied.Site != "mail.google.com" || copied.IconGlyph != "envelope" || copied.IconColor != "sky" {
 		t.Fatalf("imported profile %+v, %v", copied, err)
+	}
+	if f.get("/profiles/google-copy/icon").code != http.StatusOK {
+		t.Fatal("the icon didn't come with the import")
 	}
 	b, err := os.ReadFile(filepath.Join(f.m.Layout().ProfileDir("google-copy"), "chrome", "Default", "Cookies"))
 	if err != nil || string(b) != "session=abc" {

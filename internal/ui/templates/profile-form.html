@@ -27,6 +27,11 @@
       <span class="prefix"><span>/profiles/</span><input name="name" value="{{.Profile.Name}}" required pattern="[a-z0-9]([a-z0-9\-]{0,30}[a-z0-9])?" maxlength="32" autocomplete="off" spellcheck="false" {{if .New}}autofocus{{else}}readonly{{end}}></span>
       <span class="hint">{{if .New}}Agents ask for it by this name. Lowercase, numbers and dashes.{{else}}A profile's name can't change: agents use it.{{end}}</span>
     </label>
+    <label class="field">
+      <span class="label">Main site <span class="muted" style="font-weight:400">· optional</span></span>
+      <input class="input mono" name="site" value="{{.Profile.Site}}" placeholder="{{or .Profile.SiteInferred "accounts.google.com"}}" maxlength="253" autocomplete="off" spellcheck="false">
+      <span class="hint">Its icon shows next to the profile, read from the browser after it stops. {{if and (not .Profile.Site) .Profile.SiteInferred}}Empty: the most visited, {{.Profile.SiteInferred}}.{{else}}Empty: the site it visits most.{{end}}</span>
+    </label>
     <fieldset class="field" style="border:0;padding:0;margin:0 0 18px">
       <legend class="label" style="font-weight:500;margin-bottom:8px">When an agent sends you a handoff link</legend>
       {{range $.Policies}}
@@ -62,6 +67,21 @@
           <label class="check"><input type="checkbox" name="local_network" value="1"{{if .Profile.LocalNetwork}} checked{{end}}> Let pages reach the local network</label>
           <span class="hint">For a router's admin page, say. Off, pages can't open addresses on your LAN, this server or its other apps.</span>
         </div>
+        <fieldset class="field picker" style="border:0;padding:0;margin:0 0 18px">
+          <legend class="label" style="font-weight:500;margin-bottom:8px">Icon when the site has none</legend>
+          <div class="picker-head">
+            <span id="icon-preview" class="icon c-{{.Profile.Color}}" data-glyph="{{.Profile.Glyph}}" data-color="{{.Profile.Color}}"><svg><use href="#g-{{.Profile.Glyph}}"/></svg></span>
+            <span class="hint" style="margin:0">{{if .IconURL}}The site's own icon is used: <span class="icon fav" style="--size:20px;display:inline-flex;vertical-align:middle"><img src="{{.IconURL}}" alt=""></span>. This one shows when it has none.{{else}}Shown until the browser has visited the main site and stopped.{{end}}</span>
+          </div>
+          <div class="glyphs" role="radiogroup" aria-label="Icon">
+            <label title="Automatic"><input type="radio" name="icon_glyph" value=""{{if not .Profile.IconGlyph}} checked{{end}}><span class="auto">Auto</span></label>
+            {{range .Glyphs}}<label title="{{.}}"><input type="radio" name="icon_glyph" value="{{.}}"{{if eq . $.Profile.IconGlyph}} checked{{end}}><span><svg><use href="#g-{{.}}"/></svg></span></label>{{end}}
+          </div>
+          <div class="swatches" role="radiogroup" aria-label="Colour">
+            <label title="Automatic"><input type="radio" name="icon_color" value=""{{if not .Profile.IconColor}} checked{{end}}><span class="auto">Auto</span></label>
+            {{range .Colors}}<label title="{{.}}"><input type="radio" name="icon_color" value="{{.}}"{{if eq . $.Profile.IconColor}} checked{{end}}><span class="c-{{.}}"></span></label>{{end}}
+          </div>
+        </fieldset>
         {{if not .New}}
         <div class="two">
           <label class="field"><span class="label">Time zone</span><input class="input" name="time_zone" value="{{.Profile.TimeZone}}" placeholder="{{or .Profile.Location.TimeZone "From the proxy"}}" autocomplete="off" spellcheck="false"><span class="hint">An IANA zone such as Europe/Berlin. Empty: match the exit.</span></label>

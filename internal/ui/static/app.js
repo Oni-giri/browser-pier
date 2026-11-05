@@ -129,6 +129,15 @@
   });
 
   // Ticking a choice can select the option it belongs to.
+  // The icon picker's preview: Auto falls back to the profile's own default.
+  document.addEventListener("change", (e) => {
+    if (!e.target.matches("[name=icon_glyph], [name=icon_color]")) return;
+    const box = $("#icon-preview", e.target.form);
+    if (!box) return;
+    const pick = (n, d) => ($(`[name=${n}]:checked`, e.target.form) || {}).value || box.dataset[d];
+    box.className = "icon c-" + pick("icon_color", "color");
+    $("use", box).setAttribute("href", "#g-" + pick("icon_glyph", "glyph"));
+  });
   document.addEventListener("change", (e) => {
     const sel = e.target.dataset && e.target.dataset.select;
     if (sel && e.target.checked) { const el = $(sel); if (el) el.checked = true; }

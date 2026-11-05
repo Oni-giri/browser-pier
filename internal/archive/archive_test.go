@@ -5,8 +5,11 @@ import (
 	"bytes"
 	"compress/gzip"
 	"errors"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -61,7 +64,7 @@ func TestRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Profile != m.Profile || got.Format != Format {
+	if !reflect.DeepEqual(got.Profile, m.Profile) || got.Format != Format {
 		t.Fatalf("manifest %+v", got)
 	}
 	for name, want := range map[string]string{
@@ -77,6 +80,68 @@ func TestRoundTrip(t *testing.T) {
 		if _, err := os.Lstat(filepath.Join(dest, name)); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("%s was carried over", name)
 		}
+	}
+}
+
+// TestRoundTripCarriesTheIcon: the main site, the fallback icon and the
+// cached icon go with the profile; the icon comes back drawn again.
+func TestRoundTripCarriesTheIcon(t *testing.T) {
+	src := profileDir(t)
+	var icon bytes.Buffer
+	if err := png.Encode(&icon, image.NewNRGBA(image.Rect(0, 0, 16, 16))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "icon.png"), icon.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := Manifest{Profile: Profile{Name: "mail", Site: "mail.google.com", SiteInferred: "google.com", IconGlyph: "envelope", IconColor: "sky"}}
+	var buf bytes.Buffer
+	if err := Export(&buf, src, m, pass); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(t.TempDir(), "imported")
+	got, err := Import(&buf, pass, dest, DefaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := got.Profile
+	if p.Site != "mail.google.com" || p.SiteInferred != "google.com" || p.IconGlyph != "envelope" || p.IconColor != "sky" {
+		t.Fatalf("profile %+v", p)
+	}
+	b, err := os.ReadFile(filepath.Join(dest, "icon.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := png.DecodeConfig(bytes.NewReader(b))
+	if err != nil || cfg.Width != 64 || cfg.Height != 64 {
+		t.Fatalf("imported icon: %+v, %v; want a 64×64 PNG", cfg, err)
+	}
+	if !bytes.Equal(p.Icon, b) {
+		t.Fatal("the manifest's icon isn't the one written")
+	}
+}
+
+// TestImportDropsABadIcon: an icon that isn't an image doesn't land in
+// the profile, and doesn't stop the import.
+func TestImportDropsABadIcon(t *testing.T) {
+	src := profileDir(t)
+	if err := os.WriteFile(filepath.Join(src, "icon.png"), []byte(`<svg onload="alert(1)"/>`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := Export(&buf, src, Manifest{}, pass); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(t.TempDir(), "imported")
+	got, err := Import(&buf, pass, dest, DefaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Profile.Icon != nil {
+		t.Fatal("kept a bad icon")
+	}
+	if _, err := os.Stat(filepath.Join(dest, "icon.png")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("wrote a bad icon: %v", err)
 	}
 }
 

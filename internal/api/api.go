@@ -84,6 +84,12 @@ type profileJSON struct {
 	TimeZone        string     `json:"time_zone,omitempty"` // set by hand
 	Locale          string     `json:"locale,omitempty"`    // set by hand
 	LocalNetwork    bool       `json:"local_network"`       // pages may reach private addresses
+	// Site is the main site as set, whose favicon is the profile's icon in
+	// the web UI. The one BrowserPier infers from the history isn't shown:
+	// it is read from pages.
+	Site      string `json:"site,omitempty"`
+	IconGlyph string `json:"icon_glyph,omitempty"` // the fallback icon; "" for the default
+	IconColor string `json:"icon_color,omitempty"`
 	// Location is where the browser appeared to be when it last started.
 	Location  *locationJSON `json:"location,omitempty"`
 	Status    string        `json:"status"` // the live session's state, or stopped
@@ -114,6 +120,9 @@ func (a *API) profileOut(p profiles.Profile) profileJSON {
 		TimeZone:        p.TimeZone,
 		Locale:          p.Locale,
 		LocalNetwork:    p.LocalNetwork,
+		Site:            p.Site,
+		IconGlyph:       p.IconGlyph,
+		IconColor:       p.IconColor,
 		Status:          string(sessions.Stopped),
 	}
 	if l := p.Location; !l.CheckedAt.IsZero() {
@@ -160,6 +169,9 @@ type createProfileJSON struct {
 	HandoffPolicy   *string     `json:"handoff_policy"`
 	Proxy           *string     `json:"proxy"`
 	LocalNetwork    *bool       `json:"local_network"`
+	Site            *string     `json:"site"`
+	IconGlyph       *string     `json:"icon_glyph"`
+	IconColor       *string     `json:"icon_color"`
 }
 
 // policyRank orders handoff policies from least to most strict.
@@ -217,6 +229,15 @@ func (a *API) createProfile(w http.ResponseWriter, r *http.Request) {
 		if rank > policyRank[p.HandoffPolicy] {
 			p.HandoffPolicy = asked
 		}
+	}
+	if in.Site != nil {
+		p.Site = profiles.NormalizeSite(*in.Site)
+	}
+	if in.IconGlyph != nil {
+		p.IconGlyph = *in.IconGlyph
+	}
+	if in.IconColor != nil {
+		p.IconColor = *in.IconColor
 	}
 	if err := p.Validate(); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

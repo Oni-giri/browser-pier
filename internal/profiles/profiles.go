@@ -67,6 +67,17 @@ type Profile struct {
 	// host and its other containers. Loopback and link-local addresses (the
 	// cloud metadata endpoint) stay out of reach. Only the admin sets it.
 	LocalNetwork bool
+	// Site is the profile's main site as set, a hostname such as
+	// mail.google.com: its favicon is the profile's icon. Optional.
+	Site string
+	// SiteInferred is the most visited site in the profile's history,
+	// for when Site isn't set. BrowserPier records it when the browser
+	// stops; it can't be set, and never replaces Site.
+	SiteInferred string
+	// IconGlyph and IconColor are the icon shown when the site's favicon
+	// isn't known, from Glyphs and Colors; empty picks one from the name
+	// (see Icon).
+	IconGlyph, IconColor string
 	// Location is where the browser appeared to be the last time it ran.
 	// BrowserPier records it; it can't be set.
 	Location  Location
@@ -126,6 +137,12 @@ func (p Profile) Validate() error {
 	if p.Locale != "" && !localeRE.MatchString(p.Locale) {
 		return fmt.Errorf("locale %q: want a language and country such as de-DE", p.Locale)
 	}
+	if err := validSite(p.Site); err != nil {
+		return err
+	}
+	if err := validIcon(p.IconGlyph, p.IconColor); err != nil {
+		return err
+	}
 	return validProxy(p.Proxy)
 }
 
@@ -171,20 +188,27 @@ type Store struct {
 func NewStore(db *sql.DB) *Store { return &Store{db: db, now: time.Now} }
 
 const columns = `name, default_mode, auto_stop_minutes, screen_width, screen_height, proxy, handoff_policy, created_at, updated_at,
-	tz_override, locale_override, geo_country, geo_time_zone, geo_ip, geo_checked_at, local_network`
+	tz_override, locale_override, geo_country, geo_time_zone, geo_ip, geo_checked_at, local_network,
+	site, site_inferred, icon_glyph, icon_color`
 
-// Create adds a new profile.
+// Create adds a new profile. SiteInferred is kept as given, for an
+// imported profile.
 func (s *Store) Create(ctx context.Context, p Profile) (Profile, error) {
 	if err := p.Validate(); err != nil {
 		return Profile{}, err
 	}
+	if validSite(p.SiteInferred) != nil {
+		p.SiteInferred = ""
+	}
 	now := s.now().Truncate(time.Millisecond)
 	p.CreatedAt, p.UpdatedAt = now, now
 	res, err := s.db.ExecContext(ctx, `INSERT INTO profiles (name, default_mode, auto_stop_minutes, screen_width, screen_height,
-		proxy, handoff_policy, created_at, updated_at, tz_override, locale_override, local_network) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		proxy, handoff_policy, created_at, updated_at, tz_override, locale_override, local_network,
+		site, site_inferred, icon_glyph, icon_color) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (name) DO NOTHING`,
 		p.Name, p.DefaultMode, int(p.AutoStop/time.Minute), p.Width, p.Height, p.Proxy, p.HandoffPolicy,
-		now.UnixMilli(), now.UnixMilli(), p.TimeZone, p.Locale, p.LocalNetwork)
+		now.UnixMilli(), now.UnixMilli(), p.TimeZone, p.Locale, p.LocalNetwork,
+		p.Site, p.SiteInferred, p.IconGlyph, p.IconColor)
 	if err != nil {
 		return Profile{}, err
 	}
@@ -194,16 +218,18 @@ func (s *Store) Create(ctx context.Context, p Profile) (Profile, error) {
 	return p, nil
 }
 
-// Update replaces a profile's settings. The name can't change.
+// Update replaces a profile's settings. The name can't change, nor what
+// BrowserPier records itself (SiteInferred, Location).
 func (s *Store) Update(ctx context.Context, p Profile) (Profile, error) {
 	if err := p.Validate(); err != nil {
 		return Profile{}, err
 	}
 	now := s.now().Truncate(time.Millisecond)
 	res, err := s.db.ExecContext(ctx, `UPDATE profiles SET default_mode = ?, auto_stop_minutes = ?, screen_width = ?,
-		screen_height = ?, proxy = ?, handoff_policy = ?, tz_override = ?, locale_override = ?, local_network = ?, updated_at = ? WHERE name = ?`,
+		screen_height = ?, proxy = ?, handoff_policy = ?, tz_override = ?, locale_override = ?, local_network = ?,
+		site = ?, icon_glyph = ?, icon_color = ?, updated_at = ? WHERE name = ?`,
 		p.DefaultMode, int(p.AutoStop/time.Minute), p.Width, p.Height, p.Proxy, p.HandoffPolicy, p.TimeZone, p.Locale, p.LocalNetwork,
-		now.UnixMilli(), p.Name)
+		p.Site, p.IconGlyph, p.IconColor, now.UnixMilli(), p.Name)
 	if err != nil {
 		return Profile{}, err
 	}
@@ -217,6 +243,15 @@ func (s *Store) Update(ctx context.Context, p Profile) (Profile, error) {
 func (s *Store) SetLocation(ctx context.Context, name string, l Location) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE profiles SET geo_country = ?, geo_time_zone = ?, geo_ip = ?, geo_checked_at = ? WHERE name = ?`,
 		l.Country, l.TimeZone, l.IP, l.CheckedAt.UnixMilli(), name)
+	return err
+}
+
+// SetSiteInferred records the most visited site in the profile's history.
+func (s *Store) SetSiteInferred(ctx context.Context, name, site string) error {
+	if err := validSite(site); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE profiles SET site_inferred = ? WHERE name = ?`, site, name)
 	return err
 }
 
@@ -265,7 +300,8 @@ func scan(row interface{ Scan(...any) error }) (Profile, error) {
 	var autoStop int
 	var created, updated, checked int64
 	err := row.Scan(&p.Name, &p.DefaultMode, &autoStop, &p.Width, &p.Height, &p.Proxy, &p.HandoffPolicy, &created, &updated,
-		&p.TimeZone, &p.Locale, &p.Location.Country, &p.Location.TimeZone, &p.Location.IP, &checked, &p.LocalNetwork)
+		&p.TimeZone, &p.Locale, &p.Location.Country, &p.Location.TimeZone, &p.Location.IP, &checked, &p.LocalNetwork,
+		&p.Site, &p.SiteInferred, &p.IconGlyph, &p.IconColor)
 	p.AutoStop = time.Duration(autoStop) * time.Minute
 	p.CreatedAt, p.UpdatedAt = time.UnixMilli(created), time.UnixMilli(updated)
 	if checked != 0 {

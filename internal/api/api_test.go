@@ -279,6 +279,38 @@ func TestProfiles(t *testing.T) {
 	if code := f.call(f.all, http.MethodPost, "/api/profiles", `{"name": "Bad Name"}`, nil); code != http.StatusBadRequest {
 		t.Fatalf("bad name: %d", code)
 	}
+	// The main site and fallback icon.
+	if code := f.call(f.all, http.MethodPost, "/api/profiles", `{"name": "mail", "site": "https://Mail.Google.com/mail/", "icon_glyph": "envelope", "icon_color": "sky"}`, &p); code != http.StatusCreated ||
+		p.Site != "mail.google.com" || p.IconGlyph != "envelope" || p.IconColor != "sky" {
+		t.Fatalf("site and icon: %d %+v", code, p)
+	}
+	if stored, _ := f.m.Profiles().Get(context.Background(), "mail"); stored.Site != "mail.google.com" {
+		t.Fatalf("stored site %q", stored.Site)
+	}
+	for _, body := range []string{`{"name": "s1", "site": "not a site"}`, `{"name": "s2", "site": "a_b.com"}`,
+		`{"name": "s3", "icon_glyph": "unicorn"}`, `{"name": "s4", "icon_color": "orange"}`} {
+		if code := f.call(f.all, http.MethodPost, "/api/profiles", body, nil); code != http.StatusBadRequest {
+			t.Errorf("%s: %d, want 400", body, code)
+		}
+	}
+	// The site inferred from the history isn't the agent's to see.
+	if err := f.m.Profiles().SetSiteInferred(context.Background(), "linkedin", "linkedin.com"); err != nil {
+		t.Fatal(err)
+	}
+	var raw struct{ Profiles []map[string]any }
+	f.call(f.all, http.MethodGet, "/api/profiles", "", &raw)
+	for _, pr := range raw.Profiles {
+		if pr["name"] == "linkedin" {
+			if _, ok := pr["site"]; ok {
+				t.Fatalf("an inferred site shown: %v", pr)
+			}
+		}
+		for k := range pr {
+			if strings.Contains(k, "inferred") {
+				t.Fatalf("field %s shown", k)
+			}
+		}
+	}
 	// An agent can make handoffs stricter, never looser.
 	f.call(f.all, http.MethodPost, "/api/profiles", `{"name": "loose", "handoff_policy": "link"}`, &p)
 	if p.HandoffPolicy != "pin" {
