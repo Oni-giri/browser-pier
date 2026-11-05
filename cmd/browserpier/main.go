@@ -144,12 +144,12 @@ func run(log *slog.Logger) error {
 		ramPercent = saved.RAMLimitPercent
 	}
 	total, memErr := hostMemory()
-	if ramPercent > 0 {
-		if memErr != nil {
-			return fmt.Errorf("reading the host's memory for the memory limit: %w", memErr)
-		}
-		mgr.SetMemoryLimit(total*int64(ramPercent)/100, perBrowser)
+	if ramPercent > 0 && memErr != nil {
+		return fmt.Errorf("reading the host's memory for the memory limit: %w", memErr)
 	}
+	// With no limit (0), a new browser must still fit in what the host has free.
+	mgr.SetMemoryLimit(total*int64(ramPercent)/100, perBrowser)
+	mgr.SetHostFree(localFree())
 	go mgr.WatchIdle(ctx, 30*time.Second)
 	if err := mgr.Reconcile(ctx); err != nil {
 		return fmt.Errorf("checking browsers left running: %w", err)

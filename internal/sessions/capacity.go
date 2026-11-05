@@ -79,6 +79,12 @@ func (m *Manager) stopIdle(ctx context.Context) {
 // memLimits is the memory cap and what a new browser is expected to take.
 type memLimits struct{ limit, each int64 }
 
+// SetHostFree has a new browser fit in what the host has free, as well as
+// under the memory limit. free reads it now, other apps included; 0 means
+// unknown, and the host isn't checked. It must be called before any
+// browser starts.
+func (m *Manager) SetHostFree(free func() int64) { m.hostFree = free }
+
 // SetMemoryLimit caps the memory all browsers may use together (0: no
 // cap), expecting each new browser to need perBrowser. It can be called
 // at any time; the new cap applies to the next start, and browsers
@@ -120,19 +126,24 @@ func (r MemoryReport) Room() int {
 // Memory reports what the live browsers use, for the web UI.
 func (m *Manager) Memory(ctx context.Context) MemoryReport {
 	limit, each := m.memLimits()
-	used, browsers := m.memoryInUse(ctx, each)
+	used, _, browsers := m.memoryInUse(ctx, each)
 	return MemoryReport{Limit: limit, Used: used, Each: each, Browsers: browsers}
 }
 
 // ErrNoRoom is returned, wrapped in a *NoRoomError, when a new browser
-// wouldn't fit under the memory limit and none could be stopped for it.
+// wouldn't fit under the memory limit, or in what the host has free, and
+// none could be stopped for it.
 var ErrNoRoom = errors.New("not enough memory for another browser")
 
 // NoRoomError says what is using the memory. Its Error names no
 // profile; callers show each one only the browsers it may see.
 type NoRoomError struct {
 	Limit, Used int64
-	Running     []Usage
+	// Host is set when the host is what's short: it has Free left for a
+	// browser expected to need Each.
+	Host       bool
+	Free, Each int64
+	Running    []Usage
 }
 
 // Usage is one live browser's share of memory.
@@ -144,8 +155,18 @@ type Usage struct {
 
 func (u Usage) String() string { return fmt.Sprintf("%s (%s, %s)", u.Profile, gb(u.Bytes), u.Why) }
 
-func (e *NoRoomError) Error() string {
-	return fmt.Sprintf("%v: %s of the %s limit in use, and every running browser is in use", ErrNoRoom, gb(e.Used), gb(e.Limit))
+func (e *NoRoomError) Error() string { return fmt.Sprintf("%v: %s", ErrNoRoom, e.Why()) }
+
+// Why says what ran out, naming no profile.
+func (e *NoRoomError) Why() string {
+	why := fmt.Sprintf("%s of the %s limit in use", gb(e.Used), gb(e.Limit))
+	if e.Host {
+		why = fmt.Sprintf("the host has %s free, other apps included, and a browser needs about %s", gb(e.Free), gb(e.Each))
+	}
+	if len(e.Running) == 0 {
+		return why + ", with no browser running to stop"
+	}
+	return why + ", and every running browser is in use"
 }
 
 func (e *NoRoomError) Unwrap() error { return ErrNoRoom }
@@ -153,17 +174,28 @@ func (e *NoRoomError) Unwrap() error { return ErrNoRoom }
 // GB formats bytes for people.
 func gb(n int64) string { return fmt.Sprintf("%.1f GB", float64(n)/(1<<30)) }
 
-// makeRoom makes sure a new browser fits under the memory limit, stopping
-// the longest-idle browser no agent is using until it does. If none can
-// be stopped, it refuses with what is running.
+// makeRoom makes sure a new browser fits under the memory limit and in
+// what the host has free, stopping the longest-idle browser no agent is
+// using until it does. If none can be stopped, it refuses with what is
+// running.
 func (m *Manager) makeRoom(ctx context.Context) error {
 	limit, each := m.memLimits()
-	if limit <= 0 {
+	if each <= 0 || (limit <= 0 && m.hostFree == nil) {
 		return nil
 	}
 	for range 32 {
-		used, running := m.memoryInUse(ctx, each)
-		if used+each <= limit {
+		used, growing, running := m.memoryInUse(ctx, each)
+		underLimit := limit <= 0 || used+each <= limit
+		// Browsers still booting haven't taken their share from the host
+		// yet: what it has free must cover theirs too.
+		free, inHost := int64(0), true
+		if m.hostFree != nil {
+			if n := m.hostFree(); n > 0 {
+				free = max(n-growing, 0)
+				inHost = each <= free
+			}
+		}
+		if underLimit && inHost {
 			return nil
 		}
 		victim, idle := m.longestIdle()
@@ -172,8 +204,9 @@ func (m *Manager) makeRoom(ctx context.Context) error {
 			for i, u := range running {
 				list[i] = u.String()
 			}
-			m.log.Warn("refused a browser: no room", "used", gb(used), "limit", gb(limit), "running", strings.Join(list, "; "))
-			return &NoRoomError{Limit: limit, Used: used, Running: running}
+			full := &NoRoomError{Limit: limit, Used: used, Host: underLimit, Free: free, Each: each, Running: running}
+			m.log.Warn("refused a browser: no room", "why", full.Why(), "running", strings.Join(list, "; "))
+			return full
 		}
 		_, err := m.stopIf(ctx, victim, func(l *live) bool { return l.idleLocked(m.now()) > 0 })
 		if errors.Is(err, errStillInUse) {
@@ -189,8 +222,9 @@ func (m *Manager) makeRoom(ctx context.Context) error {
 
 // memoryInUse adds up what the live browsers use, and describes each.
 // A browser whose usage can't be read counts as each, what a new one is
-// expected to take.
-func (m *Manager) memoryInUse(ctx context.Context, each int64) (int64, []Usage) {
+// expected to take. growing is what browsers still booting are counted
+// for beyond what they use yet.
+func (m *Manager) memoryInUse(ctx context.Context, each int64) (total, growing int64, running []Usage) {
 	type entry struct {
 		profile, cid string
 		state        State
@@ -204,19 +238,20 @@ func (m *Manager) memoryInUse(ctx context.Context, each int64) (int64, []Usage) 
 	}
 	m.mu.Unlock()
 	sort.Slice(entries, func(i, j int) bool { return entries[i].profile < entries[j].profile })
-	var total int64
-	var running []Usage
 	for _, e := range entries {
-		used := each
+		used, read := each, int64(0)
 		if e.cid != "" {
 			if n, err := m.rt.MemoryUsage(ctx, e.cid); err == nil {
-				used = n
+				used, read = n, n
 				// A browser still booting will grow: count at least what a
 				// new one is expected to take.
 				if e.state == Starting {
 					used = max(n, each)
 				}
 			}
+		}
+		if e.state == Starting {
+			growing += used - read
 		}
 		total += used
 		why := string(e.state)
@@ -227,7 +262,7 @@ func (m *Manager) memoryInUse(ctx context.Context, each int64) (int64, []Usage) 
 		}
 		running = append(running, Usage{e.profile, used, why})
 	}
-	return total, running
+	return total, growing, running
 }
 
 // longestIdle returns the running session idle longest with no agent
