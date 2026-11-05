@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -161,7 +162,9 @@ func (e *NoRoomError) Error() string { return fmt.Sprintf("%v: %s", ErrNoRoom, e
 func (e *NoRoomError) Why() string {
 	why := fmt.Sprintf("%s of the %s limit in use", gb(e.Used), gb(e.Limit))
 	if e.Host {
-		why = fmt.Sprintf("the host has %s free, other apps included, and a browser needs about %s", gb(e.Free), gb(e.Each))
+		// Rounded down: 0.96 GB shown as 1.0 GB would look like enough.
+		free := math.Floor(float64(e.Free)/(1<<30)*10) / 10
+		why = fmt.Sprintf("the host has %.1f GB free, other apps included, and a browser needs about %s", free, gb(e.Each))
 	}
 	if len(e.Running) == 0 {
 		return why + ", with no browser running to stop"
