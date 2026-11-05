@@ -40,7 +40,7 @@
     </section>
 
     <section class="code span-8" aria-labelledby="qs-title" data-tabs>
-      <div class="cell-head"><h2 class="cell-title" id="qs-title" style="color:#fff">Quick start</h2>{{template "code-tabs" (list "curl" "Python" "MCP")}}</div>
+      <div class="cell-head"><h2 class="cell-title" id="qs-title" style="color:#fff">Quick start</h2>{{template "code-tabs" (list "curl" "Python" "MCP" "Agent")}}</div>
       <pre data-panel="curl"><span class="c"># 1. start (or attach to) a profile's browser</span>
 curl -X POST {{.Base}}/api/sessions \
   -H "Authorization: Bearer $PIER_TOKEN" \
@@ -84,6 +84,11 @@ claude mcp add --transport http browserpier {{.Base}}/mcp \
 
 <span class="c"># tools: start_browser, screenshot, click, type_text, press_keys,
 # scroll, drag, wait, zoom, request_handoff, stop_browser…</span></pre>
+      <div data-panel="Agent" hidden>
+        <p class="code-note">Paste this into your agent's chat, and it adds BrowserPier itself. Set <code>PIER_TOKEN</code> where the agent runs first; the token stays out of the chat.</p>
+        <pre class="message">{{.AgentMessage}}</pre>
+        <button class="btn light" type="button" data-copy="{{.AgentMessage}}" data-copied="Message copied">Copy message</button>
+      </div>
     </section>
 
     <div class="span-4 side">

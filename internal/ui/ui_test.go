@@ -200,6 +200,12 @@ func TestEveryPageRenders(t *testing.T) {
 	want(t, f.get("/profiles/google/side"), http.StatusOK, "Agent log")
 	want(t, f.get("/profiles/github/edit"), http.StatusOK, "Profile settings", "Time zone")
 	want(t, f.get("/agents"), http.StatusOK, "research-bot", "bp_live_…", "Quick start")
+	// The Agent tab's message, shown and copied, names this BrowserPier's MCP
+	// endpoint and keeps the token in PIER_TOKEN.
+	mcp := "claude mcp add --transport http browserpier " + f.srv.URL + "/mcp --header &#34;Authorization: Bearer $PIER_TOKEN&#34;"
+	if body := f.get("/agents").body; strings.Count(body, mcp) != 2 || !strings.Contains(body, `data-tab="Agent"`) || !strings.Contains(body, "Copy message") {
+		t.Fatal("the Agent tab's message isn't shown and copyable")
+	}
 	want(t, f.get("/settings"), http.StatusOK, "Handoff PIN", "Not set", "Memory limit", "50%")
 	want(t, f.get("/chip"), http.StatusOK, "1 needs you")
 	if r := f.get("/profiles/nope"); r.code != http.StatusNotFound {

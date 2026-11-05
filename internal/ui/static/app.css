@@ -324,6 +324,10 @@ input[type=range]{width:100%;accent-color:var(--ink)}
 .code pre{margin:14px 0 0;font:12.5px/1.75 var(--mono);white-space:pre-wrap;word-break:break-word;color:#E2E8F0}
 .code pre .c{color:#64748B}.code pre .s{color:#8AA8FF}
 .code .btn.light{background:#fff;color:var(--ink)}
+.code-note{margin:14px 0 0;font-size:13px;color:#94A3B8}
+.code-note code{font-family:var(--mono);color:#E2E8F0}
+.code pre.message{padding:12px 14px;border-radius:10px;background:#1E293B;font-family:inherit;font-size:13.5px;line-height:1.6}
+.code [data-panel] .btn.light{margin-top:12px}
 .copy-row{display:flex;gap:8px}
 .copy-row .input{font-family:var(--mono);font-size:13px;background:var(--fill);box-shadow:none;text-overflow:ellipsis}
 
