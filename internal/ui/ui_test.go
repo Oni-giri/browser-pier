@@ -334,6 +334,24 @@ func TestStartRefusedWhenTheHostIsShort(t *testing.T) {
 	want(t, f.get("/profiles"), http.StatusOK, "Not enough memory to start google: the host has 0.9 GB free, other apps included, and a browser needs about 1.0 GB, with no browser running to stop.")
 }
 
+// With no memory limit, pages count room in what the host has free and
+// show no limit.
+func TestNoLimitShowsTheHostsRoom(t *testing.T) {
+	f := newFixture(t)
+	f.m.SetMemoryLimit(0, 1<<30)
+	f.free = 3 << 30
+	f.profile("google")
+	for _, path := range []string{"/", "/profiles", "/settings"} {
+		r := f.get(path)
+		want(t, r, http.StatusOK)
+		if strings.Contains(r.body, "limit 0.0 GB") || strings.Contains(r.body, "of the 0.0 GB") {
+			t.Errorf("%s shows a 0 GB limit", path)
+		}
+	}
+	f.post("/profiles/google/start", nil)
+	want(t, f.get("/profiles"), http.StatusOK, "1 running · ", "room for about 3 more")
+}
+
 func TestPreviewDoesNotCountAsUse(t *testing.T) {
 	f := newFixture(t)
 	f.profile("google")
