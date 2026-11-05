@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.4
+
+**New**
+- A new look, following the design: a sky-blue page, slate greys and a header that stays on top as you scroll. Orange now only means someone is needed: while a profile waits for you, the page light turns warm, the "needs you" chip pulses and the first waiting profile stands out, with "Take control" in blue. When nobody is waiting, the page goes back to blue by itself. The sign-in and phone handoff pages follow the design too.
+- Profiles show their site's icon. After a browser stops gracefully, BrowserPier reads the main site's icon from the browser's own icon cache, the files the browser itself wrote. It treats those files as untrusted, and the icon is redrawn before it is shown. New profile and Edit have a "Main site" field. Left empty, it is guessed from the site the browser visits most. Under Advanced you pick a fallback icon and colour for profiles whose site has none. Agents keep their initials.
+- Agents can give a new profile its `site`, `icon_glyph` and `icon_color` when they create it. Exports carry them, and the icon.
+
+**Fixed**
+- With two profiles waiting, the chip said "2 needs you". It now says "2 need you".
+
 ## 0.1.3
 
 **Fixed**
