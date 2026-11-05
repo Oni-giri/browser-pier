@@ -41,6 +41,15 @@ func (m *Manager) refreshIcon(profile string) {
 		return
 	}
 	dir := m.layout.dir(profile)
+	if _, err := os.Stat(filepath.Join(dir, "chrome")); err != nil {
+		return // never started: nothing to read
+	}
+	// Copies a crash left behind.
+	if old, _ := filepath.Glob(filepath.Join(dir, ".icon-*")); len(old) > 0 {
+		for _, o := range old {
+			_ = os.RemoveAll(o)
+		}
+	}
 	scratch, err := os.MkdirTemp(dir, ".icon-")
 	if err != nil {
 		m.log.Info("reading the profile's icon", "profile", profile, "err", err)
