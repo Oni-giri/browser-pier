@@ -142,7 +142,7 @@ curl -s {{.Base}}/api/profiles -H "$H"
 curl -s -X POST {{.Base}}/api/sessions -H "$H" -d '{"profile": "NAME", "mode": "visual"}'
 # see the screen (a PNG), then act; coordinates are in that screenshot's pixels
 curl -s {{.Base}}/api/sessions/ID/screenshot -H "$H" -o screen.png
-curl -s -X POST {{.Base}}/api/sessions/ID/computer -H "$H" -d '{"action": "click", "x": 640, "y": 360, "screenshot": true}'
+curl -s -X POST {{.Base}}/api/sessions/ID/computer -H "$H" -d '{"action": "click", "x": 640, "y": 360, "screenshot": true}' -o screen.png
 #   other actions: type {"text"}, key {"keys": "ctrl+l"}, scroll {"x", "y", "dy"}, drag {"from", "to"}, wait {"ms"}, zoom {"x", "y", "w", "h"}
 # a person is needed (sign-in, 2FA, CAPTCHA, payment): send them a link, then wait for them
 curl -s -X POST {{.Base}}/api/sessions/ID/handoff -H "$H" -d '{"reason": "sensitive_input", "detail": "Enter the 2FA code"}'

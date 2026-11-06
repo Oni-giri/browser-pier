@@ -376,6 +376,7 @@ func TestSetupGuide(t *testing.T) {
 		"claude mcp add --transport http browserpier " + f.srv.URL + "/mcp --header 'Authorization: Bearer ${PIER_TOKEN}'",
 		"codex mcp add browserpier --url " + f.srv.URL + "/mcp --bearer-token-env-var PIER_TOKEN",
 		"curl -s -X POST " + f.srv.URL + "/api/sessions",
+		`"screenshot": true}' -o screen.png`, // a PNG, not JSON, for the terminal
 	} {
 		if !strings.Contains(body, s) {
 			t.Errorf("the guide is missing %q", s)
