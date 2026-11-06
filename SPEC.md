@@ -251,6 +251,7 @@ Downloads land in a per-profile folder. The API lists, fetches and deletes them,
 ### MCP tools
 
 - **Endpoint:** `/mcp` speaks MCP over streamable HTTP and takes an agent token like the API. Each tool calls the API in-process with the caller's token, so scopes, refusals and the agent log are the API's. An MCP session belongs to the token that opened it.
+- **Setup guide:** `GET /mcp/setup` is a Markdown page for agents, with this BrowserPier's address filled in, that tells an agent how to connect itself. It covers checking `PIER_TOKEN` (without printing it), the setup for each common client with the token read from the variable at connect time, never written into a config, checking with `list_profiles`, and the REST API as the fallback without MCP. It holds no secret, so it needs no sign-in; under `/mcp/` Umbrel lets it through.
 - **Tools:**
   - `list_profiles`, `start_browser`, `stop_browser`
   - `screenshot`, `click`, `type_text`, `press_keys`, `scroll`, `drag`, `wait`, `zoom`
@@ -280,7 +281,7 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 | 3 · Profiles | Grid of profile cards with a live preview per state (default), or a table. Each profile has an icon: its main site's favicon, read locally from the profile's own favicon cache, or a chosen icon and colour as fallback. Status, mode, agent, memory, activity, auto-stop. ⋯ menu (copy CDP URL, stop, edit, export, delete), stop and delete confirmations, empty state. |
 | 4 · New profile | Centred modal over Profiles: name, main site (optional, used for the icon), handoff policy, "start and log in now"; Advanced holds mode, auto-stop, screen size, proxy, local network access and the fallback icon and colour, with a live preview. |
 | 5 · Live view | Streamed browser, take or hand back control, controls locked while the agent drives, connection details, agent activity log, help request. |
-| 6 · Agents | Agent tokens (create with scope, shown once, revoke), handoff link rules, quick start (curl, Python, MCP, and an Agent tab: a message to paste into an agent's chat so it adds the MCP server itself, with the token kept in `PIER_TOKEN`), endpoint list, MCP. |
+| 6 · Agents | Agent tokens (create with scope, shown once, revoke), handoff link rules, quick start (curl, Python, MCP, and an Agent tab: a two-line prompt to paste into any agent's chat, pointing it to `/mcp/setup`, with the token kept in `PIER_TOKEN`), endpoint list, MCP. |
 | 7 · Settings | Handoff PIN, default handoff policy, memory limit, default auto-stop, default proxy, admin account and sign-out. |
 | 8 · Handoff (phone) | PIN entry, take control on a phone (tap to click, pinch, Type, Fit), note, Done or Can't do this, then expired and finished states. |
 
