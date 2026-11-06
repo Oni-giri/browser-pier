@@ -89,9 +89,9 @@ codex mcp add browserpier --url {{.Base}}/mcp \
 <span class="c"># tools: start_browser, screenshot, click, type_text, press_keys,
 # scroll, drag, wait, zoom, request_handoff, stop_browser…</span></pre>
       <div data-panel="Agent" hidden>
-        <p class="code-note">Paste this into your agent's chat, and it adds BrowserPier itself. Set <code>PIER_TOKEN</code> where the agent runs first; the token stays out of the chat.</p>
+        <p class="code-note">Create a token, set it as <code>PIER_TOKEN</code> where your agent runs, then paste this into the agent's chat. It reads BrowserPier's setup guide and connects itself, whichever agent it is. The token stays out of the chat.</p>
         <pre class="message">{{.AgentMessage}}</pre>
-        <button class="btn light" type="button" data-copy="{{.AgentMessage}}" data-copied="Message copied">Copy message</button>
+        <div class="code-actions"><button class="btn light" type="button" data-copy="{{.AgentMessage}}" data-copied="Message copied">Copy message</button><a class="code-link" href="/mcp/setup" target="_blank" rel="noopener">Read the guide →</a></div>
       </div>
     </section>
 
