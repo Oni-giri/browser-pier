@@ -107,6 +107,9 @@ func (u *UI) Register(mux *http.ServeMux) {
 		files.ServeHTTP(w, r)
 	})))
 
+	// The guide an agent reads to connect itself; under /mcp/, which Umbrel
+	// lets agents reach without signing in.
+	mux.HandleFunc("GET /mcp/setup", u.setup)
 	mux.Handle("GET /{$}", admin(u.overview))
 	mux.Handle("GET /chip", admin(u.chip))
 	mux.Handle("GET /profiles", admin(u.profilesPage))

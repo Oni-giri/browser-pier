@@ -81,7 +81,7 @@ curl -X POST {{.Base}}/api/sessions \
     <pre data-panel="MCP" hidden><span class="c"># Claude Code</span>
 claude mcp add --transport http browserpier \
   {{.Base}}/mcp \
-  --header "Authorization: Bearer $PIER_TOKEN"</pre>
+  --header 'Authorization: Bearer ${PIER_TOKEN}'</pre>
     <a class="btn light wide" href="/agents" style="margin-top:16px">Quick start →</a>
   </section>
 {{end}}

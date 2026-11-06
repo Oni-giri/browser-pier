@@ -50,6 +50,13 @@ func (u *UI) agentsData(r *http.Request) (agentsData, error) {
 	return d, nil
 }
 
+// AgentMessage is what to paste into an agent's chat: it points the agent
+// to the setup guide, which works for any client. The token stays in
+// PIER_TOKEN, out of the chat.
+func (d agentsData) AgentMessage() string {
+	return "Connect yourself to my BrowserPier: read " + d.Base + "/mcp/setup (with curl if you can) and follow it. My agent token is in the PIER_TOKEN environment variable."
+}
+
 func (u *UI) agentsPage(w http.ResponseWriter, r *http.Request) {
 	d, err := u.agentsData(r)
 	if err != nil {

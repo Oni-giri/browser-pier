@@ -40,7 +40,7 @@
     </section>
 
     <section class="code span-8" aria-labelledby="qs-title" data-tabs>
-      <div class="cell-head"><h2 class="cell-title" id="qs-title" style="color:#fff">Quick start</h2>{{template "code-tabs" (list "curl" "Python" "MCP")}}</div>
+      <div class="cell-head"><h2 class="cell-title" id="qs-title" style="color:#fff">Quick start</h2>{{template "code-tabs" (list "curl" "Python" "MCP" "Agent")}}</div>
       <pre data-panel="curl"><span class="c"># 1. start (or attach to) a profile's browser</span>
 curl -X POST {{.Base}}/api/sessions \
   -H "Authorization: Bearer $PIER_TOKEN" \
@@ -73,7 +73,11 @@ with sync_playwright() as p:
 requests.delete("{{.Base}}/api/sessions/" + s["id"], headers=auth)</pre>
       <pre data-panel="MCP" hidden><span class="c"># Claude Code</span>
 claude mcp add --transport http browserpier {{.Base}}/mcp \
-  --header "Authorization: Bearer $PIER_TOKEN"
+  --header 'Authorization: Bearer ${PIER_TOKEN}'
+
+<span class="c"># Codex</span>
+codex mcp add browserpier --url {{.Base}}/mcp \
+  --bearer-token-env-var PIER_TOKEN
 
 <span class="c"># any MCP client that speaks streamable HTTP</span>
 {"mcpServers": {"browserpier": {
@@ -84,6 +88,11 @@ claude mcp add --transport http browserpier {{.Base}}/mcp \
 
 <span class="c"># tools: start_browser, screenshot, click, type_text, press_keys,
 # scroll, drag, wait, zoom, request_handoff, stop_browser…</span></pre>
+      <div data-panel="Agent" hidden>
+        <p class="code-note">Create a token, set it as <code>PIER_TOKEN</code> where your agent runs, then paste this into the agent's chat. It reads BrowserPier's setup guide and connects itself, whichever agent it is. The token stays out of the chat.</p>
+        <pre class="message">{{.AgentMessage}}</pre>
+        <div class="code-actions"><button class="btn light" type="button" data-copy="{{.AgentMessage}}" data-copied="Message copied">Copy message</button><a class="code-link" href="/mcp/setup" target="_blank" rel="noopener">Read the guide →</a></div>
+      </div>
     </section>
 
     <div class="span-4 side">

@@ -200,6 +200,12 @@ func TestEveryPageRenders(t *testing.T) {
 	want(t, f.get("/profiles/google/side"), http.StatusOK, "Agent log")
 	want(t, f.get("/profiles/github/edit"), http.StatusOK, "Profile settings", "Time zone")
 	want(t, f.get("/agents"), http.StatusOK, "research-bot", "bp_live_…", "Quick start")
+	// The Agent tab's message, shown and copied, points to this BrowserPier's
+	// setup guide and keeps the token in PIER_TOKEN.
+	msg := "read " + f.srv.URL + "/mcp/setup (with curl if you can) and follow it. My agent token is in the PIER_TOKEN environment variable."
+	if body := f.get("/agents").body; strings.Count(body, msg) != 2 || !strings.Contains(body, `data-tab="Agent"`) || !strings.Contains(body, "Copy message") {
+		t.Fatal("the Agent tab's message isn't shown and copyable")
+	}
 	want(t, f.get("/settings"), http.StatusOK, "Handoff PIN", "Not set", "Memory limit", "50%")
 	want(t, f.get("/chip"), http.StatusOK, "1 needs you")
 	if r := f.get("/profiles/nope"); r.code != http.StatusNotFound {
@@ -350,6 +356,35 @@ func TestNoLimitShowsTheHostsRoom(t *testing.T) {
 	}
 	f.post("/profiles/google/start", nil)
 	want(t, f.get("/profiles"), http.StatusOK, "1 running · ", "room for about 3 more")
+}
+
+// The setup guide needs no sign-in: agents read it before they're set up,
+// and it holds no secret.
+func TestSetupGuide(t *testing.T) {
+	f := newFixture(t)
+	resp, err := http.Get(f.srv.URL + "/mcp/setup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, _ := io.ReadAll(resp.Body)
+	body := string(b)
+	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/markdown") {
+		t.Fatalf("GET /mcp/setup: %d %s", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+	for _, s := range []string{
+		"claude mcp add --transport http browserpier " + f.srv.URL + "/mcp --header 'Authorization: Bearer ${PIER_TOKEN}'",
+		"codex mcp add browserpier --url " + f.srv.URL + "/mcp --bearer-token-env-var PIER_TOKEN",
+		"curl -s -X POST " + f.srv.URL + "/api/sessions",
+		`"screenshot": true}' -o screen.png`, // a PNG, not JSON, for the terminal
+	} {
+		if !strings.Contains(body, s) {
+			t.Errorf("the guide is missing %q", s)
+		}
+	}
+	if strings.Contains(body, "{{") || strings.Contains(body, "bp_live_") {
+		t.Error("the guide has a template left in it, or a token")
+	}
 }
 
 func TestPreviewDoesNotCountAsUse(t *testing.T) {
