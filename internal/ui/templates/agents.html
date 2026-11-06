@@ -75,6 +75,10 @@ requests.delete("{{.Base}}/api/sessions/" + s["id"], headers=auth)</pre>
 claude mcp add --transport http browserpier {{.Base}}/mcp \
   --header 'Authorization: Bearer ${PIER_TOKEN}'
 
+<span class="c"># Codex</span>
+codex mcp add browserpier --url {{.Base}}/mcp \
+  --bearer-token-env-var PIER_TOKEN
+
 <span class="c"># any MCP client that speaks streamable HTTP</span>
 {"mcpServers": {"browserpier": {
   "type": "http",

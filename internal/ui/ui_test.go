@@ -203,7 +203,8 @@ func TestEveryPageRenders(t *testing.T) {
 	// The Agent tab's message, shown and copied, names this BrowserPier's MCP
 	// endpoint and keeps the token in PIER_TOKEN.
 	mcp := "claude mcp add --transport http browserpier " + f.srv.URL + "/mcp --header &#39;Authorization: Bearer ${PIER_TOKEN}&#39;"
-	if body := f.get("/agents").body; strings.Count(body, mcp) != 2 || !strings.Contains(body, `data-tab="Agent"`) || !strings.Contains(body, "Copy message") {
+	codex := "codex mcp add browserpier --url " + f.srv.URL + "/mcp --bearer-token-env-var PIER_TOKEN"
+	if body := f.get("/agents").body; strings.Count(body, mcp) != 2 || strings.Count(body, codex) != 2 || !strings.Contains(body, `data-tab="Agent"`) || !strings.Contains(body, "Copy message") {
 		t.Fatal("the Agent tab's message isn't shown and copyable")
 	}
 	want(t, f.get("/settings"), http.StatusOK, "Handoff PIN", "Not set", "Memory limit", "50%")
