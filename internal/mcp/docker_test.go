@@ -156,6 +156,9 @@ func TestAgentLogsInThroughMCP(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}
 	if site.Issued() == "" {
+		if r := site.Rejected(); r != "" {
+			t.Fatalf("the login form was sent with %s", r)
+		}
 		t.Fatal("the login form was never submitted")
 	}
 

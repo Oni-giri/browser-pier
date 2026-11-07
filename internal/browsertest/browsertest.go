@@ -194,6 +194,8 @@ type Site struct {
 	acceptLanguage string
 	// iconServed is set once the browser fetched /icon.png.
 	iconServed bool
+	// rejected is what the last refused login sent.
+	rejected string
 }
 
 // IconServed reports whether the browser has fetched the /icon page's
@@ -240,6 +242,9 @@ func NewSite(t *testing.T, host string) *Site {
 	})
 	mux.HandleFunc("POST /login", func(w http.ResponseWriter, r *http.Request) {
 		if r.FormValue("user") != "pier" || r.FormValue("password") != "hunter2" {
+			s.mu.Lock()
+			s.rejected = fmt.Sprintf("user %q, password %q", r.FormValue("user"), r.FormValue("password"))
+			s.mu.Unlock()
 			http.Error(w, "wrong password", http.StatusUnauthorized)
 			return
 		}
@@ -326,6 +331,14 @@ func (s *Site) state() (issued, seen string) {
 // one /account was last visited with ("" for none).
 func (s *Site) Issued() string { issued, _ := s.state(); return issued }
 func (s *Site) Seen() string   { _, seen := s.state(); return seen }
+
+// Rejected is what the last refused login sent ("" for none), to tell a
+// form never submitted from one filled in wrong.
+func (s *Site) Rejected() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rejected
+}
 
 // Login signs in through the page's form and returns once the cookie is set.
 func (s *Site) Login(t *testing.T, p *CDP) string {
