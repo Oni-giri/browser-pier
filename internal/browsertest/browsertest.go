@@ -238,7 +238,12 @@ func NewSite(t *testing.T, host string) *Site {
 	s := &Site{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /login", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, `<form method="post" action="/login"><input name="user"><input name="password" type="password"><button>Sign in</button></form>`)
+		// Each field is a 200 px band across the page in a colour of its
+		// own, so a test can see on the screen where to click, whatever the
+		// height of the browser's toolbar above.
+		_, _ = io.WriteString(w, `<style>body{margin:0}input{display:block;box-sizing:border-box;width:100%;height:200px;margin:0;border:0}
+[name=user]{background:#2f6bff}[name=password]{background:#16a34a}</style>
+<form method="post" action="/login"><input name="user"><input name="password" type="password"><button>Sign in</button></form>`)
 	})
 	mux.HandleFunc("POST /login", func(w http.ResponseWriter, r *http.Request) {
 		if r.FormValue("user") != "pier" || r.FormValue("password") != "hunter2" {
