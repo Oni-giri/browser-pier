@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BrowserPier · Agents</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#070C18}
+a{color:#E8EDF5}a:hover{color:#FFFFFF}
+th{font-weight:500}
+input:focus{outline:none;box-shadow:0 0 0 1px #2F6BFF,0 0 0 4px rgba(47,107,255,0.18)!important}
+.g-cell{grid-column:span var(--s)}
+@media (max-width: 960px){.g-cell{grid-column:1 / -1}}
+@keyframes pp-pulse{0%{box-shadow:0 0 0 0 rgba(255,106,61,0.55)}70%{box-shadow:0 0 0 7px rgba(255,106,61,0.0)}100%{box-shadow:0 0 0 0 rgba(255,106,61,0.0)}}.pp-pulse{animation:pp-pulse 1.8s ease-out infinite}@media (prefers-reduced-motion: reduce){.pp-pulse{animation:none}}
+</style>
+</helmet>
+<div style="min-height: 100vh; background: radial-gradient(760px 420px at 24% -150px, rgba(255,106,61,0.2), rgba(255,106,61,0.0) 70%), radial-gradient(900px 460px at 88% -150px, rgba(47,107,255,0.22), rgba(47,107,255,0.0) 70%), url('data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20width%3D%27180%27%20height%3D%27180%27%3E%3Cfilter%20id%3D%27n%27%3E%3CfeTurbulence%20type%3D%27fractalNoise%27%20baseFrequency%3D%27.85%27%20numOctaves%3D%272%27%20stitchTiles%3D%27stitch%27%2F%3E%3CfeColorMatrix%20values%3D%270%200%200%200%200.12%200%200%200%200%200.18%200%200%200%200%200.45%200%200%200%200.06%200%27%2F%3E%3C%2Ffilter%3E%3Crect%20width%3D%27100%25%27%20height%3D%27100%25%27%20filter%3D%27url%28%23n%29%27%2F%3E%3C%2Fsvg%3E') 0 0 / 180px 180px, linear-gradient(to bottom, rgba(7,12,24,0.0) 0, rgba(7,12,24,0.6) 260px, rgb(7,12,24) 560px), linear-gradient(rgba(47,107,255,0.07) 1px, transparent 1px) 0 0 / 48px 48px, linear-gradient(90deg, rgba(47,107,255,0.07) 1px, transparent 1px) 0 0 / 48px 48px, #070C18; color: #E8EDF5; font-family: 'Geist', system-ui, sans-serif">
+
+  <header style="position: sticky; top: 0; z-index: 10; background: rgba(17,26,46,0.72); backdrop-filter: blur(14px) saturate(160%); -webkit-backdrop-filter: blur(14px) saturate(160%); box-shadow: 0 1px 0 rgba(0,0,0,0.208)">
+    <div style="max-width: 1320px; margin: 0 auto; padding: 0 28px; min-height: 56px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 24px">
+      <a href="overview.html" style="display: flex; align-items: center; gap: 9px; font-size: 15px; font-weight: 600; letter-spacing: -0.3px; text-decoration: none">
+        <svg width="22" height="22" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7" fill="#E8EDF5"></rect><path d="M5 12h18M8 12v9M14 12v9M20 12v9" stroke="#111A2E" stroke-width="2" stroke-linecap="round"></path><circle cx="20" cy="6.5" r="2.2" fill="#2F6BFF"></circle></svg>
+        BrowserPier
+      </a>
+      <nav aria-label="Main" style="display: flex; gap: 2px; font-size: 14px">
+        <a href="overview.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; color: #A7B3C6; text-decoration: none">Overview</a>
+        <a href="profiles.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; color: #A7B3C6; text-decoration: none">Profiles</a>
+        <a href="agents.html" aria-current="page" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; background: #0A1222; font-weight: 500; text-decoration: none">Agents</a>
+        <a href="settings.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; color: #A7B3C6; text-decoration: none">Settings</a>
+      </nav>
+      <a href="live-view.html" style="min-height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 10px; border-radius: 999px; background: rgba(255,106,61,0.12); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); box-shadow: inset 0 0 0 1px rgba(255,106,61,0.35), 0 6px 16px -6px rgba(255,106,61,0.55); color: #FDA387; font-size: 13px; font-weight: 500; text-decoration: none"><span aria-hidden="true" class="pp-pulse" style="width: 6px; height: 6px; border-radius: 50%; background: #FF6A3D"></span>1 needs you</a>
+      <div style="flex: 1 1 40px"></div>
+      <span style="min-width: 200px; height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-radius: 8px; box-shadow: 0 0 0 1px #283449; font-size: 13px; color: #8A99B0">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+        <span style="flex: 1">Search…</span>
+        <span style="font-family: 'Geist Mono', monospace; font-size: 11px; padding: 0 5px; border-radius: 4px; background: #0A1222; color: #A7B3C6">⌘K</span>
+      </span>
+      <a href="login.html" aria-label="Account and sign out" style="width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, #2F6BFF, #8AA8FF); display: flex; align-items: center; justify-content: center; color: #FFFFFF; font-size: 12px; font-weight: 600; text-decoration: none">Y</a>
+    </div>
+  </header>
+
+  <main style="max-width: 1320px; margin: 0 auto; padding: 32px 28px 56px; display: flex; flex-direction: column; gap: 20px">
+    <div style="display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px">
+      <div style="display: flex; flex-direction: column; gap: 4px">
+        <h1 style="margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -0.8px">Agents</h1>
+        <p style="margin: 0; font-size: 14px; color: #A7B3C6">One token per agent, so you can see who’s driving and revoke one without touching the rest.</p>
+      </div>
+      <button type="button" onClick="{{openNew}}" style="min-height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 14px; background: #E8EDF5; border: 0; color: #111A2E; border-radius: 8px; font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.52), inset 0 1px 0 rgba(15,23,42,0.12)">New token<span aria-hidden="true" style="font-family: 'Geist Mono', monospace; font-size: 11px; padding: 0 5px; border-radius: 4px; background: rgba(15,23,42,0.14)">N</span></button>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 14px">
+
+      <section class="g-cell" style="--s: 8; background: #111A2E; border-radius: 16px; box-shadow: 0 0 0 1px rgba(148,163,184,0.14), 0 1px 2px rgba(0,0,0,0.156), 0 10px 28px -12px rgba(0,0,0,0.52); overflow-x: auto">
+        <table style="width: 100%; min-width: 560px; border-collapse: collapse; font-size: 14px">
+          <thead>
+            <tr style="text-align: left; font-size: 12px; color: #8A99B0">
+              <th scope="col" style="padding: 12px 18px; border-bottom: 1px solid #1C273B">Token</th>
+              <th scope="col" style="padding: 12px; border-bottom: 1px solid #1C273B">Can use</th>
+              <th scope="col" style="padding: 12px; border-bottom: 1px solid #1C273B">Last used</th>
+              <th scope="col" style="padding: 12px 18px 12px 12px; border-bottom: 1px solid #1C273B; text-align: right"><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            <sc-for list="{{tokens}}" as="k" hint-placeholder-count="3">
+              <tr>
+                <td style="padding: 14px 18px; border-bottom: 1px solid #1C273B">
+                  <div style="display: flex; align-items: center; gap: 12px">
+                    <span aria-hidden="true" style="width: 30px; height: 30px; border-radius: 50%; background: {{k.bg}}; display: flex; align-items: center; justify-content: center; color: #FFFFFF; font-size: 11px; font-weight: 600">{{k.i}}</span>
+                    <span style="display: flex; flex-direction: column; gap: 1px"><span style="font-weight: 500">{{k.name}}</span><span style="font-family: 'Geist Mono', monospace; font-size: 12px; color: #8A99B0">{{k.prefix}}</span></span>
+                  </div>
+                </td>
+                <td style="padding: 14px 12px; border-bottom: 1px solid #1C273B"><span style="padding: 2px 8px; border-radius: 6px; background: #0A1222; font-size: 13px; color: #C5CEDB">{{k.scope}}</span></td>
+                <td style="padding: 14px 12px; border-bottom: 1px solid #1C273B; color: #A7B3C6">{{k.used}}</td>
+                <td style="padding: 14px 18px 14px 12px; border-bottom: 1px solid #1C273B; text-align: right">
+                  <button type="button" style="min-height: 30px; padding: 0 10px; background: #111A2E; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #283449; color: #FFA195; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Revoke</button>
+                </td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="g-cell" style="--s: 4; padding: 18px; background: #111A2E; border-radius: 16px; box-shadow: 0 0 0 1px rgba(148,163,184,0.14), 0 1px 2px rgba(0,0,0,0.156), 0 10px 28px -12px rgba(0,0,0,0.52); display: flex; flex-direction: column; gap: 12px">
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px">
+          <h2 style="margin: 0; font-size: 14px; font-weight: 500; color: #A7B3C6">Handoff links</h2>
+          <span style="display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 999px; background: #1A3728; color: #77D68E; font-size: 12px; font-weight: 500"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #16A34A"></span>PIN set</span>
+        </div>
+        <ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; font-size: 14px; color: #C5CEDB">
+          <li style="display: flex; gap: 8px"><span aria-hidden="true" style="color: #2F6BFF">✓</span>Expire after 15 minutes, work once</li>
+          <li style="display: flex; gap: 8px"><span aria-hidden="true" style="color: #2F6BFF">✓</span>Open one browser only</li>
+          <li style="display: flex; gap: 8px"><span aria-hidden="true" style="color: #2F6BFF">✓</span>Five wrong PINs cancel the link</li>
+        </ul>
+        <a href="settings.html" style="align-self: flex-start; margin-top: auto; min-height: 32px; display: flex; align-items: center; padding: 0 12px; background: #111A2E; border-radius: 8px; box-shadow: 0 0 0 1px #283449; font-size: 13px; font-weight: 500; text-decoration: none">PIN and policies in Settings →</a>
+      </section>
+
+      <section class="g-cell" style="--s: 8; background: #0A1020; color: #F8FAFC; border-radius: 16px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 0 0 1px rgba(148,163,184,0.14)">
+        <div style="padding: 14px 18px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; border-bottom: 1px solid #1E293B">
+          <h2 style="margin: 0; font-size: 14px; font-weight: 500">Quick start</h2>
+          <div role="tablist" aria-label="Language" style="display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: #0F172A; font-size: 12px">
+            <span role="tab" aria-selected="true" style="padding: 4px 10px; border-radius: 6px; background: #1E293B">curl</span>
+            <span role="tab" aria-selected="false" style="padding: 4px 10px; color: #94A3B8">Python</span>
+            <span role="tab" aria-selected="false" style="padding: 4px 10px; color: #94A3B8">MCP</span>
+            <span role="tab" aria-selected="false" style="padding: 4px 10px; color: #94A3B8">Agent</span>
+          </div>
+        </div>
+        <pre style="margin: 0; padding: 18px; overflow-x: auto; font-family: 'Geist Mono', monospace; font-size: 12.5px; line-height: 1.75; color: #CBD5E1"><span style="color: #64748B"># 1. start (or attach to) a profile's browser</span>
+curl -X POST https://pier.local/api/sessions \
+  -H "Authorization: Bearer $PIER_TOKEN" \
+  -d '{"profile": "google", "mode": "visual"}'
+<span style="color: #64748B"># → {"id": "s_8f2c", "cdp": "wss://pier.local/cdp/google"}</span>
+
+<span style="color: #64748B"># 2. stuck? ask a human, send them the link, wait</span>
+POST /api/sessions/s_8f2c/handoff {"reason": "sensitive_input", "detail": "Enter the 2FA code"}
+<span style="color: #8AA8FF"># → {"url": "https://pier.local/h/7Kq2…", "expires_in": 900}</span>
+GET  /api/handoffs/h_41?wait=900   <span style="color: #64748B"># → {"status": "done", "note": "used a backup code"}</span>
+
+<span style="color: #64748B"># 3. done: free the RAM, keep the cookies</span>
+curl -X DELETE https://pier.local/api/sessions/s_8f2c -H "Authorization: Bearer $PIER_TOKEN"</pre>
+      </section>
+
+      <div class="g-cell" style="--s: 4; display: flex; flex-direction: column; gap: 14px">
+        <section style="padding: 18px; background: #111A2E; border-radius: 16px; box-shadow: 0 0 0 1px rgba(148,163,184,0.14), 0 1px 2px rgba(0,0,0,0.156), 0 10px 28px -12px rgba(0,0,0,0.52); display: flex; flex-direction: column; gap: 10px">
+          <h2 style="margin: 0; font-size: 14px; font-weight: 500; color: #A7B3C6">Endpoints</h2>
+          <ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px">
+            <sc-for list="{{endpoints}}" as="e" hint-placeholder-count="7">
+              <li style="display: flex; align-items: baseline; gap: 8px; font-size: 13px">
+                <span style="flex: none; min-width: 52px; padding: 1px 0; border-radius: 4px; background: {{e.bg}}; color: {{e.c}}; font-family: 'Geist Mono', monospace; font-size: 10px; font-weight: 500; text-align: center">{{e.m}}</span>
+                <span style="display: flex; flex-direction: column; gap: 1px; min-width: 0"><span style="font-family: 'Geist Mono', monospace; font-size: 12px; overflow-wrap: anywhere">{{e.p}}</span><span style="color: #8A99B0">{{e.d}}</span></span>
+              </li>
+            </sc-for>
+          </ul>
+        </section>
+        <section style="position: relative; overflow: hidden; padding: 18px; background: #111A2E; border-radius: 16px; box-shadow: 0 0 0 1px rgba(148,163,184,0.14), 0 1px 2px rgba(0,0,0,0.156), 0 10px 28px -12px rgba(0,0,0,0.52); display: flex; flex-direction: column; gap: 6px">
+          <div aria-hidden="true" style="position: absolute; right: -60px; top: -60px; width: 200px; height: 200px; background: radial-gradient(closest-side, rgba(47,107,255,0.18), rgba(47,107,255,0.0))"></div>
+          <h2 style="position: relative; margin: 0; font-size: 14px; font-weight: 500">MCP</h2>
+          <p style="position: relative; margin: 0; font-size: 13px; line-height: 1.5; color: #A7B3C6">Point Claude or any MCP client at <code style="font-family: 'Geist Mono', monospace; color: #E8EDF5">/mcp</code>. Handoffs show up as a native prompt in clients that support it.</p>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <sc-if value="{{dlgOpen}}" hint-placeholder-val="{{false}}">
+    <div style="position: fixed; inset: 0; z-index: 20; background: rgba(2,6,15,0.64); backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); display: flex; align-items: center; justify-content: center; padding: 16px">
+      <section role="dialog" aria-modal="true" aria-labelledby="tk-title" style="width: 100%; max-width: 460px; background: #111A2E; border-radius: 16px; box-shadow: 0 0 0 1px #283449, 0 24px 60px rgba(0,0,0,0.52); display: flex; flex-direction: column; overflow: hidden">
+
+        <sc-if value="{{isForm}}" hint-placeholder-val="{{true}}">
+          <div style="padding: 22px 24px; display: flex; flex-direction: column; gap: 18px">
+            <h2 id="tk-title" style="margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.4px">New token</h2>
+            <div style="display: flex; flex-direction: column; gap: 8px">
+              <label for="tk-name" style="font-size: 14px; font-weight: 500">Name</label>
+              <input id="tk-name" type="text" value="shopping-agent" style="height: 40px; box-sizing: border-box; padding: 0 12px; background: #111A2E; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #283449; color: #E8EDF5; font-family: inherit; font-size: 14px">
+              <span style="font-size: 13px; color: #8A99B0">Shown as the agent on Profiles.</span>
+            </div>
+            <fieldset style="margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: 4px">
+              <legend style="padding: 0; margin-bottom: 8px; font-size: 14px; font-weight: 500">Can use</legend>
+              <label style="display: flex; align-items: center; gap: 10px; min-height: 36px; font-size: 14px"><input type="radio" name="tk-scope" checked="{{scopeAll}}" onChange="{{pickAll}}" style="width: 16px; height: 16px; accent-color: #2F6BFF">All profiles</label>
+              <label style="display: flex; align-items: center; gap: 10px; min-height: 36px; font-size: 14px"><input type="radio" name="tk-scope" checked="{{scopeSome}}" onChange="{{pickSome}}" style="width: 16px; height: 16px; accent-color: #2F6BFF">Only these profiles</label>
+              <sc-if value="{{scopeSome}}" hint-placeholder-val="{{false}}">
+                <div style="margin-left: 26px; display: flex; flex-wrap: wrap; gap: 6px">
+                  <sc-for list="{{profiles}}" as="p" hint-placeholder-count="5">
+                    <label style="display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 10px; border-radius: 8px; box-shadow: 0 0 0 1px #283449; font-size: 13px"><input type="checkbox" style="width: 14px; height: 14px; accent-color: #2F6BFF">{{p}}</label>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </fieldset>
+          </div>
+          <div style="padding: 14px 24px; background: #0E1628; border-top: 1px solid #1C273B; display: flex; justify-content: flex-end; gap: 8px">
+            <button type="button" onClick="{{close}}" style="min-height: 36px; padding: 0 14px; background: #111A2E; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #283449; color: #E8EDF5; font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer">Cancel</button>
+            <button type="button" onClick="{{create}}" style="min-height: 36px; padding: 0 14px; background: #E8EDF5; border: 0; border-radius: 8px; color: #111A2E; font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer">Create token</button>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{isCreated}}" hint-placeholder-val="{{false}}">
+          <div style="padding: 22px 24px; display: flex; flex-direction: column; gap: 14px">
+            <span style="align-self: flex-start; padding: 2px 8px; border-radius: 999px; background: #43291D; color: #FDA387; font-size: 12px; font-weight: 500">Shown once</span>
+            <h2 style="margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.4px">Copy your token now</h2>
+            <p style="margin: 0; font-size: 14px; line-height: 1.55; color: #A7B3C6">Store it in your agent’s environment as <code style="font-family: 'Geist Mono', monospace; color: #E8EDF5">PIER_TOKEN</code>. You won’t see it again.</p>
+            <div style="display: flex; gap: 6px">
+              <code style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 10px 12px; background: #0A1020; border-radius: 8px; font-family: 'Geist Mono', monospace; font-size: 13px; color: #F8FAFC; box-shadow: 0 0 0 1px rgba(148,163,184,0.14)">bp_live_5d1e[YOUR TOKEN]</code>
+              <button type="button" onClick="{{copy}}" style="min-width: 76px; min-height: 38px; padding: 0 12px; background: #111A2E; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #283449; color: {{copyFg}}; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer">{{copyLabel}}</button>
+            </div>
+          </div>
+          <div style="padding: 14px 24px; background: #0E1628; border-top: 1px solid #1C273B; display: flex; justify-content: flex-end">
+            <button type="button" onClick="{{close}}" style="min-height: 36px; padding: 0 16px; background: #E8EDF5; border: 0; border-radius: 8px; color: #111A2E; font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer">Done</button>
+          </div>
+        </sc-if>
+      </section>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1080}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { step: null, scope: 'all', copied: false };
+  }
+  renderVals() {
+    const step = this.state.step;
+    const ui = {
+      dlgOpen: !!step, isForm: step === 'form', isCreated: step === 'created',
+      scopeAll: this.state.scope === 'all', scopeSome: this.state.scope === 'some',
+      profiles: ['google', 'linkedin', 'github', 'x-com', 'notion'],
+      openNew: () => this.setState({ step: 'form', copied: false }),
+      close: () => this.setState({ step: null }),
+      create: () => this.setState({ step: 'created' }),
+      pickAll: () => this.setState({ scope: 'all' }),
+      pickSome: () => this.setState({ scope: 'some' }),
+      copyLabel: this.state.copied ? 'Copied' : 'Copy',
+      copyFg: this.state.copied ? '#77D68E' : '#E8EDF5',
+      copy: () => this.setState({ copied: true })
+    };
+    const C = {
+      GET: { c: '#77D68E', bg: '#1A3728' },
+      POST: { c: '#9EBDFD', bg: '#262F47' },
+      DELETE: { c: '#FFA195', bg: '#442728' },
+      WS: { c: '#BFB1FC', bg: '#312C45' }
+    };
+    const ep = [
+      ['POST', '/api/sessions', 'Start or attach to a browser'],
+      ['DELETE', '/api/sessions/{id}', 'Stop it, keep the profile'],
+      ['WS', '/cdp/{profile}', 'API mode, token-checked'],
+      ['POST', '/api/sessions/{id}/computer', 'Visual mode actions'],
+      ['GET', '/api/profiles/{name}/files', 'Downloaded files'],
+      ['POST', '/api/sessions/{id}/handoff', 'One-time link for a human'],
+      ['GET', '/api/handoffs/{id}', 'Wait for the answer']
+    ];
+    return {
+      ...ui,
+      tokens: [
+        { i: 'RB', name: 'research-bot', prefix: 'bp_live_7f3a…', scope: 'all profiles', used: '2 min ago', bg: '#2F6BFF' },
+        { i: 'LP', name: 'linkedin-poster', prefix: 'bp_live_c91e…', scope: 'linkedin', used: '3 min ago', bg: '#26344F' },
+        { i: 'CC', name: 'claude-code', prefix: 'bp_live_04bd…', scope: 'github, notion', used: 'Just now', bg: '#3B4863' }
+      ],
+      endpoints: ep.map(([m, p, d]) => ({ m, p, d, c: C[m].c, bg: C[m].bg }))
+    };
+  }
+}
+</script>
+</body>
+</html>

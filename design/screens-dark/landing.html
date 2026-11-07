@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BrowserPier · Landing</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#070C18}
+a{color:#E8EDF5}a:hover{color:#FFFFFF}
+.lp-cell{grid-column:span var(--s)}
+.lp-hide-sm{}
+@media (max-width: 960px){.lp-cell{grid-column:1 / -1}.lp-hide-sm{display:none!important}.lp-h1{font-size:44px!important;letter-spacing:-1.6px!important}.lp-h2{font-size:32px!important}}
+@keyframes lp-pulse{0%{box-shadow:0 0 0 0 rgba(255,106,61,0.5)}70%{box-shadow:0 0 0 7px rgba(255,106,61,0.0)}100%{box-shadow:0 0 0 0 rgba(255,106,61,0.0)}}
+.lp-pulse{animation:lp-pulse 1.8s ease-out infinite}
+@media (prefers-reduced-motion: reduce){.lp-pulse{animation:none}}
+@keyframes pp-pulse{0%{box-shadow:0 0 0 0 rgba(255,106,61,0.55)}70%{box-shadow:0 0 0 7px rgba(255,106,61,0.0)}100%{box-shadow:0 0 0 0 rgba(255,106,61,0.0)}}.pp-pulse{animation:pp-pulse 1.8s ease-out infinite}@media (prefers-reduced-motion: reduce){.pp-pulse{animation:none}}
+</style>
+</helmet>
+<div style="min-height: 100vh; background: radial-gradient(1000px 480px at 15% -140px, rgba(47,107,255,0.22), rgba(47,107,255,0.0) 70%), radial-gradient(820px 520px at 86% 520px, rgba(255,106,61,0.16), rgba(255,106,61,0.0) 70%), url('data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20width%3D%27180%27%20height%3D%27180%27%3E%3Cfilter%20id%3D%27n%27%3E%3CfeTurbulence%20type%3D%27fractalNoise%27%20baseFrequency%3D%27.85%27%20numOctaves%3D%272%27%20stitchTiles%3D%27stitch%27%2F%3E%3CfeColorMatrix%20values%3D%270%200%200%200%200.12%200%200%200%200%200.18%200%200%200%200%200.45%200%200%200%200.06%200%27%2F%3E%3C%2Ffilter%3E%3Crect%20width%3D%27100%25%27%20height%3D%27100%25%27%20filter%3D%27url%28%23n%29%27%2F%3E%3C%2Fsvg%3E') 0 0 / 180px 180px, linear-gradient(to bottom, rgba(7,12,24,0.0) 0, rgba(7,12,24,0.6) 260px, rgb(7,12,24) 560px), linear-gradient(rgba(47,107,255,0.07) 1px, transparent 1px) 0 0 / 48px 48px, linear-gradient(90deg, rgba(47,107,255,0.07) 1px, transparent 1px) 0 0 / 48px 48px, #070C18; color: #E8EDF5; font-family: 'Geist', system-ui, sans-serif">
+
+  <!-- Nav -->
+  <header style="position: sticky; top: 0; z-index: 10; background: rgba(17,26,46,0.72); backdrop-filter: blur(14px) saturate(160%); -webkit-backdrop-filter: blur(14px) saturate(160%); box-shadow: 0 1px 0 rgba(0,0,0,0.208)">
+    <div style="max-width: 1200px; margin: 0 auto; padding: 0 24px; min-height: 60px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 28px">
+      <a href="#top" style="display: flex; align-items: center; gap: 9px; font-size: 16px; font-weight: 600; letter-spacing: -0.3px; text-decoration: none">
+        <svg width="24" height="24" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7" fill="#E8EDF5"></rect><path d="M5 12h18M8 12v9M14 12v9M20 12v9" stroke="#111A2E" stroke-width="2" stroke-linecap="round"></path><circle cx="20" cy="6.5" r="2.2" fill="#2F6BFF"></circle></svg>
+        BrowserPier
+      </a>
+      <nav aria-label="Main" class="lp-hide-sm" style="display: flex; gap: 4px; font-size: 14px">
+        <a href="#features" style="padding: 6px 10px; border-radius: 6px; color: #A7B3C6; text-decoration: none">Features</a>
+        <a href="#how" style="padding: 6px 10px; border-radius: 6px; color: #A7B3C6; text-decoration: none">How it works</a>
+        <a href="#handoff" style="padding: 6px 10px; border-radius: 6px; color: #A7B3C6; text-decoration: none">Handoff</a>
+        <a href="#install" style="padding: 6px 10px; border-radius: 6px; color: #A7B3C6; text-decoration: none">Self-host</a>
+      </nav>
+      <div style="flex: 1 1 20px"></div>
+      <a href="https://github.com/Oni-giri/browser-pier/blob/main/SPEC.md" class="lp-hide-sm" style="font-size: 14px; color: #A7B3C6; text-decoration: none">Spec</a>
+      <a href="https://github.com/Oni-giri/browser-pier" style="min-height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 14px; background: #E8EDF5; color: #111A2E; border-radius: 8px; font-size: 14px; font-weight: 500; text-decoration: none; box-shadow: 0 1px 2px rgba(0,0,0,0.52), inset 0 1px 0 rgba(15,23,42,0.12)">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.61.07-.61 1 .07 1.53 1.03 1.53 1.03.89 1.53 2.34 1.09 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.56-1.11-4.56-4.95 0-1.09.39-1.99 1.03-2.69-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.03A9.56 9.56 0 0 1 12 6.84c.85 0 1.71.11 2.51.34 1.91-1.3 2.75-1.03 2.75-1.03.55 1.38.2 2.4.1 2.65.64.7 1.03 1.6 1.03 2.69 0 3.85-2.34 4.7-4.57 4.95.36.31.68.92.68 1.85v2.75c0 .27.18.58.69.48A10 10 0 0 0 12 2z"></path></svg>
+        GitHub
+      </a>
+    </div>
+  </header>
+
+  <main id="top">
+
+    <!-- Hero -->
+    <section style="position: relative; overflow: hidden">
+      <div aria-hidden="true" style="position: absolute; left: 50%; top: -220px; width: 900px; height: 520px; transform: translateX(-50%); background: radial-gradient(closest-side, rgba(47,107,255,0.16), rgba(47,107,255,0.0))"></div>
+
+      <div style="position: relative; max-width: 1200px; margin: 0 auto; padding: 88px 24px 0; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 22px">
+        <a href="https://github.com/Oni-giri/browser-pier" style="display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px 5px 6px; background: #111A2E; border-radius: 999px; box-shadow: 0 0 0 1px #283449, 0 1px 2px rgba(0,0,0,0.13); font-size: 13px; color: #C5CEDB; text-decoration: none">
+          <span style="padding: 2px 8px; border-radius: 999px; background: #262F47; color: #9EBDFD; font-weight: 500">Early development</span>
+          Self-hosted · open source · v1 in progress <span aria-hidden="true">→</span>
+        </a>
+        <h1 class="lp-h1" style="margin: 0; max-width: 900px; font-size: 68px; line-height: 1.02; font-weight: 600; letter-spacing: -2.8px">Browsers that stay logged in, for your AI agents.</h1>
+        <p style="margin: 0; max-width: 620px; font-size: 19px; line-height: 1.55; color: #A7B3C6">BrowserPier runs real browsers on your own server. Log into a service once; your agents reuse it. When they hit a 2FA prompt, they send you a link and you finish it from your phone.</p>
+        <div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 10px">
+          <a href="#install" style="min-height: 44px; display: flex; align-items: center; padding: 0 20px; background: #E8EDF5; color: #111A2E; border-radius: 10px; font-size: 15px; font-weight: 500; text-decoration: none; box-shadow: 0 1px 2px rgba(0,0,0,0.52), inset 0 1px 0 rgba(15,23,42,0.12)">Self-host it</a>
+          <a href="https://github.com/Oni-giri/browser-pier/blob/main/SPEC.md" style="min-height: 44px; display: flex; align-items: center; padding: 0 20px; background: #111A2E; border-radius: 10px; font-size: 15px; font-weight: 500; text-decoration: none; box-shadow: 0 0 0 1px #283449, 0 1px 2px rgba(0,0,0,0.13)">Read the spec</a>
+        </div>
+      </div>
+
+      <!-- Product shot -->
+      <div style="position: relative; max-width: 1200px; margin: 0 auto; padding: 64px 24px 0">
+        <div style="position: relative; padding: 10px; background: #111A2E; border-radius: 20px 20px 0 0; box-shadow: 0 0 0 1px rgba(148,163,184,0.16), 0 30px 80px -20px rgba(0,0,0,0.7)">
+          <div aria-hidden="true" style="height: 34px; display: flex; align-items: center; gap: 10px; padding: 0 8px">
+            <span style="display: flex; gap: 6px"><span style="width: 10px; height: 10px; border-radius: 50%; background: #283449"></span><span style="width: 10px; height: 10px; border-radius: 50%; background: #283449"></span><span style="width: 10px; height: 10px; border-radius: 50%; background: #283449"></span></span>
+            <span style="flex: 1; max-width: 360px; margin: 0 auto; height: 22px; display: flex; align-items: center; justify-content: center; border-radius: 6px; background: #0A1222; font-family: 'Geist Mono', monospace; font-size: 11px; color: #8A99B0">pier.local/profiles</span>
+          </div>
+          <div style="border-radius: 12px; background: #0E1628; box-shadow: inset 0 0 0 1px #212C42; padding: 22px; display: flex; flex-direction: column; gap: 16px; text-align: left">
+            <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px">
+              <span style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 20px; font-weight: 600; letter-spacing: -0.5px">Profiles</span><span style="font-size: 13px; color: #8A99B0">5 profiles · 2 running · 2.9 GB in use</span></span>
+              <span style="display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: rgba(255,106,61,0.12); box-shadow: inset 0 0 0 1px rgba(255,106,61,0.35), 0 6px 16px -6px rgba(255,106,61,0.55); color: #FDA387; font-size: 13px; font-weight: 500"><span aria-hidden="true" class="lp-pulse" style="width: 6px; height: 6px; border-radius: 50%; background: #FF6A3D"></span>1 needs you</span>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px">
+              <sc-for list="{{shots}}" as="p" hint-placeholder-count="4">
+                <div style="background: #111A2E; border-radius: 14px; box-shadow: {{p.ring}}; padding: 7px 7px 12px; display: flex; flex-direction: column; gap: 10px">
+                  <div aria-hidden="true" style="position: relative; aspect-ratio: 16 / 9; border-radius: 9px; overflow: hidden; background: {{p.bg}}; box-shadow: inset 0 0 0 1px #E8EDF4; filter: brightness(0.86) saturate(0.95)">
+                    <sc-if value="{{p.otp}}" hint-placeholder-val="{{false}}">
+                      <div style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center"><div style="width: 58%; padding: 10px; background: #FFFFFF; border-radius: 7px; box-shadow: 0 0 0 1px #E2E8F0, 0 6px 16px rgba(15,23,42,0.06); display: flex; flex-direction: column; gap: 6px"><span style="height: 6px; width: 45%; border-radius: 3px; background: #E2E8F0"></span><span style="height: 8px; width: 80%; border-radius: 3px; background: #CBD5E1"></span><span style="display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 3px"><span style="height: 15px; border-radius: 3px; box-shadow: inset 0 0 0 1.5px #2F6BFF"></span><span style="height: 15px; border-radius: 3px; box-shadow: inset 0 0 0 1px #E2E8F0"></span><span style="height: 15px; border-radius: 3px; box-shadow: inset 0 0 0 1px #E2E8F0"></span><span style="height: 15px; border-radius: 3px; box-shadow: inset 0 0 0 1px #E2E8F0"></span><span style="height: 15px; border-radius: 3px; box-shadow: inset 0 0 0 1px #E2E8F0"></span><span style="height: 15px; border-radius: 3px; box-shadow: inset 0 0 0 1px #E2E8F0"></span></span></div></div>
+                    </sc-if>
+                    <sc-if value="{{p.page}}" hint-placeholder-val="{{true}}">
+                      <div style="position: absolute; inset: 0; padding: 10px; display: flex; flex-direction: column; gap: 6px; opacity: {{p.op}}"><span style="height: 6px; width: 35%; border-radius: 3px; background: #CBD5E1"></span><span style="height: 6px; width: 80%; border-radius: 3px; background: #E2E8F0"></span><span style="flex: 1; border-radius: 6px; background: {{p.block}}"></span><span style="height: 6px; width: 60%; border-radius: 3px; background: #E2E8F0"></span></div>
+                    </sc-if>
+                  </div>
+                  <div style="padding: 0 6px; display: flex; align-items: center; justify-content: space-between; gap: 8px">
+                    <span style="display: flex; align-items: center; gap: 8px"><span aria-hidden="true" style="position: relative; flex: none; width: 24px; height: 24px; border-radius: 7px; background: {{p.iconBg}}; box-shadow: inset 0 0 0 1px {{p.iconRing}}; display: flex; align-items: center; justify-content: center"><img src="{{p.icon}}" alt="" style="width: 14px; height: 14px"></span><span style="display: flex; flex-direction: column"><span style="font-size: 14px; font-weight: 600">{{p.name}}</span><span style="font-size: 12px; color: #8A99B0">{{p.sub}}</span></span></span>
+                    <span style="display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; background: {{p.pillBg}}; color: {{p.fg}}; font-size: 11px; font-weight: 500"><span aria-hidden="true" style="width: 5px; height: 5px; border-radius: 50%; background: {{p.dot}}"></span>{{p.status}}</span>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+
+        <!-- floating phone -->
+        <div aria-hidden="true" class="lp-hide-sm" style="position: absolute; right: -8px; bottom: 28px; width: 236px; padding: 14px; background: #111A2E; border-radius: 28px; box-shadow: 0 0 0 1px rgba(255,106,61,0.3), 0 30px 70px -10px rgba(255,106,61,0.45); display: flex; flex-direction: column; gap: 10px; text-align: left; transform: rotate(2deg)">
+          <span style="align-self: center; width: 60px; height: 5px; border-radius: 3px; background: #283449"></span>
+          <span style="font-size: 11px; color: #8A99B0">research-bot needs you</span>
+          <span style="font-size: 15px; font-weight: 600; line-height: 1.3; letter-spacing: -0.2px">Enter the 2FA code Google just sent</span>
+          <span style="font-size: 11px; color: #8A99B0">on accounts.google.com · 14:32 left</span>
+          <span style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 2px"><span style="height: 36px; border-radius: 8px; box-shadow: inset 0 0 0 1.5px #2F6BFF, 0 0 0 3px rgba(47,107,255,0.14); display: flex; align-items: center; justify-content: center; font-size: 18px">•</span><span style="height: 36px; border-radius: 8px; box-shadow: inset 0 0 0 1px #283449; display: flex; align-items: center; justify-content: center; font-size: 18px">•</span><span style="height: 36px; border-radius: 8px; box-shadow: inset 0 0 0 1px #283449"></span><span style="height: 36px; border-radius: 8px; box-shadow: inset 0 0 0 1px #283449"></span></span>
+          <span style="height: 40px; border-radius: 10px; background: #2F6BFF; color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 500; box-shadow: 0 1px 2px rgba(47,107,255,0.4), 0 8px 22px -6px rgba(47,107,255,0.6), inset 0 1px 0 rgba(255,255,255,0.18)">Unlock and take control</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Works with -->
+    <section aria-label="Works with" style="background: rgba(17,26,46,0.6); border-top: 1px solid rgba(2,6,15,0.128); border-bottom: 1px solid rgba(2,6,15,0.128)">
+      <div style="max-width: 1200px; margin: 0 auto; padding: 26px 24px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px 36px; font-size: 15px; color: #8A99B0">
+        <span style="font-size: 13px">Speaks CDP and MCP</span>
+        <span style="font-weight: 500; color: #C5CEDB">Playwright</span>
+        <span style="font-weight: 500; color: #C5CEDB">Puppeteer</span>
+        <span style="font-weight: 500; color: #C5CEDB">browser-use</span>
+        <span style="font-weight: 500; color: #C5CEDB">Stagehand</span>
+        <span style="font-weight: 500; color: #C5CEDB">Any MCP client</span>
+      </div>
+    </section>
+
+    <!-- Features -->
+    <section id="features" style="max-width: 1200px; margin: 0 auto; padding: 104px 24px 0; display: flex; flex-direction: column; gap: 40px">
+      <div style="display: flex; flex-direction: column; gap: 12px; max-width: 640px">
+        <span style="font-size: 14px; font-weight: 500; color: #9EBDFD">Features</span>
+        <h2 class="lp-h2" style="margin: 0; font-size: 44px; line-height: 1.08; font-weight: 600; letter-spacing: -1.6px">A browser pool built around logins, not page loads.</h2>
+        <p style="margin: 0; font-size: 17px; line-height: 1.6; color: #A7B3C6">Most browser APIs give agents a fresh, anonymous browser. Agents that work in your accounts need the opposite: the same browser, still signed in, every time.</p>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 14px">
+
+        <article class="lp-cell" style="--s: 7; padding: 24px; background: #111A2E; border-radius: 18px; box-shadow: 0 0 0 1px rgba(148,163,184,0.14), 0 1px 2px rgba(0,0,0,0.156), 0 10px 28px -12px rgba(0,0,0,0.52); display: flex; flex-direction: column; gap: 20px">
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <h3 style="margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.4px">One persistent profile per service</h3>
+            <p style="margin: 0; font-size: 15px; line-height: 1.55; color: #A7B3C6">Cookies, logins and local storage live on a volume that outlives every browser. Stop it, update it, restart the server: it's still signed in.</p>
+          </div>
+          <ul style="margin: auto 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; border-radius: 12px; box-shadow: inset 0 0 0 1px #1C273B">
+            <sc-for list="{{profiles}}" as="p" hint-placeholder-count="4">
+              <li style="min-height: 48px; padding: 0 14px; display: flex; align-items: center; gap: 12px; border-top: {{p.rule}}">
+                <span aria-hidden="true" style="position: relative; flex: none; width: 28px; height: 28px; border-radius: 8px; background: {{p.iconBg}}; box-shadow: inset 0 0 0 1px {{p.iconRing}}; display: flex; align-items: center; justify-content: center"><img src="{{p.icon}}" alt="" style="width: 16px; height: 16px"></span>
+                <span style="flex: 1; font-size: 14px; font-weight: 500">{{p.name}}</span>
+                <span style="font-size: 13px; color: #8A99B0">{{p.since}}</span>
+                <span style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: {{p.fg}}"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{p.dot}}"></span>{{p.status}}</span>
+              </li>
+            </sc-for>
+          </ul>
+        </article>
+
+        <article class="lp-cell" style="--s: 5; position: relative; overflow: hidden; padding: 24px; background: #111A2E; border-radius: 18px; box-shadow: 0 0 0 1px rgba(148,163,184,0.14), 0 1px 2px rgba(0,0,0,0.156), 0 10px 28px -12px rgba(0,0,0,0.52); display: flex; flex-direction: column; gap: 20px">
+          <div aria-hidden="true" style="position: absolute; right: -80px; top: -80px; width: 260px; height: 260px; background: radial-gradient(closest-side, rgba(255,106,61,0.14), rgba(255,106,61,0.0))"></div>
+          <div style="position: relative; display: flex; flex-direction: column; gap: 8px">
+            <h3 style="margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.4px">Handoff links for the parts only you can do</h3>
+            <p style="margin: 0; font-size: 15px; line-height: 1.55; color: #A7B3C6">2FA, a captcha, a new-device check. The agent pauses and sends you a one-time link that opens that browser, on any device.</p>
+          </div>
+          <div style="position: relative; margin-top: auto; padding: 14px; background: #0E1628; border-radius: 12px; box-shadow: inset 0 0 0 1px #1C273B; display: flex; flex-direction: column; gap: 10px">
+            <span style="display: flex; align-items: center; gap: 8px"><span aria-hidden="true" style="width: 24px; height: 24px; border-radius: 50%; background: #2F6BFF; color: #FFFFFF; font-size: 10px; font-weight: 600; display: flex; align-items: center; justify-content: center">RB</span><span style="font-size: 13px; font-weight: 500">research-bot</span><span style="font-size: 12px; color: #8A99B0">· just now</span></span>
+            <span style="font-size: 14px; line-height: 1.5">Google wants a 2FA code. Can you enter it? <span style="color: #9EBDFD; font-family: 'Geist Mono', monospace; font-size: 13px">pier.local/h/7Kq2…</span></span>
+            <span style="display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; color: #A7B3C6"><span style="padding: 2px 8px; border-radius: 999px; background: #111A2E; box-shadow: 0 0 0 1px #283449">One use</span><span style="padding: 2px 8px; border-radius: 999px; background: #111A2E; box-shadow: 0 0 0 1px #283449">15 minutes</span><span style="padding: 2px 8px; border-radius: 999px; background: #111A2E; box-shadow: 0 0 0 1px #283449">PIN required</span></span>
+          </div>
+        </article>
+
+        <article class="lp-cell" style="--s: 5; padding: 24px; background: #111A2E; border-radius: 18px; box-shadow: 0 0 0 1px rgba(148,163,184,0.14), 0 1px 2px rgba(0,0,0,0.156), 0 10px 28px -12px rgba(0,0,0,0.52); display: flex; flex-direction: column; gap: 18px">
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <h3 style="margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.4px">Two ways to drive</h3>
+            <p style="margin: 0; font-size: 15px; line-height: 1.55; color: #A7B3C6">Pick per profile, switch any time.</p>
+          </div>
+          <div role="radiogroup" aria-label="Driving mode" style="display: flex; gap: 2px; padding: 3px; background: #0A1222; border-radius: 9px">
+            <sc-for list="{{modes}}" as="m" hint-placeholder-count="2">
+              <button type="button" role="radio" onClick="{{m.pick}}" aria-checked="{{m.on}}" style="flex: 1; min-height: 34px; background: {{m.bg}}; border: 0; border-radius: 6px; box-shadow: {{m.ring}}; color: #E8EDF5; font-family: inherit; font-size: 13px; font-weight: {{m.weight}}; cursor: pointer">{{m.title}}</button>
+            </sc-for>
+          </div>
+          <p style="margin: 0; font-size: 14px; line-height: 1.55; color: #C5CEDB">{{modeText}}</p>
+          <pre style="margin: auto 0 0; padding: 14px; background: #0A1020; border-radius: 12px; font-family: 'Geist Mono', monospace; font-size: 12px; line-height: 1.7; color: #CBD5E1; white-space: pre-wrap; overflow-x: auto; box-shadow: 0 0 0 1px rgba(148,163,184,0.14)">{{modeCode}}</pre>
+        </article>
+
+        <article class="lp-cell" style="--s: 4; padding: 24px; background: #111A2E; border-radius: 18px; box-shadow: 0 0 0 1px rgba(148,163,184,0.14), 0 1px 2px rgba(0,0,0,0.156), 0 10px 28px -12px rgba(0,0,0,0.52); display: flex; flex-direction: column; gap: 18px">
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <h3 style="margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.4px">Idle browsers use no RAM</h3>
+            <p style="margin: 0; font-size: 15px; line-height: 1.55; color: #A7B3C6">Browsers start when an agent asks and stop when idle. Near the memory limit, the longest-idle one makes room.</p>
+          </div>
+          <div style="margin-top: auto; display: flex; flex-direction: column; gap: 10px">
+            <div aria-hidden="true" style="position: relative; display: flex; gap: 3px; height: 12px">
+              <span style="flex: 14; border-radius: 3px; background: #FF6A3D"></span><span style="flex: 9; border-radius: 3px; background: #2F6BFF"></span><span style="flex: 6; border-radius: 3px; background: #8AA8FF"></span><span style="flex: 42; border-radius: 3px; background: #3B4863"></span><span style="flex: 89; border-radius: 3px; background: #0A1222; box-shadow: inset 0 0 0 1px #283449"></span>
+              <span style="position: absolute; left: 70%; top: -5px; bottom: -5px; width: 2px; background: #0A1020; box-shadow: 0 0 0 1px rgba(148,163,184,0.14)"></span>
+            </div>
+            <span style="font-size: 13px; color: #A7B3C6">Plan for 1–2 GB per running browser. A 4–8 GB VPS fits 2–4.</span>
+          </div>
+        </article>
+
+        <article class="lp-cell" style="--s: 3; padding: 24px; background: #0A1020; color: #F8FAFC; border-radius: 18px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 0 0 1px rgba(148,163,184,0.14)">
+          <h3 style="margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.4px">MCP built in</h3>
+          <p style="margin: 0; font-size: 15px; line-height: 1.55; color: #94A3B8">Point Claude or any MCP client at <code style="font-family: 'Geist Mono', monospace; color: #F8FAFC">/mcp</code>. Handoffs appear as a native prompt where the client supports it.</p>
+          <span style="margin-top: auto; font-size: 13px; color: #94A3B8">Page text reaches the agent fenced as untrusted, with password fields redacted.</span>
+        </article>
+
+      </div>
+    </section>
+
+    <!-- How it works -->
+    <section id="how" style="max-width: 1200px; margin: 0 auto; padding: 120px 24px 0; display: flex; flex-direction: column; gap: 40px">
+      <div style="display: flex; flex-direction: column; gap: 12px; max-width: 640px">
+        <span style="font-size: 14px; font-weight: 500; color: #9EBDFD">How it works</span>
+        <h2 class="lp-h2" style="margin: 0; font-size: 44px; line-height: 1.08; font-weight: 600; letter-spacing: -1.6px">Start it, use it, let it go.</h2>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 14px">
+        <ol class="lp-cell" style="--s: 5; margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px">
+          <sc-for list="{{steps}}" as="s" hint-placeholder-count="3">
+            <li>
+              <button type="button" onClick="{{s.pick}}" aria-pressed="{{s.on}}" style="width: 100%; text-align: left; padding: 18px 20px; background: {{s.bg}}; border: 0; border-radius: 14px; box-shadow: {{s.ring}}; color: #E8EDF5; font-family: inherit; cursor: pointer; display: flex; gap: 14px">
+                <span aria-hidden="true" style="flex: none; width: 26px; height: 26px; border-radius: 50%; background: {{s.numBg}}; color: {{s.numFg}}; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600">{{s.n}}</span>
+                <span style="display: flex; flex-direction: column; gap: 4px"><span style="font-size: 16px; font-weight: 600">{{s.title}}</span><span style="font-size: 14px; line-height: 1.5; color: #A7B3C6">{{s.text}}</span></span>
+              </button>
+            </li>
+          </sc-for>
+        </ol>
+        <div class="lp-cell" style="--s: 7; background: #0A1020; color: #F8FAFC; border-radius: 18px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 0 0 1px rgba(148,163,184,0.14)">
+          <div style="padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; gap: 12px; border-bottom: 1px solid #1E293B">
+            <span style="font-family: 'Geist Mono', monospace; font-size: 12px; color: #94A3B8">{{stepFile}}</span>
+            <button type="button" onClick="{{copy}}" style="min-height: 28px; padding: 0 10px; background: #1E293B; border: 0; border-radius: 6px; color: {{copyFg}}; font-family: inherit; font-size: 12px; font-weight: 500; cursor: pointer">{{copyLabel}}</button>
+          </div>
+          <pre style="flex: 1; margin: 0; padding: 20px; overflow-x: auto; font-family: 'Geist Mono', monospace; font-size: 13px; line-height: 1.8; color: #CBD5E1; white-space: pre">{{stepCode}}</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Handoff -->
+    <section id="handoff" style="max-width: 1200px; margin: 0 auto; padding: 120px 24px 0">
+      <div style="position: relative; overflow: hidden; padding: 48px; background: #111A2E; border-radius: 24px; box-shadow: 0 0 0 1px rgba(148,163,184,0.14), 0 1px 2px rgba(0,0,0,0.156), 0 10px 28px -12px rgba(0,0,0,0.52); display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 32px; align-items: center">
+        <div aria-hidden="true" style="position: absolute; left: -160px; bottom: -200px; width: 520px; height: 520px; background: radial-gradient(closest-side, rgba(47,107,255,0.12), rgba(47,107,255,0.0))"></div>
+        <div class="lp-cell" style="--s: 6; position: relative; display: flex; flex-direction: column; gap: 22px">
+          <span style="font-size: 14px; font-weight: 500; color: #9EBDFD">Handoff</span>
+          <h2 class="lp-h2" style="margin: 0; font-size: 40px; line-height: 1.1; font-weight: 600; letter-spacing: -1.4px">The agent asks. You tap. It carries on.</h2>
+          <ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 16px">
+            <sc-for list="{{handoff}}" as="h" hint-placeholder-count="4">
+              <li style="display: flex; gap: 14px">
+                <span aria-hidden="true" style="flex: none; width: 30px; height: 30px; border-radius: 9px; background: {{h.bg}}; color: {{h.fg}}; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600">{{h.n}}</span>
+                <span style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 15px; font-weight: 600">{{h.title}}</span><span style="font-size: 14px; line-height: 1.5; color: #A7B3C6">{{h.text}}</span></span>
+              </li>
+            </sc-for>
+          </ol>
+        </div>
+        <div class="lp-cell" style="--s: 6; position: relative; display: flex; flex-direction: column; gap: 12px">
+          <span style="font-size: 13px; font-weight: 500; color: #A7B3C6">Each profile sets how much a link needs</span>
+          <sc-for list="{{policies}}" as="p" hint-placeholder-count="3">
+            <div style="padding: 16px 18px; background: {{p.bg}}; border-radius: 14px; box-shadow: {{p.ring}}; display: flex; align-items: center; gap: 14px">
+              <span style="flex: 1; display: flex; flex-direction: column; gap: 3px"><span style="display: flex; align-items: center; gap: 8px"><span style="font-size: 15px; font-weight: 600">{{p.title}}</span><sc-if value="{{p.rec}}" hint-placeholder-val="{{false}}"><span style="padding: 1px 7px; border-radius: 999px; background: #262F47; color: #9EBDFD; font-size: 11px; font-weight: 500">Default</span></sc-if></span><span style="font-size: 14px; color: #A7B3C6">{{p.text}}</span></span>
+              <span style="font-size: 13px; color: #8A99B0; white-space: nowrap">{{p.for}}</span>
+            </div>
+          </sc-for>
+          <span style="font-size: 13px; color: #8A99B0">Agents can ask for a stricter level on a link. Never a looser one.</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Principles -->
+    <section style="max-width: 1200px; margin: 0 auto; padding: 120px 24px 0; display: flex; flex-direction: column; gap: 40px">
+      <div style="display: flex; flex-direction: column; gap: 12px; max-width: 640px">
+        <span style="font-size: 14px; font-weight: 500; color: #9EBDFD">Principles</span>
+        <h2 class="lp-h2" style="margin: 0; font-size: 44px; line-height: 1.08; font-weight: 600; letter-spacing: -1.6px">Your logins stay on your box.</h2>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px">
+        <sc-for list="{{principles}}" as="p" hint-placeholder-count="4">
+          <div style="padding: 22px; background: #111A2E; border-radius: 16px; box-shadow: 0 0 0 1px rgba(148,163,184,0.14), 0 1px 2px rgba(0,0,0,0.156), 0 10px 28px -12px rgba(0,0,0,0.52); display: flex; flex-direction: column; gap: 8px">
+            <span style="font-size: 16px; font-weight: 600; letter-spacing: -0.2px">{{p.title}}</span>
+            <span style="font-size: 14px; line-height: 1.55; color: #A7B3C6">{{p.text}}</span>
+          </div>
+        </sc-for>
+      </div>
+    </section>
+
+    <!-- Install -->
+    <section id="install" style="max-width: 1200px; margin: 0 auto; padding: 120px 24px 0">
+      <div style="display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 14px; align-items: stretch">
+        <div class="lp-cell" style="--s: 5; display: flex; flex-direction: column; gap: 16px; padding: 8px 0">
+          <span style="font-size: 14px; font-weight: 500; color: #9EBDFD">Self-host</span>
+          <h2 class="lp-h2" style="margin: 0; font-size: 44px; line-height: 1.08; font-weight: 600; letter-spacing: -1.6px">Runs anywhere Docker does.</h2>
+          <p style="margin: 0; font-size: 17px; line-height: 1.6; color: #A7B3C6">A home server behind Tailscale is the safest setup. A VPS works too, with HTTPS and ideally a residential proxy per profile.</p>
+          <ul style="margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px; font-size: 15px; color: #C5CEDB">
+            <li style="display: flex; gap: 10px"><span aria-hidden="true" style="color: #2F6BFF">✓</span>One small Go binary plus a browser image</li>
+            <li style="display: flex; gap: 10px"><span aria-hidden="true" style="color: #2F6BFF">✓</span>HTTPS through Caddy, first-run setup in the browser</li>
+            <li style="display: flex; gap: 10px"><span aria-hidden="true" style="color: #2F6BFF">✓</span>Umbrel app for one-click installs</li>
+            <li style="display: flex; gap: 10px"><span aria-hidden="true" style="color: #2F6BFF">✓</span>Encrypted profile export, so a dead server isn't a dead login</li>
+          </ul>
+        </div>
+        <div class="lp-cell" style="--s: 7; background: #0A1020; color: #F8FAFC; border-radius: 18px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 0 0 1px rgba(148,163,184,0.14)">
+          <div style="padding: 10px 12px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; border-bottom: 1px solid #1E293B">
+            <div role="tablist" aria-label="Install method" style="display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: #16213A">
+              <sc-for list="{{installTabs}}" as="t" hint-placeholder-count="2">
+                <button type="button" role="tab" onClick="{{t.pick}}" aria-selected="{{t.on}}" style="min-height: 28px; padding: 0 12px; background: {{t.bg}}; border: 0; border-radius: 6px; color: {{t.fg}}; font-family: inherit; font-size: 12px; font-weight: 500; cursor: pointer">{{t.title}}</button>
+              </sc-for>
+            </div>
+            <span style="font-size: 12px; color: #64748B">Coming with v1</span>
+          </div>
+          <pre style="flex: 1; margin: 0; padding: 20px; overflow-x: auto; font-family: 'Geist Mono', monospace; font-size: 13px; line-height: 1.8; color: #CBD5E1; white-space: pre">{{installCode}}</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <section style="max-width: 1200px; margin: 0 auto; padding: 120px 24px 96px">
+      <div style="position: relative; overflow: hidden; padding: 64px 32px; background: #0A1020; color: #F8FAFC; border-radius: 24px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 18px; box-shadow: 0 0 0 1px rgba(148,163,184,0.14)">
+        <div aria-hidden="true" style="position: absolute; left: 50%; top: -240px; width: 800px; height: 480px; transform: translateX(-50%); background: radial-gradient(closest-side, rgba(47,107,255,0.35), rgba(47,107,255,0))"></div>
+        <h2 class="lp-h2" style="position: relative; margin: 0; max-width: 720px; font-size: 44px; line-height: 1.08; font-weight: 600; letter-spacing: -1.6px">Log in once. Let your agents do the rest.</h2>
+        <p style="position: relative; margin: 0; max-width: 520px; font-size: 17px; line-height: 1.55; color: #94A3B8">BrowserPier is being built in the open. Watch the repo to follow v1, or read the spec and tell us what's missing.</p>
+        <div style="position: relative; display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 6px">
+          <a href="https://github.com/Oni-giri/browser-pier" style="min-height: 44px; display: flex; align-items: center; padding: 0 20px; background: #F8FAFC; color: #0F172A; border-radius: 10px; font-size: 15px; font-weight: 500; text-decoration: none">Watch on GitHub</a>
+          <a href="https://github.com/Oni-giri/browser-pier/blob/main/SPEC.md" style="min-height: 44px; display: flex; align-items: center; padding: 0 20px; background: #16213A; color: #F8FAFC; border-radius: 10px; font-size: 15px; font-weight: 500; text-decoration: none; box-shadow: 0 0 0 1px #334155">Read the spec</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer style="border-top: 1px solid rgba(2,6,15,0.128); background: rgba(17,26,46,0.6)">
+    <div style="max-width: 1200px; margin: 0 auto; padding: 28px 24px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 28px; font-size: 14px; color: #8A99B0">
+      <span style="display: flex; align-items: center; gap: 8px; color: #E8EDF5; font-weight: 600"><svg width="20" height="20" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7" fill="#E8EDF5"></rect><path d="M5 12h18M8 12v9M14 12v9M20 12v9" stroke="#111A2E" stroke-width="2" stroke-linecap="round"></path><circle cx="20" cy="6.5" r="2.2" fill="#2F6BFF"></circle></svg>BrowserPier</span>
+      <span>Self-hosted browsers for AI agents.</span>
+      <div style="flex: 1 1 20px"></div>
+      <a href="https://github.com/Oni-giri/browser-pier" style="color: #A7B3C6; text-decoration: none">GitHub</a>
+      <a href="https://github.com/Oni-giri/browser-pier/blob/main/SPEC.md" style="color: #A7B3C6; text-decoration: none">Spec</a>
+      <a href="#install" style="color: #A7B3C6; text-decoration: none">Self-host</a>
+    </div>
+  </footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":5200}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { mode: 'visual', step: 0, install: 'compose', copied: false };
+  }
+  renderVals() {
+    const s = this.state;
+    const seg = (on) => ({
+      bg: on ? '#1E2A40' : 'transparent',
+      ring: on ? '0 0 0 1px rgba(148,163,184,0.28)' : 'none',
+      weight: on ? '500' : '400',
+      on: on ? 'true' : 'false'
+    });
+    const ring = '0 0 0 1px rgba(148,163,184,0.14), 0 1px 2px rgba(0,0,0,0.156), 0 10px 28px -12px rgba(0,0,0,0.52)';
+
+    const MODES = {
+      api: {
+        title: 'API (CDP)',
+        text: 'Connect Playwright, Puppeteer or browser-use over CDP. Fast and familiar, behind a token check.',
+        code: 'const browser = await chromium.connectOverCDP(\n  "wss://pier.local/cdp/github",\n  { headers: { Authorization: `Bearer ${PIER_TOKEN}` } })'
+      },
+      visual: {
+        title: 'Visual',
+        text: 'Screenshots in, real mouse and keyboard out, from the OS. No debugger attached to the page, so it looks like a person at a desk.',
+        code: 'POST /api/sessions/s_8f2c/computer\n{ "action": "click", "x": 640, "y": 412 }\n{ "action": "type",  "text": "hello" }'
+      }
+    };
+
+    const STEPS = [
+      {
+        title: 'Start or attach',
+        text: 'The agent asks for a profile by name. If its browser is already running, it attaches; otherwise one starts in a few seconds.',
+        file: 'start.sh',
+        code: 'curl -X POST https://pier.local/api/sessions \\\n  -H "Authorization: Bearer $PIER_TOKEN" \\\n  -d \'{"profile": "google", "mode": "visual"}\'\n\n# → {"id": "s_8f2c", "cdp": "wss://pier.local/cdp/google"}'
+      },
+      {
+        title: 'Ask a human when stuck',
+        text: 'The agent creates a handoff with a reason, sends you the link, and waits for the answer.',
+        file: 'handoff.sh',
+        code: 'POST /api/sessions/s_8f2c/handoff\n{ "reason": "sensitive_input",\n  "detail": "Enter the 2FA code" }\n# → {"url": "https://pier.local/h/7Kq2…", "expires_in": 900}\n\nGET /api/handoffs/h_41?wait=900\n# → {"status": "done", "note": "used a backup code"}'
+      },
+      {
+        title: 'Release',
+        text: 'Done? Stop the browser to free the RAM. Cookies and logins stay in the profile for next time.',
+        file: 'release.sh',
+        code: 'curl -X DELETE https://pier.local/api/sessions/s_8f2c \\\n  -H "Authorization: Bearer $PIER_TOKEN"\n\n# or just walk away: idle browsers stop on their own'
+      }
+    ];
+    const step = STEPS[s.step];
+
+    const INSTALL = {
+      compose: { title: 'docker compose', code: 'git clone https://github.com/Oni-giri/browser-pier\ncd browser-pier/deploy\n\n# set your domain, then:\ndocker compose up -d\n\n# open https://your-domain and create the admin password' },
+      umbrel: { title: 'Umbrel', code: '# Umbrel → App Store → ⋯ → Community App Stores\n# add the BrowserPier app store URL, then:\n\nInstall BrowserPier\n\n# reach it over Tailscale from anywhere' }
+    };
+
+    return {
+      shots: [
+        { name: 'google', icon: 'data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27%232563EB%27%20stroke-width%3D%271.9%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Crect%20x%3D%273%27%20y%3D%275%27%20width%3D%2718%27%20height%3D%2714%27%20rx%3D%272.5%27%2F%3E%3Cpath%20d%3D%27M4%207l8%206%208-6%27%2F%3E%3C%2Fsvg%3E', iconBg: '#263047', iconRing: '#2563EB2E', sub: 'research-bot', status: 'Needs you', fg: '#FDA387', pillBg: '#43291D', dot: '#FF6A3D', ring: '0 0 0 1.5px #FF6A3D, 0 8px 24px rgba(255,106,61,0.14)', bg: '#F1F5F9', otp: true, page: false },
+        { name: 'linkedin', icon: 'data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27%230284C7%27%20stroke-width%3D%271.9%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Crect%20x%3D%273%27%20y%3D%277%27%20width%3D%2718%27%20height%3D%2713%27%20rx%3D%272.5%27%2F%3E%3Cpath%20d%3D%27M9%207V5.5A1.5%201.5%200%200%201%2010.5%204h3A1.5%201.5%200%200%201%2015%205.5V7M3%2012.5h18%27%2F%3E%3C%2Fsvg%3E', iconBg: '#163443', iconRing: '#0284C72E', sub: 'linkedin-poster', status: 'Running', fg: '#77D68E', pillBg: '#1A3728', dot: '#16A34A', ring: ring, bg: '#FFFFFF', otp: false, page: true, op: '1', block: '#E8EEFF' },
+        { name: 'github', icon: 'data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27%237C3AED%27%20stroke-width%3D%271.9%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Cpath%20d%3D%27M8.5%208L4.5%2012l4%204M15.5%208l4%204-4%204M13.5%205.5l-3%2013%27%2F%3E%3C%2Fsvg%3E', iconBg: '#342B44', iconRing: '#7C3AED2E', sub: 'claude-code', status: 'Running', fg: '#77D68E', pillBg: '#1A3728', dot: '#16A34A', ring: ring, bg: '#FFFFFF', otp: false, page: true, op: '1', block: '#EEF2F7' },
+        { name: 'x-com', icon: 'data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27%23475569%27%20stroke-width%3D%271.9%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Cpath%20d%3D%27M20%2011.5a7.5%207.5%200%200%201-11.2%206.5L4%2019.5l1.5-4.3A7.5%207.5%200%201%201%2020%2011.5z%27%2F%3E%3C%2Fsvg%3E', iconBg: '#0A1222', iconRing: '#4755692E', sub: 'No agent', status: 'Stopped', fg: '#A7B3C6', pillBg: '#0A1222', dot: '#6B7A93', ring: '0 0 0 1px #283449', bg: '#F1F5F9', otp: false, page: true, op: '0.4', block: '#E2E8F0' }
+      ],
+      profiles: [
+        { i: 'G', name: 'google', icon: 'data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27%232563EB%27%20stroke-width%3D%271.9%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Crect%20x%3D%273%27%20y%3D%275%27%20width%3D%2718%27%20height%3D%2714%27%20rx%3D%272.5%27%2F%3E%3Cpath%20d%3D%27M4%207l8%206%208-6%27%2F%3E%3C%2Fsvg%3E', iconBg: '#263047', iconRing: '#2563EB2E', since: 'signed in 41 days', status: 'Running', fg: '#77D68E', dot: '#16A34A' },
+        { i: 'L', name: 'linkedin', icon: 'data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27%230284C7%27%20stroke-width%3D%271.9%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Crect%20x%3D%273%27%20y%3D%277%27%20width%3D%2718%27%20height%3D%2713%27%20rx%3D%272.5%27%2F%3E%3Cpath%20d%3D%27M9%207V5.5A1.5%201.5%200%200%201%2010.5%204h3A1.5%201.5%200%200%201%2015%205.5V7M3%2012.5h18%27%2F%3E%3C%2Fsvg%3E', iconBg: '#163443', iconRing: '#0284C72E', since: 'signed in 12 days', status: 'Running', fg: '#77D68E', dot: '#16A34A' },
+        { i: 'N', name: 'notion', icon: 'data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27%230F766E%27%20stroke-width%3D%271.9%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Cpath%20d%3D%27M6.5%203.5h7.5l4.5%204.5v11a1.5%201.5%200%200%201-1.5%201.5h-10.5A1.5%201.5%200%200%201%205%2019V5a1.5%201.5%200%200%201%201.5-1.5z%27%2F%3E%3Cpath%20d%3D%27M13.5%203.5V8h4.5M8.5%2012.5h7M8.5%2016h5%27%2F%3E%3C%2Fsvg%3E', iconBg: '#0F3834', iconRing: '#0F766E2E', since: 'signed in 9 days', status: 'Stopped', fg: '#A7B3C6', dot: '#6B7A93' },
+        { i: 'X', name: 'x-com', icon: 'data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27%23475569%27%20stroke-width%3D%271.9%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Cpath%20d%3D%27M20%2011.5a7.5%207.5%200%200%201-11.2%206.5L4%2019.5l1.5-4.3A7.5%207.5%200%201%201%2020%2011.5z%27%2F%3E%3C%2Fsvg%3E', iconBg: '#0A1222', iconRing: '#4755692E', since: 'signed in 3 days', status: 'Stopped', fg: '#A7B3C6', dot: '#6B7A93' }
+      ].map((p, i) => ({ ...p, rule: i === 0 ? '0' : '1px solid #1C273B' })),
+      modes: Object.keys(MODES).map((k) => ({ title: MODES[k].title, ...seg(s.mode === k), pick: () => this.setState({ mode: k }) })),
+      modeText: MODES[s.mode].text,
+      modeCode: MODES[s.mode].code,
+      steps: STEPS.map((st, i) => {
+        const on = s.step === i;
+        return {
+          n: String(i + 1), title: st.title, text: st.text,
+          on: on ? 'true' : 'false',
+          bg: on ? '#1E2A40' : 'transparent',
+          ring: on ? '0 0 0 1px rgba(148,163,184,0.28)' : 'none',
+          numBg: on ? '#E8EDF5' : '#0A1222',
+          numFg: on ? '#111A2E' : '#A7B3C6',
+          pick: () => this.setState({ step: i, copied: false })
+        };
+      }),
+      stepFile: step.file,
+      stepCode: step.code,
+      copyLabel: s.copied ? 'Copied' : 'Copy',
+      copyFg: s.copied ? '#4ADE80' : '#F8FAFC',
+      copy: () => { this.setState({ copied: true }); setTimeout(() => this.setState({ copied: false }), 1500); },
+      handoff: [
+        { n: '1', title: 'The agent pauses', text: 'It hits a 2FA prompt and stops before guessing.', bg: '#43291D', fg: '#FDA387' },
+        { n: '2', title: 'You get a link', text: 'In the chat you already use with the agent, with the reason and the site it’s on.', bg: '#0A1222', fg: '#C5CEDB' },
+        { n: '3', title: 'You unlock and take over', text: 'Enter your PIN, see the live browser, type the code. The agent never sees the PIN.', bg: '#262F47', fg: '#9EBDFD' },
+        { n: '4', title: 'You hand back', text: 'One tap. The agent picks up where it stopped, still signed in.', bg: '#1A3728', fg: '#77D68E' }
+      ],
+      policies: [
+        { title: 'One tap', text: 'The link alone opens the browser.', for: 'Low-stakes sites', bg: '#111A2E', ring: '0 0 0 1px #283449' },
+        { title: 'Link + PIN', text: 'A leaked link is useless on its own.', for: 'Most accounts', rec: true, bg: '#14224A', ring: '0 0 0 1.5px #2F6BFF, 0 0 0 4px rgba(47,107,255,0.1)' },
+        { title: 'Full sign-in', text: 'Needs your admin password.', for: 'Email, banking', bg: '#111A2E', ring: '0 0 0 1px #283449' }
+      ].map((p) => ({ ...p, rec: !!p.rec })),
+      principles: [
+        { title: 'No published ports', text: 'Browser containers expose nothing. CDP, the stream and inputs go through the server, behind tokens.' },
+        { title: 'No fingerprint spoofing', text: 'One real, stable browser per profile. A fingerprint that keeps changing is itself a red flag for logged-in accounts.' },
+        { title: 'Page text is untrusted', text: 'Everything an agent reads from a page is fenced, stripped of hidden text, with password and code fields redacted.' },
+        { title: 'Hashed secrets', text: 'Agent tokens, your PIN and the admin password are stored hashed and never logged.' }
+      ],
+      installTabs: Object.keys(INSTALL).map((k) => {
+        const on = s.install === k;
+        return { title: INSTALL[k].title, on: on ? 'true' : 'false', bg: on ? '#D5DCE6' : 'transparent', fg: on ? '#0E1628' : '#6B7A93', pick: () => this.setState({ install: k }) };
+      }),
+      installCode: INSTALL[s.install].code
+    };
+  }
+}
+</script>
+</body>
+</html>

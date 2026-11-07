@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BrowserPier · Overview</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#070C18}
+a{color:#E8EDF5}a:hover{color:#FFFFFF}
+.g-cell{grid-column:span var(--s)}
+@media (max-width: 960px){.g-cell{grid-column:1 / -1}}
+@keyframes pp-pulse{0%{box-shadow:0 0 0 0 rgba(255,106,61,0.55)}70%{box-shadow:0 0 0 7px rgba(255,106,61,0.0)}100%{box-shadow:0 0 0 0 rgba(255,106,61,0.0)}}.pp-pulse{animation:pp-pulse 1.8s ease-out infinite}@media (prefers-reduced-motion: reduce){.pp-pulse{animation:none}}
+</style>
+</helmet>
+<div style="min-height: 100vh; background: radial-gradient(760px 420px at 24% -150px, rgba(255,106,61,0.2), rgba(255,106,61,0.0) 70%), radial-gradient(900px 460px at 88% -150px, rgba(47,107,255,0.22), rgba(47,107,255,0.0) 70%), url('data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20width%3D%27180%27%20height%3D%27180%27%3E%3Cfilter%20id%3D%27n%27%3E%3CfeTurbulence%20type%3D%27fractalNoise%27%20baseFrequency%3D%27.85%27%20numOctaves%3D%272%27%20stitchTiles%3D%27stitch%27%2F%3E%3CfeColorMatrix%20values%3D%270%200%200%200%200.12%200%200%200%200%200.18%200%200%200%200%200.45%200%200%200%200.06%200%27%2F%3E%3C%2Ffilter%3E%3Crect%20width%3D%27100%25%27%20height%3D%27100%25%27%20filter%3D%27url%28%23n%29%27%2F%3E%3C%2Fsvg%3E') 0 0 / 180px 180px, linear-gradient(to bottom, rgba(7,12,24,0.0) 0, rgba(7,12,24,0.6) 260px, rgb(7,12,24) 560px), linear-gradient(rgba(47,107,255,0.07) 1px, transparent 1px) 0 0 / 48px 48px, linear-gradient(90deg, rgba(47,107,255,0.07) 1px, transparent 1px) 0 0 / 48px 48px, #070C18; color: #E8EDF5; font-family: 'Geist', system-ui, sans-serif">
+
+  <header style="position: sticky; top: 0; z-index: 10; background: rgba(17,26,46,0.72); backdrop-filter: blur(14px) saturate(160%); -webkit-backdrop-filter: blur(14px) saturate(160%); box-shadow: 0 1px 0 rgba(0,0,0,0.208)">
+    <div style="max-width: 1320px; margin: 0 auto; padding: 0 28px; min-height: 56px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 24px">
+      <a href="overview.html" style="display: flex; align-items: center; gap: 9px; font-size: 15px; font-weight: 600; letter-spacing: -0.3px; text-decoration: none">
+        <svg width="22" height="22" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7" fill="#E8EDF5"></rect><path d="M5 12h18M8 12v9M14 12v9M20 12v9" stroke="#111A2E" stroke-width="2" stroke-linecap="round"></path><circle cx="20" cy="6.5" r="2.2" fill="#2F6BFF"></circle></svg>
+        BrowserPier
+      </a>
+      <nav aria-label="Main" style="display: flex; gap: 2px; font-size: 14px">
+        <a href="overview.html" aria-current="page" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; background: #0A1222; font-weight: 500; text-decoration: none">Overview</a>
+        <a href="profiles.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; color: #A7B3C6; text-decoration: none">Profiles</a>
+        <a href="agents.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; color: #A7B3C6; text-decoration: none">Agents</a>
+        <a href="settings.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; color: #A7B3C6; text-decoration: none">Settings</a>
+      </nav>
+      <a href="live-view.html" style="min-height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 10px; border-radius: 999px; background: rgba(255,106,61,0.12); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); box-shadow: inset 0 0 0 1px rgba(255,106,61,0.35), 0 6px 16px -6px rgba(255,106,61,0.55); color: #FDA387; font-size: 13px; font-weight: 500; text-decoration: none"><span aria-hidden="true" class="pp-pulse" style="width: 6px; height: 6px; border-radius: 50%; background: #FF6A3D"></span>1 needs you</a>
+      <div style="flex: 1 1 40px"></div>
+      <span style="min-width: 200px; height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-radius: 8px; box-shadow: 0 0 0 1px #283449; font-size: 13px; color: #8A99B0">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+        <span style="flex: 1">Search…</span>
+        <span style="font-family: 'Geist Mono', monospace; font-size: 11px; padding: 0 5px; border-radius: 4px; background: #0A1222; color: #A7B3C6">⌘K</span>
+      </span>
+      <a href="login.html" aria-label="Account and sign out" style="width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, #2F6BFF, #8AA8FF); display: flex; align-items: center; justify-content: center; color: #FFFFFF; font-size: 12px; font-weight: 600; text-decoration: none">Y</a>
+    </div>
+  </header>
+
+  <main style="max-width: 1320px; margin: 0 auto; padding: 32px 28px 56px; display: flex; flex-direction: column; gap: 20px">
+    <div style="display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px">
+      <div style="display: flex; flex-direction: column; gap: 4px">
+        <h1 style="margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -0.8px">Overview</h1>
+        <p style="margin: 0; font-size: 14px; color: #A7B3C6">5 profiles · 3 running · 1 waiting for you</p>
+      </div>
+      <a href="new-profile.html" style="min-height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 14px; background: #E8EDF5; color: #111A2E; border-radius: 8px; font-size: 14px; font-weight: 500; text-decoration: none; box-shadow: 0 1px 2px rgba(0,0,0,0.52), inset 0 1px 0 rgba(15,23,42,0.12)">New profile<span aria-hidden="true" style="font-family: 'Geist Mono', monospace; font-size: 11px; padding: 0 5px; border-radius: 4px; background: rgba(15,23,42,0.14)">N</span></a>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 14px">
+
+      <section class="g-cell" style="--s: 7; padding: 18px; background: linear-gradient(180deg, rgba(255,106,61,0.16) 0, rgba(255,106,61,0.05) 140px, rgba(17,26,46,0.92) 260px), rgba(17,26,46,0.92); backdrop-filter: blur(16px) saturate(140%); -webkit-backdrop-filter: blur(16px) saturate(140%); border-radius: 16px; box-shadow: inset 0 1px 0 rgba(2,6,15,0.85), 0 0 0 1px rgba(255,106,61,0.38), 0 22px 48px -20px rgba(255,106,61,0.55); display: flex; flex-direction: column; gap: 14px">
+        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px">
+          <span style="display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; background: #43291D; color: #FDA387; font-size: 12px; font-weight: 500"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #FF6A3D"></span>Needs you</span>
+          <h2 style="margin: 0; font-size: 16px; font-weight: 600">google</h2>
+          <span style="font-size: 13px; color: #8A99B0">research-bot · 3 min ago</span>
+          <div style="flex: 1"></div>
+          <a href="live-view.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 12px; border-radius: 8px; background: #2F6BFF; color: #FFFFFF; font-size: 13px; font-weight: 500; text-decoration: none; box-shadow: 0 1px 2px rgba(47,107,255,0.4), 0 8px 22px -6px rgba(47,107,255,0.6), inset 0 1px 0 rgba(255,255,255,0.18)">Take control</a>
+        </div>
+        <div aria-hidden="true" style="position: relative; aspect-ratio: 16 / 8; border-radius: 10px; overflow: hidden; background: #F1F5F9; box-shadow: inset 0 0 0 1px #E8EDF4; filter: brightness(0.86) saturate(0.95)">
+          <div style="height: 30px; display: flex; align-items: center; gap: 8px; padding: 0 10px; background: #FFFFFF; border-bottom: 1px solid #E8EDF4">
+            <span style="display: flex; gap: 5px"><span style="width: 8px; height: 8px; border-radius: 50%; background: #E2E8F0"></span><span style="width: 8px; height: 8px; border-radius: 50%; background: #E2E8F0"></span><span style="width: 8px; height: 8px; border-radius: 50%; background: #E2E8F0"></span></span>
+            <span style="flex: 1; max-width: 340px; height: 18px; display: flex; align-items: center; padding: 0 8px; border-radius: 5px; background: #F1F5F9; font-family: 'Geist Mono', monospace; font-size: 11px; color: #64748B">accounts.google.com/signin/challenge</span>
+          </div>
+          <div style="position: absolute; inset: 30px 0 0 0; display: flex; align-items: center; justify-content: center">
+            <div style="width: 44%; padding: 22px; background: #FFFFFF; border-radius: 10px; box-shadow: 0 0 0 1px #E2E8F0, 0 10px 30px rgba(15,23,42,0.06); display: flex; flex-direction: column; gap: 10px">
+              <span style="height: 9px; width: 40%; border-radius: 5px; background: #E2E8F0"></span>
+              <span style="height: 14px; width: 75%; border-radius: 5px; background: #CBD5E1"></span>
+              <span style="display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; margin-top: 4px"><span style="height: 32px; border-radius: 6px; box-shadow: inset 0 0 0 1.5px #2F6BFF, 0 0 0 3px rgba(47,107,255,0.15)"></span><span style="height: 32px; border-radius: 6px; box-shadow: inset 0 0 0 1px #E2E8F0"></span><span style="height: 32px; border-radius: 6px; box-shadow: inset 0 0 0 1px #E2E8F0"></span><span style="height: 32px; border-radius: 6px; box-shadow: inset 0 0 0 1px #E2E8F0"></span><span style="height: 32px; border-radius: 6px; box-shadow: inset 0 0 0 1px #E2E8F0"></span><span style="height: 32px; border-radius: 6px; box-shadow: inset 0 0 0 1px #E2E8F0"></span></span>
+            </div>
+          </div>
+          <span style="position: absolute; left: 12px; bottom: 12px; max-width: 70%; padding: 8px 12px; border-radius: 10px; background: rgba(15,23,42,0.88); color: #F8FAFC; font-size: 13px; box-shadow: 0 8px 20px rgba(15,23,42,0.2)">“Enter the 2FA code Google just sent to your phone.”</span>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; font-size: 13px">
+          <span style="display: flex; flex-direction: column; gap: 2px; color: #8A99B0">Mode<span style="color: #E8EDF5; font-weight: 500">Visual</span></span>
+          <span style="display: flex; flex-direction: column; gap: 2px; color: #8A99B0">Memory<span style="color: #E8EDF5; font-weight: 500">1.4 GB</span></span>
+          <span style="display: flex; flex-direction: column; gap: 2px; color: #8A99B0">Policy<span style="color: #E8EDF5; font-weight: 500">Link + PIN</span></span>
+          <span style="display: flex; flex-direction: column; gap: 2px; color: #8A99B0">Link expires<span style="color: #E8EDF5; font-weight: 500; font-variant-numeric: tabular-nums">in 12 min</span></span>
+        </div>
+      </section>
+
+      <section class="g-cell" style="--s: 5; padding: 18px; background: #111A2E; border-radius: 16px; box-shadow: 0 0 0 1px rgba(148,163,184,0.14), 0 1px 2px rgba(0,0,0,0.156), 0 10px 28px -12px rgba(0,0,0,0.52); display: flex; flex-direction: column; gap: 16px">
+        <div style="display: flex; justify-content: space-between; align-items: center"><h2 style="margin: 0; font-size: 14px; font-weight: 500; color: #A7B3C6">Memory</h2><a href="settings.html" style="font-size: 12px; color: #8A99B0; text-decoration: none">limit 70% · 11.2 GB</a></div>
+        <div style="display: flex; align-items: baseline; gap: 8px"><span style="font-size: 48px; line-height: 1; font-weight: 600; letter-spacing: -2px">7.1</span><span style="font-size: 16px; color: #8A99B0">/ 16 GB</span></div>
+        <div aria-hidden="true" style="display: flex; gap: 3px; height: 10px">
+          <span style="flex: 14; border-radius: 3px; background: #FF6A3D"></span><span style="flex: 9; border-radius: 3px; background: #2F6BFF"></span><span style="flex: 6; border-radius: 3px; background: #8AA8FF"></span><span style="flex: 42; border-radius: 3px; background: #3B4863"></span><span style="flex: 89; border-radius: 3px; background: #0A1222; box-shadow: inset 0 0 0 1px #283449"></span>
+        </div>
+        <ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 9px; font-size: 13px">
+          <sc-for list="{{mem}}" as="m" hint-placeholder-count="5">
+            <li style="display: flex; align-items: center; gap: 10px">
+              <span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 2px; background: {{m.c}}; box-shadow: {{m.ring}}"></span>
+              <span style="flex: 1; color: #C5CEDB">{{m.k}}</span>
+              <span style="color: #E8EDF5; font-variant-numeric: tabular-nums">{{m.v}}</span>
+            </li>
+          </sc-for>
+        </ul>
+        <p style="margin: auto 0 0; padding-top: 12px; border-top: 1px solid #1C273B; font-size: 13px; color: #A7B3C6">Room for about <span style="color: #E8EDF5; font-weight: 500">4 more</span> browsers before idle ones are stopped.</p>
+      </section>
+
+      <section class="g-cell" style="--s: 5; padding: 18px; background: #111A2E; border-radius: 16px; box-shadow: 0 0 0 1px rgba(148,163,184,0.14), 0 1px 2px rgba(0,0,0,0.156), 0 10px 28px -12px rgba(0,0,0,0.52); display: flex; flex-direction: column; gap: 10px">
+        <div style="display: flex; justify-content: space-between; align-items: center"><h2 style="margin: 0; font-size: 14px; font-weight: 500; color: #A7B3C6">Profiles</h2><a href="profiles.html" style="font-size: 13px; color: #9EBDFD; text-decoration: none">View all →</a></div>
+        <ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column">
+          <sc-for list="{{fleet}}" as="f" hint-placeholder-count="5">
+            <li style="border-top: {{f.rule}}"><a href="{{f.href}}" style="min-height: 48px; margin: 0 -8px; padding: 0 8px; border-radius: 10px; background: {{f.rowBg}}; display: flex; align-items: center; gap: 12px; text-decoration: none">
+              <span aria-hidden="true" style="position: relative; flex: none; width: 28px; height: 28px; border-radius: 8px; background: {{f.iconBg}}; box-shadow: inset 0 0 0 1px {{f.iconRing}}; display: flex; align-items: center; justify-content: center"><img src="{{f.icon}}" alt="" style="width: 16px; height: 16px"></span>
+              <span style="flex: 1; font-size: 14px; font-weight: 500">{{f.name}}</span>
+              <span style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: {{f.fg}}"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{f.dot}}"></span>{{f.status}}</span>
+              <span style="width: 56px; text-align: right; font-size: 13px; color: #A7B3C6; font-variant-numeric: tabular-nums">{{f.mem}}</span>
+            </a></li>
+          </sc-for>
+        </ul>
+      </section>
+
+      <section class="g-cell" style="--s: 4; padding: 18px; background: #111A2E; border-radius: 16px; box-shadow: 0 0 0 1px rgba(148,163,184,0.14), 0 1px 2px rgba(0,0,0,0.156), 0 10px 28px -12px rgba(0,0,0,0.52); display: flex; flex-direction: column; gap: 12px">
+        <div style="display: flex; justify-content: space-between; align-items: center"><h2 style="margin: 0; font-size: 14px; font-weight: 500; color: #A7B3C6">Browser hours</h2><span style="font-size: 12px; color: #8A99B0">last 24h</span></div>
+        <div style="display: flex; align-items: baseline; gap: 8px"><span style="font-size: 32px; font-weight: 600; letter-spacing: -1.2px">9.4h</span><span style="font-size: 13px; color: #8A99B0">peak 3 at once</span></div>
+        <svg viewBox="0 0 300 110" role="img" aria-label="Running browsers over the last 24 hours, peaking mid-afternoon" style="width: 100%; height: auto">
+          <defs><linearGradient id="g-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2F6BFF" stop-opacity="0.22"></stop><stop offset="1" stop-color="#2F6BFF" stop-opacity="0"></stop></linearGradient></defs>
+          <g stroke="#1C273B"><path d="M0 20H300M0 55H300M0 90H300"></path></g>
+          <path d="M0 90 L25 88 L50 90 L75 82 L100 70 L125 48 L150 56 L175 34 L200 22 L225 40 L250 30 L275 52 L300 46 L300 90 Z" fill="url(#g-area)"></path>
+          <path d="M0 90 L25 88 L50 90 L75 82 L100 70 L125 48 L150 56 L175 34 L200 22 L225 40 L250 30 L275 52 L300 46" fill="none" stroke="#2F6BFF" stroke-width="2" stroke-linejoin="round"></path>
+          <circle cx="200" cy="22" r="4" fill="#111A2E" stroke="#2F6BFF" stroke-width="2"></circle>
+          <g font-family="Geist, sans-serif" font-size="9" fill="#8A99B0"><text x="0" y="106">00</text><text x="96" y="106">08</text><text x="196" y="106">16</text><text x="284" y="106">now</text></g>
+        </svg>
+      </section>
+
+      <section class="g-cell" style="--s: 3; padding: 18px; background: #0A1020; color: #F8FAFC; border-radius: 16px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 0 0 1px rgba(148,163,184,0.14)">
+        <div role="tablist" aria-label="Connect with" style="display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: #0F172A; font-size: 12px">
+          <span role="tab" aria-selected="true" style="flex: 1; text-align: center; padding: 5px 0; border-radius: 6px; background: #1E293B">CDP</span>
+          <span role="tab" aria-selected="false" style="flex: 1; text-align: center; padding: 5px 0; color: #94A3B8">MCP</span>
+          <span role="tab" aria-selected="false" style="flex: 1; text-align: center; padding: 5px 0; color: #94A3B8">REST</span>
+        </div>
+        <pre style="margin: 0; flex: 1; font-family: 'Geist Mono', monospace; font-size: 12px; line-height: 1.7; color: #CBD5E1; white-space: pre-wrap"><span style="color: #64748B">// playwright</span>
+const b = await chromium
+  .connectOverCDP(
+  <span style="color: #8AA8FF">"wss://pier.local/cdp/linkedin"</span>,
+  { headers: auth })</pre>
+        <a href="agents.html" style="min-height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 8px; background: #F8FAFC; color: #0F172A; font-size: 13px; font-weight: 500; text-decoration: none">Quick start →</a>
+      </section>
+
+      <section class="g-cell" style="--s: 4; padding: 18px; background: #111A2E; border-radius: 16px; box-shadow: 0 0 0 1px rgba(148,163,184,0.14), 0 1px 2px rgba(0,0,0,0.156), 0 10px 28px -12px rgba(0,0,0,0.52); display: flex; flex-direction: column; gap: 10px">
+        <div style="display: flex; justify-content: space-between; align-items: center"><h2 style="margin: 0; font-size: 14px; font-weight: 500; color: #A7B3C6">Agents</h2><a href="agents.html" style="font-size: 13px; color: #9EBDFD; text-decoration: none">Manage →</a></div>
+        <ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px">
+          <sc-for list="{{agents}}" as="a" hint-placeholder-count="3">
+            <li style="display: flex; align-items: center; gap: 10px">
+              <span aria-hidden="true" style="width: 28px; height: 28px; border-radius: 50%; background: {{a.bg}}; display: flex; align-items: center; justify-content: center; color: #FFFFFF; font-size: 11px; font-weight: 600">{{a.i}}</span>
+              <span style="flex: 1; display: flex; flex-direction: column"><span style="font-size: 14px; font-weight: 500">{{a.name}}</span><span style="font-size: 12px; color: #8A99B0">{{a.scope}}</span></span>
+              <span style="font-size: 12px; color: #8A99B0">{{a.used}}</span>
+            </li>
+          </sc-for>
+        </ul>
+      </section>
+
+      <section class="g-cell" style="--s: 4; padding: 18px; background: #111A2E; border-radius: 16px; box-shadow: 0 0 0 1px rgba(148,163,184,0.14), 0 1px 2px rgba(0,0,0,0.156), 0 10px 28px -12px rgba(0,0,0,0.52); display: flex; flex-direction: column; gap: 12px">
+        <div style="display: flex; justify-content: space-between; align-items: center"><h2 style="margin: 0; font-size: 14px; font-weight: 500; color: #A7B3C6">Handoffs <span style="font-weight: 400; color: #8A99B0">· this week</span></h2><a href="agents.html" style="font-size: 13px; color: #9EBDFD; text-decoration: none">Links →</a></div>
+        <div style="display: flex; align-items: flex-end; justify-content: space-between; gap: 16px">
+          <span style="display: flex; flex-direction: column; gap: 4px"><span style="font-size: 32px; font-weight: 600; letter-spacing: -1.2px">12</span><span style="font-size: 13px; color: #A7B3C6">48s median to hand back</span></span>
+          <svg width="150" height="64" viewBox="0 0 150 64" role="img" aria-label="Handoffs per day, highest on Saturday"><g fill="#2F6BFF"><rect x="0" y="40" width="16" height="16" rx="3" opacity="0.3"></rect><rect x="22" y="30" width="16" height="26" rx="3" opacity="0.4"></rect><rect x="44" y="44" width="16" height="12" rx="3" opacity="0.3"></rect><rect x="66" y="22" width="16" height="34" rx="3" opacity="0.55"></rect><rect x="88" y="32" width="16" height="24" rx="3" opacity="0.4"></rect><rect x="110" y="8" width="16" height="48" rx="3"></rect><rect x="132" y="26" width="16" height="30" rx="3" opacity="0.5"></rect></g><g font-family="Geist, sans-serif" font-size="8" fill="#8A99B0"><text x="5" y="64">M</text><text x="27" y="64">T</text><text x="49" y="64">W</text><text x="71" y="64">T</text><text x="94" y="64">F</text><text x="115" y="64">S</text><text x="137" y="64">S</text></g></svg>
+        </div>
+      </section>
+
+      <a href="new-profile.html" class="g-cell" style="--s: 4; min-height: 150px; box-sizing: border-box; padding: 18px; border-radius: 16px; border: 1.5px dashed rgba(148,163,184,0.35); background: rgba(255,255,255,0.02); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-decoration: none; color: #A7B3C6">
+        <span aria-hidden="true" style="width: 36px; height: 36px; border-radius: 10px; background: #111A2E; box-shadow: 0 0 0 1px #283449, 0 1px 2px rgba(0,0,0,0.13); display: flex; align-items: center; justify-content: center; font-size: 18px; color: #E8EDF5">+</span>
+        <span style="font-size: 14px; font-weight: 500; color: #E8EDF5">New profile</span>
+        <span style="font-size: 13px">Log in once, agents reuse it</span>
+      </a>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1120}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const none = 'none';
+    return {
+      mem: [
+        { k: 'google', v: '1.4 GB', c: '#FF6A3D', ring: none },
+        { k: 'linkedin', v: '0.9 GB', c: '#2F6BFF', ring: none },
+        { k: 'github', v: '0.6 GB', c: '#8AA8FF', ring: none },
+        { k: 'System & orchestrator', v: '4.2 GB', c: '#3B4863', ring: none },
+        { k: 'Free', v: '8.9 GB', c: '#0A1222', ring: 'inset 0 0 0 1px #3B4863' }
+      ],
+      fleet: [
+        { i: 'G', name: 'google', icon: 'data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27%232563EB%27%20stroke-width%3D%271.9%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Crect%20x%3D%273%27%20y%3D%275%27%20width%3D%2718%27%20height%3D%2714%27%20rx%3D%272.5%27%2F%3E%3Cpath%20d%3D%27M4%207l8%206%208-6%27%2F%3E%3C%2Fsvg%3E', iconBg: '#263047', iconRing: '#2563EB2E', status: 'Needs you', fg: '#FDA387', dot: '#FF6A3D', mem: '1.4 GB' },
+        { i: 'L', name: 'linkedin', icon: 'data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27%230284C7%27%20stroke-width%3D%271.9%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Crect%20x%3D%273%27%20y%3D%277%27%20width%3D%2718%27%20height%3D%2713%27%20rx%3D%272.5%27%2F%3E%3Cpath%20d%3D%27M9%207V5.5A1.5%201.5%200%200%201%2010.5%204h3A1.5%201.5%200%200%201%2015%205.5V7M3%2012.5h18%27%2F%3E%3C%2Fsvg%3E', iconBg: '#163443', iconRing: '#0284C72E', status: 'Running', fg: '#77D68E', dot: '#16A34A', mem: '0.9 GB' },
+        { i: 'G', name: 'github', icon: 'data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27%237C3AED%27%20stroke-width%3D%271.9%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Cpath%20d%3D%27M8.5%208L4.5%2012l4%204M15.5%208l4%204-4%204M13.5%205.5l-3%2013%27%2F%3E%3C%2Fsvg%3E', iconBg: '#342B44', iconRing: '#7C3AED2E', status: 'Starting', fg: '#9EBDFD', dot: '#2F6BFF', mem: '0.6 GB' },
+        { i: 'N', name: 'notion', icon: 'data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27%230F766E%27%20stroke-width%3D%271.9%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Cpath%20d%3D%27M6.5%203.5h7.5l4.5%204.5v11a1.5%201.5%200%200%201-1.5%201.5h-10.5A1.5%201.5%200%200%201%205%2019V5a1.5%201.5%200%200%201%201.5-1.5z%27%2F%3E%3Cpath%20d%3D%27M13.5%203.5V8h4.5M8.5%2012.5h7M8.5%2016h5%27%2F%3E%3C%2Fsvg%3E', iconBg: '#0F3834', iconRing: '#0F766E2E', status: 'Failed', fg: '#FFA195', dot: '#DC2626', mem: '—' },
+        { i: 'X', name: 'x-com', icon: 'data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27%23475569%27%20stroke-width%3D%271.9%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Cpath%20d%3D%27M20%2011.5a7.5%207.5%200%200%201-11.2%206.5L4%2019.5l1.5-4.3A7.5%207.5%200%201%201%2020%2011.5z%27%2F%3E%3C%2Fsvg%3E', iconBg: '#0A1222', iconRing: '#4755692E', status: 'Stopped', fg: '#A7B3C6', dot: '#6B7A93', mem: '—' }
+      ].map((f, i) => ({ ...f, rowBg: f.status === 'Needs you' ? 'rgba(255,106,61,0.07)' : 'transparent', rule: i === 0 ? '0' : '1px solid #1C273B', href: i === 0 ? 'LiveView.dc.html' : 'Sessions.dc.html' })),
+      agents: [
+        { i: 'RB', name: 'research-bot', scope: 'all profiles', used: '2m ago', bg: '#2F6BFF' },
+        { i: 'LP', name: 'linkedin-poster', scope: 'linkedin', used: '3m ago', bg: '#26344F' },
+        { i: 'CC', name: 'claude-code', scope: 'github, notion', used: 'now', bg: '#3B4863' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

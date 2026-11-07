@@ -16,6 +16,8 @@ The reference for the web UI (PROJ-11), the handoff page (PROJ-10) and the landi
 | Handoff link (phone) | `screens/handoff.html` | `/h/{token}` | `screenshots/handoff.png` |
 | Landing page (marketing site) | `screens/landing.html` | separate site | `screenshots/landing.png` |
 
+Every screen also has a dark version with the same file name in `screens-dark/` and `screenshots-dark/` (plus `screenshots-dark/profiles-table.png`). See **Dark mode** below.
+
 ### Viewing the screens
 
 The screens were made on a design canvas. `screens/support.js` is a small stand-in runtime so they open in a normal browser and are clickable:
@@ -105,6 +107,72 @@ Every profile shows an icon next to its name (Overview list 28px, Profiles cards
 5. **Status vocabulary:** Needs you (orange), Running (green), Starting (blue, spinner), Stopped (grey), Failed (red, with the exit reason). The same words appear everywhere.
 6. **Functional labels stay plain.** No nautical wordplay on buttons or statuses; the theme is for the logo and marketing only.
 7. **Show real numbers or none.** No invented comparisons ("31% faster"). Placeholder figures in the screens are sample data, not copy.
+
+## Dark mode
+
+Dark is a second theme of the same system, not an inverted copy. The four surface levels, the blue/orange split and every rule above still hold. Reference screens are in `screens-dark/` (open them the same way as `screens/`), renders in `screenshots-dark/`.
+
+**Choosing the theme:** follows the operating system by default (`prefers-color-scheme`). Settings has an Appearance choice: System, Light or Dark, remembered per device. The phone handoff page follows the system (and the saved choice if that device has one).
+
+### Tokens
+
+| Token | Light | Dark |
+|---|---|---|
+| `page` (solid) | `#EAF1FF` | `#070C18` |
+| `surface` (card) | `#FFFFFF` | `#111A2E` |
+| `surface-2` (subtle fill) | `#F8FAFC` | `#0E1628` |
+| `well` (inside cards) | `#F1F5F9` | `#0A1222` |
+| `line-soft` | `#EEF2F7` | `#1C273B` |
+| `line` | `#E2E8F0` | `#283449` |
+| `line-strong` | `#CBD5E1` | `#3B4863` |
+| `ink` | `#0F172A` | `#E8EDF5` |
+| `ink-body` | `#334155` | `#C5CEDB` |
+| `ink-2` | `#475569` | `#A7B3C6` |
+| `ink-3` | `#64748B` | `#8A99B0` |
+| `grey-dot` (decoration only) | `#94A3B8` | `#6B7A93` |
+| `blue` / `orange` / `green` / `red` | unchanged | unchanged |
+| `blue-text` / `blue-tint` | `#1D4ED8` / `#EEF3FF` | `#9EBDFD` / `#262F47` |
+| `orange-text` / `orange-tint` | `#C2410C` / `#FFF1EB` | `#FDA387` / `#43291D` |
+| `green-text` / `green-tint` | `#15803D` / `#ECFDF3` | `#77D68E` / `#1A3728` |
+| `red-text` / `red-tint` | `#B91C1C` / `#FEF2F2` | `#FFA195` / `#442728` |
+
+Text never uses `grey-dot` in dark: it is 4.0:1 on a card. Use `ink-3` (6.0:1) or brighter.
+
+### Surfaces in dark
+
+1. **Page:** `#070C18` with the same top lights (blue `rgba(47,107,255,.22)`; warm `rgba(255,106,61,.20)` when someone needs you), the same blue grid, a *light* grain (white noise at ~4% instead of the dark noise) and the fade going to `#070C18`.
+2. **Card:** `#111A2E`; shadow `0 0 0 1px rgba(148,163,184,.14), 0 1px 2px rgba(0,0,0,.16), 0 10px 28px -12px rgba(0,0,0,.52)`. Cards are lighter than the page: elevation goes up in lightness.
+3. **Well:** `#0A1222`, darker than the card.
+4. **Emphasis:** `linear-gradient(180deg, rgba(255,106,61,.16) 0, rgba(255,106,61,.05) 140px, rgba(17,26,46,.92) 260px), rgba(17,26,46,.92)` with the same orange ring and glow.
+
+Header: `rgba(17,26,46,.72)` with the same blur. Scrims: `rgba(2,6,15,.6)`. Dark blocks that are dark in both themes (code cells, toasts, the unsaved-changes bar): `#0A1020` with a `rgba(148,163,184,.14)` ring; their contents keep their light-mode colours.
+
+### Components in dark
+
+- **Buttons:** the one page-level primary per view (New profile, New token, Create profile, Continue) is light: `#E8EDF5` with `ink` text from the light theme (`#111A2E`). Everyday primaries inside cards and rows (Start, Retry, Save PIN, table buttons) are muted: `#1C273B`, text `#E8EDF5`, ring `rgba(148,163,184,.22)`. Blue stays `#2F6BFF` with white text and the blue glow, so "Take control" is the loudest action on any card. Danger stays red with white text.
+- **Segmented controls:** selected option `#1E2A40` with ring `rgba(148,163,184,.28)` and `ink` text; the track is `well`.
+- **Selected radio cards** (handoff policy): background `#14224A`, blue ring as in light.
+- **Status pills, chips:** tints and texts from the table. The frosted header chip is unchanged apart from its text (`#FDA387`).
+- **Dashed "New profile" tile:** border `rgba(148,163,184,.35)`, background `rgba(255,255,255,.02)`.
+- **Agent avatars:** navy `#26344F`, slate `#3B4863` or blue, always white initials. Never near-white circles.
+- **Profile icons:** fallback tiles use `color-mix(in srgb, var(--hue) 20%, var(--surface))` as the tint and a lightened hue for the glyph. **Favicons sit on a light tile (`#F1F5F9`)**, because many favicons are dark glyphs on transparency and would vanish on navy.
+- **Logo:** the tile inverts (light tile, dark mark, blue dot unchanged).
+- **Charts:** series colours unchanged; axis labels `ink-3`.
+
+### Real pages keep their colours
+
+Live view, the browser previews on profile cards and the Overview's needs-you preview show real websites. They are **not** themed: a site looks the same whatever BrowserPier's theme is. In dark mode they are slightly dimmed (`filter: brightness(.86) saturate(.95)`) so they don't outshine the UI, **except** the live stream while you are driving it and the phone handoff page, which always show the page at full brightness. BrowserPier's own states inside those frames (crash panel, loading shimmer, "Booting Chromium…") are themed: crash `#2A1416` with `#FCA5A5` text; loading `#0E1628` with a `#111A2E → #1C273B` shimmer.
+
+### Contrast (dark)
+
+| Pair | Ratio |
+|---|---|
+| `ink` on card | 14.8:1 |
+| `ink-2` on card / page | 8.2:1 / 9.2:1 |
+| `ink-3` on card / page | 6.0:1 / 6.8:1 |
+| Status pill texts on their tints | 6.8–7.3:1 |
+| `blue-text` on card | 9.2:1 |
+| White on `blue` | 4.5:1 (keep button text at weight 500+) |
 
 ## Components to build once
 

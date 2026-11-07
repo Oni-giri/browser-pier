@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BrowserPier · Sign in</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#070C18}
+a{color:#E8EDF5}a:hover{color:#FFFFFF}
+input:focus{outline:none;box-shadow:0 0 0 1px #2F6BFF,0 0 0 4px rgba(47,107,255,0.18)!important}
+@media (max-width: 1000px){.m-bento{display:none}}
+</style>
+</helmet>
+<div style="min-height: 100vh; display: flex; background: #070C18; color: #E8EDF5; font-family: 'Geist', system-ui, sans-serif">
+
+  <section style="flex: 1 1 520px; box-sizing: border-box; padding: 32px 40px; display: flex; flex-direction: column">
+    <span style="display: flex; align-items: center; gap: 9px; font-size: 16px; font-weight: 600; letter-spacing: -0.3px">
+      <svg width="24" height="24" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7" fill="#E8EDF5"></rect><path d="M5 12h18M8 12v9M14 12v9M20 12v9" stroke="#111A2E" stroke-width="2" stroke-linecap="round"></path><circle cx="20" cy="6.5" r="2.2" fill="#2F6BFF"></circle></svg>
+      BrowserPier
+    </span>
+
+    <div style="flex: 1; display: flex; align-items: center; justify-content: center; padding: 48px 0">
+      <form action="overview.html" style="width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 22px">
+        <div style="display: flex; flex-direction: column; gap: 8px">
+          <h1 style="margin: 0; font-size: 28px; line-height: 1.2; font-weight: 600; letter-spacing: -0.8px">Sign in to BrowserPier</h1>
+          <p style="margin: 0; font-size: 15px; line-height: 1.5; color: #A7B3C6">Use the app password from Umbrel → BrowserPier → Info.</p>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 8px">
+          <label for="pw" style="font-size: 14px; font-weight: 500">Password</label>
+          <input id="pw" type="password" autocomplete="current-password" value="••••••••••••" style="height: 42px; box-sizing: border-box; padding: 0 12px; background: #111A2E; border: 0; border-radius: 8px; color: #E8EDF5; font-family: 'Geist Mono', monospace; font-size: 15px; box-shadow: {{pwRing}}">
+          <sc-if value="{{showError}}" hint-placeholder-val="{{false}}">
+            <p role="alert" style="margin: 0; font-size: 13px; color: #FFA195">Wrong password. 3 tries left before a 5-minute lockout.</p>
+          </sc-if>
+        </div>
+        <label style="display: flex; align-items: center; gap: 10px; min-height: 32px; font-size: 14px; color: #C5CEDB">
+          <input type="checkbox" checked style="width: 16px; height: 16px; accent-color: #E8EDF5">
+          Remember this device for 30 days
+        </label>
+        <a href="overview.html" role="button" style="height: 42px; display: flex; align-items: center; justify-content: center; gap: 10px; background: #E8EDF5; color: #111A2E; border-radius: 8px; font-size: 14px; font-weight: 500; text-decoration: none; box-shadow: 0 1px 2px rgba(0,0,0,0.52), inset 0 1px 0 rgba(15,23,42,0.12)">Continue<span aria-hidden="true" style="font-family: 'Geist Mono', monospace; font-size: 11px; padding: 1px 5px; border-radius: 4px; background: rgba(15,23,42,0.14)">↵</span></a>
+        <p style="margin: 0; display: flex; align-items: center; gap: 8px; font-size: 13px; color: #8A99B0"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #16A34A"></span>Encrypted over Tailscale · pier.local</p>
+      </form>
+    </div>
+
+    <p style="margin: 0; font-size: 13px; color: #8A99B0">v0.1 · self-hosted</p>
+  </section>
+
+  <section aria-hidden="true" class="m-bento" style="flex: 1 1 760px; box-sizing: border-box; margin: 12px; padding: 40px; border-radius: 20px; background-color: #070C18; background-image: radial-gradient(700px 360px at 20% -80px, rgba(47,107,255,0.22), rgba(47,107,255,0.0) 70%), radial-gradient(600px 320px at 100% 0, rgba(56,189,248,0.16), rgba(56,189,248,0.0) 70%), linear-gradient(rgba(47,107,255,0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(47,107,255,0.08) 1px, transparent 1px); background-size: auto, auto, 40px 40px, 40px 40px; position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: center; gap: 28px">
+    <div style="position: absolute; left: 50%; top: -180px; width: 720px; height: 420px; transform: translateX(-50%); background: radial-gradient(closest-side, rgba(47,107,255,0.22), rgba(47,107,255,0.0))"></div>
+    <div style="position: relative; display: flex; flex-direction: column; gap: 10px; max-width: 560px">
+      <span style="align-self: flex-start; padding: 4px 10px; border-radius: 999px; background: #111A2E; box-shadow: 0 0 0 1px #283449; font-size: 12px; font-weight: 500; color: #9EBDFD">New · handoff over MCP</span>
+      <p style="margin: 0; font-size: 40px; line-height: 1.1; font-weight: 600; letter-spacing: -1.4px">Persistent browsers your agents can borrow.</p>
+    </div>
+    <div style="position: relative; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px">
+      <div style="grid-column: span 4; padding: 16px; background: #111A2E; border-radius: 14px; box-shadow: 0 0 0 1px #283449, 0 8px 24px rgba(0,0,0,0.156); display: flex; flex-direction: column; gap: 12px">
+        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 13px"><span style="font-weight: 500">Live view · google</span><span style="display: flex; align-items: center; gap: 6px; color: #FDA387"><span style="width: 6px; height: 6px; border-radius: 50%; background: #FF6A3D"></span>Needs you</span></div>
+        <div style="aspect-ratio: 16 / 7; border-radius: 8px; background: #F1F5F9; box-shadow: inset 0 0 0 1px #E8EDF4; display: flex; align-items: center; justify-content: center; filter: brightness(0.86) saturate(0.95)">
+          <div style="width: 50%; padding: 14px; background: #FFFFFF; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; display: flex; flex-direction: column; gap: 8px">
+            <span style="height: 7px; width: 50%; border-radius: 4px; background: #E2E8F0"></span>
+            <span style="display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px"><span style="height: 18px; border-radius: 4px; box-shadow: inset 0 0 0 1.5px #2F6BFF"></span><span style="height: 18px; border-radius: 4px; box-shadow: inset 0 0 0 1px #E2E8F0"></span><span style="height: 18px; border-radius: 4px; box-shadow: inset 0 0 0 1px #E2E8F0"></span><span style="height: 18px; border-radius: 4px; box-shadow: inset 0 0 0 1px #E2E8F0"></span><span style="height: 18px; border-radius: 4px; box-shadow: inset 0 0 0 1px #E2E8F0"></span><span style="height: 18px; border-radius: 4px; box-shadow: inset 0 0 0 1px #E2E8F0"></span></span>
+          </div>
+        </div>
+      </div>
+      <div style="grid-column: span 2; padding: 16px; background: #0A1020; color: #F8FAFC; border-radius: 14px; display: flex; flex-direction: column; justify-content: space-between; gap: 12px; box-shadow: 0 0 0 1px rgba(148,163,184,0.14)">
+        <span style="font-size: 13px; color: #94A3B8">Memory</span>
+        <span style="font-size: 34px; font-weight: 600; letter-spacing: -1.2px">7.1<span style="font-size: 16px; color: #94A3B8"> / 16 GB</span></span>
+        <span style="display: flex; gap: 3px; height: 6px"><span style="flex: 14; border-radius: 3px; background: #FF6A3D"></span><span style="flex: 9; border-radius: 3px; background: #2F6BFF"></span><span style="flex: 6; border-radius: 3px; background: #8AA8FF"></span><span style="flex: 61; border-radius: 3px; background: #1E293B"></span></span>
+      </div>
+      <div style="grid-column: span 3; padding: 16px; background: #111A2E; border-radius: 14px; box-shadow: 0 0 0 1px #283449; display: flex; flex-direction: column; gap: 8px; font-family: 'Geist Mono', monospace; font-size: 12px; color: #C5CEDB">
+        <span style="font-family: 'Geist', sans-serif; font-size: 13px; font-weight: 500; color: #E8EDF5">Connect an agent</span>
+        <span>wss://pier.local/cdp/<span style="color: #2F6BFF">linkedin</span></span>
+        <span style="color: #8A99B0">Bearer bp_live_••••</span>
+      </div>
+      <div style="grid-column: span 3; padding: 16px; background: #111A2E; border-radius: 14px; box-shadow: 0 0 0 1px #283449; display: flex; align-items: flex-end; justify-content: space-between; gap: 12px">
+        <span style="display: flex; flex-direction: column; gap: 4px"><span style="font-size: 13px; font-weight: 500">Handoffs this week</span><span style="font-size: 26px; font-weight: 600; letter-spacing: -0.8px">12 <span style="font-size: 13px; font-weight: 400; color: #8A99B0">· 48s median</span></span></span>
+        <svg width="96" height="36" viewBox="0 0 96 36"><g fill="#2F6BFF"><rect x="0" y="22" width="10" height="14" rx="2" opacity="0.35"></rect><rect x="14" y="16" width="10" height="20" rx="2" opacity="0.45"></rect><rect x="28" y="26" width="10" height="10" rx="2" opacity="0.35"></rect><rect x="42" y="10" width="10" height="26" rx="2" opacity="0.6"></rect><rect x="56" y="18" width="10" height="18" rx="2" opacity="0.45"></rect><rect x="70" y="4" width="10" height="32" rx="2" opacity="0.8"></rect><rect x="84" y="12" width="10" height="24" rx="2"></rect></g></svg>
+      </div>
+    </div>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"showError":{"editor":"boolean","default":false},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const err = this.props.showError ?? false;
+    return {
+      showError: err,
+      pwRing: err ? '0 0 0 1px #DC2626, 0 0 0 4px rgba(220,38,38,0.12)' : '0 0 0 1px #283449, 0 1px 2px rgba(0,0,0,0.13)'
+    };
+  }
+}
+</script>
+</body>
+</html>
