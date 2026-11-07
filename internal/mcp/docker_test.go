@@ -5,8 +5,11 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"image/color"
+	"image/png"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -31,7 +34,7 @@ import (
 )
 
 // TestAgentLogsInThroughMCP is the done-when through MCP, in Visual mode:
-// an agent signs in to a site with only the keyboard and the screen,
+// an agent signs in to a site with only the mouse, keyboard and screen,
 // asks a person for help and gets the browser back, stops the browser,
 // starts it again and is still signed in.
 func TestAgentLogsInThroughMCP(t *testing.T) {
@@ -141,21 +144,40 @@ func TestAgentLogsInThroughMCP(t *testing.T) {
 	if res.IsError || !strings.Contains(out, "1152×720") {
 		t.Fatalf("screenshot: %s", out)
 	}
-	// Sign in with the keyboard: the page has the user field first.
+	// Sign in as an agent does: look at the screen, click each field, type.
+	// Not Tab: just after a page loads, Chrome can still have the keyboard
+	// in the address bar, and the first Tab only moves it into the page.
+	// Nor as soon as the page has loaded: Chrome drops clicks on a page it
+	// hasn't painted yet. The fields are 200 px bands under the toolbar, the
+	// user field blue across the screen's y 200 (180 in the 1152×720
+	// screenshot), the password field green across y 400.
 	visit(site.URL + "/login")
-	call(t, cs, "press_keys", map[string]any{"session_id": id, "keys": "Tab"})
+	deadline := time.Now().Add(20 * time.Second)
+	for !shows(t, cs, id, 576, 180, color.RGBA{0x2f, 0x6b, 0xff, 0xff}) {
+		if time.Now().After(deadline) {
+			t.Fatal("the login page never showed")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if !shows(t, cs, id, 576, 360, color.RGBA{0x16, 0xa3, 0x4a, 0xff}) {
+		t.Fatal("the password field isn't where the test clicks")
+	}
+	call(t, cs, "click", map[string]any{"session_id": id, "x": 576, "y": 180})
 	call(t, cs, "type_text", map[string]any{"session_id": id, "text": "pier"})
-	call(t, cs, "press_keys", map[string]any{"session_id": id, "keys": "Tab"})
+	call(t, cs, "click", map[string]any{"session_id": id, "x": 576, "y": 360})
 	call(t, cs, "type_text", map[string]any{"session_id": id, "text": "hunter2"})
 	res, out = call(t, cs, "press_keys", map[string]any{"session_id": id, "keys": "Return", "screenshot": true})
 	if res.IsError || len(res.Content) != 2 {
 		t.Fatalf("press_keys with a screenshot: %s", out)
 	}
-	deadline := time.Now().Add(10 * time.Second)
+	deadline = time.Now().Add(10 * time.Second)
 	for site.Issued() == "" && time.Now().Before(deadline) {
 		time.Sleep(200 * time.Millisecond)
 	}
 	if site.Issued() == "" {
+		if r := site.Rejected(); r != "" {
+			t.Fatalf("the login form was sent with %s", r)
+		}
 		t.Fatal("the login form was never submitted")
 	}
 
@@ -194,4 +216,26 @@ func TestAgentLogsInThroughMCP(t *testing.T) {
 	if res.IsError || len(res.Content) != 2 {
 		t.Fatalf("zoom: %+v", res)
 	}
+}
+
+// shows reports whether a screenshot of the session has about colour c at
+// (x, y).
+func shows(t *testing.T, cs *sdk.ClientSession, id string, x, y int, c color.RGBA) bool {
+	t.Helper()
+	res, _ := call(t, cs, "screenshot", map[string]any{"session_id": id})
+	for _, ct := range res.Content {
+		img, ok := ct.(*sdk.ImageContent)
+		if !ok {
+			continue
+		}
+		m, err := png.Decode(bytes.NewReader(img.Data))
+		if err != nil {
+			t.Fatalf("screenshot: %v", err)
+		}
+		r, g, b, _ := m.At(x, y).RGBA()
+		near := func(v uint32, want uint8) bool { return max(int(v>>8), int(want))-min(int(v>>8), int(want)) <= 8 }
+		return near(r, c.R) && near(g, c.G) && near(b, c.B)
+	}
+	t.Fatal("screenshot: no image")
+	return false
 }

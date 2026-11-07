@@ -194,6 +194,8 @@ type Site struct {
 	acceptLanguage string
 	// iconServed is set once the browser fetched /icon.png.
 	iconServed bool
+	// rejected is what the last refused login sent.
+	rejected string
 }
 
 // IconServed reports whether the browser has fetched the /icon page's
@@ -236,10 +238,18 @@ func NewSite(t *testing.T, host string) *Site {
 	s := &Site{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /login", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, `<form method="post" action="/login"><input name="user"><input name="password" type="password"><button>Sign in</button></form>`)
+		// Each field is a 200 px band across the page in a colour of its
+		// own, so a test can see on the screen where to click, whatever the
+		// height of the browser's toolbar above.
+		_, _ = io.WriteString(w, `<style>body{margin:0}input{display:block;box-sizing:border-box;width:100%;height:200px;margin:0;border:0}
+[name=user]{background:#2f6bff}[name=password]{background:#16a34a}</style>
+<form method="post" action="/login"><input name="user"><input name="password" type="password"><button>Sign in</button></form>`)
 	})
 	mux.HandleFunc("POST /login", func(w http.ResponseWriter, r *http.Request) {
 		if r.FormValue("user") != "pier" || r.FormValue("password") != "hunter2" {
+			s.mu.Lock()
+			s.rejected = fmt.Sprintf("user %q, password %q", r.FormValue("user"), r.FormValue("password"))
+			s.mu.Unlock()
 			http.Error(w, "wrong password", http.StatusUnauthorized)
 			return
 		}
@@ -326,6 +336,14 @@ func (s *Site) state() (issued, seen string) {
 // one /account was last visited with ("" for none).
 func (s *Site) Issued() string { issued, _ := s.state(); return issued }
 func (s *Site) Seen() string   { _, seen := s.state(); return seen }
+
+// Rejected is what the last refused login sent ("" for none), to tell a
+// form never submitted from one filled in wrong.
+func (s *Site) Rejected() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rejected
+}
 
 // Login signs in through the page's form and returns once the cookie is set.
 func (s *Site) Login(t *testing.T, p *CDP) string {
