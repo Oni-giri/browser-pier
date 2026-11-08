@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+)
 
 func TestAddressesSettled(t *testing.T) {
 	for _, c := range []struct {
@@ -19,5 +24,25 @@ func TestAddressesSettled(t *testing.T) {
 		if got := addressesSettled(c.ifInet6); got != c.want {
 			t.Errorf("%s: addressesSettled = %t, want %t", c.name, got, c.want)
 		}
+	}
+}
+
+// Only a timeout lets startup go on without the network settled: a
+// display that exited or a stop doesn't.
+func TestWaitForTellsATimeoutApart(t *testing.T) {
+	never := func() bool { return false }
+	running := &process{done: make(chan struct{})}
+	if err := waitFor(context.Background(), running, 50*time.Millisecond, never); !errors.Is(err, errNotReady) {
+		t.Errorf("timeout: %v", err)
+	}
+	exited := &process{done: make(chan struct{})}
+	close(exited.done)
+	if err := waitFor(context.Background(), exited, time.Second, never); err == nil || errors.Is(err, errNotReady) {
+		t.Errorf("exited: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := waitFor(ctx, running, time.Second, never); err == nil || errors.Is(err, errNotReady) {
+		t.Errorf("stopped: %v", err)
 	}
 }
