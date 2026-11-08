@@ -102,6 +102,13 @@ func run(log *slog.Logger) error {
 	}); err != nil {
 		return fmt.Errorf("xvfb: %w", err)
 	}
+	// Chromium starts once the network has stopped changing, so its first
+	// page loads aren't cut off as the network "changes".
+	if err := waitFor(ctx, xvfb, 5*time.Second, ipv6Settled); ctx.Err() != nil {
+		return fmt.Errorf("network: %w", err)
+	} else if err != nil {
+		log.Warn("IPv6 addresses still tentative; starting Chromium anyway", "err", err)
+	}
 
 	chromium := exec.Command(chromiumBinary, chromiumArgs(cfg, smallShm())...)
 	chromium.Env = append(append(os.Environ(), "DISPLAY="+display), where.env()...)
