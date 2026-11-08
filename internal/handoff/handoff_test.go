@@ -291,6 +291,8 @@ func TestLinkOnlyAndSignIn(t *testing.T) {
 	}
 	if p := f.do(phone, "GET", "/h/"+token, nil, nil); p.code != http.StatusOK || !strings.Contains(p.body, "Done, hand back") {
 		t.Fatalf("control page: %d", p.code)
+	} else if !strings.Contains(p.body, `style="--ratio:1440/900"`) {
+		t.Fatalf("the live view doesn't take the browser's shape:\n%s", p.body)
 	}
 
 	g := newFixture(t, profiles.PolicySignIn, auth.WebOptions{})

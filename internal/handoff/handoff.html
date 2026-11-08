@@ -27,7 +27,7 @@
 </main>
 {{else if eq .Step "control"}}
 <div class="ho-tools"><span id="who" class="pill">You're driving</span><span class="grow"></span><button id="type" class="btn small" type="button" hidden>Keyboard</button><button id="fit" class="btn small" type="button" hidden>Fit</button></div>
-<div id="stage" class="ho-stage"><video id="screen" autoplay playsinline muted tabindex="0"></video><div id="note" role="status"></div></div>
+<div id="stage" class="ho-stage" style="--ratio:{{.Width}}/{{.Height}}"><video id="screen" autoplay playsinline muted tabindex="0"></video><div id="note" role="status"></div></div>
 <p id="hint" class="caption ho-hint"></p>
 <main class="ho">
   <section class="cell">

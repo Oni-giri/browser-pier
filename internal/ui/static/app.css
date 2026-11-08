@@ -462,7 +462,7 @@ body.handoff{background:radial-gradient(280px 190px at 50% -10px,rgba(47,107,255
 .ho-tools{display:flex;align-items:center;gap:8px;padding:8px 16px;background:var(--surface);box-shadow:0 1px 0 var(--line),0 -1px 0 var(--line)}
 .ho-tools #who{position:static;background:var(--blue-tint);color:var(--blue-text)}
 .ho-tools #who::before{background:var(--blue)}
-.ho-stage{aspect-ratio:auto;height:56vh;min-height:280px;border-radius:0}
+#stage.ho-stage{max-width:calc(72vh * var(--ratio));margin:0 auto;border-radius:0}
 .ho-hint{margin:6px 16px 0}
 textarea.input{height:auto;padding:10px 12px;resize:vertical}
 .ho-row{display:flex;gap:8px;margin-top:12px}
