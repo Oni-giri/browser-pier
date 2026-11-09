@@ -89,8 +89,8 @@ with sync_playwright() as p:
     browser = p.chromium.connect_over_cdp(s["cdp_url"], headers=auth)
     page = browser.contexts[0].pages[0]
     page.goto("https://github.com/notifications")
-# The browser stops by itself once idle, and the login is kept. Another agent
-# may be using it too, so this doesn't stop it.
+# The browser stops by itself once idle (unless its profile says never), and
+# the login is kept. Another agent may be using it too, so this doesn't stop it.
 ```
 
 **REST, in Visual mode:**
