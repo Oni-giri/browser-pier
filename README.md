@@ -85,16 +85,12 @@ base = "https://pier.example.com"
 auth = {"Authorization": "Bearer " + os.environ["PIER_TOKEN"]}
 s = requests.post(base + "/api/sessions", json={"profile": "github", "mode": "api"}, headers=auth).json()
 
-try:
-    with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp(s["cdp_url"], headers=auth)
-        page = browser.contexts[0].pages[0]
-        page.goto("https://github.com/notifications")
-finally:
-    # Stop the browser if this script started it; the login is kept.
-    # "attached" means it was already running for someone else.
-    if not s["attached"]:
-        requests.delete(base + "/api/sessions/" + s["id"], headers=auth)
+with sync_playwright() as p:
+    browser = p.chromium.connect_over_cdp(s["cdp_url"], headers=auth)
+    page = browser.contexts[0].pages[0]
+    page.goto("https://github.com/notifications")
+# The browser stops by itself once idle, and the login is kept. Another agent
+# may be using it too, so this doesn't stop it.
 ```
 
 **REST, in Visual mode:**
