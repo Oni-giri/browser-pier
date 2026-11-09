@@ -147,25 +147,30 @@
   // if saving fails. System drops the attribute, and the page follows the
   // device again.
   const bars = { light: "#EAF1FF", dark: "#070C18" };
-  // Choices made quickly queue up: each answer is about the one it sent.
+  // Choices made quickly queue up, so each one is numbered and each answer
+  // is about the choice it carried. The number goes up before htmx reads
+  // the form, hence the capture phase.
   let savedTheme = ($("form[data-appearance] input:checked") || {}).value;
-  let wantedTheme = savedTheme;
+  let choice = 0;
   document.addEventListener("change", (e) => {
     if (!e.target.closest("form[data-appearance]")) return;
-    wantedTheme = e.target.value;
-    applyTheme(wantedTheme);
+    choice++;
+    applyTheme(e.target.value);
+  }, true);
+  document.addEventListener("htmx:configRequest", (e) => {
+    if (e.target.matches && e.target.matches("form[data-appearance]")) e.detail.parameters.choice = choice;
   });
   document.addEventListener("htmx:afterRequest", (e) => {
     const form = e.target.matches && e.target.matches("form[data-appearance]") && e.target;
     if (!form) return;
-    const sent = e.detail.requestConfig && e.detail.requestConfig.parameters.theme;
+    const sent = e.detail.requestConfig.parameters;
+    const latest = +sent.choice === choice;
     if (e.detail.successful) {
-      savedTheme = sent;
-      if (sent === wantedTheme) toast("Appearance saved");
+      savedTheme = sent.theme;
+      if (latest) toast("Appearance saved");
       return;
     }
-    if (sent !== wantedTheme) return; // a newer choice is on its way
-    wantedTheme = savedTheme;
+    if (!latest) return; // a newer choice is on its way
     const was = $(`input[value="${savedTheme}"]`, form);
     if (was) was.checked = true;
     applyTheme(savedTheme);
