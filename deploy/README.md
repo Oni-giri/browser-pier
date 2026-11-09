@@ -124,7 +124,7 @@ Leave `BROWSERPIER_LISTEN` and `BROWSERPIER_WEBRTC_PORT` alone with this compose
 | `BROWSERPIER_WEBRTC_IPS` | every local address | Addresses advertised to live viewers. Pages can't open them, as they're this server's own. |
 | `BROWSERPIER_WEBRTC_PORT` | 7438 | The live-view port, UDP with TCP as the fallback. |
 | `BROWSERPIER_ADMIN_PASSWORD` | unset | The admin password. It wins over one changed in the UI. |
-| `BROWSERPIER_RAM_LIMIT_PERCENT` | 70 | The share of host memory all browsers may use together. Unset: set in Settings. |
+| `BROWSERPIER_RAM_LIMIT_PERCENT` | 70 | The share of host memory all browsers may use together. Unset: set in Settings. A new browser must also fit in what the host has free, other apps included. Past either, the longest-idle browser no agent is using is stopped to make room, or the start is refused. `0`: no limit, but the host is still checked. |
 | `BROWSERPIER_FILES_LIMIT_MB` | 1024 | The cap on each profile's downloads and uploads. |
 | `BROWSERPIER_TRUSTED_PROXIES` | none (Caddy's `10.247.74.3` in compose) | Proxies whose `X-Forwarded-*` headers are believed: addresses, CIDRs, or `private`. |
 | `BROWSERPIER_NET` | `10.247.74` | The compose network's first three numbers (compose only). |
@@ -133,6 +133,7 @@ Leave `BROWSERPIER_LISTEN` and `BROWSERPIER_WEBRTC_PORT` alone with this compose
 | `BROWSERPIER_GEOIP_URL` | `https://ifconfig.co/json` | How browsers find their exit location, to match time zone and language. `off` disables it. |
 | `BROWSERPIER_LISTEN` | `:7437` | The app's address inside the container. |
 | `BROWSERPIER_BROWSER_IMAGE` | this release's | The browser image. Only BrowserPier's own. |
+| `BROWSERPIER_DATA_DIR` | `/data` | The database and one folder per profile, inside the container. Keep the `./data:/data` mount. |
 | `BROWSERPIER_HOST_DATA_DIR` | detected | The data folder's path on the host, if detection fails. |
 | `BROWSERPIER_USERNS_MODE` | unset | `keep-id` under rootless Podman. |
 | `BROWSERPIER_BROWSER_APPARMOR` | unset | The browser containers' AppArmor profile. Unset, they keep Docker's, except on AppArmor hosts without Ubuntu's user namespace restriction (Debian, umbrelOS), where they run without one: there, from Debian 13 on, Docker's refuses Chromium's sandbox. With `DOCKER_HOST` set, Docker's default is kept, since that daemon's kernel can't be checked: set `unconfined` if browsers then fail with a sandbox error. |
