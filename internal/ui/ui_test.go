@@ -666,8 +666,10 @@ func TestOrangeOnlyWhenSomeoneIsNeeded(t *testing.T) {
 	if r := f.get("/"); strings.Contains(r.body, "has-help") || strings.Contains(r.body, " emph") {
 		t.Fatal("the overview stays warm with nobody needed")
 	}
-	want(t, f.get("/static/grain.svg"), http.StatusOK, "feTurbulence")
-	if r := f.get("/static/grain.svg"); r.header.Get("Cache-Control") != "public, max-age=31536000, immutable" {
-		t.Fatalf("grain.svg: %q", r.header.Get("Cache-Control"))
+	for _, grain := range []string{"grain.svg", "grain-dark.svg"} {
+		want(t, f.get("/static/"+grain), http.StatusOK, "feTurbulence")
+		if r := f.get("/static/" + grain); r.header.Get("Cache-Control") != "public, max-age=31536000, immutable" {
+			t.Fatalf("%s: %q", grain, r.header.Get("Cache-Control"))
+		}
 	}
 }

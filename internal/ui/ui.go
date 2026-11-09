@@ -99,9 +99,9 @@ func (u *UI) Register(mux *http.ServeMux) {
 	files := http.FileServerFS(sub)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		static.Header(w, r, staticTags[r.URL.Path])
-		// app.css links the fonts and the page grain without a version;
+		// app.css links the fonts and the page grains without a version;
 		// they don't change (a new grain gets a new name).
-		if strings.HasPrefix(r.URL.Path, "fonts/") || r.URL.Path == "grain.svg" {
+		if strings.HasPrefix(r.URL.Path, "fonts/") || r.URL.Path == "grain.svg" || r.URL.Path == "grain-dark.svg" {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		}
 		files.ServeHTTP(w, r)

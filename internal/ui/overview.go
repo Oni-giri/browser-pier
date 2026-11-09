@@ -2,6 +2,7 @@ package ui
 
 import (
 	"cmp"
+	"html/template"
 	"net/http"
 	"slices"
 	"time"
@@ -62,11 +63,14 @@ func (mv memoryView) FreeBound() bool {
 type memoryPart struct {
 	Name  string
 	Bytes int64
-	Color string
+	Color template.CSS
 }
 
-// partColors tell browsers apart in the memory bar; the needs-you one is orange.
-var partColors = []string{"#2F6BFF", "#8AA8FF", "#16A34A", "#7C3AED", "#0EA5E9", "#94A3B8"}
+// partColors tell browsers apart in the memory bar; the needs-you one is
+// orange. Grey is a token, as it changes with the theme.
+var partColors = []template.CSS{"#2F6BFF", "#8AA8FF", "#16A34A", "#7C3AED", "#0EA5E9", grey}
+
+const grey template.CSS = "var(--grey-dot)"
 
 func (u *UI) memoryView(r *http.Request, views []profileView) memoryView {
 	mv := memoryView{Host: u.o.HostMemory}
@@ -89,7 +93,7 @@ func (u *UI) memoryView(r *http.Request, views []profileView) memoryView {
 	slices.SortFunc(browsers, func(a, b sessions.Usage) int { return cmp.Compare(b.Bytes, a.Bytes) })
 	i := 0
 	for _, b := range browsers {
-		c := "#94A3B8"
+		c := grey
 		switch {
 		case help[b.Profile]:
 			c = "#FF6A3D"
