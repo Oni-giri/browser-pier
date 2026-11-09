@@ -36,7 +36,8 @@ curl -fsSLO $release/Caddyfile
 curl -fsSL  $release/env.example -o .env
 install -d -m 700 data
 # fill in .env: your user, the Docker group and how you'll reach it
-docker compose up -d
+docker compose up -d                   # Tailscale, or your own proxy
+docker compose --profile https up -d   # or this, with the bundled Caddy
 ```
 
 [deploy/README.md](deploy/README.md) has the rest:
@@ -84,12 +85,16 @@ base = "https://pier.example.com"
 auth = {"Authorization": "Bearer " + os.environ["PIER_TOKEN"]}
 s = requests.post(base + "/api/sessions", json={"profile": "github", "mode": "api"}, headers=auth).json()
 
-with sync_playwright() as p:
-    browser = p.chromium.connect_over_cdp(s["cdp_url"], headers=auth)
-    page = browser.contexts[0].pages[0]
-    page.goto("https://github.com/notifications")
-
-requests.delete(base + "/api/sessions/" + s["id"], headers=auth)  # stops it; the login is kept
+try:
+    with sync_playwright() as p:
+        browser = p.chromium.connect_over_cdp(s["cdp_url"], headers=auth)
+        page = browser.contexts[0].pages[0]
+        page.goto("https://github.com/notifications")
+finally:
+    # Stop the browser if this script started it; the login is kept.
+    # "attached" means it was already running for someone else.
+    if not s["attached"]:
+        requests.delete(base + "/api/sessions/" + s["id"], headers=auth)
 ```
 
 **REST, in Visual mode:**

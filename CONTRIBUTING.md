@@ -30,10 +30,10 @@ DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock BROWSERPIER_USERNS_MODE=k
 
 ```sh
 make build
-BROWSERPIER_DATA_DIR=./data BROWSERPIER_ADMIN_PASSWORD=change-me-please ./bin/browserpier
+BROWSERPIER_LISTEN=127.0.0.1:7437 BROWSERPIER_DATA_DIR=./data BROWSERPIER_ADMIN_PASSWORD=change-me-please ./bin/browserpier
 ```
 
-It listens on `:7437` and keeps its database and profiles in `./data` (`BROWSERPIER_DATA_DIR`). It reaches Docker through the usual `DOCKER_HOST`. Every other setting is a `BROWSERPIER_*` environment variable, listed in [deploy/README.md](deploy/README.md#settings).
+It listens on `127.0.0.1:7437`, so only your machine reaches it with that password (the default, `:7437`, is every interface). It keeps its database and profiles in `./data` (`BROWSERPIER_DATA_DIR`). It reaches Docker through the usual `DOCKER_HOST`. Every other setting is a `BROWSERPIER_*` environment variable, listed in [deploy/README.md](deploy/README.md#settings).
 
 To try the API:
 
