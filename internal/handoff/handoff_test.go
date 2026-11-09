@@ -26,6 +26,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/sessions/sessionstest"
+	"github.com/Oni-giri/browser-pier/internal/theme"
 	"github.com/Oni-giri/browser-pier/internal/webrtc"
 )
 
@@ -714,5 +715,23 @@ func TestReloadedHandoffPageGetsControlBack(t *testing.T) {
 	}
 	if s, _ := f.m.Live("google"); !s.HumanControl {
 		t.Fatal("the reloaded page doesn't hold control")
+	}
+}
+
+func TestHandoffPageHasThePhonesTheme(t *testing.T) {
+	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
+	_, token := f.open("")
+	phone := browser()
+	if p := f.do(phone, "GET", "/h/"+token, nil, nil); !strings.Contains(p.body, `<html lang="en">`) || !strings.Contains(p.body, `content="light dark"`) {
+		t.Fatalf("system: %.400s", p.body)
+	}
+	u, _ := url.Parse(f.srv.URL)
+	phone.Jar.SetCookies(u, []*http.Cookie{{Name: theme.Cookie, Value: "dark", Path: "/"}})
+	if p := f.do(phone, "GET", "/h/"+token, nil, nil); !strings.Contains(p.body, `<html lang="en" data-theme="dark">`) || strings.Count(p.body, `name="theme-color"`) != 1 {
+		t.Fatalf("dark: %.400s", p.body)
+	}
+	// The page offers no choice of its own.
+	if p := f.do(phone, "GET", "/h/"+token, nil, nil); strings.Contains(p.body, "appearance") {
+		t.Fatal("the handoff page has a theme control")
 	}
 }

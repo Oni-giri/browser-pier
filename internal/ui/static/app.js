@@ -143,6 +143,28 @@
     if (sel && e.target.checked) { const el = $(sel); if (el) el.checked = true; }
   });
 
+  // Appearance: the page switches at once, as the choice is saved. System
+  // drops the attribute, and the page follows the device again.
+  const bars = { light: "#EAF1FF", dark: "#070C18" };
+  document.addEventListener("change", (e) => {
+    if (!e.target.closest("form[data-appearance]")) return;
+    const t = e.target.value;
+    const root = document.documentElement;
+    if (t === "light" || t === "dark") root.dataset.theme = t; else delete root.dataset.theme;
+    $("meta[name=color-scheme]").content = t === "system" ? "light dark" : t;
+    $$("meta[name=theme-color]").forEach((m) => m.remove());
+    for (const [k, c] of Object.entries(bars)) {
+      if (t !== "system" && t !== k) continue;
+      const m = document.createElement("meta");
+      m.name = "theme-color"; m.content = c;
+      if (t === "system") m.media = `(prefers-color-scheme: ${k})`;
+      document.head.append(m);
+    }
+  });
+  document.addEventListener("htmx:afterRequest", (e) => {
+    if (e.target.matches && e.target.matches("form[data-appearance]") && e.detail.successful) toast("Appearance saved");
+  });
+
   // Code tabs.
   $$("[data-tabs]").forEach((box) => {
     box.addEventListener("click", (e) => {

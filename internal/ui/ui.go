@@ -20,6 +20,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/settings"
 	"github.com/Oni-giri/browser-pier/internal/static"
+	"github.com/Oni-giri/browser-pier/internal/theme"
 )
 
 //go:embed templates static
@@ -135,6 +136,7 @@ func (u *UI) Register(mux *http.ServeMux) {
 	mux.Handle("POST /settings/pin", admin(u.savePIN))
 	mux.Handle("POST /settings/password", admin(u.changePassword))
 	mux.Handle("POST /settings/sign-out-others", admin(u.signOutOthers))
+	mux.Handle("POST /settings/appearance", admin(u.saveAppearance))
 }
 
 // page is what every app page's layout needs.
@@ -146,7 +148,8 @@ type page struct {
 	// Profiles lists the profile names, for the header's search.
 	Profiles []string
 	// Data is the page's own.
-	Data any
+	Data  any
+	Theme theme.Theme
 }
 
 type helpChip struct {
@@ -175,7 +178,7 @@ func headers(w http.ResponseWriter) {
 
 // render writes a whole page.
 func (u *UI) render(w http.ResponseWriter, r *http.Request, status int, name, title, nav string, data any) {
-	p := page{Title: title, Nav: nav, Data: data, Flash: takeFlash(w, r)}
+	p := page{Title: title, Nav: nav, Data: data, Flash: takeFlash(w, r), Theme: theme.Of(r)}
 	p.Help = u.helpChip()
 	if all, err := u.m.Profiles().List(r.Context()); err == nil {
 		for _, pr := range all {
@@ -324,6 +327,17 @@ func (u *UI) cdpURL(r *http.Request, profile string) string {
 }
 
 var funcs = template.FuncMap{
+	// themeChoices are Settings' appearance options, and themeChoice the
+	// one a theme is.
+	"themeChoices": func() []struct{ Value, Label string } {
+		return []struct{ Value, Label string }{{"system", "System"}, {"light", "Light"}, {"dark", "Dark"}}
+	},
+	"themeChoice": func(t theme.Theme) string {
+		if t == theme.System {
+			return "system"
+		}
+		return string(t)
+	},
 	// static links a file under static/ with its version, so the browser
 	// keeps it until it changes.
 	"static":      func(name string) string { return "/static/" + name + "?v=" + staticTags[name] },

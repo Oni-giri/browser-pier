@@ -18,6 +18,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/static"
+	"github.com/Oni-giri/browser-pier/internal/theme"
 	"github.com/Oni-giri/browser-pier/internal/webrtc"
 )
 
@@ -97,9 +98,10 @@ type view struct {
 	// Width and Height are the browser's screen, which the live view
 	// takes the shape of.
 	Width, Height int
+	Theme         theme.Theme
 }
 
-func (w *Web) render(rw http.ResponseWriter, status int, v view) {
+func (w *Web) render(rw http.ResponseWriter, r *http.Request, status int, v view) {
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	rw.Header().Set("Cache-Control", "no-store")
 	// Other sites never see the link. Not no-referrer, under which the PIN
@@ -109,6 +111,7 @@ func (w *Web) render(rw http.ResponseWriter, status int, v view) {
 	rw.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' blob:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 	rw.WriteHeader(status)
 	v.Reason = v.H.Reason.Label()
+	v.Theme = theme.Of(r)
 	v.ExpiresMs = v.H.ExpiresAt.UnixMilli()
 	if err := page.Execute(rw, v); err != nil {
 		w.log.Error("rendering the handoff page", "err", err)
@@ -120,7 +123,7 @@ func (w *Web) load(rw http.ResponseWriter, r *http.Request) (Handoff, string, bo
 	token := r.PathValue("token")
 	h, err := w.svc.ByToken(r.Context(), token)
 	if errors.Is(err, ErrNotFound) {
-		w.render(rw, http.StatusNotFound, view{Step: "ended", Ended: "missing"})
+		w.render(rw, r, http.StatusNotFound, view{Step: "ended", Ended: "missing"})
 		return h, token, false
 	}
 	if err != nil {
@@ -128,7 +131,7 @@ func (w *Web) load(rw http.ResponseWriter, r *http.Request) (Handoff, string, bo
 		return h, token, false
 	}
 	if h.Status.Final() {
-		w.render(rw, http.StatusGone, view{Step: "ended", Ended: string(h.Status), H: h})
+		w.render(rw, r, http.StatusGone, view{Step: "ended", Ended: string(h.Status), H: h})
 		return h, token, false
 	}
 	return h, token, true
@@ -147,7 +150,7 @@ func (w *Web) insecure(rw http.ResponseWriter, r *http.Request, h Handoff) bool 
 	if w.web.IsHTTPS(r) || private(w.web.ClientIP(r)) {
 		return false
 	}
-	w.render(rw, http.StatusForbidden, view{Step: "ended", Ended: "insecure", H: h})
+	w.render(rw, r, http.StatusForbidden, view{Step: "ended", Ended: "insecure", H: h})
 	return true
 }
 
@@ -167,7 +170,7 @@ func private(ip string) bool {
 func (w *Web) unlock(rw http.ResponseWriter, r *http.Request, h Handoff, token string) bool {
 	secret := randomToken()
 	if err := w.svc.Unlock(r.Context(), h, secret); err != nil {
-		w.render(rw, http.StatusForbidden, view{Step: "other", H: h})
+		w.render(rw, r, http.StatusForbidden, view{Step: "other", H: h})
 		return false
 	}
 	//nolint:gosec // Secure as the sign-in cookie is (CookieSecure, HTTPS, an https public URL)
@@ -186,11 +189,11 @@ func (w *Web) show(rw http.ResponseWriter, r *http.Request) {
 		if p, err := w.m.Profiles().Get(r.Context(), h.Profile); err == nil {
 			v.Width, v.Height = p.Width, p.Height
 		}
-		w.render(rw, http.StatusOK, v)
+		w.render(rw, r, http.StatusOK, v)
 		return
 	}
 	if h.unlocked {
-		w.render(rw, http.StatusForbidden, view{Step: "other", H: h})
+		w.render(rw, r, http.StatusForbidden, view{Step: "other", H: h})
 		return
 	}
 	switch h.Policy {
@@ -207,7 +210,7 @@ func (w *Web) show(rw http.ResponseWriter, r *http.Request) {
 			http.Redirect(rw, r, "/h/"+url.PathEscape(token), http.StatusSeeOther)
 		}
 	default:
-		w.render(rw, http.StatusOK, view{Step: "pin", H: h, Token: token, TriesLeft: MaxPINFailures - h.PINFailures})
+		w.render(rw, r, http.StatusOK, view{Step: "pin", H: h, Token: token, TriesLeft: MaxPINFailures - h.PINFailures})
 	}
 }
 
@@ -217,7 +220,7 @@ func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.unlocked {
-		w.render(rw, http.StatusForbidden, view{Step: "other", H: h})
+		w.render(rw, r, http.StatusForbidden, view{Step: "other", H: h})
 		return
 	}
 	// The PIN only opens a link whose policy asks for it: a "full sign-in"
@@ -229,14 +232,14 @@ func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 	ip := w.web.ClientIP(r)
 	mine, _ := w.pin.Begin(ip)
 	if mine == nil {
-		w.render(rw, http.StatusTooManyRequests, view{Step: "pin", H: h, Token: token, TriesLeft: MaxPINFailures - h.PINFailures, Error: "Too many wrong PINs from here. Wait a few minutes."})
+		w.render(rw, r, http.StatusTooManyRequests, view{Step: "pin", H: h, Token: token, TriesLeft: MaxPINFailures - h.PINFailures, Error: "Too many wrong PINs from here. Wait a few minutes."})
 		return
 	}
 	prof, _ := w.pinProfile.Begin(h.Profile)
 	if prof == nil {
 		mine.Cancel()
 		w.log.Warn("handoff PINs locked for a profile: too many wrong PINs across its links", "profile", h.Profile)
-		w.render(rw, http.StatusTooManyRequests, view{Step: "pin", H: h, Token: token, TriesLeft: MaxPINFailures - h.PINFailures, Error: "Too many wrong PINs. Wait a few minutes."})
+		w.render(rw, r, http.StatusTooManyRequests, view{Step: "pin", H: h, Token: token, TriesLeft: MaxPINFailures - h.PINFailures, Error: "Too many wrong PINs. Wait a few minutes."})
 		return
 	}
 	glob, _ := w.pinAll.Begin("")
@@ -244,7 +247,7 @@ func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 		mine.Cancel()
 		prof.Cancel()
 		w.log.Warn("handoff PINs locked everywhere: too many wrong PINs across all profiles")
-		w.render(rw, http.StatusTooManyRequests, view{Step: "pin", H: h, Token: token, TriesLeft: MaxPINFailures - h.PINFailures, Error: "Too many wrong PINs. Wait a few minutes."})
+		w.render(rw, r, http.StatusTooManyRequests, view{Step: "pin", H: h, Token: token, TriesLeft: MaxPINFailures - h.PINFailures, Error: "Too many wrong PINs. Wait a few minutes."})
 		return
 	}
 	all := attempts{prof, glob}
@@ -261,9 +264,9 @@ func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 		case err != nil:
 			http.Error(rw, "something went wrong", http.StatusInternalServerError)
 		case h.Status.Final():
-			w.render(rw, http.StatusGone, view{Step: "ended", Ended: string(h.Status), H: h})
+			w.render(rw, r, http.StatusGone, view{Step: "ended", Ended: string(h.Status), H: h})
 		default:
-			w.render(rw, http.StatusTooManyRequests, view{Step: "pin", H: h, Token: token, TriesLeft: MaxPINFailures - h.PINFailures, Error: "Wait for your other attempts to finish."})
+			w.render(rw, r, http.StatusTooManyRequests, view{Step: "pin", H: h, Token: token, TriesLeft: MaxPINFailures - h.PINFailures, Error: "Wait for your other attempts to finish."})
 		}
 		return
 	}
@@ -286,10 +289,10 @@ func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 		}
 		w.log.Warn("wrong handoff PIN", "handoff", h.ID, "ip", ip, "tries_left", left)
 		if left <= 0 {
-			w.render(rw, http.StatusGone, view{Step: "ended", Ended: string(Cancelled), H: h})
+			w.render(rw, r, http.StatusGone, view{Step: "ended", Ended: string(Cancelled), H: h})
 			return
 		}
-		w.render(rw, http.StatusUnauthorized, view{Step: "pin", H: h, Token: token, TriesLeft: left, Error: "Wrong PIN."})
+		w.render(rw, r, http.StatusUnauthorized, view{Step: "pin", H: h, Token: token, TriesLeft: left, Error: "Wrong PIN."})
 		return
 	}
 	mine.Succeed()
@@ -347,7 +350,7 @@ func (w *Web) finish(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !w.holder(r, h) {
-		w.render(rw, http.StatusForbidden, view{Step: "other", H: h})
+		w.render(rw, r, http.StatusForbidden, view{Step: "other", H: h})
 		return
 	}
 	r.Body = http.MaxBytesReader(rw, r.Body, 8<<10)
@@ -360,7 +363,7 @@ func (w *Web) finish(rw http.ResponseWriter, r *http.Request) {
 		http.Error(rw, "something went wrong", http.StatusInternalServerError)
 		return
 	}
-	w.render(rw, http.StatusOK, view{Step: "ended", Ended: string(h.Status), H: h})
+	w.render(rw, r, http.StatusOK, view{Step: "ended", Ended: string(h.Status), H: h})
 }
 
 // attempts ends several lockout attempts the same way.
