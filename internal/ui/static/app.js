@@ -147,18 +147,25 @@
   // if saving fails. System drops the attribute, and the page follows the
   // device again.
   const bars = { light: "#EAF1FF", dark: "#070C18" };
+  // Choices made quickly queue up: each answer is about the one it sent.
   let savedTheme = ($("form[data-appearance] input:checked") || {}).value;
+  let wantedTheme = savedTheme;
   document.addEventListener("change", (e) => {
-    if (e.target.closest("form[data-appearance]")) applyTheme(e.target.value);
+    if (!e.target.closest("form[data-appearance]")) return;
+    wantedTheme = e.target.value;
+    applyTheme(wantedTheme);
   });
   document.addEventListener("htmx:afterRequest", (e) => {
     const form = e.target.matches && e.target.matches("form[data-appearance]") && e.target;
     if (!form) return;
+    const sent = e.detail.requestConfig && e.detail.requestConfig.parameters.theme;
     if (e.detail.successful) {
-      savedTheme = $("input:checked", form).value;
-      toast("Appearance saved");
+      savedTheme = sent;
+      if (sent === wantedTheme) toast("Appearance saved");
       return;
     }
+    if (sent !== wantedTheme) return; // a newer choice is on its way
+    wantedTheme = savedTheme;
     const was = $(`input[value="${savedTheme}"]`, form);
     if (was) was.checked = true;
     applyTheme(savedTheme);
