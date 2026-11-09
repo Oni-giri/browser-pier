@@ -143,12 +143,28 @@
     if (sel && e.target.checked) { const el = $(sel); if (el) el.checked = true; }
   });
 
-  // Appearance: the page switches at once, as the choice is saved. System
-  // drops the attribute, and the page follows the device again.
+  // Appearance: the page switches at once, as the choice is saved, and back
+  // if saving fails. System drops the attribute, and the page follows the
+  // device again.
   const bars = { light: "#EAF1FF", dark: "#070C18" };
+  let savedTheme = ($("form[data-appearance] input:checked") || {}).value;
   document.addEventListener("change", (e) => {
-    if (!e.target.closest("form[data-appearance]")) return;
-    const t = e.target.value;
+    if (e.target.closest("form[data-appearance]")) applyTheme(e.target.value);
+  });
+  document.addEventListener("htmx:afterRequest", (e) => {
+    const form = e.target.matches && e.target.matches("form[data-appearance]") && e.target;
+    if (!form) return;
+    if (e.detail.successful) {
+      savedTheme = $("input:checked", form).value;
+      toast("Appearance saved");
+      return;
+    }
+    const was = $(`input[value="${savedTheme}"]`, form);
+    if (was) was.checked = true;
+    applyTheme(savedTheme);
+    if (!e.detail.xhr || !e.detail.xhr.status) toast("Can't reach BrowserPier.", true);
+  });
+  function applyTheme(t) {
     const root = document.documentElement;
     if (t === "light" || t === "dark") root.dataset.theme = t; else delete root.dataset.theme;
     $("meta[name=color-scheme]").content = t === "system" ? "light dark" : t;
@@ -160,10 +176,7 @@
       if (t === "system") m.media = `(prefers-color-scheme: ${k})`;
       document.head.append(m);
     }
-  });
-  document.addEventListener("htmx:afterRequest", (e) => {
-    if (e.target.matches && e.target.matches("form[data-appearance]") && e.detail.successful) toast("Appearance saved");
-  });
+  }
 
   // Code tabs.
   $$("[data-tabs]").forEach((box) => {
