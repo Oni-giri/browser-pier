@@ -157,6 +157,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) to build it, run the tests and see how ch
 
 ## License
 
-Not chosen yet.
+[Apache 2.0](LICENSE).
 
 Several ideas come from [Steel Browser](https://github.com/steel-dev/steel-browser) (Apache 2.0); see [NOTICE](NOTICE) and the credits in [SPEC.md](SPEC.md#credits).

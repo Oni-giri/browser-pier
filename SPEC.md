@@ -398,13 +398,13 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 | CDP without headers | Single-use, one-minute tickets; the token is never taken in the URL | A proxy in front may log URLs, and a logged token would be good until revoked. `?token=` was removed before the first release rather than deprecated, as nothing depended on it. |
 | Orchestrator ↔ browser container | A Unix socket in a per-profile folder shared with the orchestrator | Nothing listens on a network, so a page or another container can't reach CDP. |
 | Profile storage | Bind-mounted folders in the data dir, not named Docker volumes | One directory to back up or move; export and downloads read files directly. The host path is detected from the orchestrator's own mounts. |
+| License | Apache 2.0, not AGPL | Self-hosters are the users, and many companies forbid AGPL code, even for internal tools. Same license as Steel; the patent grant and NOTICE come with it. |
 | Chromium sandbox | On, with a seccomp profile that allows user namespaces | Pages are untrusted; the container is a second boundary, not the only one. |
 | AppArmor for browser containers | Docker's, except none on AppArmor 4 hosts without Ubuntu's userns restriction (Debian 13, umbrelOS 2.0), until BrowserPier ships its own profile (PROJ-37) | Docker's profile refuses the sandbox there. Losing that backup layer costs less than losing Chromium's sandbox. |
 
 ### Still open
 
 - **Logo:** navy style (v1.1).
-- **License:** Apache 2.0 (most adoption, same as Steel and Kernel) or AGPL (a cloud host must share changes). Decide before the first public release.
 
 ---
 
@@ -449,7 +449,6 @@ v1 stays fully self-hosted on one box. The aim right now is to ship a complete, 
 - One-line install; templates for Umbrel, CasaOS, Unraid and Coolify.
 - Python and TypeScript SDKs; ready-made integrations with browser-use (the first example: it connects over CDP), Stagehand and Playwright.
 - Docs and example agents ("log into X once, then automate it").
-- Pick the license before the first public release (see Still open).
 
 **Stage 2: teams and several machines** (likely the first paid tier)
 - Postgres instead of SQLite; a distributed lock so "one running browser per profile" holds across machines.
