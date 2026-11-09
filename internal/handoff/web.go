@@ -94,6 +94,9 @@ type view struct {
 	TriesLeft int
 	Ended     string // done, cant, cancelled, expired, missing, insecure
 	ExpiresMs int64
+	// Width and Height are the browser's screen, which the live view
+	// takes the shape of.
+	Width, Height int
 }
 
 func (w *Web) render(rw http.ResponseWriter, status int, v view) {
@@ -179,7 +182,11 @@ func (w *Web) show(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if w.holder(r, h) {
-		w.render(rw, http.StatusOK, view{Step: "control", H: h, Token: token})
+		v := view{Step: "control", H: h, Token: token, Width: 16, Height: 10}
+		if p, err := w.m.Profiles().Get(r.Context(), h.Profile); err == nil {
+			v.Width, v.Height = p.Width, p.Height
+		}
+		w.render(rw, http.StatusOK, v)
 		return
 	}
 	if h.unlocked {

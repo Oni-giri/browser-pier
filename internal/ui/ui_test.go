@@ -30,6 +30,7 @@ type fixture struct {
 	t        *testing.T
 	m        *sessions.Manager
 	handoffs *handoff.Service
+	web      *auth.Web
 	tokens   *auth.Tokens
 	settings *settings.Store
 	srv      *httptest.Server
@@ -75,7 +76,7 @@ func newFixture(t *testing.T) *fixture {
 	}
 	tokens := auth.NewTokens(d)
 	web := auth.NewWeb(admin, tokens, log, auth.WebOptions{CookieSecure: "auto"})
-	f := &fixture{t: t, m: m, handoffs: handoff.New(d, m, log), tokens: tokens, settings: settings.New(d)}
+	f := &fixture{t: t, m: m, handoffs: handoff.New(d, m, log), web: web, tokens: tokens, settings: settings.New(d)}
 	app := New(m, web, f.handoffs, f.settings, log, Options{HostMemory: 16 << 30, HostFree: func() int64 { return f.free }, SetRAMLimit: func(p int) { f.ram = p }})
 	mux := http.NewServeMux()
 	web.Register(mux)

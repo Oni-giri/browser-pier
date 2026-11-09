@@ -132,6 +132,11 @@
   if (takeBtn) takeBtn.onclick = () => send({ type: control ? "release" : "take" });
   typeBtn.onclick = () => { const text = prompt("Type into the browser"); if (text) send({ type: "text", text }); };
   fitBtn.onclick = () => { zoom = 1; panX = panY = 0; applyZoom(); };
+  // The stage takes the stream's shape: the profile's screen size may have
+  // changed since this browser started.
+  video.addEventListener("resize", () => {
+    if (video.videoWidth && video.videoHeight) stage.style.setProperty("--ratio", `${video.videoWidth}/${video.videoHeight}`);
+  });
 
   // Mouse.
   video.addEventListener("mousemove", (e) => { const p = toScreen(e.clientX, e.clientY); if (p) push({ t: "move", ...p }); });
