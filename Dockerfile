@@ -14,6 +14,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 
 FROM gcr.io/distroless/static-debian13:nonroot
 COPY --from=build /out/browserpier /usr/local/bin/browserpier
+COPY LICENSE NOTICE /usr/share/doc/browserpier/
 COPY --from=build --chown=nonroot:nonroot /out/data /data
 ENV BROWSERPIER_DATA_DIR=/data
 VOLUME /data
