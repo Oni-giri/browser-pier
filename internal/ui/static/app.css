@@ -173,7 +173,7 @@ code,kbd,.mono{font-family:var(--mono)}
 .crumbs .icon{--size:32px}
 /* Fallback icon colours: the cool range only, never orange or red. */
 /* The tile is the hue on the card: faint in light, stronger in dark. */
-[class*=c-]{--tint:color-mix(in srgb,var(--hue) var(--tint-mix),var(--surface))}
+.icon,.swatches span{--tint:color-mix(in srgb,var(--hue) var(--tint-mix),var(--surface))}
 .c-blue{--hue:#2563EB}.c-sky{--hue:#0284C7}.c-violet{--hue:#7C3AED}.c-indigo{--hue:#4F46E5}.c-teal{--hue:#0F766E}.c-cyan{--hue:#0E7490}.c-slate{--hue:#475569}
 .badge{width:28px;height:28px;flex:none;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:var(--on-accent);background:var(--badge-navy);text-transform:uppercase}
 .badge.c0{background:var(--blue)}.badge.c1{background:var(--badge-navy)}.badge.c2{background:var(--badge-slate)}.badge.c3{background:var(--violet)}
