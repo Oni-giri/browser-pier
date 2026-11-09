@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 )
@@ -44,5 +45,31 @@ func TestWaitForTellsATimeoutApart(t *testing.T) {
 	cancel()
 	if err := waitFor(ctx, running, time.Second, never); err == nil || errors.Is(err, errNotReady) {
 		t.Errorf("stopped: %v", err)
+	}
+}
+
+func TestSettleNetworkGoesOnOnlyAfterATimeout(t *testing.T) {
+	log := slog.New(slog.DiscardHandler)
+	never := func() bool { return false }
+	settled := func() bool { return true }
+	running := &process{done: make(chan struct{})}
+	if err := settleNetwork(context.Background(), log, running, 50*time.Millisecond, never); err != nil {
+		t.Errorf("timeout: %v", err)
+	}
+	if err := settleNetwork(context.Background(), log, running, time.Second, settled); err != nil {
+		t.Errorf("settled: %v", err)
+	}
+	exited := &process{done: make(chan struct{})}
+	close(exited.done)
+	if err := settleNetwork(context.Background(), log, exited, time.Second, never); err == nil {
+		t.Error("Xvfb exited, and startup went on")
+	}
+	// A stop that comes as the network settles still wins.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for name, ready := range map[string]func() bool{"waiting": never, "settled": settled} {
+		if err := settleNetwork(ctx, log, running, time.Second, ready); err == nil {
+			t.Errorf("stopped while %s, and startup went on", name)
+		}
 	}
 }

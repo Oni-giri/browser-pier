@@ -104,10 +104,8 @@ func run(log *slog.Logger) error {
 	}
 	// Chromium starts once the network has stopped changing, so its first
 	// page loads aren't cut off as the network "changes".
-	if err := waitFor(ctx, xvfb, 5*time.Second, ipv6Settled); errors.Is(err, errNotReady) {
-		log.Warn("IPv6 addresses still tentative; starting Chromium anyway", "err", err)
-	} else if err != nil {
-		return fmt.Errorf("xvfb: %w", err)
+	if err := settleNetwork(ctx, log, xvfb, 5*time.Second, ipv6Settled); err != nil {
+		return err
 	}
 
 	chromium := exec.Command(chromiumBinary, chromiumArgs(cfg, smallShm())...)
@@ -320,10 +318,27 @@ func (p *process) wait(timeout time.Duration) bool {
 	return false
 }
 
-// waitFor polls ready until it returns true, p exits, ctx ends or timeout passes.
+// settleNetwork waits for settled while Xvfb runs. Only its timeout lets
+// startup go on: a stop, even one that comes as the wait ends, or Xvfb
+// exiting ends it.
+func settleNetwork(ctx context.Context, log *slog.Logger, xvfb *process, timeout time.Duration, settled func() bool) error {
+	err := waitFor(ctx, xvfb, timeout, settled)
+	switch {
+	case ctx.Err() != nil:
+		return errors.New("network: stopped during startup")
+	case errors.Is(err, errNotReady):
+		log.Warn("IPv6 addresses still tentative; starting Chromium anyway", "err", err)
+		return nil
+	case err != nil:
+		return fmt.Errorf("xvfb: %w", err)
+	}
+	return nil
+}
+
 // errNotReady is waitFor's timeout.
 var errNotReady = errors.New("not ready")
 
+// waitFor polls ready until it returns true, p exits, ctx ends or timeout passes.
 func waitFor(ctx context.Context, p *process, timeout time.Duration, ready func() bool) error {
 	deadline := time.After(timeout)
 	tick := time.NewTicker(100 * time.Millisecond)
