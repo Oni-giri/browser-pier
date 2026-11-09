@@ -185,9 +185,9 @@ code,kbd,.mono{font-family:var(--mono)}
 .btn.primary{background:var(--btn-primary-bg);color:var(--btn-primary-fg);box-shadow:inset 0 1px 0 var(--btn-primary-shine)}
 .btn.primary:hover{background:var(--btn-primary-hover)}
 /* Everyday primaries, in cards and rows, or small: muted in dark. A
-   dialog's confirm stays the page's primary. */
-:is(.card,.table,.cell,.viewer,.side) :not(.dlg-foot)>.btn.primary,.btn.primary.small{background:var(--btn-muted-bg);color:var(--btn-muted-fg);box-shadow:inset 0 1px 0 var(--btn-primary-shine),0 0 0 1px var(--btn-muted-ring)}
-:is(.card,.table,.cell,.viewer,.side) :not(.dlg-foot)>.btn.primary:hover,.btn.primary.small:hover{background:var(--btn-muted-hover)}
+   dialog's confirm and the handoff's "Done" stay the page's primary. */
+:is(.card,.table,.cell,.viewer,.side) :not(.dlg-foot,.ho-row)>.btn.primary,.btn.primary.small{background:var(--btn-muted-bg);color:var(--btn-muted-fg);box-shadow:inset 0 1px 0 var(--btn-primary-shine),0 0 0 1px var(--btn-muted-ring)}
+:is(.card,.table,.cell,.viewer,.side) :not(.dlg-foot,.ho-row)>.btn.primary:hover,.btn.primary.small:hover{background:var(--btn-muted-hover)}
 .btn.blue{background:var(--blue);color:var(--on-accent);box-shadow:var(--glow-blue)}
 .btn.blue:hover{background:var(--blue-hover)}
 .btn.danger{background:var(--red);color:var(--on-accent);box-shadow:none}

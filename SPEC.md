@@ -282,7 +282,7 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 | 4 · New profile | Centred modal over Profiles: name, main site (optional, used for the icon), handoff policy, "start and log in now"; Advanced holds mode, auto-stop, screen size, proxy, local network access and the fallback icon and colour, with a live preview. |
 | 5 · Live view | Streamed browser, take or hand back control, controls locked while the agent drives, connection details, agent activity log, help request. |
 | 6 · Agents | Agent tokens (create with scope, shown once, revoke), handoff link rules, quick start (curl, Python, MCP, and an Agent tab: a two-line prompt to paste into any agent's chat, pointing it to `/mcp/setup`, with the token kept in `PIER_TOKEN`), endpoint list, MCP. |
-| 7 · Settings | Handoff PIN, default handoff policy, memory limit, default auto-stop, default proxy, admin account and sign-out. |
+| 7 · Settings | Handoff PIN, default handoff policy, memory limit, default auto-stop, default proxy, admin account and sign-out, appearance. |
 | 8 · Handoff (phone) | PIN entry, take control on a phone (tap to click, pinch, Type, Fit), note, Done or Can't do this, then expired and finished states. |
 
 ### Settings and what they decide
@@ -292,6 +292,7 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 - **Changing the PIN** needs the current one; changing the password needs the current one and signs out other devices. Wrong tries are limited.
 - **Handing back from the app:** when an agent asked for help, the profile page shows the request with **Done, hand back** and **Can't do this** and a note, like the phone page; either answers the agent at once.
 - **Agent log:** the profile page lists what agents did in the current session (attached, clicked, typed N characters, took a screenshot, asked for help). It never shows typed text, and it is kept in memory only.
+- **Appearance:** light or dark, following the device's own setting unless it chooses System, Light or Dark in Settings. The choice is per device, kept in a cookie, so a phone and a desktop can differ; the sign-in and handoff pages follow it too. Real websites (previews, the live view) keep their own colours, slightly dimmed in dark except while you drive them.
 - **Previews:** profile cards show a small screenshot of each running browser. Taking one doesn't count as use, so an open page never keeps a browser from stopping when idle.
 
 ### Profile icons
