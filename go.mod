@@ -13,7 +13,7 @@ require (
 	github.com/pion/webrtc/v4 v4.2.25
 	golang.org/x/crypto v0.58.0
 	golang.org/x/net v0.60.0
-	modernc.org/sqlite v1.61.0
+	modernc.org/sqlite v1.61.1
 )
 
 require (
