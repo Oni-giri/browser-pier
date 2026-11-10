@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.5
+
+**New**
+- Dark mode. Settings → Appearance picks System, Light or Dark, for each device. System follows the device's own setting. The sign-in and phone handoff pages follow the choice too, from the first paint.
+- Quick start has an Agent tab: a two-line message to paste into any agent's chat. It points the agent to `/mcp/setup`, a guide with this BrowserPier's address filled in that tells it how to connect itself, for Claude Code, Codex and other clients, with the token read from `PIER_TOKEN` and never written into a config. Clients without MCP get the REST API.
+- BrowserPier is under the Apache 2.0 license. Both images carry LICENSE and NOTICE.
+
+**Fixed**
+- A new browser must also fit in what the host has free, other apps included, not just under the memory limit. When it doesn't, the longest-idle unused browser is stopped first, as for the limit. The refusal says which one ran short, for example "the host has 0.8 GB free, other apps included, and a browser needs about 1.0 GB". Before, a host short because of other apps could swap, or have its OOM killer end an app or a browser mid-task.
+- An agent's first page load could fail with `ERR_NETWORK_CHANGED` when it was still loading a second or two after the browser started. Chromium now starts once the container's network has settled, which makes a start about 1.4 s longer.
+- On a phone, the handoff's live view fits the screen instead of scrolling sideways.
+- A long toast, such as a memory refusal, was squeezed into half the screen's width. It now takes the width it needs, up to 640px.
+
 ## 0.1.4
 
 **New**
