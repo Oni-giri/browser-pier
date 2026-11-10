@@ -538,3 +538,4 @@ textarea.input{height:auto;padding:10px 12px;resize:vertical}
 .ho-end h1{margin:0 0 8px;font-size:20px;font-weight:600;letter-spacing:-.4px}
 .ho-end p{margin:0 0 16px;color:var(--ink-2)}
 .appearance{display:flex;align-items:center;justify-content:space-between;gap:12px 24px;flex-wrap:wrap}
+.appearance .seg span{min-height:36px;min-width:76px;justify-content:center}
