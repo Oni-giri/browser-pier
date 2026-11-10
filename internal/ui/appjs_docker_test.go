@@ -11,18 +11,24 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/browsertest"
 	"github.com/Oni-giri/browser-pier/internal/handoff"
+	"github.com/Oni-giri/browser-pier/internal/theme"
 )
 
 // held is a request the test holds: what it sent, and how to answer it.
 type held struct {
 	form    url.Values
 	release chan http.HandlerFunc
+	once    *sync.Once
 }
+
+// answer answers the request with fn; only the first answer counts.
+func (h held) answer(fn http.HandlerFunc) { h.once.Do(func() { h.release <- fn }) }
 
 // gate holds every request to the routes it's given until the test
 // answers it.
@@ -30,16 +36,26 @@ type gate struct{ arrived chan held }
 
 func (g *gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
-	h := held{r.PostForm, make(chan http.HandlerFunc)}
-	g.arrived <- h
-	(<-h.release)(w, r)
+	h := held{r.PostForm, make(chan http.HandlerFunc, 1), new(sync.Once)}
+	select {
+	case g.arrived <- h:
+	case <-r.Context().Done():
+		return
+	}
+	select {
+	case fn := <-h.release:
+		fn(w, r)
+	case <-r.Context().Done():
+	}
 }
 
-// next is the next held request.
+// next is the next held request. If the test ends without answering it,
+// it fails.
 func (g *gate) next(t *testing.T) held {
 	t.Helper()
 	select {
 	case h := <-g.arrived:
+		t.Cleanup(func() { h.answer(failWith500) })
 		return h
 	case <-time.After(10 * time.Second):
 		t.Fatal("no request came")
@@ -53,7 +69,7 @@ func (g *gate) settle() {
 	for {
 		select {
 		case h := <-g.arrived:
-			h.release <- failWith500
+			h.answer(failWith500)
 		case <-time.After(time.Second):
 			return
 		}
@@ -77,7 +93,7 @@ func dropConnection(w http.ResponseWriter, _ *http.Request) {
 // retry is dropped too.
 func (g *gate) unreachable(h held) {
 	for {
-		h.release <- dropConnection
+		h.answer(dropConnection)
 		select {
 		case h = <-g.arrived:
 		case <-time.After(2 * time.Second):
@@ -109,10 +125,18 @@ func TestAppJS(t *testing.T) {
 	b.Eval(`document.querySelector("#password").value = "the-admin-password"; document.querySelector("#password").form.requestSubmit()`)
 	until(t, b, "signing in didn't leave the login page", `location.pathname === "/"`)
 
-	theme := `(document.documentElement.dataset.theme || "system")`
+	shown := `(document.documentElement.dataset.theme || "system")`
 	checked := `document.querySelector("form[data-appearance] input:checked").value`
 	pick := func(v string) {
 		b.Eval(fmt.Sprintf(`document.querySelector("form[data-appearance] input[value=%s]").click()`, v))
+	}
+	// saved sets the theme this browser has saved, as a save would.
+	saved := func(t *testing.T, v string) {
+		t.Helper()
+		b.Call("Network.setCookie", map[string]any{"name": theme.Cookie, "value": v, "url": base, "path": "/", "httpOnly": true})
+		b.Navigate(base + "/settings")
+		is(t, b, shown, v)
+		is(t, b, checked, v)
 	}
 	toast := func(text string) string {
 		return fmt.Sprintf(`[...document.querySelectorAll("#toasts .toast")].some((t) => t.textContent.includes(%q))`, text)
@@ -124,29 +148,29 @@ func TestAppJS(t *testing.T) {
 		pick("dark")
 		// The page is dark while the save is still on its way.
 		h := g.next(t)
-		is(t, b, theme, "dark")
+		is(t, b, shown, "dark")
 		if h.form.Get("theme") != "dark" {
 			t.Fatalf("sent %v", h.form)
 		}
-		h.release <- app.ServeHTTP
+		h.answer(app.ServeHTTP)
 		until(t, b, "no toast after saving", toast("Appearance saved"))
 		b.Navigate(base + "/settings")
-		is(t, b, theme, "dark")
+		is(t, b, shown, "dark")
 		is(t, b, checked, "dark")
 	})
 
 	t.Run("a theme that couldn't be saved switches back", func(t *testing.T) {
 		t.Cleanup(g.settle)
-		b.Navigate(base + "/settings")
+		saved(t, "dark")
 		for _, fail := range []func(held){
-			func(h held) { h.release <- failWith500 },
+			func(h held) { h.answer(failWith500) },
 			g.unreachable,
 		} {
 			pick("light")
 			h := g.next(t)
-			is(t, b, theme, "light")
+			is(t, b, shown, "light")
 			fail(h)
-			until(t, b, "the page didn't switch back to the saved theme", theme+` === "dark" && `+checked+` === "dark"`)
+			until(t, b, "the page didn't switch back to the saved theme", shown+` === "dark" && `+checked+` === "dark"`)
 		}
 		until(t, b, "no toast for a lost connection", toast("Can't reach BrowserPier."))
 	})
@@ -156,25 +180,25 @@ func TestAppJS(t *testing.T) {
 		// Saved: Dark. Light is held, Dark and then Light chosen meanwhile;
 		// htmx keeps only the last one queued. Light fails, and as a newer
 		// choice is on its way, the page doesn't switch back.
-		b.Navigate(base + "/settings")
-		b.Eval(`window.answers = 0; document.addEventListener("htmx:afterRequest", () => answers++)`)
+		saved(t, "dark")
+		b.Eval(`window.answers = 0; document.addEventListener("htmx:afterRequest", (e) => { if (e.target.matches("form[data-appearance]")) answers++ })`)
 		pick("light")
 		first := g.next(t)
 		pick("dark")
 		pick("light")
-		is(t, b, theme, "light")
-		first.release <- failWith500
+		is(t, b, shown, "light")
+		first.answer(failWith500)
 		until(t, b, "the failure never reached the page", `answers === 1`)
-		is(t, b, theme, "light")
+		is(t, b, shown, "light")
 		is(t, b, checked, "light")
 		last := g.next(t)
 		if last.form.Get("theme") != "light" || last.form.Get("choice") != "3" {
 			t.Fatalf("the queued request sent %v, want the third choice, light", last.form)
 		}
-		last.release <- app.ServeHTTP
+		last.answer(app.ServeHTTP)
 		until(t, b, "no toast after saving", toast("Appearance saved"))
 		b.Navigate(base + "/settings")
-		is(t, b, theme, "light")
+		is(t, b, shown, "light")
 	})
 
 	t.Run("unsaved changes bar", func(t *testing.T) {
@@ -207,7 +231,7 @@ func TestAppJS(t *testing.T) {
 		if busy != "true Deleting…" {
 			t.Errorf("the delete button is %q while it submits, want disabled and Deleting…", busy)
 		}
-		h.release <- failWith500 // keeps the profile for the next test
+		h.answer(failWith500) // keeps the profile for the next test
 		until(t, b, "the error page didn't load", `document.readyState === "complete" && location.pathname === "/profiles/mail/delete"`)
 	})
 
