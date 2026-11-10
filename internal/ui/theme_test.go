@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"io/fs"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -38,6 +39,26 @@ func TestCSSColoursAreTokens(t *testing.T) {
 			t.Errorf("app.css:%d: %s isn't a token: add it to :root as light-dark(light, dark)", line, c)
 		}
 		line++
+	}
+}
+
+// Inline styles in templates use tokens too: the guard above can't see them.
+func TestTemplateStylesAreTokens(t *testing.T) {
+	inline := regexp.MustCompile(`style="[^"]*"`)
+	files, err := fs.Glob(embedded, "templates/*.html")
+	if err != nil || len(files) == 0 {
+		t.Fatal("no templates", err)
+	}
+	for _, name := range files {
+		b, err := embedded.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range inline.FindAllString(string(b), -1) {
+			if colourLiteral.MatchString(s) {
+				t.Errorf("%s: %s: use a token from app.css", name, s)
+			}
+		}
 	}
 }
 
@@ -81,6 +102,9 @@ func TestAppearance(t *testing.T) {
 		if r := f.post("/settings/appearance", url.Values{"theme": {v}}, htmx...); r.code != http.StatusBadRequest || r.header.Get("Set-Cookie") != "" {
 			t.Errorf("%q: %d %q", v, r.code, r.header.Get("Set-Cookie"))
 		}
+	}
+	if r := f.post("/settings/appearance", url.Values{"theme": {"dark"}, "pad": {strings.Repeat("x", 20<<10)}}, htmx...); r.code != http.StatusBadRequest {
+		t.Errorf("oversized form: %d", r.code)
 	}
 	// Another site can't change it, and nor can someone signed out.
 	if r := f.post("/settings/appearance", url.Values{"theme": {"dark"}}, "Sec-Fetch-Site", "cross-site"); r.code != http.StatusForbidden || r.header.Get("Set-Cookie") != "" {
