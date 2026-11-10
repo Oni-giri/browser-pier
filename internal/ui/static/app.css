@@ -167,7 +167,6 @@ code,kbd,.mono{font-family:var(--mono)}
 .icon svg,.icon img{width:57%;height:57%}
 .icon svg{fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
 .icon.fav{--hue:var(--fav-hue);--tint:var(--fav-tile)}
-.icon.fav img{filter:var(--preview-filter)}
 .card-name{display:flex;align-items:center;gap:10px;min-width:0}
 .card-name .icon{--size:36px}
 .crumbs .icon{--size:32px}
