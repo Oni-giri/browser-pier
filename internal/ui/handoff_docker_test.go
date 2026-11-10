@@ -62,21 +62,7 @@ func TestHandoffFitsAPhone(t *testing.T) {
 	mux := http.NewServeMux()
 	handoff.NewWeb(f.handoffs, f.web, webrtc.NewHandler(relay, f.m, f.web, log), f.m, log).Register(mux)
 	mux.Handle("/", f.srv.Config.Handler)
-	ln, err := net.Listen("tcp", ":0") //nolint:gosec // reached from the browser container
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The phone is on the LAN. On Docker's bridge it comes from a private
-	// address, but rootless Podman can show it as the host's public one,
-	// where the page would ask for HTTPS.
-	lan := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.RemoteAddr = "192.168.1.20:50000"
-		mux.ServeHTTP(w, r)
-	})
-	srv := &http.Server{Handler: lan, ReadHeaderTimeout: 10 * time.Second}
-	go func() { _ = srv.Serve(ln) }()
-	t.Cleanup(func() { _ = srv.Close() })
-	link := fmt.Sprintf("http://%s/h/%s", net.JoinHostPort(siteHost(t), fmt.Sprint(ln.Addr().(*net.TCPAddr).Port)), token)
+	link := serveToBrowser(t, mux) + "/h/" + token
 
 	// The phone: a real browser container, shown at a phone's size.
 	phone := newPhone(t, image)
@@ -143,6 +129,27 @@ func newPhone(t *testing.T, image string) *browsertest.CDP {
 		_ = d.Close()
 	})
 	return browsertest.Page(t, browsertest.ControlClient(m.Layout().ControlSocket(p.Name)))
+}
+
+// serveToBrowser serves h where a browser container can reach it, and
+// returns its base URL.
+func serveToBrowser(t *testing.T, h http.Handler) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", ":0") //nolint:gosec // reached from the browser container
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The browser is on the LAN. On Docker's bridge it comes from a
+	// private address, but rootless Podman can show it as the host's
+	// public one, where pages would ask for HTTPS.
+	lan := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.RemoteAddr = "192.168.1.20:50000"
+		h.ServeHTTP(w, r)
+	})
+	srv := &http.Server{Handler: lan, ReadHeaderTimeout: 10 * time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return "http://" + net.JoinHostPort(siteHost(t), fmt.Sprint(ln.Addr().(*net.TCPAddr).Port))
 }
 
 func siteHost(t *testing.T) string {
