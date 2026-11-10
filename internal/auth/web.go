@@ -17,6 +17,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Oni-giri/browser-pier/internal/theme"
 )
 
 // maxWaiting caps sign-ins queued behind the global throttle.
@@ -313,9 +315,10 @@ type pageData struct {
 	Next       string
 	Remember   bool
 	EnvManaged bool
+	Theme      theme.Theme
 }
 
-func (w *Web) render(rw http.ResponseWriter, status int, name string, d pageData) {
+func (w *Web) render(rw http.ResponseWriter, r *http.Request, status int, name string, d pageData) {
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	rw.Header().Set("Cache-Control", "no-store")
 	// Not no-referrer: under it, browsers send "Origin: null" on form posts,
@@ -324,6 +327,7 @@ func (w *Web) render(rw http.ResponseWriter, status int, name string, d pageData
 	rw.Header().Set("X-Frame-Options", "DENY")
 	rw.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 	rw.WriteHeader(status)
+	d.Theme = theme.Of(r)
 	if err := w.pages[name].ExecuteTemplate(rw, "page", d); err != nil {
 		w.log.Error("rendering a page", "page", name, "err", err)
 	}
@@ -341,7 +345,7 @@ func (w *Web) loginPage(rw http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	w.render(rw, http.StatusOK, "login", pageData{Title: "Sign in", Next: next, EnvManaged: w.admin.EnvManaged()})
+	w.render(rw, r, http.StatusOK, "login", pageData{Title: "Sign in", Next: next, EnvManaged: w.admin.EnvManaged()})
 }
 
 func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
@@ -354,7 +358,7 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 	ip := w.ClientIP(r)
 	mine, wait := w.loginIP.Begin(ip)
 	if mine == nil {
-		w.locked(rw, pageData{Title: "Sign in", Next: "/", EnvManaged: w.admin.EnvManaged()}, wait)
+		w.locked(rw, r, pageData{Title: "Sign in", Next: "/", EnvManaged: w.admin.EnvManaged()}, wait)
 		return
 	}
 	if err := readForm(rw, r); err != nil {
@@ -384,7 +388,7 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 				mine.Cancel()
 				retryAfter(rw, time.Minute)
 				d.Error = "Too many sign-in attempts right now. Try again in a minute."
-				w.render(rw, http.StatusTooManyRequests, "login", d)
+				w.render(rw, r, http.StatusTooManyRequests, "login", d)
 				return
 			}
 			defer release()
@@ -405,11 +409,11 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 		}
 		w.log.Warn("admin sign-in failed", "ip", ip, "tries_left", left)
 		if left == 0 {
-			w.locked(rw, d, 5*time.Minute)
+			w.locked(rw, r, d, 5*time.Minute)
 			return
 		}
 		d.Error = fmt.Sprintf("Wrong password. %d %s left before a 5‑minute lockout.", left, plural(left, "try", "tries"))
-		w.render(rw, http.StatusUnauthorized, "login", d)
+		w.render(rw, r, http.StatusUnauthorized, "login", d)
 		return
 	}
 	if err != nil {
@@ -419,7 +423,7 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 		}
 		w.log.Error("signing in", "err", err)
 		d.Error = "Something went wrong. Try again."
-		w.render(rw, http.StatusInternalServerError, "login", d)
+		w.render(rw, r, http.StatusInternalServerError, "login", d)
 		return
 	}
 	mine.Succeed()
@@ -537,11 +541,11 @@ func plural(n int, one, many string) string {
 	return many
 }
 
-func (w *Web) locked(rw http.ResponseWriter, d pageData, wait time.Duration) {
+func (w *Web) locked(rw http.ResponseWriter, r *http.Request, d pageData, wait time.Duration) {
 	retryAfter(rw, wait)
 	mins := int(math.Ceil(wait.Minutes()))
 	d.Error = fmt.Sprintf("Too many wrong passwords. Try again in %d %s.", mins, plural(mins, "minute", "minutes"))
-	w.render(rw, http.StatusTooManyRequests, "login", d)
+	w.render(rw, r, http.StatusTooManyRequests, "login", d)
 }
 
 // setCookies hands the browser its new session cookie, and a device
@@ -585,7 +589,7 @@ func (w *Web) setupPage(rw http.ResponseWriter, r *http.Request) {
 		http.NotFound(rw, r)
 		return
 	}
-	w.render(rw, http.StatusOK, "setup", pageData{Title: "Set up"})
+	w.render(rw, r, http.StatusOK, "setup", pageData{Title: "Set up"})
 }
 
 func (w *Web) doSetup(rw http.ResponseWriter, r *http.Request) {
@@ -598,7 +602,7 @@ func (w *Web) doSetup(rw http.ResponseWriter, r *http.Request) {
 	if attempt == nil {
 		retryAfter(rw, wait)
 		d.Error = "Too many wrong setup codes. Wait a few minutes, or restart BrowserPier for a new code."
-		w.render(rw, http.StatusTooManyRequests, "setup", d)
+		w.render(rw, r, http.StatusTooManyRequests, "setup", d)
 		return
 	}
 	if err := readForm(rw, r); err != nil {
@@ -610,7 +614,7 @@ func (w *Web) doSetup(rw http.ResponseWriter, r *http.Request) {
 	if password != r.PostFormValue("confirm") {
 		attempt.Cancel()
 		d.Error = "The two passwords don't match."
-		w.render(rw, http.StatusBadRequest, "setup", d)
+		w.render(rw, r, http.StatusBadRequest, "setup", d)
 		return
 	}
 	err := w.admin.Setup(r.Context(), strings.TrimSpace(r.PostFormValue("code")), password)
@@ -619,7 +623,7 @@ func (w *Web) doSetup(rw http.ResponseWriter, r *http.Request) {
 		attempt.Fail()
 		w.log.Warn("wrong setup code", "ip", w.ClientIP(r))
 		d.Error = "That setup code is wrong. Copy it from BrowserPier's log."
-		w.render(rw, http.StatusUnauthorized, "setup", d)
+		w.render(rw, r, http.StatusUnauthorized, "setup", d)
 		return
 	case err == ErrAlreadySetUp: //nolint:errorlint // sentinel
 		attempt.Cancel()
@@ -628,7 +632,7 @@ func (w *Web) doSetup(rw http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		attempt.Cancel()
 		d.Error = "Password: " + err.Error() + "."
-		w.render(rw, http.StatusBadRequest, "setup", d)
+		w.render(rw, r, http.StatusBadRequest, "setup", d)
 		return
 	}
 	attempt.Succeed()

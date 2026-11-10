@@ -143,6 +143,53 @@
     if (sel && e.target.checked) { const el = $(sel); if (el) el.checked = true; }
   });
 
+  // Appearance: the page switches at once, as the choice is saved, and back
+  // if saving fails. System drops the attribute, and the page follows the
+  // device again.
+  const bars = { light: "#EAF1FF", dark: "#070C18" };
+  // Choices made quickly queue up, so each one is numbered and each answer
+  // is about the choice it carried. The number goes up before htmx reads
+  // the form, hence the capture phase.
+  let savedTheme = ($("form[data-appearance] input:checked") || {}).value;
+  let choice = 0;
+  document.addEventListener("change", (e) => {
+    if (!e.target.closest("form[data-appearance]")) return;
+    choice++;
+    applyTheme(e.target.value);
+  }, true);
+  document.addEventListener("htmx:configRequest", (e) => {
+    if (e.target.matches && e.target.matches("form[data-appearance]")) e.detail.parameters.choice = choice;
+  });
+  document.addEventListener("htmx:afterRequest", (e) => {
+    const form = e.target.matches && e.target.matches("form[data-appearance]") && e.target;
+    if (!form) return;
+    const sent = e.detail.requestConfig.parameters;
+    const latest = +sent.choice === choice;
+    if (e.detail.successful) {
+      savedTheme = sent.theme;
+      if (latest) toast("Appearance saved");
+      return;
+    }
+    if (!latest) return; // a newer choice is on its way
+    const was = $(`input[value="${savedTheme}"]`, form);
+    if (was) was.checked = true;
+    applyTheme(savedTheme);
+    if (!e.detail.xhr || !e.detail.xhr.status) toast("Can't reach BrowserPier.", true);
+  });
+  function applyTheme(t) {
+    const root = document.documentElement;
+    if (t === "light" || t === "dark") root.dataset.theme = t; else delete root.dataset.theme;
+    $("meta[name=color-scheme]").content = t === "system" ? "light dark" : t;
+    $$("meta[name=theme-color]").forEach((m) => m.remove());
+    for (const [k, c] of Object.entries(bars)) {
+      if (t !== "system" && t !== k) continue;
+      const m = document.createElement("meta");
+      m.name = "theme-color"; m.content = c;
+      if (t === "system") m.media = `(prefers-color-scheme: ${k})`;
+      document.head.append(m);
+    }
+  }
+
   // Code tabs.
   $$("[data-tabs]").forEach((box) => {
     box.addEventListener("click", (e) => {

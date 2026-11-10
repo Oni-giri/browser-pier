@@ -10,6 +10,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/settings"
+	"github.com/Oni-giri/browser-pier/internal/theme"
 )
 
 type settingsData struct {
@@ -247,4 +248,21 @@ func (u *UI) signOutOthers(w http.ResponseWriter, r *http.Request) {
 	}
 	u.log.Info("other devices signed out from the UI")
 	done(w, r, "/settings", "Other devices signed out", false)
+}
+
+// saveAppearance keeps this device's theme. The page has already switched,
+// so htmx gets nothing back; a plain form goes back to Settings.
+func (u *UI) saveAppearance(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+	t, ok := theme.Parse(r.PostFormValue("theme"))
+	if !ok {
+		http.Error(w, "Choose System, Light or Dark.", http.StatusBadRequest)
+		return
+	}
+	theme.Set(w, t)
+	if r.Header.Get("HX-Request") == "true" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	done(w, r, "/settings", "Appearance saved", false)
 }

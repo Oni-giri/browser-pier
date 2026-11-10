@@ -69,6 +69,17 @@
         <li><span>This device</span><form method="post" action="/logout"><button class="btn small" type="submit">Sign out</button></form></li>
       </ul>
     </section>
+
+    <section class="cell span-12 appearance" aria-labelledby="look-title">
+      <div><h2 class="cell-title big" id="look-title" style="margin:0">Appearance</h2>
+      <p class="small" style="margin:2px 0 0;color:var(--ink-2)">On this device. System follows its light or dark setting.</p></div>
+      <form method="post" action="/settings/appearance" hx-post="/settings/appearance" hx-trigger="change" hx-swap="none" data-appearance>
+        <div class="seg" role="radiogroup" aria-labelledby="look-title">
+          {{range themeChoices}}<label><input type="radio" name="theme" value="{{.Value}}"{{if eq .Value (themeChoice $.Theme)}} checked{{end}}><span>{{.Label}}</span></label>{{end}}
+        </div>
+        <noscript><button class="btn small" type="submit">Save</button></noscript>
+      </form>
+    </section>
   </div>
 </div>
 

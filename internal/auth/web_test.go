@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Oni-giri/browser-pier/internal/theme"
 )
 
 type webFixture struct {
@@ -501,5 +503,18 @@ func TestThrottleQueueIsBounded(t *testing.T) {
 	release()
 	if n := f.web.waiting.Load(); n != 0 {
 		t.Fatalf("%d left waiting", n)
+	}
+}
+
+func TestSignInPageHasTheDevicesTheme(t *testing.T) {
+	f := newWebFixture(t, "the-admin-password", WebOptions{})
+	b := f.browser()
+	if _, body := f.get(b, "/login"); !strings.Contains(body, `<html lang="en">`) || !strings.Contains(body, `content="light dark"`) {
+		t.Fatalf("system: %.400s", body)
+	}
+	u, _ := url.Parse(f.srv.URL)
+	b.Jar.SetCookies(u, []*http.Cookie{{Name: theme.Cookie, Value: "dark", Path: "/"}})
+	if _, body := f.get(b, "/login"); !strings.Contains(body, `<html lang="en" data-theme="dark">`) || !strings.Contains(body, `<meta name="color-scheme" content="dark">`) {
+		t.Fatalf("dark: %.400s", body)
 	}
 }
