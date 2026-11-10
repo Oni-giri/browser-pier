@@ -45,6 +45,7 @@ RUN useradd --uid 1000 --user-group --create-home --shell /usr/sbin/nologin pier
  && chmod 1777 /tmp/.X11-unix
 
 COPY --from=build /out/entrypoint /usr/local/bin/browserpier-entrypoint
+COPY LICENSE NOTICE /usr/share/doc/browserpier/
 # Managed policy: hides the "unsupported command-line flag" bar that
 # --disable-blink-features would put over every page, and sends downloads
 # to /files/downloads without asking, in both modes and without CDP, and

@@ -6,4 +6,6 @@
 !cmd
 !internal
 !images/chromium
+!LICENSE
+!NOTICE
 **/*_test.go
