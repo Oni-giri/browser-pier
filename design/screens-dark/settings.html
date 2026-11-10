@@ -152,6 +152,19 @@ input[type=range]:focus{box-shadow:none!important}
           <div style="min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid #1C273B"><dt style="font-size: 14px; color: #A7B3C6">This device</dt><dd style="margin: 0"><a href="login.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 12px; border-radius: 8px; box-shadow: 0 0 0 1px #283449; font-size: 13px; font-weight: 500; text-decoration: none">Sign out</a></dd></div>
         </dl>
       </section>
+
+      <!-- Appearance -->
+      <section class="g-cell" aria-labelledby="st-look" style="--s: 12; padding: 20px; background: #111A2E; border-radius: 16px; box-shadow: 0 0 0 1px rgba(148,163,184,0.14), 0 1px 2px rgba(0,0,0,0.156), 0 10px 28px -12px rgba(0,0,0,0.52); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px">
+        <div style="display: flex; flex-direction: column; gap: 4px">
+          <h2 id="st-look" style="margin: 0; font-size: 16px; font-weight: 600">Appearance</h2>
+          <p style="margin: 0; font-size: 14px; color: #A7B3C6">On this device. System follows its light or dark setting.</p>
+        </div>
+        <div role="radiogroup" aria-labelledby="st-look" style="flex: none; display: flex; gap: 2px; padding: 3px; background: #0A1222; border-radius: 9px">
+          <sc-for list="{{themes}}" as="t" hint-placeholder-count="3">
+            <button type="button" role="radio" onClick="{{t.pick}}" aria-checked="{{t.on}}" style="min-width: 76px; min-height: 36px; padding: 0 10px; background: {{t.bg}}; border: 0; border-radius: 6px; box-shadow: {{t.ring}}; color: #E8EDF5; font-family: inherit; font-size: 13px; font-weight: {{t.weight}}; cursor: pointer">{{t.title}}</button>
+          </sc-for>
+        </div>
+      </section>
     </div>
   </main>
 
@@ -173,7 +186,7 @@ class Component extends DCLogic {
   constructor(props) {
     super(props);
     this.saved = { ram: 70, policy: 'pin', idle: 15 };
-    this.state = { ...this.saved, pin: 'idle', proxyTested: false, toast: null };
+    this.state = { ...this.saved, pin: 'idle', proxyTested: false, toast: null, theme: 'system' };
   }
   flash(msg) {
     this.setState({ toast: msg });
@@ -215,6 +228,7 @@ class Component extends DCLogic {
           pick: () => this.setState({ idle: m })
         };
       }),
+      themes: [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([id, title]) => ({ title, ...seg(id === s.theme), on: id === s.theme ? 'true' : 'false', pick: () => { this.setState({ theme: id }); this.flash('Appearance saved'); } })),
       proxyTested: s.proxyTested,
       testProxy: () => this.setState({ proxyTested: true }),
       dirty: dirty && !s.toast,

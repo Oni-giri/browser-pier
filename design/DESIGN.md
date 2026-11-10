@@ -112,7 +112,7 @@ Every profile shows an icon next to its name (Overview list 28px, Profiles cards
 
 Dark is a second theme of the same system, not an inverted copy. The four surface levels, the blue/orange split and every rule above still hold. Reference screens are in `screens-dark/` (open them the same way as `screens/`), renders in `screenshots-dark/`.
 
-**Choosing the theme:** follows the operating system by default (`prefers-color-scheme`). Settings has an Appearance choice: System, Light or Dark, remembered per device. The phone handoff page follows the system (and the saved choice if that device has one).
+**Choosing the theme:** follows the operating system by default (`prefers-color-scheme`). Settings has an Appearance choice: System, Light or Dark, remembered per device. It is the last, full-width row of Settings, with the same segmented control as the handoff policy, and it saves as soon as you pick (no unsaved-changes bar). The phone handoff page follows the system (and the saved choice if that device has one).
 
 ### Tokens
 
