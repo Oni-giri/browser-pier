@@ -148,7 +148,7 @@ The TURN server must reach this server on 7438 UDP, where it relays to. Lock it 
 
 ### Checking it works
 
-Add `?ice=relay` to a live view's address (`https://pier.example.com/profiles/google?ice=relay`) or to a handoff link. That page connects only through TURN: if the video plays, TURN works. Without it, a viewer connects directly where it can and through TURN only where it must.
+Add `?ice=relay` to a live view's address (`https://pier.example.com/profiles/google?ice=relay`), or to a handoff link's once it's open (after the PIN), and reload. That page connects only through TURN: if the video plays, TURN works. Without it, a viewer connects directly where it can and through TURN only where it must.
 
 ## Settings
 
