@@ -1,0 +1,138 @@
+//go:build docker
+
+package api
+
+import (
+	"fmt"
+	"net/http"
+	"os/exec"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Oni-giri/browser-pier/internal/browsertest"
+)
+
+// TestPageToolsRead is PROJ-21's reading scenarios on a real browser:
+// a big nav is summed up and the form still fits, an open modal comes
+// first, hidden text is out and transparent text fenced, a page-filled
+// password never shows, and navigate follows a redirect and refuses
+// what it must.
+func TestPageToolsRead(t *testing.T) {
+	a := newRealAPI(t)
+	site := browsertest.NewPageSite(t, siteHost(t))
+	s := a.startAPIBrowser(t, "r")
+	open := func(path string) string {
+		t.Helper()
+		return a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + path})
+	}
+
+	// 1. A 200-link nav and a cookie banner: the form is in, the nav summed up.
+	open("/nav")
+	snap := a.mustTool(s.ID, "snapshot", nil)
+	for _, want := range []string{`textbox "Your email"`, `button "Subscribe"`, `button "Accept all"`, "navigation with 200 controls"} {
+		if !strings.Contains(snap, want) {
+			t.Errorf("nav page: missing %q in\n%s", want, snap)
+		}
+	}
+	_ = refFor(t, snap, `button "Subscribe"`)
+	if strings.Contains(snap, `link "Section 100"`) {
+		t.Errorf("the nav is listed link by link:\n%s", snap)
+	}
+	found := a.mustTool(s.ID, "find", map[string]any{"text": "section 137"})
+	if !strings.Contains(found, `link "Section 137"`) || !strings.Contains(found, "1 match.") {
+		t.Errorf("find: %s", found)
+	}
+
+	// 2. An open modal comes first.
+	open("/modal")
+	snap = a.mustTool(s.ID, "snapshot", nil)
+	if !strings.Contains(snap, "-- in the open dialog --") || strings.Index(snap, `button "Confirm"`) > strings.Index(snap+"-- in view --", "-- in view --") {
+		t.Errorf("modal page:\n%s", snap)
+	}
+
+	// 10. Hidden text: CSS-hidden is absent; transparent text only fenced.
+	open("/hidden")
+	snap = a.mustTool(s.ID, "snapshot", nil)
+	for _, gone := range []string{"DISPLAY-NONE-TEXT", "VISIBILITY-HIDDEN-TEXT", "ARIA-HIDDEN-TEXT", "ZERO-SIZE-TEXT", "ZERO-SIZE-BUTTON"} {
+		if strings.Contains(snap, gone) {
+			t.Errorf("%s is in the snapshot:\n%s", gone, snap)
+		}
+	}
+	end := strings.LastIndex(snap, "</untrusted-content-")
+	for _, kept := range []string{"OPACITY-ZERO-TEXT", "OFF-SCREEN-TEXT", "CLIPPED-TEXT", "LABELLEDBY-HIDDEN-NAME", "ARIA-LABEL-NAME"} {
+		if i := strings.Index(snap, kept); i < 0 || i > end || !strings.HasPrefix(snap, "<untrusted-content-") {
+			t.Errorf("%s isn't in the fence:\n%s", kept, snap)
+		}
+	}
+
+	// 11. A password the page filled in never shows.
+	open("/password")
+	snap = a.mustTool(s.ID, "snapshot", nil)
+	found = a.mustTool(s.ID, "find", map[string]any{"text": "password"})
+	for _, out := range []string{snap, found} {
+		if strings.Contains(out, "PAGE-FILLED-SECRET") || strings.Contains(out, "424242") {
+			t.Errorf("a secret value leaked:\n%s", out)
+		}
+	}
+	if !strings.Contains(snap, `"Password" = [filled]`) || !strings.Contains(snap, `"One-time code" = [filled]`) || !strings.Contains(snap, `"User" = "pier"`) {
+		t.Errorf("password page:\n%s", snap)
+	}
+
+	// Navigate: a redirect is followed; other schemes are refused.
+	got := open("/redirect")
+	if !strings.Contains(got, "URL: "+site.URL+"/login") || !strings.Contains(got, "Title: Sign in") {
+		t.Errorf("redirect: %s", got)
+	}
+	for _, bad := range []string{"javascript:alert(1)", "file:///etc/passwd", "https://u:p@example.com/"} {
+		if code, msg := a.tool(s.ID, "navigate", map[string]string{"url": bad}); code != http.StatusBadRequest {
+			t.Errorf("%s: %d %s", bad, code, msg)
+		}
+	}
+	if got := a.mustTool(s.ID, "navigate", map[string]string{"action": "back"}); !strings.Contains(got, "/password") {
+		t.Errorf("back: %s", got)
+	}
+	for _, act := range a.m.Activity(s.ID) {
+		if strings.Contains(act.What, "SECRET") || strings.Contains(act.What, "Section") {
+			t.Errorf("the activity log has page text: %q", act.What)
+		}
+	}
+	// Nothing stays attached between calls.
+	for _, tg := range targets(t, a.m.Layout().ControlSocket(s.Profile)) {
+		if tg.Attached {
+			t.Errorf("%s is still attached", tg.URL)
+		}
+	}
+}
+
+// TestPageToolsRefuseVisualMode is scenario 13: every page tool answers
+// 409 in Visual mode, and nothing attaches to the page.
+func TestPageToolsRefuseVisualMode(t *testing.T) {
+	a := newRealAPI(t)
+	name := fmt.Sprintf("v%d", time.Now().UnixNano()%1e9)
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", "browserpier-"+name).Run() })
+	if code := a.do(http.MethodPost, "/api/profiles", fmt.Sprintf(`{"name": %q, "default_mode": "visual"}`, name), nil); code != http.StatusCreated {
+		t.Fatalf("create: %d", code)
+	}
+	var s sessionJSON
+	if code := a.do(http.MethodPost, "/api/sessions", fmt.Sprintf(`{"profile": %q}`, name), &s); code != http.StatusCreated {
+		t.Fatalf("start: %d", code)
+	}
+	for tool, body := range pageToolBodies {
+		if code, msg := a.tool(s.ID, tool, body); code != http.StatusConflict {
+			t.Errorf("%s in Visual mode: %d %s", tool, code, msg)
+		}
+	}
+	for _, tg := range targets(t, a.m.Layout().ControlSocket(name)) {
+		if tg.Type == "page" && tg.Attached {
+			t.Errorf("in Visual mode, something attached to %s", tg.URL)
+		}
+	}
+}
+
+// pageToolBodies is a valid call of each page tool.
+var pageToolBodies = map[string]any{
+	"snapshot": map[string]any{},
+	"find":     map[string]any{"text": "x"},
+	"navigate": map[string]any{"url": "https://example.com/"},
+}
