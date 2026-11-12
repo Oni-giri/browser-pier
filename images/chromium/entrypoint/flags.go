@@ -2,6 +2,10 @@ package main
 
 import "fmt"
 
+// panelHeight is the taskbar's height in pixels, which the window manager
+// reserves at the bottom of the screen. It must match the tray in jwmrc.
+const panelHeight = 32
+
 // chromiumArgs is Chromium's command line. It never includes
 // --enable-automation, --headless or --no-sandbox, and spoofs nothing.
 // smallShm is set when /dev/shm is too small for Chromium's shared memory.
@@ -33,10 +37,10 @@ func chromiumArgs(c config, smallShm bool) []string {
 		"--no-default-browser-check",
 		"--hide-crash-restore-bubble",
 		"--noerrdialogs",
-		// There is no window manager, so place the window over the whole display:
-		// Visual-mode coordinates are screen coordinates.
+		// The window fills the screen above the taskbar, at 0,0 and with no
+		// frame (jwmrc), so Visual-mode coordinates are screen coordinates.
 		"--window-position=0,0",
-		fmt.Sprintf("--window-size=%d,%d", c.Width, c.Height),
+		fmt.Sprintf("--window-size=%d,%d", c.Width, c.Height-panelHeight),
 	}
 	if smallShm {
 		args = append(args, "--disable-dev-shm-usage")

@@ -12,9 +12,12 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w" -o /out/entrypoint ./images/chromium/entrypoint
 
 FROM debian:trixie-slim
+# jwm is the window manager and taskbar (jwmrc). It depends on a terminal
+# emulator; xterm is named so apt doesn't pick a larger one, and nothing on
+# the desktop starts it.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      chromium chromium-l10n xvfb xdotool \
+      chromium chromium-l10n xvfb xdotool jwm xterm \
       gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-ugly \
       fonts-liberation fonts-dejavu-core fonts-noto-color-emoji fonts-noto-cjk \
       ca-certificates tzdata \
@@ -51,6 +54,10 @@ COPY LICENSE NOTICE /usr/share/doc/browserpier/
 # to /files/downloads without asking, in both modes and without CDP, and
 # turns off DNS-over-HTTPS, which would go around a profile's proxy.
 COPY images/chromium/policies.json /etc/chromium/policies/managed/browserpier.json
+COPY images/chromium/jwmrc /etc/browserpier/jwmrc
+# Fail the build if JWM can't read it: jwm -p exits 0 whatever it finds,
+# so any warning counts.
+RUN out=$(jwm -p -f /etc/browserpier/jwmrc 2>&1) && test -z "$out" || { echo "jwmrc: $out"; exit 1; }
 
 # Changing REBUILD forces a new image without reinstalling packages (used by the persistence test).
 ARG REBUILD=0

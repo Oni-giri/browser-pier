@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<!--
+  The browser container's desktop: JWM with a taskbar along the bottom, as
+  on a person's Linux desktop. The taskbar reserves its strip of the screen
+  (_NET_WORKAREA), so screen.availHeight is less than screen.height.
+
+  Visual-mode coordinates are screen coordinates, so the browser window sits
+  at 0,0 with no frame, filling the screen above the taskbar. Keep the tray's
+  height equal to panelHeight in entrypoint/flags.go.
+
+  Nothing here starts a program or stops the browser: no menus, no key
+  bindings and no window buttons, so every key reaches the browser, nothing
+  on the desktop opens a terminal, and nothing kills Chromium, which must
+  close gracefully to keep its logins.
+-->
+<JWM>
+    <Tray x="0" y="-1" height="32" autohide="off" layer="above">
+        <!-- Empty (see nolist below); it fills the bar, so the clock sits on the right. -->
+        <TaskList/>
+        <Clock format="%H:%M"/>
+    </Tray>
+    <Group>
+        <Class>Chromium</Class>
+        <Option>noborder</Option>
+        <Option>notitle</Option>
+        <!-- Kept off the task list, whose window menu has Kill. -->
+        <Option>nolist</Option>
+        <!-- Alt+drag would move it off 0,0. -->
+        <Option>nomove</Option>
+        <Option>noresize</Option>
+    </Group>
+    <Desktops width="1" height="1">
+        <Background type="solid">#3b4252</Background>
+    </Desktops>
+    <FocusModel>click</FocusModel>
+    <!-- Tells the entrypoint the desktop is up, so Chromium starts on it. -->
+    <StartupCommand>touch /tmp/.browserpier-desktop-ready</StartupCommand>
+</JWM>

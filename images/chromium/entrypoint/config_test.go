@@ -78,7 +78,7 @@ func TestChromiumArgs(t *testing.T) {
 		"--disable-background-networking",
 		"--no-first-run",
 		"--window-position=0,0",
-		"--window-size=1280,800",
+		"--window-size=1280,768", // above the 32px taskbar
 	} {
 		if !slices.Contains(args, want) {
 			t.Errorf("missing %s", want)

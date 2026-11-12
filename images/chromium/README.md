@@ -1,6 +1,6 @@
 # Browser image
 
-`ghcr.io/oni-giri/browser-pier-chromium`: headful Chromium on Xvfb, xdotool for OS-level input and a GStreamer sidecar that streams the display as H.264. See SPEC.md §3 for why it's built this way.
+`ghcr.io/oni-giri/browser-pier-chromium`: headful Chromium on Xvfb with a minimal desktop (JWM and a taskbar, `jwmrc`), xdotool for OS-level input and a GStreamer sidecar that streams the display as H.264. See SPEC.md §3 for why it's built this way.
 
 ```sh
 make image-chromium   # build from the repo root
@@ -27,7 +27,7 @@ Settings, all optional:
 
 | Variable | Default | |
 |---|---|---|
-| `BROWSERPIER_SCREEN` | `1920x1080` | Display and window size |
+| `BROWSERPIER_SCREEN` | `1920x1080` | Display size. The window fills it but for the 32-pixel taskbar along the bottom. |
 | `BROWSERPIER_STOP_TIMEOUT` | `20s` | How long Chromium gets to close before it's killed. Keep it under the container's stop timeout. |
 | `BROWSERPIER_PROFILE_DIR` | `/profile` | |
 | `BROWSERPIER_CONTROL_SOCKET` | `/run/browserpier/control.sock` | |

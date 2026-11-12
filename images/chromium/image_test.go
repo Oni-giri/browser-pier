@@ -293,19 +293,18 @@ func TestBrowserEnvironment(t *testing.T) {
 		}
 		t.Logf("ICE candidates: %v", found)
 	})
-	t.Run("window covers the display", func(t *testing.T) {
-		// Visual-mode coordinates are screen coordinates, so the window must sit at 0,0.
-		// Without a window manager Chromium comes out a pixel short of --window-size.
+	t.Run("window fills the screen above the taskbar", func(t *testing.T) {
+		// Visual-mode coordinates are screen coordinates, so the window must
+		// sit at 0,0, unframed, and fill the screen but for the 32px taskbar.
 		out := docker(t, "exec", b.name, "xdotool", "search", "--onlyvisible", "--class", "chromium", "getwindowgeometry", "%@")
-		for _, m := range regexp.MustCompile(`Position: 0,0 .*\n\s*Geometry: (\d+)x(\d+)`).FindAllStringSubmatch(out, -1) {
-			var w, h int
-			_, _ = fmt.Sscan(m[1], &w)
-			_, _ = fmt.Sscan(m[2], &h)
-			if w >= 1278 && w <= 1280 && h >= 798 && h <= 800 {
-				return
-			}
+		if !regexp.MustCompile(`Position: 0,0 .*\n\s*Geometry: 1280x768\b`).MatchString(out) {
+			t.Fatalf("no window at 0,0 filling 1280x768 of the 1280x800 display:\n%s", out)
 		}
-		t.Fatalf("no window at 0,0 covering the 1280x800 display:\n%s", out)
+		// The taskbar's strip is reserved, as on a person's desktop:
+		// screen.availHeight equal to screen.height says headless.
+		if got := p.Eval("[screen.width, screen.height, screen.availWidth, screen.availHeight, outerWidth, outerHeight].join()"); got != "1280,800,1280,768,1280,768" {
+			t.Fatalf("screen, available screen and window are %v, want 1280,800,1280,768,1280,768", got)
+		}
 	})
 	t.Run("xdotool input", func(t *testing.T) {
 		docker(t, "exec", b.name, "xdotool", "mousemove", "40", "50")
