@@ -37,12 +37,14 @@ func NewHandler(relay *Relay, m *sessions.Manager, web *auth.Web, log *slog.Logg
 	return &Handler{relay: relay, m: m, web: web, log: log}
 }
 
-// Register adds /live/{profile}'s status and offer, and the client script.
+// Register adds /live/{profile}'s status, ICE servers and offer, and the
+// client script.
 // The page itself is the web UI's /profiles/{profile}.
 func (h *Handler) Register(mux *http.ServeMux) {
 	admin := func(f http.HandlerFunc) http.Handler { return h.web.RequireAdmin(f) }
 	mux.Handle("GET /live/{profile}", admin(h.page))
 	mux.Handle("GET /live/{profile}/status", admin(h.status))
+	mux.Handle("GET /live/{profile}/ice", admin(h.ice))
 	mux.Handle("POST /live/{profile}/offer", admin(h.offer))
 	mux.HandleFunc("GET /static/live.js", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
@@ -71,6 +73,24 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+// LiveTURNLifetime is how long the admin's TURN credentials last. A live
+// view can stay open all day; when they run out, the TURN server drops it
+// and the page reconnects with new ones.
+const LiveTURNLifetime = 12 * time.Hour
+
+func (h *Handler) ice(w http.ResponseWriter, r *http.Request) {
+	h.ICE(w, r, time.Now().Add(LiveTURNLifetime))
+}
+
+// ICE sends the iceServers a viewer connects with, TURN credentials
+// included, valid until the given time. The caller has already checked
+// who may watch: they're for that viewer alone.
+func (h *Handler) ICE(w http.ResponseWriter, _ *http.Request, until time.Time) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(map[string]any{"iceServers": h.relay.ICEServers(until)})
 }
 
 func (h *Handler) offer(w http.ResponseWriter, r *http.Request) {

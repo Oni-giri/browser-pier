@@ -194,9 +194,14 @@ func run(log *slog.Logger) error {
 	agentAPI := api.New(mgr, web, fileStore, log, cfg.PublicURL)
 	agentAPI.SetSettings(prefs)
 	go agentAPI.WatchRevocations(ctx, 10*time.Second)
-	relay, err := webrtc.New(webrtc.Options{Port: cfg.WebRTCPort, IPs: cfg.WebRTCIPs}, mgr.Layout().ControlSocket, log)
+	turn := webrtc.TURN{URLs: cfg.TURNURLs, Secret: cfg.TURNSecret, Username: cfg.TURNUsername, Password: cfg.TURNPassword, PeerIPs: cfg.TURNPeerIPs}
+	relay, err := webrtc.New(webrtc.Options{Port: cfg.WebRTCPort, IPs: cfg.WebRTCIPs, TURN: turn}, mgr.Layout().ControlSocket, log)
 	if err != nil {
 		return err
+	}
+	if turn.Enabled() {
+		// The URLs only: never the secret or the password.
+		log.Info("live views may relay through TURN", "urls", turn.URLs, "expiring_credentials", turn.Secret != "")
 	}
 	defer func() { _ = relay.Close() }()
 	live := webrtc.NewHandler(relay, mgr, web, log)

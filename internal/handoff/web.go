@@ -76,6 +76,7 @@ func NewWeb(svc *Service, web *auth.Web, live *webrtc.Handler, m *sessions.Manag
 func (w *Web) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /h/{token}", w.show)
 	mux.HandleFunc("POST /h/{token}/pin", w.enterPIN)
+	mux.HandleFunc("GET /h/{token}/ice", w.ice)
 	mux.HandleFunc("POST /h/{token}/offer", w.offer)
 	mux.HandleFunc("GET /h/{token}/status", w.status)
 	mux.HandleFunc("POST /h/{token}/finish", w.finish)
@@ -301,6 +302,17 @@ func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 	if w.unlock(rw, r, h, token) {
 		http.Redirect(rw, r, "/h/"+url.PathEscape(token), http.StatusSeeOther)
 	}
+}
+
+// ice gives the holder the live view's ICE servers, with TURN credentials
+// that run out shortly after the link does.
+func (w *Web) ice(rw http.ResponseWriter, r *http.Request) {
+	h, err := w.svc.ByToken(r.Context(), r.PathValue("token"))
+	if err != nil || h.Status.Final() || !w.holder(r, h) {
+		http.Error(rw, "this link isn't open here", http.StatusForbidden)
+		return
+	}
+	w.live.ICE(rw, r, h.ExpiresAt.Add(time.Minute))
 }
 
 // offer connects the live view; the holder has control from the start.

@@ -8,6 +8,9 @@
   // with control from the start.
   const offerURL = root.dataset.offer || `/live/${encodeURIComponent(profile)}/offer`;
   const statusURL = root.dataset.status || `/live/${encodeURIComponent(profile)}/status`;
+  const iceURL = root.dataset.ice || `/live/${encodeURIComponent(profile)}/ice`;
+  // ?ice=relay connects only through the TURN server: a way to check it works.
+  const relayOnly = new URLSearchParams(location.search).get("ice") === "relay";
   const video = document.getElementById("screen");
   const stage = document.getElementById("stage");
   const who = document.getElementById("who");
@@ -94,8 +97,18 @@
     render();
   }
 
+  // The TURN server, if BrowserPier has one, with credentials for this
+  // viewer. Without them the view still connects where UDP gets through.
+  async function iceServers() {
+    try {
+      const r = await fetch(iceURL, { cache: "no-store" });
+      if (r.ok) return (await r.json()).iceServers || [];
+    } catch (_) { /* connect without */ }
+    return [];
+  }
+
   async function connect() {
-    const pc = new RTCPeerConnection({ iceServers: [] });
+    const pc = new RTCPeerConnection({ iceServers: await iceServers(), iceTransportPolicy: relayOnly ? "relay" : "all" });
     pc.addTransceiver("video", { direction: "recvonly" });
     dc = pc.createDataChannel("input", { ordered: true });
     dc.onopen = render;
