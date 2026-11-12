@@ -8,116 +8,27 @@ package webrtc
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
 	"log/slog"
 	"net"
 	"os"
-	"os/exec"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/pion/logging"
 	"github.com/pion/turn/v5"
 	pion "github.com/pion/webrtc/v4"
+
+	"github.com/Oni-giri/browser-pier/internal/browsertest"
 )
 
-// composeTURN reads the turn service's image and start-up script from the
-// compose file, so what's tested is what ships.
-func composeTURN(t *testing.T) (image, script string) {
-	t.Helper()
-	b, err := os.ReadFile("../../deploy/docker-compose.yml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var lines []string
-	in, inCommand := false, false
-	for _, l := range strings.Split(string(b), "\n") {
-		switch {
-		case l == "  turn:":
-			in = true
-		case in && len(l) > 2 && l[2] != ' ' && l[2] != '#':
-			in = false // the next service
-		case in && strings.HasPrefix(l, "    image: "):
-			image = strings.TrimPrefix(l, "    image: ")
-		case in && l == "    command:":
-			inCommand = true
-		case inCommand && l == "      - |":
-		case inCommand && (l == "" || strings.HasPrefix(l, "        ")):
-			lines = append(lines, strings.TrimPrefix(l, "        "))
-		case inCommand:
-			inCommand = false
-		}
-	}
-	if image == "" || len(lines) < 10 {
-		t.Fatalf("no turn service in the compose file (image %q, %d lines of script)", image, len(lines))
-	}
-	// Compose turns $$ into $.
-	return image, strings.ReplaceAll(strings.Join(lines, "\n"), "$$", "$")
-}
-
-func freePort(t *testing.T, ip string) int {
-	t.Helper()
-	for range 20 {
-		ln, err := net.Listen("tcp4", ip+":0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		port := ln.Addr().(*net.TCPAddr).Port
-		pc, err := net.ListenPacket("udp4", fmt.Sprintf("%s:%d", ip, port))
-		_ = ln.Close()
-		if err == nil {
-			_ = pc.Close()
-			return port
-		}
-	}
-	t.Fatal("no port free for both UDP and TCP")
-	return 0
-}
-
 // coturn starts the compose file's TURN server on ip, relaying only to
-// peer, and returns its address once it hands out allocations.
+// peer.
 func coturn(t *testing.T, ip, peer, secret string) string {
 	t.Helper()
 	if os.Getenv("BROWSERPIER_TEST_IMAGE") == "" {
 		t.Skip("BROWSERPIER_TEST_IMAGE not set; run `make test-docker`")
 	}
-	image, script := composeTURN(t)
-	if exec.Command("docker", "image", "inspect", image).Run() != nil {
-		if out, err := exec.Command("docker", "pull", image).CombinedOutput(); err != nil {
-			t.Fatalf("pulling %s: %v\n%s", image, err, out)
-		}
-	}
-	port := freePort(t, ip)
-	name := fmt.Sprintf("bp-turn-test-%d", time.Now().UnixNano())
-	out, err := exec.Command("docker", "run", "-d", "--name", name, "--network", "host",
-		"-e", "BROWSERPIER_TURN_SECRET="+secret, "-e", "TURN_IP="+ip, "-e", "BROWSERPIER_IP="+peer, "-e", fmt.Sprint("TURN_PORT=", port),
-		"--entrypoint", "/bin/sh", image, "-c", script).CombinedOutput()
-	if err != nil {
-		t.Fatalf("starting coturn: %v\n%s", err, out)
-	}
-	t.Cleanup(func() {
-		logs, _ := exec.Command("docker", "logs", name).CombinedOutput()
-		if strings.Contains(string(logs), secret) {
-			t.Error("coturn logged the shared secret")
-		}
-		if t.Failed() {
-			t.Logf("coturn's log:\n%s", logs)
-		}
-		_ = exec.Command("docker", "rm", "-f", name).Run()
-	})
-	addr := fmt.Sprintf("%s:%d", ip, port)
-	user, pass := restCredentials(secret, time.Now().Add(time.Minute), "ready")
-	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(200 * time.Millisecond) {
-		c, err := turnClient(t, addr, user, pass)
-		if err == nil {
-			c.Close()
-			return addr
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("coturn never answered: %v", err)
-		}
-	}
+	return browsertest.Coturn(t, ip, peer, secret)
 }
 
 // turnClient allocates a relay on the TURN server at addr.
@@ -127,21 +38,19 @@ func turnClient(t *testing.T, addr, user, pass string) (*turn.Client, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = conn.Close() })
 	quiet := logging.NewDefaultLoggerFactory()
 	quiet.DefaultLogLevel = logging.LogLevelDisabled
 	c, err := turn.NewClient(&turn.ClientConfig{STUNServerAddr: addr, TURNServerAddr: addr, Conn: conn, Username: user, Password: pass, LoggerFactory: quiet, RTO: 200 * time.Millisecond})
 	if err != nil {
-		_ = conn.Close()
 		return nil, err
 	}
 	if err := c.Listen(); err != nil {
 		c.Close()
-		_ = conn.Close()
 		return nil, err
 	}
 	if _, err := c.Allocate(); err != nil {
 		c.Close()
-		_ = conn.Close()
 		return nil, err
 	}
 	return c, nil

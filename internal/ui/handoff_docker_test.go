@@ -89,6 +89,13 @@ func TestHandoffFitsAPhone(t *testing.T) {
 // newPhone starts a real browser to load the page in, and connects to it.
 func newPhone(t *testing.T, image string) *browsertest.CDP {
 	t.Helper()
+	phone, _ := newPhoneContainer(t, image)
+	return phone
+}
+
+// newPhoneContainer is newPhone, and names the browser's container.
+func newPhoneContainer(t *testing.T, image string) (*browsertest.CDP, string) {
+	t.Helper()
 	ctx := context.Background()
 	rt, err := docker.New(docker.Options{Image: image, UsernsMode: os.Getenv("BROWSERPIER_USERNS_MODE"), Instance: fmt.Sprintf("test%d", time.Now().UnixNano())})
 	if err != nil {
@@ -128,7 +135,7 @@ func newPhone(t *testing.T, image string) *browsertest.CDP {
 		m.Close()
 		_ = d.Close()
 	})
-	return browsertest.Page(t, browsertest.ControlClient(m.Layout().ControlSocket(p.Name)))
+	return browsertest.Page(t, browsertest.ControlClient(m.Layout().ControlSocket(p.Name))), "browserpier-" + p.Name
 }
 
 // serveToBrowser serves h where a browser container can reach it, and
