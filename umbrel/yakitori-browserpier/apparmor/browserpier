@@ -50,8 +50,9 @@ profile browserpier flags=(attach_disconnected,mediate_deleted) {
 
   deny mount,
   # BrowserPier: nor swap its root; Chromium's sandbox chroots instead.
-  # (With ABI 4.0, what isn't granted here, POSIX message queues and
-  # io_uring among it, is refused too.)
+  # (Under ABI 4.0, POSIX message queues are mediated, and refused, since
+  # nothing here grants them. io_uring isn't mediated before ABI 5.0;
+  # BrowserPier's seccomp profile blocks it.)
   deny pivot_root,
 
   deny /sys/[^f]*/** wklx,
