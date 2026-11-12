@@ -123,3 +123,59 @@ func TestEmptyMeansUnset(t *testing.T) {
 		t.Fatalf("%+v", c)
 	}
 }
+
+func TestTURN(t *testing.T) {
+	c, err := load(env(map[string]string{
+		"BROWSERPIER_TURN_URLS":     "turn:pier.example.com:3478?transport=udp, turn:pier.example.com:3478?transport=tcp,turns:turn.example.net:443",
+		"BROWSERPIER_TURN_SECRET":   "0123456789abcdef0123",
+		"BROWSERPIER_TURN_PEER_IPS": "10.247.74.2",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.TURNURLs) != 3 || c.TURNURLs[1] != "turn:pier.example.com:3478?transport=tcp" || c.TURNSecret != "0123456789abcdef0123" || len(c.TURNPeerIPs) != 1 {
+		t.Fatalf("TURN: %q %q", c.TURNURLs, c.TURNPeerIPs)
+	}
+	c, err = load(env(map[string]string{"BROWSERPIER_TURN_URLS": "turns:turn.example.net:443", "BROWSERPIER_TURN_USERNAME": "pier", "BROWSERPIER_TURN_PASSWORD": "pw"}))
+	if err != nil || c.TURNUsername != "pier" || c.TURNPassword != "pw" {
+		t.Fatalf("static login: %v", err)
+	}
+	// A STUN server needs no credentials.
+	if _, err := load(env(map[string]string{"BROWSERPIER_TURN_URLS": "stun:stun.example.net:3478"})); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := load(env(nil)); len(c.TURNURLs) != 0 || c.TURNSecret != "" {
+		t.Fatalf("TURN is on by default: %q", c.TURNURLs)
+	}
+}
+
+func TestTURNRejectsBadValues(t *testing.T) {
+	const secret = "s3cret-s3cret-s3cret"
+	for name, vars := range map[string]map[string]string{
+		"not a turn url":       {"BROWSERPIER_TURN_URLS": "https://pier.example.com", "BROWSERPIER_TURN_SECRET": secret},
+		"no host":              {"BROWSERPIER_TURN_URLS": "turn:", "BROWSERPIER_TURN_SECRET": secret},
+		"one bad url":          {"BROWSERPIER_TURN_URLS": "turn:x:3478,nope", "BROWSERPIER_TURN_SECRET": secret},
+		"turn without login":   {"BROWSERPIER_TURN_URLS": "turn:pier.example.com:3478"},
+		"secret without urls":  {"BROWSERPIER_TURN_SECRET": secret},
+		"login without urls":   {"BROWSERPIER_TURN_USERNAME": "pier", "BROWSERPIER_TURN_PASSWORD": secret},
+		"secret and login":     {"BROWSERPIER_TURN_URLS": "turn:x:3478", "BROWSERPIER_TURN_SECRET": secret, "BROWSERPIER_TURN_USERNAME": "pier", "BROWSERPIER_TURN_PASSWORD": secret},
+		"username alone":       {"BROWSERPIER_TURN_URLS": "turn:x:3478", "BROWSERPIER_TURN_USERNAME": "pier"},
+		"password alone":       {"BROWSERPIER_TURN_URLS": "turn:x:3478", "BROWSERPIER_TURN_PASSWORD": secret},
+		"short secret":         {"BROWSERPIER_TURN_URLS": "turn:x:3478", "BROWSERPIER_TURN_SECRET": "s3cret"},
+		"bad peer ip":          {"BROWSERPIER_TURN_URLS": "turn:x:3478", "BROWSERPIER_TURN_SECRET": secret, "BROWSERPIER_TURN_PEER_IPS": "browserpier"},
+		"password and short s": {"BROWSERPIER_TURN_URLS": "turn:x:3478", "BROWSERPIER_TURN_SECRET": "s3cret", "BROWSERPIER_TURN_PASSWORD": "s3cret-pw"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := load(env(vars))
+			if err == nil {
+				t.Fatal("want error, got nil")
+			}
+			// Errors never echo a secret or a password.
+			for _, k := range []string{"BROWSERPIER_TURN_SECRET", "BROWSERPIER_TURN_PASSWORD"} {
+				if v := vars[k]; v != "" && strings.Contains(err.Error(), v) {
+					t.Fatalf("%s is in the error: %v", k, err)
+				}
+			}
+		})
+	}
+}
