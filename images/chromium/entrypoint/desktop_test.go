@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,5 +68,39 @@ func TestJWMTrayHeightMatchesPanelHeight(t *testing.T) {
 	}
 	if !strings.Contains(string(b), desktopReady) {
 		t.Errorf("jwmrc doesn't create %s, so startup would wait for nothing", desktopReady)
+	}
+}
+
+// A window manager that exits during the session is logged, not fatal;
+// one stopped at the end isn't logged.
+func TestWatchDesktopWarnsWhenTheWindowManagerExits(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	waitOver := func(over <-chan struct{}) {
+		t.Helper()
+		select {
+		case <-over:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the watch didn't end")
+		}
+	}
+
+	crashed := &process{done: make(chan struct{})}
+	over := watchDesktop(log, crashed, make(chan struct{}))
+	close(crashed.done)
+	waitOver(over)
+	if !strings.Contains(buf.String(), "level=WARN") || !strings.Contains(buf.String(), "window manager exited") {
+		t.Errorf("no warning when the window manager exited: %q", buf.String())
+	}
+
+	buf.Reset()
+	stopped := &process{done: make(chan struct{})}
+	stopping := make(chan struct{})
+	over = watchDesktop(log, stopped, stopping)
+	close(stopping)
+	close(stopped.done)
+	waitOver(over)
+	if buf.Len() != 0 {
+		t.Errorf("a warning when the window manager was stopped on purpose: %q", buf.String())
 	}
 }

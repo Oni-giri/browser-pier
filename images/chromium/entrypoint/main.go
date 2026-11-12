@@ -107,7 +107,12 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	defer desktop.stop(syscall.SIGTERM, 5*time.Second)
+	desktopStopping := make(chan struct{})
+	watchDesktop(log, desktop, desktopStopping)
+	defer func() {
+		close(desktopStopping)
+		desktop.stop(syscall.SIGTERM, 5*time.Second)
+	}()
 	// Chromium starts once the network has stopped changing, so its first
 	// page loads aren't cut off as the network "changes".
 	if err := settleNetwork(ctx, log, xvfb, 5*time.Second, ipv6Settled); err != nil {

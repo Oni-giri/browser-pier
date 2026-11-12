@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"syscall"
@@ -46,4 +47,25 @@ func startDesktop(ctx context.Context, wm *exec.Cmd, ready string, timeout time.
 		return nil, fmt.Errorf("window manager: %w", err)
 	}
 	return p, nil
+}
+
+// watchDesktop logs a warning if the window manager exits before stopping
+// is closed. The browser carries on without it: input, screenshots and a
+// graceful stop don't need it, only the taskbar goes. The returned channel
+// is closed once the watch is over.
+func watchDesktop(log *slog.Logger, wm *process, stopping <-chan struct{}) <-chan struct{} {
+	over := make(chan struct{})
+	go func() {
+		defer close(over)
+		select {
+		case <-wm.done:
+			select {
+			case <-stopping: // stopped on purpose
+			default:
+				log.Warn("the window manager exited; the browser carries on without a taskbar", "status", describe(wm.status))
+			}
+		case <-stopping:
+		}
+	}()
+	return over
 }
