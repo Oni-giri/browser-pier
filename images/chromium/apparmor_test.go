@@ -2,6 +2,7 @@ package chromium
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -64,6 +65,64 @@ func TestUmbrelCarriesTheAppArmorFiles(t *testing.T) {
 		if info.Mode()&0o111 == 0 {
 			t.Errorf("%s isn't executable", f)
 		}
+	}
+}
+
+// The loader's gates, against a stand-in for the kernel's AppArmor files.
+// It must load only where needed, and fail without writing anything when
+// it isn't root on the host (rootless Docker or Podman).
+func TestLoadGates(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("as root this would try to load the profile")
+	}
+	dir := t.TempDir()
+	aa := filepath.Join(dir, "apparmor")
+	restrict := filepath.Join(dir, "restrict")
+	etc := filepath.Join(dir, "etc")
+	for _, d := range []string{filepath.Join(aa, "features", "namespaces"), filepath.Join(etc, "abi")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	touch := func(path string) {
+		t.Helper()
+		if err := os.WriteFile(path, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func(fs string) (int, string) {
+		t.Helper()
+		cmd := exec.Command(filepath.Join("apparmor", "load"), "--persist", etc)
+		cmd.Env = append(os.Environ(), "BROWSERPIER_APPARMOR_FS="+fs, "BROWSERPIER_APPARMOR_RESTRICT="+restrict)
+		out, err := cmd.CombinedOutput()
+		code := 0
+		if exit, ok := err.(*exec.ExitError); ok { //nolint:errorlint // only the exit status
+			code = exit.ExitCode()
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		return code, string(out)
+	}
+	expect := func(what string, wantCode int, want string, fs string) {
+		t.Helper()
+		if code, out := run(fs); code != wantCode || !strings.Contains(out, want) {
+			t.Errorf("%s: exit %d, %q; want exit %d with %q", what, code, out, wantCode, want)
+		}
+	}
+
+	expect("no AppArmor", 0, "nothing to load", filepath.Join(dir, "none"))
+	expect("no userns mediation (Debian 12)", 0, "doesn't mediate user namespaces", aa)
+	touch(filepath.Join(aa, "features", "namespaces", "userns_create"))
+	touch(restrict)
+	expect("Ubuntu", 0, "Ubuntu's user namespace restriction", aa)
+	if err := os.Remove(restrict); err != nil {
+		t.Fatal(err)
+	}
+	expect("AppArmor 3 userspace, newer kernel", 0, "older than 4.0", aa)
+	touch(filepath.Join(etc, "abi", "4.0"))
+	expect("not root (rootless)", 1, "isn't root on the host", aa)
+	if _, err := os.Stat(filepath.Join(etc, "browserpier")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the profile was installed without being loaded: %v", err)
 	}
 }
 

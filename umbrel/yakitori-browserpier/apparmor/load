@@ -11,8 +11,12 @@
 #
 # Run as root with CAP_MAC_ADMIN and the host's /sys/kernel/security: on
 # the host (Umbrel's hooks/pre-start), or in the browser image's loader
-# service (deploy/docker-compose.yml). Exits non-zero only when loading
-# fails; BrowserPier then runs browsers without AppArmor, and says so.
+# service (deploy/docker-compose.yml, --profile apparmor). It exits
+# non-zero when it can't load the profile, but nothing waits on that:
+# BrowserPier then runs browsers without AppArmor, and its log says so.
+#
+# BROWSERPIER_APPARMOR_FS and BROWSERPIER_APPARMOR_RESTRICT stand in for
+# the kernel's paths in tests.
 set -eu
 
 here="$(dirname "$0")"
@@ -26,8 +30,13 @@ while [ $# -gt 0 ]; do
 done
 
 say() { echo "BrowserPier AppArmor: $*"; }
+fail() {
+  say "$* Browsers will run without AppArmor; see \"AppArmor\" in BrowserPier's deploy/README.md to load the profile by hand." >&2
+  exit 1
+}
 
-aa=/sys/kernel/security/apparmor
+aa="${BROWSERPIER_APPARMOR_FS:-/sys/kernel/security/apparmor}"
+restrict="${BROWSERPIER_APPARMOR_RESTRICT:-/proc/sys/kernel/apparmor_restrict_unprivileged_userns}"
 if [ ! -d "${aa}" ]; then
   say "AppArmor isn't on (no ${aa}); nothing to load"
   exit 0
@@ -36,7 +45,7 @@ if [ ! -e "${aa}/features/namespaces/userns_create" ]; then
   say "this kernel doesn't mediate user namespaces, so Docker's profile works; nothing to load"
   exit 0
 fi
-if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+if [ -e "${restrict}" ]; then
   say "Ubuntu's user namespace restriction is here, and Docker's profile works under it; nothing to load"
   exit 0
 fi
@@ -47,6 +56,12 @@ abi="${persist:-/etc/apparmor.d}/abi/4.0"
 if [ ! -e "${abi}" ]; then
   say "the host's AppArmor is older than 4.0 (no ${abi}), so Docker's profile works; nothing to load"
   exit 0
+fi
+
+# Loading policy takes root in the host's own user namespace: not a
+# rootless Docker or Podman, nor a daemon with userns-remap.
+if [ "$(id -u)" != 0 ] || [ "$(awk 'NR == 1 { print $1, $2, $3 } END { print NR }' /proc/self/uid_map | tr '\n' ' ')" != "0 0 4294967295 1 " ]; then
+  fail "can't load the profile: this isn't root on the host (a rootless or userns-remapped container runtime, say)."
 fi
 
 if [ -n "${persist}" ] && ! cmp -s "${profile}" "${persist}/browserpier"; then
@@ -61,12 +76,17 @@ if [ -n "${persist}" ] && ! cmp -s "${profile}" "${persist}/browserpier"; then
   fi
 fi
 
-if ! command -v apparmor_parser >/dev/null 2>&1; then
-  say "no apparmor_parser here; can't load the profile" >&2
-  exit 1
+# Hooks may run with a PATH that leaves out the sbin directories.
+parser="$(command -v apparmor_parser 2>/dev/null || true)"
+for p in /usr/sbin/apparmor_parser /sbin/apparmor_parser; do
+  if [ -z "${parser}" ] && [ -x "${p}" ]; then
+    parser="${p}"
+  fi
+done
+if [ -z "${parser}" ]; then
+  fail "can't load the profile: no apparmor_parser here."
 fi
-if ! apparmor_parser --replace --skip-cache "${profile}"; then
-  say "loading the profile failed; browsers will run without AppArmor" >&2
-  exit 1
+if ! "${parser}" --replace --skip-cache "${profile}"; then
+  fail "loading the profile failed."
 fi
 say "loaded the browserpier profile"
