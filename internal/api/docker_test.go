@@ -127,23 +127,12 @@ func (a agent) allowLocalNetwork(t *testing.T, name string) {
 	}
 }
 
-func siteHost(t *testing.T) string {
-	if h := os.Getenv("BROWSERPIER_TEST_SITE_HOST"); h != "" {
-		return h
-	}
-	out, err := exec.Command("docker", "network", "inspect", "bridge", "-f", "{{(index .IPAM.Config 0).Gateway}}").Output()
-	if err != nil {
-		t.Fatalf("can't find the bridge gateway (%v); set BROWSERPIER_TEST_SITE_HOST", err)
-	}
-	return strings.TrimSpace(string(out))
-}
-
 // TestAgentKeepsItsLoginThroughTheAPI is the done-when through the API an
 // agent uses: create a profile, start it, log in over the CDP proxy, stop
 // it, start it again and find the login still there.
 func TestAgentKeepsItsLoginThroughTheAPI(t *testing.T) {
 	a := newRealAPI(t)
-	site := browsertest.NewSite(t, siteHost(t))
+	site := browsertest.NewSite(t, browsertest.SiteHost(t))
 	name := fmt.Sprintf("e%d", time.Now().UnixNano()%1e9)
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", "browserpier-"+name).Run() })
 
@@ -226,7 +215,7 @@ func TestAgentKeepsItsLoginThroughTheAPI(t *testing.T) {
 // attaches over CDP); an uploaded file can be picked by a page.
 func TestDownloadsAndUploads(t *testing.T) {
 	a := newRealAPI(t)
-	site := browsertest.NewSite(t, siteHost(t))
+	site := browsertest.NewSite(t, browsertest.SiteHost(t))
 	name := fmt.Sprintf("f%d", time.Now().UnixNano()%1e9)
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", "browserpier-"+name).Run() })
 	if code := a.do(http.MethodPost, "/api/profiles", fmt.Sprintf(`{"name": %q, "default_mode": "api", "screen": {"width": 1280, "height": 800}}`, name), nil); code != http.StatusCreated {
@@ -332,7 +321,7 @@ func TestProxiedBrowserMatchesItsExit(t *testing.T) {
 	} {
 		t.Run(kind, func(t *testing.T) {
 			a := newRealAPI(t)
-			host := siteHost(t) // how the container reaches the proxy
+			host := browsertest.SiteHost(t) // how the container reaches the proxy
 			// The site has a name only the proxy can resolve: if pages load,
 			// names went through the proxy unresolved.
 			site := browsertest.NewSite(t, "browserpier.test")

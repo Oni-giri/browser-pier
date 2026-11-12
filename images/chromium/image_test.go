@@ -1,8 +1,9 @@
 //go:build docker
 
 // These tests run the real browser image. They need Docker and an image built
-// with `make image-chromium`; BROWSERPIER_TEST_IMAGE names it. Set
-// BROWSERPIER_TEST_ARTIFACTS to a directory to keep a screenshot.
+// with `make image-chromium`; BROWSERPIER_TEST_IMAGE names it. The browser
+// reaches the test site as browsertest.SiteHost says, like the orchestrator's
+// tests. Set BROWSERPIER_TEST_ARTIFACTS to a directory to keep a screenshot.
 package chromium
 
 import (
@@ -71,7 +72,6 @@ func startBrowser(t *testing.T, image, volume string) *browser {
 	docker(t, "run", "-d", "--name", name,
 		"--security-opt", "seccomp="+seccomp,
 		"--shm-size=1g",
-		"--add-host=host.docker.internal:host-gateway",
 		"-e", "BROWSERPIER_SCREEN=1280x800",
 		// The test sites are on the Docker host: the local network.
 		"-e", "BROWSERPIER_LOCAL_NETWORK=true",
@@ -169,7 +169,7 @@ func (b *browser) page() *browsertest.CDP {
 // Chromium was closed gracefully.
 func TestLoginSurvivesStopStartAndRebuild(t *testing.T) {
 	image := testImage(t)
-	s := browsertest.NewSite(t, "host.docker.internal")
+	s := browsertest.NewSite(t, browsertest.SiteHost(t))
 	vol := newVolume(t)
 
 	b := startBrowser(t, image, vol)
@@ -211,7 +211,7 @@ func TestLoginSurvivesStopStartAndRebuild(t *testing.T) {
 // starts failing, the test above no longer proves anything.
 func TestKillLosesFreshLogin(t *testing.T) {
 	image := testImage(t)
-	s := browsertest.NewSite(t, "host.docker.internal")
+	s := browsertest.NewSite(t, browsertest.SiteHost(t))
 	vol := newVolume(t)
 
 	b := startBrowser(t, image, vol)
@@ -230,7 +230,7 @@ func TestKillLosesFreshLogin(t *testing.T) {
 
 func TestBrowserEnvironment(t *testing.T) {
 	image := testImage(t)
-	s := browsertest.NewSite(t, "host.docker.internal")
+	s := browsertest.NewSite(t, browsertest.SiteHost(t))
 	b := startBrowser(t, image, newVolume(t))
 	p := b.page()
 

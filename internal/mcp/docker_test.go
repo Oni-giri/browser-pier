@@ -106,15 +106,7 @@ func TestAgentLogsInThroughMCP(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	host := os.Getenv("BROWSERPIER_TEST_SITE_HOST")
-	if host == "" {
-		out, err := exec.Command("docker", "network", "inspect", "bridge", "-f", "{{(index .IPAM.Config 0).Gateway}}").Output()
-		if err != nil {
-			t.Fatalf("can't find the bridge gateway (%v); set BROWSERPIER_TEST_SITE_HOST", err)
-		}
-		host = strings.TrimSpace(string(out))
-	}
-	site := browsertest.NewSite(t, host)
+	site := browsertest.NewSite(t, browsertest.SiteHost(t))
 
 	f := &fixture{t: t, srv: srv}
 	cs := f.connect(secret, versions[0], func(r *sdk.ElicitRequest) (*sdk.ElicitResult, error) {

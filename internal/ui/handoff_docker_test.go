@@ -149,16 +149,5 @@ func serveToBrowser(t *testing.T, h http.Handler) string {
 	srv := &http.Server{Handler: lan, ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
-	return "http://" + net.JoinHostPort(siteHost(t), fmt.Sprint(ln.Addr().(*net.TCPAddr).Port))
-}
-
-func siteHost(t *testing.T) string {
-	if h := os.Getenv("BROWSERPIER_TEST_SITE_HOST"); h != "" {
-		return h
-	}
-	out, err := exec.Command("docker", "network", "inspect", "bridge", "-f", "{{(index .IPAM.Config 0).Gateway}}").Output()
-	if err != nil || strings.TrimSpace(string(out)) == "" {
-		t.Fatalf("can't find the bridge gateway (%v); set BROWSERPIER_TEST_SITE_HOST", err)
-	}
-	return strings.TrimSpace(string(out))
+	return "http://" + net.JoinHostPort(browsertest.SiteHost(t), fmt.Sprint(ln.Addr().(*net.TCPAddr).Port))
 }

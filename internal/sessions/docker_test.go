@@ -107,17 +107,6 @@ func (w testWriter) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-func siteHost(t *testing.T) string {
-	if h := os.Getenv("BROWSERPIER_TEST_SITE_HOST"); h != "" {
-		return h
-	}
-	out, err := exec.Command("docker", "network", "inspect", "bridge", "-f", "{{(index .IPAM.Config 0).Gateway}}").Output()
-	if err != nil || strings.TrimSpace(string(out)) == "" {
-		t.Fatalf("can't find the bridge gateway (%v); set BROWSERPIER_TEST_SITE_HOST", err)
-	}
-	return strings.TrimSpace(string(out))
-}
-
 func startRunning(t *testing.T, m *Manager, profile string) Session {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -145,7 +134,7 @@ func TestLoginSurvivesStopAndStart(t *testing.T) {
 	f := newRealFixture(t)
 	m := f.manager(f.layout)
 	name := f.profile(m)
-	site := browsertest.NewSite(t, siteHost(t))
+	site := browsertest.NewSite(t, browsertest.SiteHost(t))
 
 	s := startRunning(t, m, name)
 	control := browsertest.ControlClient(f.layout.ControlSocket(name))
@@ -185,7 +174,7 @@ func TestLoginSurvivesExportAndImport(t *testing.T) {
 	f := newRealFixture(t)
 	m := f.manager(f.layout)
 	name := f.profile(m)
-	site := browsertest.NewSite(t, siteHost(t))
+	site := browsertest.NewSite(t, browsertest.SiteHost(t))
 
 	s := startRunning(t, m, name)
 	p := browsertest.Page(t, browsertest.ControlClient(f.layout.ControlSocket(name)))

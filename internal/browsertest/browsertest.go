@@ -12,6 +12,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -231,8 +233,24 @@ func (s *Site) AcceptLanguage() string {
 	return s.acceptLanguage
 }
 
+// SiteHost is how a browser container reaches a test site on this machine:
+// BROWSERPIER_TEST_SITE_HOST, or else the gateway of Docker's default
+// bridge. Under rootless Podman 5, host.docker.internal is link-local,
+// which the egress filter always refuses; CONTRIBUTING.md has the fix.
+func SiteHost(t *testing.T) string {
+	t.Helper()
+	if h := os.Getenv("BROWSERPIER_TEST_SITE_HOST"); h != "" {
+		return h
+	}
+	out, err := exec.Command("docker", "network", "inspect", "bridge", "-f", "{{(index .IPAM.Config 0).Gateway}}").Output()
+	if err != nil || strings.TrimSpace(string(out)) == "" {
+		t.Fatalf("can't find the bridge gateway (%v); set BROWSERPIER_TEST_SITE_HOST", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // NewSite serves the site on every interface; host is how the browser
-// container reaches this machine, such as host.docker.internal.
+// container reaches this machine, from SiteHost.
 func NewSite(t *testing.T, host string) *Site {
 	t.Helper()
 	s := &Site{}

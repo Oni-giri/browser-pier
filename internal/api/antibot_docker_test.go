@@ -23,9 +23,9 @@ import (
 // Visual mode avoids: an attached client, and a page left unfocused.
 func TestVisualModeLooksLikeAPerson(t *testing.T) {
 	a := newRealAPI(t)
-	det := browsertest.NewDetector(t, siteHost(t))
+	det := browsertest.NewDetector(t, browsertest.SiteHost(t))
 	// Exiting in Germany, so the language checks below aren't en-US's.
-	a.m.SetGeoURL(browsertest.NewSite(t, siteHost(t)).URL + "/geo")
+	a.m.SetGeoURL(browsertest.NewSite(t, browsertest.SiteHost(t)).URL + "/geo")
 	name := fmt.Sprintf("b%d", time.Now().UnixNano()%1e9)
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", "browserpier-"+name).Run() })
 	if code := a.do(http.MethodPost, "/api/profiles", fmt.Sprintf(`{"name": %q, "default_mode": "visual"}`, name), nil); code != http.StatusCreated {

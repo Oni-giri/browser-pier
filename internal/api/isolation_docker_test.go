@@ -24,7 +24,7 @@ import (
 // and loopback still aren't.
 func TestPagesCantReachTheLocalNetwork(t *testing.T) {
 	a := newRealAPI(t)
-	site := browsertest.NewSite(t, siteHost(t))
+	site := browsertest.NewSite(t, browsertest.SiteHost(t))
 	_, sitePort, _ := net.SplitHostPort(strings.TrimPrefix(site.URL, "http://"))
 	name := fmt.Sprintf("n%d", time.Now().UnixNano()%1e9)
 	other := name + "o"

@@ -23,7 +23,7 @@ func TestIconAfterGracefulStop(t *testing.T) {
 	f := newRealFixture(t)
 	m := f.manager(f.layout)
 	name := f.profile(m)
-	site := browsertest.NewSite(t, siteHost(t))
+	site := browsertest.NewSite(t, browsertest.SiteHost(t))
 
 	s := startRunning(t, m, name)
 	p := browsertest.Page(t, browsertest.ControlClient(f.layout.ControlSocket(name)))
@@ -60,7 +60,7 @@ func TestIconAfterGracefulStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := favicon.Registrable(siteHost(t)); prof.SiteInferred != want {
+	if want := favicon.Registrable(browsertest.SiteHost(t)); prof.SiteInferred != want {
 		t.Fatalf("inferred site %q, want %q", prof.SiteInferred, want)
 	}
 }
