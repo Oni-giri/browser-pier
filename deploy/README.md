@@ -46,7 +46,7 @@ docker compose up -d                   # Tailscale, or your own proxy
 docker compose --profile https up -d   # with Caddy
 ```
 
-BrowserPier pulls its browser image the first time a profile starts.
+Compose pulls the browser image too: its `apparmor` service runs once and exits (see [AppArmor](#apparmor)).
 
 ## First run
 
@@ -80,6 +80,29 @@ Still:
 - Prefer a server or VM that runs nothing more sensitive.
 - Keep BrowserPier behind Tailscale where you can.
 - Keep it up to date.
+
+## AppArmor
+
+On Ubuntu and Debian, Docker confines containers with its AppArmor profile, `docker-default`. That profile has no rule for user namespaces, which Chromium's sandbox needs, and under AppArmor 4 without Ubuntu's own user namespace restriction (Debian 13 and later) it refuses them: Chromium aborts with `Check failed: … Permission denied (13)`. Ubuntu and Debian 12 aren't affected.
+
+So BrowserPier has an AppArmor profile of its own, `browserpier`: Docker's, plus user namespaces. The compose file's **`apparmor` service** loads it. It runs once at each `docker compose up`, as root with only `CAP_MAC_ADMIN`, no network and a read-only root, and exits. Where the profile is needed, it loads it and installs it as `/etc/apparmor.d/browserpier`, so the host loads it again at boot. Anywhere else it says why it isn't needed and does nothing. On a host without AppArmor, Docker creates an empty `/etc/apparmor.d` for its mount. If loading fails, the service fails and BrowserPier doesn't start: `docker compose logs apparmor` says why.
+
+At start, unless `BROWSERPIER_BROWSER_APPARMOR` names a profile, BrowserPier picks the browsers' AppArmor profile. Where Docker uses its stock profile, and the host has no Ubuntu restriction or is a remote `DOCKER_HOST`, it starts a short-lived container from its browser image, with the browsers' settings, to check where Chromium's sandbox works, in this order:
+1. **`browserpier`**, if it's loaded.
+2. **Docker's `docker-default`** (Debian 12, or a remote Ubuntu).
+3. **None** (`unconfined`), with a warning in the log. The seccomp profile, dropped capabilities and no-new-privileges still apply. BrowserPier did this on Debian 13 before it had a profile of its own, so a server updated without the `apparmor` service keeps working.
+
+If nothing works, BrowserPier logs an error: user namespaces are probably turned off on the host. On Ubuntu, and with a default profile you set for the daemon, browsers keep Docker's profile, unchecked. The log says what was chosen.
+
+**To load the profile yourself** instead of through the service (for example with your own compose file), as root on the Docker host, from the release's browser image:
+
+```sh
+docker run --rm --entrypoint cat ghcr.io/oni-giri/browser-pier-chromium:<version> \
+  /usr/share/browserpier/apparmor/browserpier > /etc/apparmor.d/browserpier
+apparmor_parser -r /etc/apparmor.d/browserpier
+```
+
+Then restart BrowserPier so it checks again, or set `BROWSERPIER_BROWSER_APPARMOR=browserpier`. `aa-status | grep browserpier` shows it's loaded, and `docker inspect -f '{{.AppArmorProfile}}' <browser container>` shows a browser using it. To remove it: `apparmor_parser -R /etc/apparmor.d/browserpier && rm /etc/apparmor.d/browserpier`.
 
 ## Behind your own proxy
 
@@ -136,7 +159,7 @@ Leave `BROWSERPIER_LISTEN` and `BROWSERPIER_WEBRTC_PORT` alone with this compose
 | `BROWSERPIER_DATA_DIR` | `/data` | The database and one folder per profile, inside the container. Keep the `./data:/data` mount. |
 | `BROWSERPIER_HOST_DATA_DIR` | detected | The data folder's path on the host, if detection fails. |
 | `BROWSERPIER_USERNS_MODE` | unset | `keep-id` under rootless Podman. |
-| `BROWSERPIER_BROWSER_APPARMOR` | unset | The browser containers' AppArmor profile. Unset, they keep Docker's, except on AppArmor hosts without Ubuntu's user namespace restriction (Debian, umbrelOS), where they run without one: there, from Debian 13 on, Docker's refuses Chromium's sandbox. With `DOCKER_HOST` set, Docker's default is kept, since that daemon's kernel can't be checked: set `unconfined` if browsers then fail with a sandbox error. |
+| `BROWSERPIER_BROWSER_APPARMOR` | unset | The browser containers' AppArmor profile. Unset, BrowserPier picks one: see [AppArmor](#apparmor). Set, that profile is used as it is, unchecked: `browserpier`, `unconfined`, or one of your own. A named profile that isn't loaded makes every browser fail to start, with an error saying so. |
 | `BROWSERPIER_STOP_BROWSERS_ON_EXIT` | `false` | `true` stops every browser when BrowserPier stops. Otherwise they keep running through an update. |
 
 ## Updating and backups
@@ -162,6 +185,8 @@ To move one profile, use **Export** on its ⋯ menu instead. That gives an encry
 ## If something's wrong
 
 - **"can't reach Docker":** `DOCKER_GID` doesn't match the socket's group.
+- **"browser containers run without an AppArmor profile"** in the log: BrowserPier's AppArmor profile isn't loaded. Check `docker compose logs apparmor`, or load it by hand: see [AppArmor](#apparmor).
+- **"service apparmor didn't complete successfully":** loading the AppArmor profile failed; `docker compose logs apparmor` says why.
 - **"the data dir … isn't on a volume or bind mount":** keep the `./data:/data` mount.
 - **A page on your LAN or this server won't load:** pages can't reach private addresses, so a page can't get to your router, the server's other services or a VPS's metadata. To let one profile reach them, tick "Let pages reach the local network" in its settings.
 - **Live view never connects:** port 7438 isn't open (UDP, and TCP for the fallback), or `BROWSERPIER_WEBRTC_IPS` isn't the address the viewer reaches.
