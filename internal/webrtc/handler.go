@@ -75,22 +75,26 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(out)
 }
 
-// LiveTURNLifetime is how long the admin's TURN credentials last. A live
-// view can stay open all day; once they've run out and the TURN server
-// drops it, the page reconnects with new ones.
+// LiveTURNLifetime is how long the admin's TURN credentials can open new
+// relays. A relay already open outlives them (coturn checks them only for
+// new allocations), and a live view can stay open all day: the page gets
+// new ones whenever it reconnects.
 const LiveTURNLifetime = 12 * time.Hour
 
 func (h *Handler) ice(w http.ResponseWriter, r *http.Request) {
-	h.ICE(w, r, time.Now().Add(LiveTURNLifetime))
+	// One viewer per signed-in browser, for the TURN server's quota.
+	s, _ := auth.SessionFromContext(r.Context())
+	h.ICE(w, r, time.Now().Add(LiveTURNLifetime), "admin session "+s.ID)
 }
 
 // ICE sends the iceServers a viewer connects with, TURN credentials
-// included, valid until the given time. The caller has already checked
-// who may watch: they're for that viewer alone.
-func (h *Handler) ICE(w http.ResponseWriter, _ *http.Request, until time.Time) {
+// included, which open new relays until the given time. viewer names who
+// asks, the same on each request (see TURN.Servers). The caller has
+// already checked who may watch: they're for that viewer alone.
+func (h *Handler) ICE(w http.ResponseWriter, _ *http.Request, until time.Time, viewer string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(w).Encode(map[string]any{"iceServers": h.relay.ICEServers(until)})
+	_ = json.NewEncoder(w).Encode(map[string]any{"iceServers": h.relay.ICEServers(until, viewer)})
 }
 
 func (h *Handler) offer(w http.ResponseWriter, r *http.Request) {

@@ -116,9 +116,11 @@ func rewriteRule(o Options) (webrtc.ICEAddressRewriteRule, bool) {
 }
 
 // ICEServers returns the iceServers a viewer connects with: the TURN
-// server, if there is one, with credentials that stop working at until.
-// Give them only to someone already allowed to watch.
-func (r *Relay) ICEServers(until time.Time) []ICEServer { return r.turn.Servers(until) }
+// server, if there is one, with credentials for that viewer (see
+// TURN.Servers). Give them only to someone already allowed to watch.
+func (r *Relay) ICEServers(until time.Time, viewer string) []ICEServer {
+	return r.turn.Servers(until, viewer)
+}
 
 // Close stops listening.
 func (r *Relay) Close() error {

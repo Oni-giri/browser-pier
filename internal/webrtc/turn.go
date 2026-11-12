@@ -2,8 +2,8 @@ package webrtc
 
 import (
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha1" //nolint:gosec // the TURN REST API's HMAC is SHA-1, as coturn checks it
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"strconv"
@@ -42,22 +42,33 @@ type ICEServer struct {
 	Credential string   `json:"credential,omitempty"`
 }
 
-// Servers returns the iceServers for one viewer. With a shared secret its
-// credentials are its own and stop working at until.
-func (t TURN) Servers(until time.Time) []ICEServer {
+// Servers returns the iceServers for one viewer, named by viewer: who it
+// is, stable across its requests (the admin's sign-in, a handoff). With a
+// shared secret its credentials are its own and stop working for new
+// allocations at until. Its username's id is the same on every request,
+// so the TURN server's per-user quota (coturn's user-quota, which counts
+// by that id) holds one viewer to its share however often it asks.
+func (t TURN) Servers(until time.Time, viewer string) []ICEServer {
 	if !t.Enabled() {
 		return []ICEServer{}
 	}
 	s := ICEServer{URLs: append([]string(nil), t.URLs...)}
 	switch {
 	case t.Secret != "":
-		var id [8]byte
-		_, _ = rand.Read(id[:])
-		s.Username, s.Credential = restCredentials(t.Secret, until, hex.EncodeToString(id[:]))
+		s.Username, s.Credential = restCredentials(t.Secret, until, t.viewerID(viewer))
 	case t.Username != "":
 		s.Username, s.Credential = t.Username, t.Password
 	}
 	return []ICEServer{s}
+}
+
+// viewerID names a viewer to the TURN server without saying who it is: a
+// keyed hash, so neither the TURN server's logs nor the viewer learn the
+// session or handoff behind it.
+func (t TURN) viewerID(viewer string) string {
+	mac := hmac.New(sha256.New, []byte(t.Secret))
+	mac.Write([]byte("browserpier turn viewer\x00" + viewer))
+	return hex.EncodeToString(mac.Sum(nil)[:8])
 }
 
 // restCredentials are TURN REST API credentials (as coturn's

@@ -37,18 +37,39 @@ func TestRESTCredentials(t *testing.T) {
 	}
 }
 
+// userID is the part of a TURN REST username coturn counts quotas by.
+func userID(t *testing.T, s []ICEServer) string {
+	t.Helper()
+	_, id, ok := strings.Cut(s[0].Username, ":")
+	if !ok || id == "" {
+		t.Fatalf("username %q has no id", s[0].Username)
+	}
+	return id
+}
+
 func TestServersGiveEachViewerItsOwnExpiringCredentials(t *testing.T) {
-	if s := (TURN{}).Servers(time.Now()); s == nil || len(s) != 0 {
+	if s := (TURN{}).Servers(time.Now(), "handoff h1"); s == nil || len(s) != 0 {
 		t.Fatalf("no TURN: %#v, want an empty list (JSON [])", s)
 	}
 	tr := TURN{URLs: []string{"turn:pier.example.com:3478?transport=udp", "turn:pier.example.com:3478?transport=tcp"}, Secret: testSecret}
 	until := time.Now().Add(time.Hour).Truncate(time.Second)
-	a, b := tr.Servers(until), tr.Servers(until)
+	a := tr.Servers(until, "handoff h1")
 	if len(a) != 1 || len(a[0].URLs) != 2 {
 		t.Fatalf("servers: %#v", a)
 	}
-	if a[0].Username == b[0].Username {
-		t.Fatal("two viewers got the same username")
+	// One viewer keeps its id, whenever it asks and whatever the expiry,
+	// so the TURN server's per-user quota holds it; others get their own.
+	if again := tr.Servers(until.Add(time.Hour), "handoff h1"); userID(t, again) != userID(t, a) {
+		t.Fatal("one viewer got two ids")
+	}
+	if other := tr.Servers(until, "handoff h2"); userID(t, other) == userID(t, a) {
+		t.Fatal("two viewers got the same id")
+	}
+	if other := (TURN{URLs: tr.URLs, Secret: testSecret + "x"}).Servers(until, "handoff h1"); userID(t, other) == userID(t, a) {
+		t.Fatal("the id doesn't depend on the secret, so anyone could work out whose it is")
+	}
+	if strings.Contains(a[0].Username, "h1") || len(userID(t, a)) != 16 {
+		t.Fatalf("the id %q says who the viewer is", userID(t, a))
 	}
 	exp, _, ok := strings.Cut(a[0].Username, ":")
 	if !ok || exp != strconv.FormatInt(until.Unix(), 10) {
@@ -63,7 +84,7 @@ func TestServersGiveEachViewerItsOwnExpiringCredentials(t *testing.T) {
 		t.Fatal("the secret reached the viewer")
 	}
 
-	static := TURN{URLs: []string{"turns:turn.example.net:443"}, Username: "pier", Password: "static-pass"}.Servers(until)
+	static := TURN{URLs: []string{"turns:turn.example.net:443"}, Username: "pier", Password: "static-pass"}.Servers(until, "handoff h1")
 	if static[0].Username != "pier" || static[0].Credential != "static-pass" {
 		t.Fatalf("static login: %#v", static)
 	}
@@ -208,7 +229,7 @@ func TestRelayOnlyViewerConnectsThroughTURN(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { _ = r.Close() }()
-			if relayOnlyConnects(t, r, ip, r.ICEServers(time.Now().Add(time.Minute))) != nil {
+			if relayOnlyConnects(t, r, ip, r.ICEServers(time.Now().Add(time.Minute), "test viewer")) != nil {
 				t.Fatal("no connection through TURN")
 			}
 		})
@@ -219,7 +240,7 @@ func TestRelayOnlyViewerConnectsThroughTURN(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = r.Close() }()
-		if relayOnlyConnects(t, r, ip, r.ICEServers(time.Now().Add(-time.Minute))) == nil {
+		if relayOnlyConnects(t, r, ip, r.ICEServers(time.Now().Add(-time.Minute), "test viewer")) == nil {
 			t.Fatal("expired credentials still relay")
 		}
 	})
@@ -327,23 +348,40 @@ func TestICEServersNeedTheAdmin(t *testing.T) {
 			t.Fatalf("cookie %q: %d %s", cookie, rec.Code, rec.Body)
 		}
 	}
+	servers := func(cookie string) []ICEServer {
+		t.Helper()
+		rec := get(cookie)
+		if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("signed in: %d %v", rec.Code, rec.Header())
+		}
+		var out struct {
+			ICEServers []ICEServer `json:"iceServers"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || len(out.ICEServers) != 1 || out.ICEServers[0].Credential == "" {
+			t.Fatalf("signed in: %s (%v)", rec.Body, err)
+		}
+		return out.ICEServers
+	}
 	cookie, _, err := admin.NewSession(ctx, false, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec := get(cookie)
-	if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "no-store" {
-		t.Fatalf("signed in: %d %v", rec.Code, rec.Header())
-	}
-	var out struct {
-		ICEServers []ICEServer `json:"iceServers"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || len(out.ICEServers) != 1 || out.ICEServers[0].Credential == "" {
-		t.Fatalf("signed in: %s (%v)", rec.Body, err)
-	}
-	exp, _, _ := strings.Cut(out.ICEServers[0].Username, ":")
+	first := servers(cookie)
+	exp, _, _ := strings.Cut(first[0].Username, ":")
 	n, _ := strconv.ParseInt(exp, 10, 64)
 	if left := time.Until(time.Unix(n, 0)); left < LiveTURNLifetime-time.Minute || left > LiveTURNLifetime {
 		t.Fatalf("the admin's credentials last %v", left)
+	}
+	// One signed-in browser is one viewer to the TURN server's quota,
+	// however often it asks; another browser is another.
+	if userID(t, servers(cookie)) != userID(t, first) {
+		t.Fatal("asking again gave the same browser a new TURN id")
+	}
+	other, _, err := admin.NewSession(ctx, false, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if userID(t, servers(other)) == userID(t, first) {
+		t.Fatal("two signed-in browsers share a TURN id")
 	}
 }

@@ -776,6 +776,15 @@ func TestTURNCredentialsOnlyForTheHolder(t *testing.T) {
 	if until := time.Unix(n, 0); until.Before(h.ExpiresAt) || until.After(h.ExpiresAt.Add(2*time.Minute)) {
 		t.Fatalf("credentials until %v for a link that expires at %v", until, h.ExpiresAt)
 	}
+	// Asking again gets the same TURN user, so the TURN server's per-user
+	// quota holds the link however often its page reloads, and the user
+	// says nothing of the link or the handoff.
+	if again := f.do(phone, "GET", "/h/"+token+"/ice", nil, nil); !strings.Contains(again.body, `"username":"`+out.ICEServers[0].Username+`"`) {
+		t.Fatalf("a second request got another TURN user: %s, then %s", out.ICEServers[0].Username, again.body)
+	}
+	if u := out.ICEServers[0].Username; strings.Contains(u, h.ID) || strings.Contains(u, token) {
+		t.Fatalf("the TURN user %q names the handoff", u)
+	}
 
 	if p := f.do(phone, "POST", "/h/"+token+"/finish", url.Values{"status": {"done"}}, nil); p.code != http.StatusOK {
 		t.Fatalf("finish: %d", p.code)

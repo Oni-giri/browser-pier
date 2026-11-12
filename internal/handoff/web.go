@@ -305,14 +305,16 @@ func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 }
 
 // ice gives the holder the live view's ICE servers, with TURN credentials
-// that run out shortly after the link does.
+// that open no new relays after the link has expired. The handoff is the
+// viewer, so asking again and again doesn't get it more of the TURN
+// server than its quota.
 func (w *Web) ice(rw http.ResponseWriter, r *http.Request) {
 	h, err := w.svc.ByToken(r.Context(), r.PathValue("token"))
 	if err != nil || h.Status.Final() || !w.holder(r, h) {
 		http.Error(rw, "this link isn't open here", http.StatusForbidden)
 		return
 	}
-	w.live.ICE(rw, r, h.ExpiresAt.Add(time.Minute))
+	w.live.ICE(rw, r, h.ExpiresAt.Add(time.Minute), "handoff "+h.ID)
 }
 
 // offer connects the live view; the holder has control from the start.
