@@ -77,7 +77,7 @@ With Podman 5, that passes only after two changes to the host.
 host_containers_internal_ip = "100.64.0.7"
 ```
 
-Not the address on your default route: pasta copies that one into the containers' network, where it means the container itself. A second interface's address works, such as a Tailscale one. `podman run --rm alpine getent hosts host.docker.internal` shows the address containers get. Setting `BROWSERPIER_TEST_SITE_HOST` to that address instead works too.
+Not the address on your default route: pasta copies that one into the containers' network, where it means the container itself. A second interface's address works, such as a Tailscale one. A running `podman system service` keeps the setting it started with, so restart it after the edit. `podman run --rm alpine getent hosts host.docker.internal` shows the address containers get. Setting `BROWSERPIER_TEST_SITE_HOST` to that address instead works too.
 
 **Stopping the last container** (Ubuntu). When the last container on the rootless network stops, Podman kills `pasta`, and Ubuntu's AppArmor profile for `pasta` refuses the signal, so the stop returns `rootless netns: kill network process: permission denied`. The container has stopped, so BrowserPier only logs a warning, but the host should still be fixed: add this line to the profile in `/etc/apparmor.d/usr.bin.pasta`, after `include <abstractions/pasta>`,
 
@@ -85,7 +85,7 @@ Not the address on your default route: pasta copies that one into the containers
   signal (receive) peer=podman,
 ```
 
-then reload it with `sudo apparmor_parser -r /etc/apparmor.d/usr.bin.pasta`.
+then reload it with `sudo apparmor_parser -r /etc/apparmor.d/usr.bin.pasta`. The file comes with the `passt` package, so an upgrade may ask about the edit or undo it; check the line is still there afterwards.
 
 ## Running it locally
 
