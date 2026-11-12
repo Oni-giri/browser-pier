@@ -3,13 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/xml"
+	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -56,18 +57,79 @@ func TestWindowManagerCommand(t *testing.T) {
 	}
 }
 
-// The taskbar's height in jwmrc is the one the window is sized around.
-func TestJWMTrayHeightMatchesPanelHeight(t *testing.T) {
+// jwmrc is the window manager's configuration, as JWM reads it.
+type jwmrc struct {
+	Trays []struct {
+		X        int    `xml:"x,attr"`
+		Y        int    `xml:"y,attr"`
+		Height   int    `xml:"height,attr"`
+		Autohide string `xml:"autohide,attr"`
+	} `xml:"Tray"`
+	Groups []struct {
+		Class   []string `xml:"Class"`
+		Options []string `xml:"Option"`
+	} `xml:"Group"`
+	StartupCommands []string `xml:"StartupCommand"`
+}
+
+// jwm -p, which the image build runs, says nothing of malformed XML or a
+// height that isn't a number, so jwmrc is checked here: well formed, the
+// taskbar the window is sized around, a ready file for startup to wait
+// for, and nothing on the desktop that starts a program or touches the
+// browser's window.
+func TestJWMConfig(t *testing.T) {
 	b, err := os.ReadFile("../jwmrc")
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := regexp.MustCompile(`<Tray [^>]*\bheight="(\d+)"`).FindSubmatch(b)
-	if m == nil || string(m[1]) != strconv.Itoa(panelHeight) {
-		t.Errorf("jwmrc's tray height is %q, want panelHeight, %d", m, panelHeight)
+	// Every token, not just the first element, so trailing junk fails too.
+	dec := xml.NewDecoder(bytes.NewReader(b))
+	for {
+		tok, err := dec.Token()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("jwmrc isn't well-formed XML: %v", err)
+		}
+		if el, ok := tok.(xml.StartElement); ok {
+			switch el.Name.Local {
+			// Menus, key and mouse bindings and buttons start programs or
+			// act on windows (a window menu has Kill).
+			case "RootMenu", "Menu", "Program", "Key", "Mouse", "TrayButton", "Swallow", "Include", "RestartCommand", "ShutdownCommand":
+				t.Errorf("jwmrc has <%s>", el.Name.Local)
+			}
+		}
 	}
-	if !strings.Contains(string(b), desktopReady) {
-		t.Errorf("jwmrc doesn't create %s, so startup would wait for nothing", desktopReady)
+	var c jwmrc
+	if err := xml.Unmarshal(b, &c); err != nil {
+		t.Fatalf("jwmrc: %v", err)
+	}
+	if len(c.Trays) != 1 {
+		t.Fatalf("jwmrc has %d trays, want 1", len(c.Trays))
+	}
+	// At the bottom, so the window stays at 0,0, and always shown, so it
+	// reserves its strip.
+	if tr := c.Trays[0]; tr.X != 0 || tr.Y != -1 || tr.Height != panelHeight || tr.Autohide != "off" {
+		t.Errorf("tray %+v, want x 0, y -1 (the bottom), height %d (panelHeight) and autohide off", tr, panelHeight)
+	}
+	if len(c.StartupCommands) != 1 || !strings.Contains(c.StartupCommands[0], desktopReady) {
+		t.Errorf("startup commands %q, want one that creates %s, which startup waits for", c.StartupCommands, desktopReady)
+	}
+	chromium := false
+	for _, g := range c.Groups {
+		if !slices.Contains(g.Class, "Chromium") {
+			continue
+		}
+		chromium = true
+		for _, want := range []string{"noborder", "notitle", "nolist", "nomove", "noresize"} {
+			if !slices.Contains(g.Options, want) {
+				t.Errorf("Chromium's window lacks %s", want)
+			}
+		}
+	}
+	if !chromium {
+		t.Error("jwmrc has no group for Chromium's window")
 	}
 }
 
