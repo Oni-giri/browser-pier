@@ -991,23 +991,33 @@ func (m *Manager) stopIf(ctx context.Context, id string, cond func(*live) bool) 
 }
 
 // runStop asks Docker to stop the container. On failure it puts the
-// session back as it was, so a later Stop can try again.
+// session back as it was, so a later Stop can try again. An error that
+// comes back after the container has exited and the session has ended is
+// no failure: the session's final state says how the browser stopped
+// (PROJ-64).
 func (m *Manager) runStop(l *live, attempt *stopAttempt, cid string, prev State) {
 	ctx, cancel := context.WithTimeout(m.ctx, stopTimeout)
 	defer cancel()
 	err := m.rt.Stop(ctx, cid)
 	if err != nil && m.ctx.Err() == nil {
-		m.log.Warn("stopping the browser container", "container", cid, "err", err)
-		m.mu.Lock()
-		if l.sess.State == Stopping {
-			l.sess.State = prev
-			l.sess.UpdatedAt = m.now()
-			if err := updateSession(context.Background(), m.db, l.sess); err != nil {
-				m.log.Error("saving session state", "session", l.sess.ID, "err", err)
+		select {
+		case <-l.done:
+			m.log.Warn("the browser container stopped, but Docker reported an error stopping it; check the host's container runtime",
+				"container", cid, "err", err)
+			err = nil
+		default:
+			m.log.Warn("stopping the browser container", "container", cid, "err", err)
+			m.mu.Lock()
+			if l.sess.State == Stopping {
+				l.sess.State = prev
+				l.sess.UpdatedAt = m.now()
+				if err := updateSession(context.Background(), m.db, l.sess); err != nil {
+					m.log.Error("saving session state", "session", l.sess.ID, "err", err)
+				}
 			}
+			l.stop = nil
+			m.mu.Unlock()
 		}
-		l.stop = nil
-		m.mu.Unlock()
 	}
 	attempt.err = err
 	close(attempt.done)

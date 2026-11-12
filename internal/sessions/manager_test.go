@@ -681,6 +681,41 @@ func TestStopErrorLeavesTheSessionRunning(t *testing.T) {
 	}
 }
 
+// PROJ-64: rootless Podman can stop the container, let the watcher record
+// the exit, and only then report an error from tearing down the network.
+// The stop has done its job; the exit status says how it went.
+func TestStopErrorAfterTheSessionEndedIsNoFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		want   State
+	}{
+		{"closed cleanly", 0, Stopped},
+		{"killed", 137, Failed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			s := f.start(f.m)
+			l := f.m.find(s.ID)
+			f.rt.StopStatus = tc.status
+			f.rt.AfterStop = func(string) error {
+				<-l.done // the watcher has ended the session
+				return errors.New("rootless netns: kill network process: permission denied")
+			}
+			got, err := f.m.Stop(context.Background(), s.ID)
+			if err != nil || got.State != tc.want {
+				t.Fatalf("Stop = %s, %v; want %s and no error", got.State, err, tc.want)
+			}
+			if got := f.stored(s.ID); got.State != tc.want {
+				t.Fatalf("stored %s, want %s", got.State, tc.want)
+			}
+			if _, live := f.m.Live("google"); live {
+				t.Fatal("the profile still has a live session")
+			}
+		})
+	}
+}
+
 func TestConcurrentStopsShareOneAttempt(t *testing.T) {
 	f := newFixture(t)
 	s := f.start(f.m)

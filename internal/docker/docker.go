@@ -356,18 +356,26 @@ func (c *Client) Start(ctx context.Context, id string) error {
 // outcome comes from its exit status, which tells a clean close from a
 // kill. Rootless Podman on Ubuntu reports one when the host's AppArmor
 // profile for pasta keeps it from tearing down the network after the
-// last container stops (PROJ-64).
+// last container stops (PROJ-64). By the time that error arrives, the
+// session's watcher may have seen the container exit and removed it, so a
+// container that is gone counts as stopped too, unless the stop itself
+// found no container.
 func (c *Client) Stop(ctx context.Context, id string) error {
 	_, err := c.api.ContainerStop(ctx, id, client.ContainerStopOptions{})
-	if err == nil || ctx.Err() != nil {
+	if err == nil || ctx.Err() != nil || cerrdefs.IsNotFound(err) {
 		return err
 	}
+	state := "removed"
 	res, ierr := c.api.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
-	if ierr != nil || res.Container.State == nil || res.Container.State.Running {
+	switch {
+	case cerrdefs.IsNotFound(ierr):
+	case ierr != nil || res.Container.State == nil || res.Container.State.Running:
 		return err
+	default:
+		state = string(res.Container.State.Status)
 	}
 	c.log.Warn("the browser container stopped, but Docker reported an error stopping it; check the host's container runtime",
-		"container", id, "state", res.Container.State.Status, "err", err)
+		"container", id, "state", state, "err", err)
 	return nil
 }
 

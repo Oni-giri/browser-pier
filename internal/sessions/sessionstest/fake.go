@@ -29,7 +29,11 @@ type FakeRuntime struct {
 	Unhealthy   bool // never answer on the socket
 	StopStatus  int
 	StopErr     error // Stop fails with this, leaving the container running
-	LastLog     string
+	// AfterStop, if set, is called (without the lock) once Stop has made
+	// the container exit, and Stop returns what it returns: a runtime that
+	// reports an error after the container has stopped (PROJ-64).
+	AfterStop func(id string) error
+	LastLog   string
 	// Memory is what MemoryUsage reports for every container.
 	Memory int64
 	// Control, if set, serves each started container's control socket
@@ -116,16 +120,22 @@ func (f *FakeRuntime) exitLocked(c *FakeContainer, status int) {
 
 func (f *FakeRuntime) Stop(_ context.Context, id string) error {
 	f.Mu.Lock()
-	defer f.Mu.Unlock()
 	c, ok := f.Containers[id]
 	if !ok {
+		f.Mu.Unlock()
 		return errors.New("no such container")
 	}
 	f.Stops++
 	if f.StopErr != nil {
+		f.Mu.Unlock()
 		return f.StopErr
 	}
 	f.exitLocked(c, f.StopStatus)
+	after := f.AfterStop
+	f.Mu.Unlock()
+	if after != nil {
+		return after(id)
+	}
 	return nil
 }
 
