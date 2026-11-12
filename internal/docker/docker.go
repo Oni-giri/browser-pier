@@ -10,10 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
@@ -92,13 +94,20 @@ type Client struct {
 	// seccompOpt is the security option that applies it: the JSON itself
 	// for Docker, a host path for Podman (see UseDataDir).
 	seccompOpt string
-	// apparmorOpt sets the containers' AppArmor profile, or is empty for
-	// the daemon's default (see UseDataDir).
-	apparmorOpt  string
-	apparmorNote AppArmorNote // how it was chosen, for the log
-	apparmor     string       // the profile asked for (Options.AppArmor)
-	userns       string
-	instance     string
+	apparmor   string       // the profile asked for (Options.AppArmor)
+	plan       appArmorPlan // how to choose one (see planAppArmor)
+	// apparmorMu guards the choice, which a browser start may make again
+	// while it isn't settled (see selectAppArmor).
+	apparmorMu sync.Mutex
+	// apparmorOpt sets new containers' AppArmor profile, or is empty for
+	// the daemon's default.
+	apparmorOpt     string
+	apparmorSettled bool
+	apparmorNote    AppArmorNote // the last one logged
+	userns          string
+	user            string // uid:gid browsers run as, and the sandbox check
+	instance        string
+	log             *slog.Logger
 }
 
 // Options configure a Client.
@@ -114,6 +123,11 @@ type Options struct {
 	// AppArmor names the containers' AppArmor profile. Empty means one is
 	// chosen to suit the host (see planAppArmor).
 	AppArmor string
+	// User is the uid:gid browsers run as; the sandbox check runs as it
+	// too. Empty means the image's own user.
+	User string
+	// Log gets what's worth saying about the AppArmor choice. Nil: nothing.
+	Log *slog.Logger
 }
 
 // New connects to the Docker daemon named by the usual DOCKER_* variables.
@@ -133,7 +147,12 @@ func New(o Options) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{api: api, image: image, seccomp: seccomp.String(), seccompOpt: "seccomp=" + seccomp.String(), apparmor: o.AppArmor, userns: o.UsernsMode, instance: o.Instance}, nil
+	log := o.Log
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+	return &Client{api: api, image: image, seccomp: seccomp.String(), seccompOpt: "seccomp=" + seccomp.String(),
+		apparmor: o.AppArmor, userns: o.UsernsMode, user: o.User, instance: o.Instance, log: log}, nil
 }
 
 // UseDataDir finishes setting up against the daemon, given the data dir as
@@ -141,7 +160,8 @@ func New(o Options) (*Client, error) {
 // seccomp profile as a path rather than inline, so for Podman the profile
 // is written into the data dir and passed by its host path. It then picks
 // the browser containers' AppArmor profile, which may take starting a
-// short-lived container to check (see planAppArmor).
+// short-lived container to check (see planAppArmor). It doesn't pull the
+// browser image for that: without it, the first browser start chooses.
 func (c *Client) UseDataDir(ctx context.Context, dataDir, hostDataDir string) error {
 	info, err := c.api.Info(ctx, client.InfoOptions{})
 	if err != nil {
@@ -156,10 +176,10 @@ func (c *Client) UseDataDir(ctx context.Context, dataDir, hostDataDir string) er
 			return err
 		}
 	}
-	plan := planAppArmor(info.Info.SecurityOptions, c.apparmor, ubuntuUsernsRestriction())
-	c.apparmorOpt, c.apparmorNote = chooseAppArmor(plan, func(opt string) (bool, string, error) {
-		return c.checkSandbox(ctx, opt)
-	})
+	c.apparmorMu.Lock()
+	defer c.apparmorMu.Unlock()
+	c.plan = planAppArmor(info.Info.SecurityOptions, c.apparmor, ubuntuUsernsRestriction())
+	c.selectAppArmor(ctx, false)
 	return nil
 }
 
@@ -202,9 +222,10 @@ func (c *Client) Ping(ctx context.Context) error {
 // Create creates a browser container, pulling the image first if Docker
 // doesn't have it.
 func (c *Client) Create(ctx context.Context, spec BrowserSpec) (string, error) {
-	cfg, host := browserConfig(c.image, c.seccompOpt, c.apparmorOpt, spec)
+	opt := c.appArmorForCreate(ctx)
+	cfg, host := browserConfig(c.image, c.seccompOpt, opt, spec)
 	cfg.Labels[LabelInstance] = c.instance
-	cfg.Labels[LabelSpec] = c.Spec()
+	cfg.Labels[LabelSpec] = specLabel(opt)
 	host.UsernsMode = container.UsernsMode(c.userns)
 	opts := client.ContainerCreateOptions{Name: spec.Name, Config: cfg, HostConfig: host}
 	res, err := c.api.ContainerCreate(ctx, opts)
@@ -276,7 +297,18 @@ func browserConfig(image, seccompOpt, apparmorOpt string, spec BrowserSpec) (*co
 
 func (c *Client) Start(ctx context.Context, id string) error {
 	_, err := c.api.ContainerStart(ctx, id, client.ContainerStartOptions{})
-	return appArmorStartError(err, c.apparmor)
+	if !isAppArmorError(err) {
+		return err
+	}
+	c.apparmorMu.Lock()
+	defer c.apparmorMu.Unlock()
+	profile, auto := strings.TrimPrefix(c.apparmorOpt, "apparmor="), c.plan.try != nil
+	if auto {
+		// Unloaded since the check, say by an AppArmor reload: check
+		// again before the next start.
+		c.apparmorSettled = false
+	}
+	return appArmorStartError(err, profile, auto)
 }
 
 // Stop asks the container to stop and returns once it has, killing it after

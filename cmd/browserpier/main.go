@@ -99,7 +99,9 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	dc, err := docker.New(docker.Options{Image: image, UsernsMode: cfg.UsernsMode, Instance: instance, AppArmor: cfg.BrowserAppArmor})
+	uid, gid := browserUser(os.Getuid(), os.Getgid())
+	dc, err := docker.New(docker.Options{Image: image, UsernsMode: cfg.UsernsMode, Instance: instance,
+		AppArmor: cfg.BrowserAppArmor, User: docker.User(uid, gid), Log: log})
 	if err != nil {
 		return err
 	}
@@ -114,13 +116,12 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	// It may check the AppArmor profile with the browser image, if it's
+	// here already: about a second per profile tried, 30 s at most each,
+	// and never a pull (the first browser start does that).
 	if err := dc.UseDataDir(ctx, dataDir, hostDataDir); err != nil {
 		return err
 	}
-	if note := dc.AppArmorNote(); note.Msg != "" {
-		log.Log(ctx, note.Level, note.Msg)
-	}
-	uid, gid := browserUser(os.Getuid(), os.Getgid())
 	mgr, err := sessions.NewManager(database, dc, sessions.Layout{DataDir: dataDir, HostDataDir: hostDataDir, UID: uid, GID: gid}, log)
 	if err != nil {
 		return err

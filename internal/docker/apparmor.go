@@ -112,31 +112,53 @@ type AppArmorNote struct {
 	Msg   string
 }
 
-// chooseAppArmor follows a plan. check reports whether Chromium's sandbox
-// works under an option and if not why, or an error if it couldn't tell.
+// verdict is a sandbox check's answer for one AppArmor option.
+type verdict int
+
+const (
+	unknown verdict = iota // the check couldn't tell (the daemon, a timeout…)
+	works
+	fails // the sandbox fails, or the daemon can't apply the profile
+)
+
+// appArmorChoice is where following a plan got.
+type appArmorChoice struct {
+	opt string
+	// settled is false when a check couldn't tell: opt is then the plan's
+	// fallback for now, and the next browser start checks again.
+	settled bool
+	note    AppArmorNote
+}
+
+// chooseAppArmor follows a plan. check says whether Chromium's sandbox
+// works under an option, and if not why.
 //
 // Not finding browserpier loaded isn't fatal: browsers then run under
 // Docker's default if the sandbox works there, and otherwise unconfined,
 // as before BrowserPier had its own profile, with a warning. Refusing
-// would break every host that updated without loading it.
-func chooseAppArmor(p appArmorPlan, check func(opt string) (bool, string, error)) (string, AppArmorNote) {
+// would break every host that updated without loading it. A check that
+// can't tell settles nothing, so a passing hiccup doesn't drop AppArmor
+// until the next restart.
+func chooseAppArmor(p appArmorPlan, check func(opt string) (verdict, string)) appArmorChoice {
 	if p.try == nil {
-		return p.fixed, AppArmorNote{}
+		return appArmorChoice{opt: p.fixed, settled: true}
 	}
 	var failed []string
 	for _, opt := range p.try {
-		ok, why, err := check(opt)
-		if err != nil {
-			return p.fallback, AppArmorNote{slog.LevelWarn, fmt.Sprintf(
-				"couldn't check which AppArmor profile Chromium's sandbox works under (%v), so browser containers run %s", err, describeAppArmor(p.fallback))}
+		v, why := check(opt)
+		switch v {
+		case works:
+			return appArmorChoice{opt: opt, settled: true, note: appArmorNote(opt, failed)}
+		case fails:
+			failed = append(failed, describeAppArmor(opt)+": "+why)
+		default:
+			return appArmorChoice{opt: p.fallback, note: AppArmorNote{slog.LevelWarn, fmt.Sprintf(
+				"couldn't check whether Chromium's sandbox works %s (%s), so for now browser containers run %s; BrowserPier checks again before the next browser starts",
+				describeAppArmor(opt), why, describeAppArmor(p.fallback))}}
 		}
-		if ok {
-			return opt, appArmorNote(opt, failed)
-		}
-		failed = append(failed, describeAppArmor(opt)+": "+why)
 	}
-	return p.fallback, AppArmorNote{slog.LevelError,
-		"Chromium's sandbox fails under every AppArmor choice, so browsers won't start; are user namespaces turned off on the Docker host? Tried " + strings.Join(failed, "; ")}
+	return appArmorChoice{opt: p.fallback, settled: true, note: AppArmorNote{slog.LevelError,
+		"Chromium's sandbox fails under every AppArmor choice, so browsers won't start; are user namespaces turned off on the Docker host? Tried " + strings.Join(failed, "; ")}}
 }
 
 func appArmorNote(opt string, failed []string) AppArmorNote {
@@ -147,7 +169,7 @@ func appArmorNote(opt string, failed []string) AppArmorNote {
 		return AppArmorNote{slog.LevelInfo, "browser containers keep Docker's default AppArmor profile: Chromium's sandbox works under it here"}
 	}
 	return AppArmorNote{slog.LevelWarn, "browser containers run without an AppArmor profile: Docker's default refuses Chromium's sandbox on this host (AppArmor 4, as on Debian 13), " +
-		`and BrowserPier's own profile isn't loaded. Load it to keep AppArmor: see "AppArmor" in deploy/README.md. Tried ` + strings.Join(failed, "; ")}
+		`and BrowserPier's own profile isn't loaded. Load it to keep AppArmor: with the compose file, "docker compose --profile apparmor up -d"; see "AppArmor" in deploy/README.md. Tried ` + strings.Join(failed, "; ")}
 }
 
 func describeAppArmor(opt string) string {
@@ -160,18 +182,87 @@ func describeAppArmor(opt string) string {
 	return "under the AppArmor profile " + strings.TrimPrefix(opt, "apparmor=")
 }
 
+// selectAppArmor follows the plan, checking with the browser image, and
+// logs the outcome when it says something new. With pull, a missing image
+// is pulled first; without, the choice waits for the first browser start.
+// The caller holds c.mu.
+func (c *Client) selectAppArmor(ctx context.Context, pull bool) {
+	var ch appArmorChoice
+	switch ready, why := c.checkable(ctx, pull); {
+	case c.plan.try == nil || ready:
+		ch = chooseAppArmor(c.plan, func(opt string) (verdict, string) { return c.checkSandbox(ctx, opt) })
+	case !pull && why == "":
+		// Not pulled yet: the first browser start pulls it, and checks.
+		ch = appArmorChoice{opt: c.plan.fallback, note: AppArmorNote{slog.LevelInfo,
+			"the browser image isn't here yet, so the browsers' AppArmor profile is chosen at the first browser start"}}
+	default:
+		ch = appArmorChoice{opt: c.plan.fallback, note: AppArmorNote{slog.LevelWarn, fmt.Sprintf(
+			"couldn't check which AppArmor profile Chromium's sandbox works under (%s), so for now browser containers run %s; BrowserPier checks again before the next browser starts",
+			why, describeAppArmor(c.plan.fallback))}}
+	}
+	c.apparmorOpt, c.apparmorSettled = ch.opt, ch.settled
+	if ch.note.Msg != "" && ch.note != c.apparmorNote {
+		c.log.Log(ctx, ch.note.Level, ch.note.Msg)
+	}
+	c.apparmorNote = ch.note
+}
+
+// appArmorForCreate is the AppArmor option for a new browser container,
+// checking first if the choice isn't settled yet.
+func (c *Client) appArmorForCreate(ctx context.Context) string {
+	c.apparmorMu.Lock()
+	defer c.apparmorMu.Unlock()
+	if !c.apparmorSettled {
+		c.selectAppArmor(ctx, true)
+	}
+	return c.apparmorOpt
+}
+
 // LabelCheck marks the short-lived container that checks the sandbox.
 const LabelCheck = "io.browserpier.check"
+
+// LabelSandboxCheck on the browser image says it has the sandbox check.
+const LabelSandboxCheck = "io.browserpier.sandbox-check"
 
 // checkArg makes the browser image's entrypoint run its sandbox check.
 const checkArg = "sandbox-check"
 
+// checkTimeout bounds one check; it takes about a second.
+const checkTimeout = 30 * time.Second
+
+// checkable reports whether the browser image is here with its sandbox
+// check, pulling it first if pull is set. If not, why says why, or is
+// empty when the image just isn't pulled yet.
+func (c *Client) checkable(ctx context.Context, pull bool) (bool, string) {
+	if c.plan.try == nil {
+		return true, ""
+	}
+	res, err := c.api.ImageInspect(ctx, c.image)
+	if cerrdefs.IsNotFound(err) {
+		if !pull {
+			return false, ""
+		}
+		if err := c.pull(ctx); err != nil {
+			return false, err.Error()
+		}
+		res, err = c.api.ImageInspect(ctx, c.image)
+	}
+	if err != nil {
+		return false, "inspecting the browser image: " + err.Error()
+	}
+	if res.Config == nil || res.Config.Labels[LabelSandboxCheck] != "1" {
+		return false, fmt.Sprintf("the browser image %s has no sandbox check: it's older than this BrowserPier, so set BROWSERPIER_BROWSER_IMAGE to this release's", c.image)
+	}
+	return true, ""
+}
+
 // checkSandbox runs the browser image's sandbox check in a short-lived
 // container, with the browser containers' settings and the AppArmor option
-// opt: whether Chromium's sandbox works under it, and if not why. The
-// error is for when it can't tell, say if the image can't be pulled.
-func (c *Client) checkSandbox(ctx context.Context, opt string) (bool, string, error) {
-	cfg, host := browserConfig(c.image, c.seccompOpt, opt, BrowserSpec{})
+// opt: whether Chromium's sandbox works under it, and if not why. Only the
+// daemon refusing the profile, or the check itself failing, counts as
+// fails; any other error is unknown.
+func (c *Client) checkSandbox(ctx context.Context, opt string) (verdict, string) {
+	cfg, host := browserConfig(c.image, c.seccompOpt, opt, BrowserSpec{User: c.user})
 	cfg.Cmd = []string{checkArg}
 	cfg.Env = nil
 	cfg.StopTimeout = nil
@@ -180,48 +271,57 @@ func (c *Client) checkSandbox(ctx context.Context, opt string) (bool, string, er
 	host.ShmSize = 0
 	host.NetworkMode = "none"
 	host.UsernsMode = container.UsernsMode(c.userns)
+	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
+	defer cancel()
 	// "_" keeps it apart from browsers, named "browserpier-<profile>".
 	name := "browserpier_check_" + c.instance
 	if err := c.removeCheck(ctx, name); err != nil {
-		return false, "", err
+		return unknown, err.Error()
 	}
-	opts := client.ContainerCreateOptions{Name: name, Config: cfg, HostConfig: host}
-	res, err := c.api.ContainerCreate(ctx, opts)
-	if cerrdefs.IsNotFound(err) {
-		if err := c.pull(ctx); err != nil {
-			return false, "", err
-		}
-		res, err = c.api.ContainerCreate(ctx, opts)
-	}
+	res, err := c.api.ContainerCreate(ctx, client.ContainerCreateOptions{Name: name, Config: cfg, HostConfig: host})
 	if err != nil {
 		// A daemon may refuse a profile that isn't loaded when creating.
-		return false, shorten(err.Error()), nil
+		return appArmorVerdict(err), shorten(err.Error())
 	}
 	defer func() {
 		rmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		_, _ = c.api.ContainerRemove(rmCtx, res.ID, client.ContainerRemoveOptions{Force: true})
 		cancel()
 	}()
-	runCtx, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
 	// Not c.Start, which words a missing profile for browsers.
-	if _, err := c.api.ContainerStart(runCtx, res.ID, client.ContainerStartOptions{}); err != nil {
+	if _, err := c.api.ContainerStart(ctx, res.ID, client.ContainerStartOptions{}); err != nil {
 		// runc: "unable to apply apparmor profile: ... no such file or
 		// directory" when the profile isn't loaded.
-		return false, shorten(err.Error()), nil
+		return appArmorVerdict(err), shorten(err.Error())
 	}
-	code, err := c.Wait(runCtx, res.ID)
+	code, err := c.Wait(ctx, res.ID)
 	if err != nil {
-		return false, "", fmt.Errorf("waiting for the sandbox check: %w", err)
+		return unknown, "waiting for the sandbox check: " + err.Error()
 	}
 	if code == 0 {
-		return true, "", nil
+		return works, ""
 	}
-	line, err := c.LastLogLine(runCtx, res.ID)
+	line, err := c.LastLogLine(ctx, res.ID)
 	if err != nil || line == "" {
 		line = fmt.Sprintf("exit status %d", code)
 	}
-	return false, line, nil
+	if strings.HasPrefix(line, "sandbox-check: failed") {
+		return fails, line
+	}
+	return unknown, "the sandbox check didn't run: " + line
+}
+
+// appArmorVerdict is a create or start error's verdict: fails if the
+// daemon couldn't apply the AppArmor profile, unknown otherwise.
+func appArmorVerdict(err error) verdict {
+	if isAppArmorError(err) {
+		return fails
+	}
+	return unknown
+}
+
+func isAppArmorError(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "apparmor")
 }
 
 // removeCheck removes a check container a previous run left behind, say
@@ -249,31 +349,61 @@ func shorten(s string) string {
 	return s
 }
 
-// appArmorStartError words a failure to start a browser container under a
-// named AppArmor profile (BROWSERPIER_BROWSER_APPARMOR) that isn't loaded.
-func appArmorStartError(err error, profile string) error {
-	if err == nil || profile == "" || profile == "unconfined" || !strings.Contains(strings.ToLower(err.Error()), "apparmor") {
+// ErrAppArmorNotLoaded is a browser container that wouldn't start because
+// its AppArmor profile isn't loaded on the Docker host. When BrowserPier
+// chose the profile, it checks again before the next browser start, so a
+// second try may work.
+var ErrAppArmorNotLoaded = errors.New("the browser's AppArmor profile isn't loaded on the Docker host")
+
+// appArmorStartError words a failure to start a browser container under
+// a named AppArmor profile, chosen (auto) or set in
+// BROWSERPIER_BROWSER_APPARMOR, that isn't loaded.
+func appArmorStartError(err error, profile string, auto bool) error {
+	if !isAppArmorError(err) || profile == "" || profile == "unconfined" {
 		return err
 	}
-	return fmt.Errorf("docker couldn't apply the AppArmor profile %q to the browser container; is it loaded on the Docker host? See \"AppArmor\" in deploy/README.md: %w", profile, err)
+	if auto {
+		return fmt.Errorf("%w: docker couldn't apply %q, loaded when BrowserPier checked (reloading AppArmor on the host unloads it; Umbrel loads it again when the app starts), so it checks again before the next start: %w", ErrAppArmorNotLoaded, profile, err)
+	}
+	return fmt.Errorf("%w: docker couldn't apply %q, set in BROWSERPIER_BROWSER_APPARMOR; is it loaded? See \"AppArmor\" in deploy/README.md: %w", ErrAppArmorNotLoaded, profile, err)
 }
 
-// Spec is the definition version this client labels its containers with:
-// docker.Spec, plus the AppArmor option when there is one, so that a
+// specLabel is the definition version a container gets under an AppArmor
+// option: docker.Spec, plus the option when there is one, so that a
 // browser started under another AppArmor choice isn't picked up after a
 // restart (see sessions.Reconcile).
-func (c *Client) Spec() string {
-	if c.apparmorOpt == "" {
+func specLabel(apparmorOpt string) string {
+	if apparmorOpt == "" {
 		return Spec
 	}
-	return Spec + ";" + c.apparmorOpt
+	return Spec + ";" + apparmorOpt
+}
+
+// Spec is the definition version this client labels new containers with.
+func (c *Client) Spec() string {
+	c.apparmorMu.Lock()
+	defer c.apparmorMu.Unlock()
+	return specLabel(c.apparmorOpt)
+}
+
+// Outdated reports whether a container labelled with spec must not run on
+// under this BrowserPier: an older definition, or another AppArmor choice.
+// While the choice isn't settled, any AppArmor choice is kept.
+func (c *Client) Outdated(spec string) bool {
+	if base, _, _ := strings.Cut(spec, ";"); base != Spec {
+		return true
+	}
+	c.apparmorMu.Lock()
+	defer c.apparmorMu.Unlock()
+	return c.apparmorSettled && spec != specLabel(c.apparmorOpt)
 }
 
 // AppArmor is the browser containers' AppArmor profile: "unconfined", a
 // profile's name, or empty for the daemon's default, or none on a daemon
-// without AppArmor. Known after UseDataDir.
-func (c *Client) AppArmor() string { return strings.TrimPrefix(c.apparmorOpt, "apparmor=") }
-
-// AppArmorNote says how the AppArmor profile was chosen, for the log.
-// Known after UseDataDir.
-func (c *Client) AppArmorNote() AppArmorNote { return c.apparmorNote }
+// without AppArmor. Known after UseDataDir, and may change while the choice
+// isn't settled.
+func (c *Client) AppArmor() string {
+	c.apparmorMu.Lock()
+	defer c.apparmorMu.Unlock()
+	return strings.TrimPrefix(c.apparmorOpt, "apparmor=")
+}

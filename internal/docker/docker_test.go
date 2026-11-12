@@ -1,11 +1,11 @@
 package docker
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 
@@ -187,57 +187,84 @@ func TestPlanAppArmor(t *testing.T) {
 
 func TestChooseAppArmor(t *testing.T) {
 	plan := appArmorPlan{try: []string{"apparmor=browserpier", "", "apparmor=unconfined"}, fallback: "apparmor=unconfined"}
-	// works is the options the sandbox works under; the others fail.
-	choose := func(p appArmorPlan, works ...string) (string, AppArmorNote, []string) {
+	// verdicts maps options to the check's answer; the others fail.
+	choose := func(p appArmorPlan, verdicts map[string]verdict) (appArmorChoice, []string) {
 		var tried []string
-		opt, note := chooseAppArmor(p, func(opt string) (bool, string, error) {
+		ch := chooseAppArmor(p, func(opt string) (verdict, string) {
 			tried = append(tried, opt)
-			return slices.Contains(works, opt), "Check failed: Permission denied (13)", nil
+			if v, ok := verdicts[opt]; ok {
+				return v, "daemon hiccup"
+			}
+			return fails, "sandbox-check: failed: permission denied"
 		})
-		return opt, note, tried
+		return ch, tried
 	}
 
 	// Loaded: the first choice, checked once.
-	if opt, note, tried := choose(plan, "apparmor=browserpier", "", "apparmor=unconfined"); opt != "apparmor=browserpier" || len(tried) != 1 || note.Level != slog.LevelInfo {
-		t.Errorf("profile loaded: %q %+v after %q", opt, note, tried)
+	if ch, tried := choose(plan, map[string]verdict{"apparmor=browserpier": works, "": works}); ch.opt != "apparmor=browserpier" || !ch.settled || len(tried) != 1 || ch.note.Level != slog.LevelInfo {
+		t.Errorf("profile loaded: %+v after %q", ch, tried)
 	}
 	// AppArmor 3 (Debian 12): nothing to load, and Docker's profile works.
-	if opt, note, _ := choose(plan, "", "apparmor=unconfined"); opt != "" || note.Level != slog.LevelInfo {
-		t.Errorf("Debian 12: %q %+v", opt, note)
+	if ch, _ := choose(plan, map[string]verdict{"": works, "apparmor=unconfined": works}); ch.opt != "" || !ch.settled || ch.note.Level != slog.LevelInfo {
+		t.Errorf("Debian 12: %+v", ch)
 	}
-	// AppArmor 4 without the profile loaded: unconfined, with a warning
-	// that says what to do and what failed.
-	opt, note, _ := choose(plan, "apparmor=unconfined")
-	if opt != "apparmor=unconfined" || note.Level != slog.LevelWarn || !strings.Contains(note.Msg, "deploy/README.md") || !strings.Contains(note.Msg, "Permission denied") {
-		t.Errorf("not loaded: %q %+v", opt, note)
+	// AppArmor 4 without the profile loaded: unconfined, settled, with a
+	// warning that says what to do and what failed.
+	ch, _ := choose(plan, map[string]verdict{"apparmor=unconfined": works})
+	if ch.opt != "apparmor=unconfined" || !ch.settled || ch.note.Level != slog.LevelWarn || !strings.Contains(ch.note.Msg, "deploy/README.md") || !strings.Contains(ch.note.Msg, "permission denied") {
+		t.Errorf("not loaded: %+v", ch)
 	}
 	// Nothing works: an error, and the fallback.
-	if opt, note, tried := choose(plan); opt != "apparmor=unconfined" || note.Level != slog.LevelError || len(tried) != 3 {
-		t.Errorf("nothing works: %q %+v after %q", opt, note, tried)
+	if ch, tried := choose(plan, nil); ch.opt != "apparmor=unconfined" || !ch.settled || ch.note.Level != slog.LevelError || len(tried) != 3 {
+		t.Errorf("nothing works: %+v after %q", ch, tried)
 	}
-	// Can't check (the image won't pull): the fallback, with a warning.
-	opt, note = chooseAppArmor(appArmorPlan{try: plan.try}, func(string) (bool, string, error) { return false, "", errors.New("pull failed") })
-	if opt != "" || note.Level != slog.LevelWarn || !strings.Contains(note.Msg, "pull failed") {
-		t.Errorf("no check: %q %+v", opt, note)
+	// A check that can't tell settles nothing, whatever came before, and
+	// stops there: the fallback for now, with a warning.
+	for _, verdicts := range []map[string]verdict{{"apparmor=browserpier": unknown}, {"": unknown}} {
+		ch, tried := choose(plan, verdicts)
+		if ch.opt != "apparmor=unconfined" || ch.settled || ch.note.Level != slog.LevelWarn || !strings.Contains(ch.note.Msg, "daemon hiccup") {
+			t.Errorf("%v: %+v after %q", verdicts, ch, tried)
+		}
+	}
+	// A remote daemon's fallback is Docker's default.
+	if ch, _ := choose(appArmorPlan{try: plan.try}, map[string]verdict{"apparmor=browserpier": unknown}); ch.opt != "" || ch.settled {
+		t.Errorf("remote, unknown: %+v", ch)
 	}
 	// Nothing to check.
-	if opt, note, tried := choose(appArmorPlan{fixed: "apparmor=custom"}); opt != "apparmor=custom" || note.Msg != "" || tried != nil {
-		t.Errorf("fixed: %q %+v after %q", opt, note, tried)
+	if ch, tried := choose(appArmorPlan{fixed: "apparmor=custom"}, nil); ch.opt != "apparmor=custom" || !ch.settled || ch.note.Msg != "" || tried != nil {
+		t.Errorf("fixed: %+v after %q", ch, tried)
+	}
+}
+
+func TestAppArmorVerdict(t *testing.T) {
+	if appArmorVerdict(errors.New("unable to apply apparmor profile: apparmor failed to apply profile: write /proc/thread-self/attr/apparmor/exec: no such file or directory")) != fails {
+		t.Error("a profile the daemon can't apply must count as failing")
+	}
+	for _, err := range []error{errors.New("Cannot connect to the Docker daemon"), context.DeadlineExceeded} {
+		if appArmorVerdict(err) != unknown {
+			t.Errorf("%v must count as unknown", err)
+		}
 	}
 }
 
 func TestAppArmorStartError(t *testing.T) {
 	runc := errors.New("failed to create task for container: OCI runtime create failed: runc create failed: unable to start container process: error during container init: unable to apply apparmor profile: apparmor failed to apply profile: write /proc/thread-self/attr/apparmor/exec: no such file or directory")
-	if err := appArmorStartError(runc, "browserpier"); !errors.Is(err, runc) || !strings.Contains(err.Error(), `"browserpier"`) || !strings.Contains(err.Error(), "loaded") {
-		t.Errorf("named profile: %v", err)
+	for _, auto := range []bool{true, false} {
+		err := appArmorStartError(runc, "browserpier", auto)
+		if !errors.Is(err, runc) || !errors.Is(err, ErrAppArmorNotLoaded) || !strings.Contains(err.Error(), `"browserpier"`) {
+			t.Errorf("auto %t: %v", auto, err)
+		}
+		if strings.Contains(err.Error(), "BROWSERPIER_BROWSER_APPARMOR") == auto {
+			t.Errorf("auto %t names the setting wrongly: %v", auto, err)
+		}
 	}
 	for _, profile := range []string{"", "unconfined"} {
-		if err := appArmorStartError(runc, profile); err != runc { //nolint:errorlint // must be the very error
+		if err := appArmorStartError(runc, profile, true); err != runc { //nolint:errorlint // must be the very error
 			t.Errorf("profile %q: %v", profile, err)
 		}
 	}
 	other := errors.New("no such image")
-	if err := appArmorStartError(other, "browserpier"); err != other { //nolint:errorlint // must be the very error
+	if err := appArmorStartError(other, "browserpier", true); err != other { //nolint:errorlint // must be the very error
 		t.Errorf("unrelated error reworded: %v", err)
 	}
 }
@@ -283,6 +310,31 @@ func TestClientSpecCarriesTheAppArmorChoice(t *testing.T) {
 	unconfined, named := (&Client{apparmorOpt: "apparmor=unconfined"}).Spec(), (&Client{apparmorOpt: "apparmor=browserpier"}).Spec()
 	if unconfined == Spec || named == Spec || unconfined == named {
 		t.Fatalf("specs %q and %q don't tell the AppArmor choices apart", unconfined, named)
+	}
+}
+
+func TestOutdated(t *testing.T) {
+	settled := &Client{apparmorOpt: "apparmor=browserpier", apparmorSettled: true}
+	unsettled := &Client{apparmorOpt: "apparmor=unconfined"}
+	for _, c := range []struct {
+		client *Client
+		spec   string
+		want   bool
+	}{
+		{settled, "2;apparmor=browserpier", false},
+		{settled, "2;apparmor=unconfined", true}, // another choice
+		{settled, "2", true},
+		{settled, "1;apparmor=browserpier", true}, // an older definition
+		{settled, "", true},
+		// Until the choice is known, a browser under any choice runs on;
+		// not an older definition, though.
+		{unsettled, "2;apparmor=browserpier", false},
+		{unsettled, "2", false},
+		{unsettled, "1", true},
+	} {
+		if got := c.client.Outdated(c.spec); got != c.want {
+			t.Errorf("settled %t, Outdated(%q) = %t", c.client.apparmorSettled, c.spec, got)
+		}
 	}
 }
 

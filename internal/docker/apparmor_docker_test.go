@@ -22,7 +22,8 @@ func TestCheckSandbox(t *testing.T) {
 	if image == "" {
 		t.Skip("BROWSERPIER_TEST_IMAGE not set; run `make test-docker`")
 	}
-	c, err := New(Options{Image: image, UsernsMode: os.Getenv("BROWSERPIER_USERNS_MODE"), Instance: fmt.Sprintf("test%d", time.Now().UnixNano())})
+	c, err := New(Options{Image: image, UsernsMode: os.Getenv("BROWSERPIER_USERNS_MODE"), User: User(os.Getuid(), os.Getgid()),
+		Instance: fmt.Sprintf("test%d", time.Now().UnixNano())})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,19 +35,23 @@ func TestCheckSandbox(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The image carries the check, and says so.
+	c.plan = appArmorPlan{try: []string{""}}
+	if ok, why := c.checkable(ctx, false); !ok {
+		t.Fatalf("the browser image isn't checkable: %q", why)
+	}
 	// Wherever the browser tests pass, the sandbox works under the
-	// daemon's default profile.
-	ok, why, err := c.checkSandbox(ctx, "")
-	if err != nil || !ok {
-		t.Fatalf("the sandbox check fails under the daemon's default: %v %s", err, why)
+	// daemon's default profile, as the browsers' user.
+	if v, why := c.checkSandbox(ctx, ""); v != works {
+		t.Fatalf("the sandbox check fails under the daemon's default: %v %s", v, why)
 	}
 	name := "browserpier_check_" + c.instance
 	if _, err := c.api.ContainerInspect(ctx, name, client.ContainerInspectOptions{}); !cerrdefs.IsNotFound(err) {
 		t.Fatalf("the check container was left behind: %v", err)
 	}
 
-	// A profile that isn't loaded fails the check, rather than erring,
-	// on a daemon that applies AppArmor.
+	// A profile that isn't loaded fails the check, rather than being
+	// unknown, on a daemon that applies AppArmor.
 	info, err := c.api.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -55,9 +60,9 @@ func TestCheckSandbox(t *testing.T) {
 		slices.Contains(info.Info.SecurityOptions, "name=rootless") {
 		t.Skip("this daemon applies no AppArmor profile")
 	}
-	ok, why, err = c.checkSandbox(ctx, "apparmor=browserpier-test-not-loaded")
-	if err != nil || ok || why == "" {
-		t.Fatalf("a profile that isn't loaded: ok %t, why %q, err %v", ok, why, err)
+	v, why := c.checkSandbox(ctx, "apparmor=browserpier-test-not-loaded")
+	if v != fails || why == "" {
+		t.Fatalf("a profile that isn't loaded: %v, why %q", v, why)
 	}
 	t.Logf("not loaded: %s", why)
 }

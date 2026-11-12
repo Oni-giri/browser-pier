@@ -57,6 +57,9 @@ COPY images/chromium/policies.json /etc/chromium/policies/managed/browserpier.js
 # package above). Browsers never run it. See images/chromium/apparmor.
 COPY images/chromium/apparmor/ /usr/share/browserpier/apparmor/
 RUN apparmor_parser --skip-kernel-load --skip-cache /usr/share/browserpier/apparmor/browserpier
+# The entrypoint has the sandbox check (`sandbox-check`), with which the
+# orchestrator picks the AppArmor profile; older images don't.
+LABEL io.browserpier.sandbox-check="1"
 
 # Changing REBUILD forces a new image without reinstalling packages (used by the persistence test).
 ARG REBUILD=0

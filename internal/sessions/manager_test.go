@@ -3,6 +3,7 @@ package sessions
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -234,6 +235,25 @@ func TestStartFailsWhenTheBrowserExits(t *testing.T) {
 	f.rt.ExitOnStart = nil
 	if s := f.start(f.m); s.State != Running {
 		t.Fatalf("retry: %+v", s)
+	}
+}
+
+// An AppArmor profile unloaded since BrowserPier chose it (an AppArmor
+// reload, say) gets one more try, which the runtime chooses again for.
+func TestStartRetriesOnceWhenTheAppArmorProfileIsGone(t *testing.T) {
+	f := newFixture(t)
+	gone := fmt.Errorf("%w: unable to apply apparmor profile", docker.ErrAppArmorNotLoaded)
+	f.rt.StartErrs = []error{gone}
+	if s := f.start(f.m); s.State != Running || f.rt.Creates != 2 || f.rt.Count() != 1 {
+		t.Fatalf("after a retry: %+v, %d creates, %d containers", s, f.rt.Creates, f.rt.Count())
+	}
+
+	// Only once.
+	f2 := newFixture(t)
+	f2.rt.StartErrs = []error{gone, gone}
+	s, _, err := f2.m.Start(context.Background(), "google", "")
+	if !errors.Is(err, ErrStartFailed) || !strings.Contains(s.Error, "AppArmor") || f2.rt.Creates != 2 || f2.rt.Count() != 0 {
+		t.Fatalf("twice: %v %+v, %d creates, %d containers", err, s, f2.rt.Creates, f2.rt.Count())
 	}
 }
 
