@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -99,6 +100,7 @@ type Client struct {
 	apparmor    string // the profile asked for (Options.AppArmor)
 	userns      string
 	instance    string
+	log         *slog.Logger
 }
 
 // Options configure a Client.
@@ -114,6 +116,9 @@ type Options struct {
 	// AppArmor names the containers' AppArmor profile. Empty means none
 	// where the daemon uses AppArmor (see appArmorOpt).
 	AppArmor string
+	// Log gets what the daemon reports that isn't an error for the caller
+	// (see Stop). Nil discards it.
+	Log *slog.Logger
 }
 
 // New connects to the Docker daemon named by the usual DOCKER_* variables.
@@ -133,7 +138,11 @@ func New(o Options) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{api: api, image: image, seccomp: seccomp.String(), seccompOpt: "seccomp=" + seccomp.String(), apparmor: o.AppArmor, userns: o.UsernsMode, instance: o.Instance}, nil
+	log := o.Log
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+	return &Client{api: api, image: image, seccomp: seccomp.String(), seccompOpt: "seccomp=" + seccomp.String(), apparmor: o.AppArmor, userns: o.UsernsMode, instance: o.Instance, log: log}, nil
 }
 
 // UseDataDir finishes setting up against the daemon, given the data dir as
@@ -341,9 +350,24 @@ func (c *Client) Start(ctx context.Context, id string) error {
 
 // Stop asks the container to stop and returns once it has, killing it after
 // StopTimeout.
+//
+// An error from a stop that did leave the container stopped is logged, not
+// returned: the browser has closed by then, the way it always does, and
+// the session's outcome comes from its exit status. Rootless Podman on
+// Ubuntu reports one when the host's AppArmor profile for pasta keeps it
+// from tearing down the network after the last container stops (PROJ-64).
 func (c *Client) Stop(ctx context.Context, id string) error {
 	_, err := c.api.ContainerStop(ctx, id, client.ContainerStopOptions{})
-	return err
+	if err == nil || ctx.Err() != nil {
+		return err
+	}
+	res, ierr := c.api.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+	if ierr != nil || res.Container.State == nil || res.Container.State.Running {
+		return err
+	}
+	c.log.Warn("the browser container stopped, but Docker reported an error stopping it; check the host's container runtime",
+		"container", id, "state", res.Container.State.Status, "err", err)
+	return nil
 }
 
 // Wait blocks until the container isn't running and returns its exit code.

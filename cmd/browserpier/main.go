@@ -99,7 +99,7 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	dc, err := docker.New(docker.Options{Image: image, UsernsMode: cfg.UsernsMode, Instance: instance, AppArmor: cfg.BrowserAppArmor})
+	dc, err := docker.New(docker.Options{Image: image, UsernsMode: cfg.UsernsMode, Instance: instance, AppArmor: cfg.BrowserAppArmor, Log: log})
 	if err != nil {
 		return err
 	}
