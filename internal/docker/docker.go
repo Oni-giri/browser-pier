@@ -352,10 +352,11 @@ func (c *Client) Start(ctx context.Context, id string) error {
 // StopTimeout.
 //
 // An error from a stop that did leave the container stopped is logged, not
-// returned: the browser has closed by then, the way it always does, and
-// the session's outcome comes from its exit status. Rootless Podman on
-// Ubuntu reports one when the host's AppArmor profile for pasta keeps it
-// from tearing down the network after the last container stops (PROJ-64).
+// returned: the container has stopped all the same, and the session's
+// outcome comes from its exit status, which tells a clean close from a
+// kill. Rootless Podman on Ubuntu reports one when the host's AppArmor
+// profile for pasta keeps it from tearing down the network after the
+// last container stops (PROJ-64).
 func (c *Client) Stop(ctx context.Context, id string) error {
 	_, err := c.api.ContainerStop(ctx, id, client.ContainerStopOptions{})
 	if err == nil || ctx.Err() != nil {
