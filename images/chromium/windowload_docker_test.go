@@ -5,7 +5,9 @@ package chromium
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/Oni-giri/browser-pier/internal/browsertest"
@@ -23,7 +25,7 @@ import (
 // in API mode with Page.navigate (MEASURE_API).
 func TestMeasureWindowAtLoad(t *testing.T) {
 	image := testImage(t)
-	det := browsertest.NewDetector(t, "host.docker.internal")
+	det := browsertest.NewDetector(t, siteHost(t))
 	zero, total := 0, 0
 	record := func(what string, s browsertest.Signals) {
 		total++
@@ -84,4 +86,18 @@ func envInt(name string, def int) int {
 		return n
 	}
 	return def
+}
+
+// siteHost is how a browser container reaches this machine, as the other
+// packages' Docker tests find it: BROWSERPIER_TEST_SITE_HOST, or the
+// bridge's gateway.
+func siteHost(t *testing.T) string {
+	if h := os.Getenv("BROWSERPIER_TEST_SITE_HOST"); h != "" {
+		return h
+	}
+	out, err := exec.Command("docker", "network", "inspect", "bridge", "-f", "{{(index .IPAM.Config 0).Gateway}}").Output()
+	if err != nil {
+		t.Fatalf("can't find the bridge gateway (%v); set BROWSERPIER_TEST_SITE_HOST", err)
+	}
+	return strings.TrimSpace(string(out))
 }
