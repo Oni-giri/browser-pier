@@ -14,6 +14,7 @@ The orchestrator starts these containers; nothing else should. Each one needs:
 | What | How | Why |
 |---|---|---|
 | Seccomp profile | `--security-opt seccomp=seccomp.json` (embedded as `chromium.SeccompProfile`) | Chromium's sandbox needs user namespaces, which Docker's default profile blocks. Without it Chromium won't start. |
+| AppArmor profile | Docker's, or `--security-opt apparmor=browserpier` where Docker's refuses user namespaces (AppArmor 4, Debian 13) | `apparmor/browserpier` is Docker's profile plus `userns`. The image carries it, and `apparmor/load`, at `/usr/share/browserpier/apparmor/`, for the compose file's loader service. The orchestrator picks the profile by running the image with the argument `sandbox-check`, which tests the namespaces and the chroot Chromium's sandbox needs and exits 0 if they work. See "AppArmor" in `deploy/README.md`. |
 | Capabilities | `--cap-drop ALL --cap-add SYS_CHROOT`, `--security-opt no-new-privileges` | The browser runs as a non-root user with no effective capabilities. The sandbox chroots inside its own user namespace, which needs `SYS_CHROOT` in the bounding set; without it the zygote dies at startup. |
 | User | `--user UID:GID` (any non-root uid) | The orchestrator runs it as its own uid so it owns the profile files. `HOME` is `/tmp/home`, created at startup. |
 | Profile folder | mounted at `/profile` | Chromium's user data dir, writable by that user. |
