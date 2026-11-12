@@ -1,10 +1,52 @@
 # Contributing to BrowserPier
 
-Read [SPEC.md](SPEC.md) first: it is the source of truth for behaviour, decisions and scope. For anything visual, follow [design/DESIGN.md](design/DESIGN.md) and the screens in `design/screens/`. [CLAUDE.md](CLAUDE.md) has the rules every change must keep (no ports on browser containers, no CDP in Visual mode, no fingerprint spoofing and so on), and it applies to people as much as to coding agents.
+Read [SPEC.md](SPEC.md) first: it is the source of truth for behaviour, decisions and scope. For anything visual, follow [design/DESIGN.md](design/DESIGN.md) and the screens in `design/screens/`. [AGENTS.md](AGENTS.md) has the rules every change must keep (no ports on browser containers, no CDP in Visual mode, no fingerprint spoofing and so on), and it applies to people as much as to coding agents.
+
+## Setting up a machine
+
+You need four tools. CI runs on Ubuntu, so Linux is the reference platform; macOS works for building and the fast tests.
+
+| Tool | Version | Why |
+|---|---|---|
+| [Go](https://go.dev/dl/) | the `go` line in `go.mod` | builds and tests the orchestrator and the browser image's entrypoint |
+| [golangci-lint](https://golangci-lint.run) | v2.15.0, as in `.github/workflows/ci.yml` | `make lint` |
+| Docker (or rootless Podman, below) | a recent Engine; Docker Desktop on macOS | the browser image and the `docker`-tagged tests |
+| [GitHub CLI](https://cli.github.com) (`gh`) | any recent | pull requests and CI status |
+
+Any Go from 1.21 on is enough to start: with the default `GOTOOLCHAIN=auto`, `go` downloads the exact version `go.mod` asks for the first time it runs here.
+
+**Debian or Ubuntu:**
+
+```sh
+sudo apt-get install -y git make curl ca-certificates
+# Go: the tarball from https://go.dev/dl/, then
+sudo tar -C /usr/local -xzf go*.linux-*.tar.gz && export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin
+curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b "$(go env GOPATH)/bin" v2.15.0
+# Docker Engine: https://docs.docker.com/engine/install/, then let your user reach it
+sudo usermod -aG docker "$USER"   # log out and back in
+# gh: https://github.com/cli/cli/blob/trunk/docs/install_linux.md
+```
+
+**macOS (Homebrew):**
+
+```sh
+brew install go gh
+curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b "$(go env GOPATH)/bin" v2.15.0
+brew install --cask docker   # Docker Desktop; start it once
+export PATH=$PATH:$(go env GOPATH)/bin
+```
+
+**Then check it all works,** from the repository's root:
+
+```sh
+go version && golangci-lint version && docker info --format '{{.ServerVersion}}' && gh auth status
+make lint test build   # fast: no Docker needed
+make test-docker       # builds the browser image and runs the Docker tests (several minutes)
+```
+
+`gh auth login` signs the GitHub CLI in if `gh auth status` says it isn't. Coding agents start with [AGENTS.md](AGENTS.md); work is tracked in Jira, which an agent reaches through the Atlassian MCP connector.
 
 ## Building and testing
-
-You need Go (the version in `go.mod`), [golangci-lint](https://golangci-lint.run) v2, and Docker or rootless Podman.
 
 ```sh
 make build        # bin/browserpier

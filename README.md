@@ -153,7 +153,7 @@ BrowserPier is early (0.x) and moving fast. See the [changelog](CHANGELOG.md) an
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) to build it, run the tests and see how changes are made.
+See [CONTRIBUTING.md](CONTRIBUTING.md) to set up a machine (Go, golangci-lint, Docker and the GitHub CLI), build it, run the tests and see how changes are made. Coding agents start with [AGENTS.md](AGENTS.md).
 
 ## License
 

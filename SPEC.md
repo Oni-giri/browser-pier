@@ -1,7 +1,7 @@
 # BrowserPier — Spec
 
-**Version:** v0.3 · 25 Oct 2026
-**Status:** design and decisions done, backend not started
+**Version:** v0.4 · 12 Nov 2026
+**Status:** v1 shipped (0.1.5); v1.1 next (see Jira, label `v1.1`)
 **Repo:** https://github.com/Oni-giri/browser-pier
 **Images:** `ghcr.io/oni-giri/browser-pier` (orchestrator) and `ghcr.io/oni-giri/browser-pier-chromium` (browser)
 **Tracking:** Jira epic [PROJ-1](https://geistlogic.atlassian.net/browse/PROJ-1)
