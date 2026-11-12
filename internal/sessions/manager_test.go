@@ -255,6 +255,15 @@ func TestStartRetriesOnceWhenTheAppArmorProfileIsGone(t *testing.T) {
 	if !errors.Is(err, ErrStartFailed) || !strings.Contains(s.Error, "AppArmor") || f2.rt.Creates != 2 || f2.rt.Count() != 0 {
 		t.Fatalf("twice: %v %+v, %d creates, %d containers", err, s, f2.rt.Creates, f2.rt.Count())
 	}
+
+	// Not for a profile set in BROWSERPIER_BROWSER_APPARMOR, which nothing
+	// chooses again: it fails at once, with the error saying so.
+	f3 := newFixture(t)
+	f3.rt.StartErrs = []error{fmt.Errorf("%w: set in BROWSERPIER_BROWSER_APPARMOR", docker.ErrAppArmorSetNotLoaded)}
+	s, _, err = f3.m.Start(context.Background(), "google", "")
+	if !errors.Is(err, ErrStartFailed) || !strings.Contains(s.Error, "BROWSERPIER_BROWSER_APPARMOR") || f3.rt.Creates != 1 || f3.rt.Count() != 0 {
+		t.Fatalf("set profile: %v %+v, %d creates, %d containers", err, s, f3.rt.Creates, f3.rt.Count())
+	}
 }
 
 func TestBrowserCrashFailsTheSession(t *testing.T) {

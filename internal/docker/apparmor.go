@@ -350,10 +350,15 @@ func shorten(s string) string {
 }
 
 // ErrAppArmorNotLoaded is a browser container that wouldn't start because
-// its AppArmor profile isn't loaded on the Docker host. When BrowserPier
-// chose the profile, it checks again before the next browser start, so a
-// second try may work.
-var ErrAppArmorNotLoaded = errors.New("the browser's AppArmor profile isn't loaded on the Docker host")
+// the AppArmor profile BrowserPier chose isn't loaded on the Docker host
+// any more. It checks again before the next browser start, so a second try
+// may work.
+var ErrAppArmorNotLoaded = errors.New("the browser's AppArmor profile isn't loaded on the Docker host any more")
+
+// ErrAppArmorSetNotLoaded is the same for the profile named in
+// BROWSERPIER_BROWSER_APPARMOR, which isn't checked or chosen again: a
+// second try would fail the same way.
+var ErrAppArmorSetNotLoaded = errors.New("the AppArmor profile set for browsers isn't loaded on the Docker host")
 
 // appArmorStartError words a failure to start a browser container under
 // a named AppArmor profile, chosen (auto) or set in
@@ -365,7 +370,7 @@ func appArmorStartError(err error, profile string, auto bool) error {
 	if auto {
 		return fmt.Errorf("%w: docker couldn't apply %q, loaded when BrowserPier checked (reloading AppArmor on the host unloads it; Umbrel loads it again when the app starts), so it checks again before the next start: %w", ErrAppArmorNotLoaded, profile, err)
 	}
-	return fmt.Errorf("%w: docker couldn't apply %q, set in BROWSERPIER_BROWSER_APPARMOR; is it loaded? See \"AppArmor\" in deploy/README.md: %w", ErrAppArmorNotLoaded, profile, err)
+	return fmt.Errorf("%w: docker couldn't apply %q, set in BROWSERPIER_BROWSER_APPARMOR; is it loaded? See \"AppArmor\" in deploy/README.md: %w", ErrAppArmorSetNotLoaded, profile, err)
 }
 
 // specLabel is the definition version a container gets under an AppArmor

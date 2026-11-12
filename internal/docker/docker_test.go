@@ -251,8 +251,13 @@ func TestAppArmorStartError(t *testing.T) {
 	runc := errors.New("failed to create task for container: OCI runtime create failed: runc create failed: unable to start container process: error during container init: unable to apply apparmor profile: apparmor failed to apply profile: write /proc/thread-self/attr/apparmor/exec: no such file or directory")
 	for _, auto := range []bool{true, false} {
 		err := appArmorStartError(runc, "browserpier", auto)
-		if !errors.Is(err, runc) || !errors.Is(err, ErrAppArmorNotLoaded) || !strings.Contains(err.Error(), `"browserpier"`) {
+		if !errors.Is(err, runc) || !strings.Contains(err.Error(), `"browserpier"`) {
 			t.Errorf("auto %t: %v", auto, err)
+		}
+		// Only a profile BrowserPier chose is worth a second try: it chooses
+		// again. One set in BROWSERPIER_BROWSER_APPARMOR would fail again.
+		if errors.Is(err, ErrAppArmorNotLoaded) != auto || errors.Is(err, ErrAppArmorSetNotLoaded) == auto {
+			t.Errorf("auto %t: wrong sentinel: %v", auto, err)
 		}
 		if strings.Contains(err.Error(), "BROWSERPIER_BROWSER_APPARMOR") == auto {
 			t.Errorf("auto %t names the setting wrongly: %v", auto, err)
