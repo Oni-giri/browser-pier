@@ -130,8 +130,10 @@ TURN is optional. A viewer is given the TURN server, with credentials, only once
 3. Open 3478 UDP and TCP to the people who watch or take over browsers.
 
 What it does:
-- **Credentials of their own:** each viewer gets a username and password made from the secret, and they expire: after 12 hours for the admin's live view (a view open longer reconnects with new ones once coturn drops it), a minute after the link does for a handoff. The secret stays with BrowserPier and coturn, and neither logs it.
-- **No open relay:** coturn relays only to BrowserPier's live-view port, over the compose network (BrowserPier's address there, `….2`, is advertised to viewers too: `BROWSERPIER_TURN_PEER_IPS`). Every other address is refused: this host, your LAN, other containers, the internet. Its relay ports aren't published.
+- **Credentials of their own:** each viewer (a signed-in browser, a handoff link) gets a username and password made from the secret. The username names the viewer the same way every time, without saying who it is, so coturn's per-user quota of 10 relays holds one viewer however often it asks.
+- **Expiry stops new relays, not open ones:** the credentials open no new relay after 12 hours for the admin's live view, or a minute after the link expires for a handoff. coturn checks them only when a relay is set up, so a relay already open keeps working past that, until it's closed. BrowserPier hangs up a handoff's live view itself when the handoff ends, and with this coturn a relay leads nowhere but BrowserPier, so that costs little.
+- **No open relay:** coturn relays only to BrowserPier's address on the compose network (`….2`, which is advertised to viewers too: `BROWSERPIER_TURN_PEER_IPS`), and only over UDP. The allowed address covers all its ports, so it's the UDP-only relaying (no TCP relays) that keeps BrowserPier's web app out of reach. Every other address is refused: this host, your LAN, other containers, the internet. Its relay ports aren't published.
+- **Locked down:** no capabilities but the one its binary needs to start, no privilege gain, a read-only filesystem, and no answers to unauthenticated STUN requests.
 - **Still end-to-end encrypted:** the stream and your input stay encrypted (DTLS-SRTP) between the viewer and BrowserPier. coturn only passes the packets on.
 
 ### Port 443 and TLS
@@ -144,7 +146,10 @@ Set `BROWSERPIER_TURN_URLS` to its URLs, and one of:
 - `BROWSERPIER_TURN_SECRET`, its shared secret for the TURN REST API (coturn's `use-auth-secret` and `static-auth-secret`; many services support it). Prefer this.
 - `BROWSERPIER_TURN_USERNAME` and `BROWSERPIER_TURN_PASSWORD`, for a service that only gives a fixed login. Every viewer's browser gets that login, and it works for anyone it leaks to until you change it.
 
-The TURN server must reach this server on 7438 UDP, where it relays to. Lock it down so it can't be used to reach private networks: coturn's `denied-peer-ip` for `10.0.0.0-10.255.255.255`, `172.16.0.0-172.31.255.255`, `192.168.0.0-192.168.255.255`, `100.64.0.0-100.127.255.255`, `169.254.0.0-169.254.255.255`, `fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff` and `fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff`, plus `no-multicast-peers`, with loopback peers left off (the default).
+The TURN server must reach this server on 7438 UDP, where it relays to. Anyone BrowserPier gives credentials to can relay through it to whatever it allows, and an open relay already set up outlives the credentials' expiry, so lock it down:
+- **Best, if it serves only BrowserPier:** deny every peer but this server, as the bundled one does. In coturn, `denied-peer-ip=0.0.0.0-255.255.255.255` and `denied-peer-ip=::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff`, then `allowed-peer-ip=` this server's address (allowed wins over denied).
+- **At the least:** deny every private and local range, so it can't be used to reach the networks it sits on: `denied-peer-ip` for `0.0.0.0-0.255.255.255`, `10.0.0.0-10.255.255.255`, `100.64.0.0-100.127.255.255`, `127.0.0.0-127.255.255.255`, `169.254.0.0-169.254.255.255`, `172.16.0.0-172.31.255.255`, `192.168.0.0-192.168.255.255`, `::1`, `fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff` and `fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff`, plus `no-multicast-peers`, never `allow-loopback-peers`.
+- **Either way:** `no-tcp-relay`, since allowed addresses cover every port, and a `user-quota` (BrowserPier gives each viewer its own user, so it applies per viewer) and `total-quota`.
 
 ### Checking it works
 
