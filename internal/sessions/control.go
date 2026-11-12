@@ -37,8 +37,9 @@ func (m *Manager) AgentInput(id string) (done func(), err error) {
 }
 
 // TakeControl gives a person in the live view the mouse and keyboard.
-// It is refused while an agent is driving: connected over CDP, or having
-// clicked or typed in the last few seconds. Meanwhile agents can only
+// It is refused while an agent is driving: connected over CDP, having
+// clicked or typed in the last few seconds, or with a page call (PageLease)
+// under way or just ended. Meanwhile agents can only
 // watch: their input and new CDP connections are refused. During a
 // handoff (Needs help) the agent is paused, so it always succeeds.
 func (m *Manager) TakeControl(id string) error {
@@ -48,13 +49,14 @@ func (m *Manager) TakeControl(id string) error {
 	if l == nil || (l.sess.State != Running && l.sess.State != NeedsHelp) {
 		return ErrNotRunning
 	}
-	if l.sess.State == Running && (len(l.conns) > 0 || m.now().Sub(l.lastAgentInput) < agentQuiet) {
+	if l.sess.State == Running && (len(l.conns) > 0 || len(l.leases) > 0 || m.now().Sub(l.lastAgentInput) < agentQuiet) {
 		return ErrAgentDriving
 	}
 	if l.human {
 		return ErrHumanDriving // one person at a time
 	}
 	l.human = true
+	l.generation++
 	l.lastActivity = m.now()
 	return nil
 }
