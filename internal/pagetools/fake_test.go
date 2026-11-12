@@ -85,10 +85,17 @@ type fakeBrowser struct {
 	call func(tab *ftab, m cdptest.Message) (res any, handled bool, err error)
 	// maxNodes makes the DOM snapshot claim this many nodes, if set.
 	bigDOM int
+	// behave is what elements do when acted on; removed are detached
+	// nodes the page still holds; inputs is each tab's focus and events.
+	behave  map[*fnode]*behaviour
+	removed map[*fnode]bool
+	inputs  map[*ftab]*fakeInput
+	// onInput is called (with the fake locked) on each input event.
+	onInput func(typ string)
 }
 
 func newFakeBrowser(t *testing.T) *fakeBrowser {
-	fb := &fakeBrowser{t: t, worlds: map[int64]string{}, nextCtx: 100}
+	fb := &fakeBrowser{t: t, worlds: map[int64]string{}, nextCtx: 100, behave: map[*fnode]*behaviour{}, removed: map[*fnode]bool{}}
 	fb.Browser = cdptest.New(fb.handle)
 	fb.pages = func(string) *fnode { return el("#document", "RootWebArea", "", box(0, 0, 1280, 800)) }
 	return fb
@@ -251,6 +258,9 @@ func (fb *fakeBrowser) handle(m cdptest.Message) (any, error) {
 			return res, err
 		}
 	}
+	if res, ok, err := fb.dom(tb, m, p); ok {
+		return res, err
+	}
 	return nil, cdptest.Error{Message: "fake: no " + m.Method}
 }
 
@@ -281,11 +291,29 @@ func (fb *fakeBrowser) evaluate(tb *ftab, expr string) (any, error) {
 			return "visible", nil
 		}
 		return "hidden", nil
+	case strings.Contains(expr, "/*bp:href*/"):
+		return tb.url, nil
+	case strings.Contains(expr, "/*bp:hastext*/"):
+		var want string
+		_ = json.Unmarshal([]byte(expr[strings.LastIndex(expr, "(")+1:len(expr)-1]), &want)
+		return strings.Contains(strings.ToLower(pageText(tb.doc)), strings.ToLower(want)), nil
 	}
 	if fb.eval != nil {
 		return fb.eval(tb, expr)
 	}
 	return nil, cdptest.Error{Message: "fake: unknown script " + expr}
+}
+
+// pageText is a document's laid-out text.
+func pageText(n *fnode) string {
+	if n.box == nil || n.ignored {
+		return ""
+	}
+	s := n.text
+	for _, k := range n.kids {
+		s += " " + pageText(k)
+	}
+	return s
 }
 
 // snapshot is DOMSnapshot.captureSnapshot of tb's document.

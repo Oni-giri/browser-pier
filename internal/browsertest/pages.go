@@ -127,6 +127,15 @@ var pageSitePages = map[string]string{ //nolint:gosec // test pages, not credent
 <label for="d">Date</label> <input id="d" type="date">
 <button onmouseover="report('hovered')">Hover me</button>`,
 	"/signed-in": `<!doctype html><title>Account</title><h1>Signed in</h1>`,
+	// Buttons inside a closed shadow root: one free, one under a cover.
+	"/shadow": `<!doctype html><title>Shadow</title>` + report + `
+<div id="host"></div>
+<script>
+const root = document.getElementById('host').attachShadow({mode: 'closed'});
+root.innerHTML = '<button onclick="report(\'shadow free clicked\')">Free in shadow</button>' +
+  '<span style="position:relative;display:inline-block;margin-left:20px"><button onclick="report(\'shadow covered clicked\')">Covered in shadow</button>' +
+  '<span aria-label="Shadow cover" role="img" style="position:absolute;inset:0"></span></span>';
+</script>`,
 }
 
 func longForm() string {

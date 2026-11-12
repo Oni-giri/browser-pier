@@ -21,6 +21,8 @@ func (a *API) registerPageTools(mux *http.ServeMux) {
 	mux.Handle("POST /api/sessions/{id}/snapshot", t(pageTool(a, (*pagetools.Tools).Snapshot)))
 	mux.Handle("POST /api/sessions/{id}/find", t(pageTool(a, (*pagetools.Tools).Find)))
 	mux.Handle("POST /api/sessions/{id}/navigate", t(pageTool(a, (*pagetools.Tools).Navigate)))
+	mux.Handle("POST /api/sessions/{id}/act", t(pageTool(a, (*pagetools.Tools).Act)))
+	mux.Handle("POST /api/sessions/{id}/wait", t(pageTool(a, (*pagetools.Tools).WaitFor)))
 }
 
 // PageTools is the page tools the API runs, for tests.

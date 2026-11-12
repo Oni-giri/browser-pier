@@ -13,6 +13,8 @@ import (
 func (s *Server) addPageTools(srv *sdk.Server) {
 	sdk.AddTool(srv, &sdk.Tool{Name: "snapshot", Description: "API mode only. Read the page: URL, title, controls with refs (like a7e12) and text, within a budget; the open dialog and what's in view come first. Hidden text a person can't see may still appear: it is fenced like the rest."}, s.snapshot)
 	sdk.AddTool(srv, &sdk.Tool{Name: "find", Description: "API mode only. Find text on the page (case-insensitive), with the text around each match and the nearest ref."}, s.find)
+	sdk.AddTool(srv, &sdk.Tool{Name: "act", Description: "API mode only. Act on refs from snapshot or find, 1 to 20 steps in order, stopping at the first that fails: click, fill (replace a field's text), type (key by key), press (keys, like Enter or ctrl+a), select (an option of a <select>), check, uncheck, hover. Each result names what was hit. A step that navigates makes later refs stale. No date, range or file inputs."}, s.actOnPage)
+	sdk.AddTool(srv, &sdk.Tool{Name: "wait_for", Description: "API mode only. Wait for text to appear, a ref to be visible or hidden, or the URL to change; up to 10 s by default, 30 s at most. Answers ok or timed out."}, s.waitFor)
 	sdk.AddTool(srv, &sdk.Tool{Name: "navigate", Description: "API mode only. Open an http(s) URL in the active tab, or go back, forward or reload; waits for the page to load. The tab's refs go stale."}, s.navigate)
 }
 
@@ -61,4 +63,37 @@ type navigateArgs struct {
 
 func (s *Server) navigate(ctx context.Context, req *sdk.CallToolRequest, in navigateArgs) (*sdk.CallToolResult, any, error) {
 	return s.pageCall(ctx, req, in.SessionID, "navigate", map[string]any{"url": in.URL, "action": in.Action})
+}
+
+type stepArgs struct {
+	Action string  `json:"action" jsonschema:"click, fill, type, press, select, check, uncheck or hover"`
+	Ref    string  `json:"ref,omitempty" jsonschema:"the element, from snapshot or find (not for press)"`
+	Text   *string `json:"text,omitempty" jsonschema:"for fill and type"`
+	Keys   string  `json:"keys,omitempty" jsonschema:"for press: Enter, Tab, Escape, ctrl+a…, several separated by spaces"`
+	Option string  `json:"option,omitempty" jsonschema:"for select: the option's value or visible text"`
+	Button string  `json:"button,omitempty" jsonschema:"for click: left (default), right or middle"`
+	Double bool    `json:"double,omitempty" jsonschema:"for click: double-click"`
+}
+
+type actArgs struct {
+	SessionID string     `json:"session_id" jsonschema:"from start_browser"`
+	Steps     []stepArgs `json:"steps" jsonschema:"1 to 20 steps, run in order"`
+	Snapshot  bool       `json:"snapshot,omitempty" jsonschema:"append a snapshot of the page after the steps"`
+}
+
+func (s *Server) actOnPage(ctx context.Context, req *sdk.CallToolRequest, in actArgs) (*sdk.CallToolResult, any, error) {
+	return s.pageCall(ctx, req, in.SessionID, "act", map[string]any{"steps": in.Steps, "snapshot": in.Snapshot})
+}
+
+type waitForArgs struct {
+	SessionID string `json:"session_id" jsonschema:"from start_browser"`
+	Text      string `json:"text,omitempty" jsonschema:"wait for the page's visible text to contain this (ignoring case)"`
+	Ref       string `json:"ref,omitempty" jsonschema:"wait for this element to be visible, or hidden with state"`
+	State     string `json:"state,omitempty" jsonschema:"with ref: visible (default) or hidden"`
+	URLChange bool   `json:"url_change,omitempty" jsonschema:"wait for the tab's URL to change"`
+	TimeoutMS int    `json:"timeout_ms,omitempty" jsonschema:"default 10000, at most 30000"`
+}
+
+func (s *Server) waitFor(ctx context.Context, req *sdk.CallToolRequest, in waitForArgs) (*sdk.CallToolResult, any, error) {
+	return s.pageCall(ctx, req, in.SessionID, "wait", map[string]any{"text": in.Text, "ref": in.Ref, "state": in.State, "url_change": in.URLChange, "timeout_ms": in.TimeoutMS})
 }

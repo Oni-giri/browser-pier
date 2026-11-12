@@ -13,6 +13,8 @@ var pageTools = map[string]map[string]any{
 	"snapshot": {},
 	"find":     {"text": "x"},
 	"navigate": {"url": "https://example.com"},
+	"act":      {"steps": []any{map[string]any{"action": "press", "keys": "Enter"}}},
+	"wait_for": {"text": "x"},
 }
 
 func TestPageToolsAreAPIModeOnly(t *testing.T) {
