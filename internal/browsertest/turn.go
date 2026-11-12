@@ -27,7 +27,9 @@ func Coturn(t *testing.T, ip, peer, secret string) string {
 	}
 	port := freePort(t, ip)
 	name := fmt.Sprintf("bp-turn-test-%d", time.Now().UnixNano())
+	// The compose file's hardening, as docker run spells it.
 	out, err := docker("run", "-d", "--name", name, "--network", "host",
+		"--cap-drop", "ALL", "--cap-add", "NET_BIND_SERVICE", "--security-opt", "no-new-privileges:true", "--read-only", "--tmpfs", "/tmp",
 		"-e", "BROWSERPIER_TURN_SECRET="+secret, "-e", "TURN_IP="+ip, "-e", "BROWSERPIER_IP="+peer, "-e", fmt.Sprint("TURN_PORT=", port),
 		"--entrypoint", "/bin/sh", image, "-c", script).CombinedOutput()
 	if err != nil {
@@ -73,6 +75,13 @@ func composeTURN(t *testing.T) (image, script string) {
 		t.Fatal(err)
 	}
 	var lines []string
+	hardening := map[string]bool{ // what Coturn passes docker run to match
+		"    cap_drop: [ALL]":                        false,
+		"    cap_add: [NET_BIND_SERVICE]":            false,
+		"    security_opt: [no-new-privileges:true]": false,
+		"    read_only: true":                        false,
+		"    tmpfs: [/tmp]":                          false,
+	}
 	in, inCommand := false, false
 	for _, l := range strings.Split(string(b), "\n") {
 		switch {
@@ -90,9 +99,17 @@ func composeTURN(t *testing.T) (image, script string) {
 		case inCommand:
 			inCommand = false
 		}
+		if _, ok := hardening[l]; ok && in {
+			hardening[l] = true
+		}
 	}
 	if image == "" || len(lines) < 10 {
 		t.Fatalf("no turn service in the compose file (image %q, %d lines of script)", image, len(lines))
+	}
+	for l, found := range hardening {
+		if !found {
+			t.Fatalf("the compose file's turn service lacks %q, which the tests run it with", strings.TrimSpace(l))
+		}
 	}
 	// Compose turns $$ into $.
 	return image, strings.ReplaceAll(strings.Join(lines, "\n"), "$$", "$")

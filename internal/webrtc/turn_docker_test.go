@@ -164,6 +164,17 @@ func TestBundledTURNIsNoOpenRelay(t *testing.T) {
 		c6.Close()
 	}
 
+	// No STUN: it answers no one's Binding request (it isn't a free
+	// reflector for strangers), only authenticated TURN.
+	if cs, err := newTURNClient(t, addr, "", "", false, nil); err != nil {
+		t.Fatal(err)
+	} else {
+		if mapped, err := cs.SendBindingRequest(); err == nil {
+			t.Errorf("coturn answers STUN: %v", mapped)
+		}
+		cs.Close()
+	}
+
 	// Allow lists are by address, not port: what keeps BrowserPier's other
 	// ports (its HTTP API on 7437) out of reach is that coturn relays UDP
 	// only. A TCP relay (RFC 6062) is refused: 442, Unsupported Transport
