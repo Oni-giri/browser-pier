@@ -129,17 +129,30 @@ func noSocket(string) string { return filepath.Join(os.TempDir(), "bp-no-such-so
 // network, so that is advertised too, but only when there is TURN.
 func TestRelayAdvertisesTheTURNServersWayIn(t *testing.T) {
 	log := slog.New(slog.DiscardHandler)
+	local := hostIP(t) // as the compose network's address is to BrowserPier
+	turn := func(peers ...string) TURN {
+		return TURN{URLs: []string{"turn:x:3478"}, Secret: testSecret, PeerIPs: peers}
+	}
 	for _, c := range []struct {
 		name string
 		o    Options
 		want []string
 		not  []string
 	}{
-		{"with TURN", Options{IPs: []string{"127.0.0.1"}, TURN: TURN{URLs: []string{"turn:x:3478"}, Secret: testSecret, PeerIPs: []string{"10.247.74.2", "127.0.0.1"}}}, []string{"127.0.0.1", "10.247.74.2"}, nil},
+		{"with TURN", Options{IPs: []string{"127.0.0.1"}, TURN: turn("10.247.74.2", "127.0.0.1")}, []string{"127.0.0.1", "10.247.74.2"}, nil},
+		{"as in the compose file", Options{IPs: []string{"203.0.113.9"}, TURN: turn(local)}, []string{"203.0.113.9", local}, nil},
 		{"without TURN", Options{IPs: []string{"127.0.0.1"}, TURN: TURN{PeerIPs: []string{"10.247.74.2"}}}, []string{"127.0.0.1"}, []string{"10.247.74.2"}},
-		{"without advertised IPs", Options{TURN: TURN{URLs: []string{"turn:x:3478"}, Secret: testSecret, PeerIPs: []string{"10.247.74.2"}}}, []string{"10.247.74.2"}, nil},
+		{"without advertised IPs", Options{TURN: turn("10.247.74.2")}, []string{"10.247.74.2"}, nil},
+		{"without advertised IPs, a local peer", Options{TURN: turn(local)}, []string{local}, nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			// One port for every local address, as in production.
+			pc, err := net.ListenPacket("udp", ":0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.o.Port = pc.LocalAddr().(*net.UDPAddr).Port
+			_ = pc.Close()
 			r, err := New(c.o, noSocket, log)
 			if err != nil {
 				t.Fatal(err)
@@ -154,6 +167,21 @@ func TestRelayAdvertisesTheTURNServersWayIn(t *testing.T) {
 			}
 			defer v.Close()
 			got := candidates(answer)
+			// Each address once per transport and component (pion writes
+			// every candidate for components 1 and 2), however many local
+			// addresses map to it and even when it's a local one itself.
+			seen := map[string]bool{}
+			for _, line := range strings.Split(answer, "\n") {
+				f := strings.Fields(strings.TrimPrefix(strings.TrimSpace(line), "a="))
+				if len(f) < 6 || !strings.HasPrefix(f[0], "candidate:") {
+					continue
+				}
+				key := strings.Join([]string{f[1], f[2], f[4], f[5]}, " ") // component, transport, address, port
+				if seen[key] {
+					t.Errorf("advertised twice: %s", key)
+				}
+				seen[key] = true
+			}
 			for _, ip := range c.want {
 				if !strings.Contains(strings.Join(got, " "), ip) {
 					t.Errorf("%s isn't advertised: %v", ip, got)
