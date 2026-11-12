@@ -55,6 +55,11 @@ Self-hosted, persistent browsers for AI agents. Agents start a browser when they
 - **Browser container**, one per running session: headful Chromium on a virtual display (Xvfb) with no automation flags. It has OS-level input (xdotool) for Visual mode and exposes CDP for API mode. A small sidecar captures the display, encodes H.264 (GStreamer) and sends it to the orchestrator.
 - **Live stream:** WebRTC, served by the orchestrator with pion on a single muxed UDP port (TCP fallback). It relays each container's stream to the viewer and passes mouse and keyboard from the viewer back over a data channel to xdotool. No CDP is involved, so Visual mode stays clean.
   - **Ports and addresses:** `BROWSERPIER_WEBRTC_PORT` (default 7438) is the one UDP port, and the same TCP port is the fallback; `BROWSERPIER_WEBRTC_IPS` sets the addresses to advertise (a VPS's public IP, the Tailscale IP). The live view is the web UI's profile page, `/profiles/{profile}`, for the signed-in admin (`/live/{profile}` redirects there).
+  - **TURN (optional):** for viewers on networks that block UDP or direct connections (corporate Wi-Fi, some mobile carriers). `BROWSERPIER_TURN_URLS` names the servers. A viewer gets them, with credentials, from `/live/{profile}/ice` (the signed-in admin) or `/h/{token}/ice` (the browser holding an open handoff link), behind the same checks as the offer, never before.
+    - **Credentials:** with `BROWSERPIER_TURN_SECRET`, the TURN REST API's shared secret, each viewer gets its own, which expire: after 12 hours for the admin (a view open longer reconnects with new ones once the TURN server drops it), a minute after the link for a handoff. The secret never leaves the orchestrator, and neither it nor a password is logged. A static login (`BROWSERPIER_TURN_USERNAME`, `BROWSERPIER_TURN_PASSWORD`) is for services without the REST API.
+    - **The orchestrator doesn't relay:** viewers' relayed candidates reach its own port. `BROWSERPIER_TURN_PEER_IPS`, the address a TURN server reaches it at (the compose network's, for the bundled coturn), is advertised besides `BROWSERPIER_WEBRTC_IPS` while TURN is on.
+    - **Checking it:** `?ice=relay` on the profile page or a handoff link connects through TURN only.
+    - Decided 2026-11-12 (PROJ-22).
   - **Streaming:** a browser's stream is read only while someone watches, so an unwatched browser spends nothing on encoding. Each frame is one sample; x264 writes one slice per frame.
   - **Control:** a person takes control to send mouse and keyboard. It is refused while an agent is driving: connected over CDP, or having clicked or typed in the last 5 seconds. While a person has control, agents can only watch: their input and new CDP connections are refused, and open ones close. Esc releases the keyboard; leaving the page or losing focus lets go of any held key or button.
   - **Input safety:** input reaches the browser as structured events (move, button, wheel, key by X keysym name; printable characters as Unicode keysyms, so the viewer's own layout types), fed to one long-running `xdotool`. Every command is built in the container from checked values; nothing a viewer sends becomes script text.
@@ -367,10 +372,13 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
   - **Image:** `BROWSERPIER_VERSION` defaults to `latest` in the repository, and to the release itself in the files attached to a GitHub release, which is where the install guide downloads them from. `edge` follows `main`.
   - **Releases:** a `v*` tag publishes both images (`0.1.0`, `0.1` and `latest`), then CI makes the GitHub release with the pinned install files and the version's `CHANGELOG.md` section. `RELEASING.md` has the steps.
   - **Configuration:** through environment variables, where an empty value counts as unset. Without `BROWSERPIER_ADMIN_PASSWORD`, the first-run setup page asks for the code printed in the log.
-- **WebRTC on a server:** advertise the public IP (or the Tailscale IP), open one UDP port with a TCP fallback. Optional TURN (v1.1) for viewers on networks that block UDP.
+- **WebRTC on a server:** advertise the public IP (or the Tailscale IP), open one UDP port with a TCP fallback.
+  - **TURN:** the `turn` profile adds coturn on the compose network, publishing 3478 UDP and TCP. It takes TURN REST API credentials from `BROWSERPIER_TURN_SECRET` and relays only to BrowserPier's address on that network: every other peer is denied (the host, the LAN, other containers, the internet), so it is no open relay, and its relay ports stay unpublished. Its settings go to a file, not its command line, so the secret doesn't show in the host's process list.
+  - **TLS on 443 isn't bundled:** Caddy holds 443. TURN over TCP on 3478 covers networks that only block UDP; for those that allow only HTTPS, the guide points to a TURN server elsewhere (`turns:` on 443), set with the same variables.
 - **Umbrel:** `yakitori-browserpier` in the author's community app store (`Oni-giri/yakitoris-app-store`); the source is `umbrel/yakitori-browserpier/`.
   - **Sign-in:** the app password (`deterministicPassword`) is the admin password. Umbrel's login stays on for the UI; `/api`, `/cdp`, `/mcp`, `/h` (handoff links) and `/static` are whitelisted, since agents and phones can't sign in to Umbrel and BrowserPier checks them itself.
   - **Ports:** Umbrel opens it on **7436** (7437 is taken by another app in Umbrel's store); BrowserPier still listens on 7437 inside. Live views publish 7438 UDP and TCP directly.
+  - **No TURN:** an Umbrel is reached on the LAN or Tailscale, where live views connect directly, and a TURN server at home would need ports forwarded on the router.
   - **Live-view addresses:** `exports.sh` reads the host's own addresses (LAN and Tailscale, not Docker's bridges) when the app starts, since the container can't see them.
   - **Trusted proxies:** only the app network's gateway, which Umbrel's proxy (part of umbreld since umbrelOS 2.0) connects from. Other apps on that network can't forge `X-Forwarded-*`. The app therefore requires umbrelOS 2.0 (`manifestVersion: 2.0`); older versions, whose proxy was a container, refuse to install it.
   - **Stopping:** with `BROWSERPIER_STOP_BROWSERS_ON_EXIT=true`, BrowserPier stops its browsers on the way out, through the normal stop, once it accepts no more requests. So stopping, updating or uninstalling the app in Umbrel ends its sessions (logins are kept). This differs from the generic install, where browsers keep running through an update. A `post-stop` hook stops any browser left over.
@@ -401,6 +409,8 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 | Profile storage | Bind-mounted folders in the data dir, not named Docker volumes | One directory to back up or move; export and downloads read files directly. The host path is detected from the orchestrator's own mounts. |
 | License | Apache 2.0, not AGPL | Self-hosters are the users, and many companies forbid AGPL code, even for internal tools. Same license as Steel; the patent grant and NOTICE come with it. |
 | Chromium sandbox | On, with a seccomp profile that allows user namespaces | Pages are untrusted; the container is a second boundary, not the only one. |
+| TURN credentials | Each viewer's own, derived from a shared secret (TURN REST API) and expiring; a static login only for services without it | A static password reaches every viewer's browser and works for anyone it leaks to until changed. Derived ones run out, and the secret stays on the server. |
+| Bundled TURN | coturn on the compose network, relaying only to BrowserPier's address there | A TURN server that relays anywhere is a way into the LAN and a free relay for strangers. Relaying over the compose network also needs no relay port range published and no hairpin through the host's public address. |
 | AppArmor for browser containers | Docker's, except none on AppArmor 4 hosts without Ubuntu's userns restriction (Debian 13, umbrelOS 2.0), until BrowserPier ships its own profile (PROJ-37) | Docker's profile refuses the sandbox there. Losing that backup layer costs less than losing Chromium's sandbox. |
 
 ### Still open
@@ -423,12 +433,12 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 - Web UI (8 screens, see `design/`), encrypted profile export/import
 - Generic docker-compose with HTTPS (Caddy), first-run setup, Umbrel app
 - Anti-bot validation
+- TURN support for viewers on UDP-blocking networks (planned for v1.1, done early): bundled coturn or your own
 
 ### v1.1: efficiency and reach
 
 - Content endpoints: page to Markdown or readability text, screenshot, PDF (API mode)
 - Token-efficient API-mode tools: accessibility snapshot with stable refs, find, batch, covered-element check
-- TURN support for viewers on UDP-blocking networks
 - Seed a profile from your own Chrome: cookie and localStorage JSON export/import, so you don't have to log in again inside BrowserPier
 - Navy-style logo
 

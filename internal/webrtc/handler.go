@@ -76,8 +76,8 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 }
 
 // LiveTURNLifetime is how long the admin's TURN credentials last. A live
-// view can stay open all day; when they run out, the TURN server drops it
-// and the page reconnects with new ones.
+// view can stay open all day; once they've run out and the TURN server
+// drops it, the page reconnects with new ones.
 const LiveTURNLifetime = 12 * time.Hour
 
 func (h *Handler) ice(w http.ResponseWriter, r *http.Request) {
