@@ -52,7 +52,7 @@ Self-hosted, persistent browsers for AI agents. Agents start a browser when they
 
 - **Orchestrator**, always on and lightweight: one Go binary that serves the API, the web UI and an MCP endpoint. It starts and stops browser containers through the Docker SDK and keeps state (profiles, tokens, sessions, handoffs) in SQLite.
 - **Web UI:** Go templates with htmx for live updates, embedded in the binary, with no JS build step. Live view and handoff use a small vanilla JS WebRTC client.
-- **Browser container**, one per running session: headful Chromium on a virtual display (Xvfb) with no automation flags. It has OS-level input (xdotool) for Visual mode and exposes CDP for API mode. A small sidecar captures the display, encodes H.264 (GStreamer) and sends it to the orchestrator.
+- **Browser container**, one per running session: headful Chromium on a virtual display (Xvfb) with no automation flags, on a minimal desktop: a window manager (JWM) and a taskbar. It has OS-level input (xdotool) for Visual mode and exposes CDP for API mode. A small sidecar captures the display, encodes H.264 (GStreamer) and sends it to the orchestrator.
 - **Live stream:** WebRTC, served by the orchestrator with pion on a single muxed UDP port (TCP fallback). It relays each container's stream to the viewer and passes mouse and keyboard from the viewer back over a data channel to xdotool. No CDP is involved, so Visual mode stays clean.
   - **Ports and addresses:** `BROWSERPIER_WEBRTC_PORT` (default 7438) is the one UDP port, and the same TCP port is the fallback; `BROWSERPIER_WEBRTC_IPS` sets the addresses to advertise (a VPS's public IP, the Tailscale IP). The live view is the web UI's profile page, `/profiles/{profile}`, for the signed-in admin (`/live/{profile}` redirects there).
   - **Streaming:** a browser's stream is read only while someone watches, so an unwatched browser spends nothing on encoding. Each frame is one sample; x264 writes one slice per frame.
@@ -77,6 +77,7 @@ Self-hosted, persistent browsers for AI agents. Agents start a browser when they
   - `--webrtc-ip-handling-policy=disable_non_proxied_udp`, so WebRTC sends no UDP, which would go around the forwarder (see Egress) and, behind a proxy, leak the host IP.
   - No component updates, background networking or first-run screens.
   - `--password-store=basic`, so cookies decrypt the same way in every container and logins survive image updates.
+  - The window sits at 0,0 with no frame and fills the screen above a 32-pixel taskbar along the bottom, so Visual-mode coordinates are screen coordinates. The taskbar shows a clock only: no menus, key bindings or window buttons, so nothing on the desktop starts a program or kills Chromium, and the window can't be moved off 0,0.
 - **Graceful shutdown:** Chrome is closed cleanly and waited on before its container stops, so recent cookie writes are never lost. The entry process runs as PID 1 and handles stop signals itself. On SIGTERM it closes Chrome through CDP's `Browser.close`, not a signal: Chrome's own SIGTERM handler exits before flushing the cookie store, which loses a login made in the last half minute.
 - **Egress:** every connection Chromium makes goes through a small SOCKS5 forwarder in the container (`--proxy-server`, with `--proxy-bypass-list=<-loopback>` so loopback and link-local addresses don't skip it). Chromium resolves no name itself (`--host-resolver-rules`), DNS-over-HTTPS is off by policy, and there is no DIRECT fallback: if the forwarder or the proxy is down, pages fail rather than going out directly.
   - **The local network is off limits:** pages are untrusted, so the forwarder refuses private addresses (the Docker host through the bridge, its other containers, the LAN; `10/8`, `172.16/12`, `192.168/16`, `100.64/10` where Tailscale lives, `fc00::/7`) and the host's own addresses as `BROWSERPIER_WEBRTC_IPS` gives them. It always refuses loopback, link-local (the cloud metadata endpoint `169.254.169.254`) and addresses that aren't one host. IPv6 addresses that carry an IPv4 one (mapped, NAT64, 6to4) are judged by it.
@@ -335,11 +336,12 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 - Headful Chromium on a virtual display, with no automation flags.
 - Visual mode sends real OS-level input through xdotool, not CDP input events. The CDP connection itself is detectable, so in Visual mode no CDP client stays attached to the page.
 - Residential IP: a home server's own connection by default, with an optional per-profile proxy. On a VPS, a residential proxy is close to required for protected sites.
+- A desktop like a person's: a window manager whose taskbar reserves the bottom of the screen, so `screen.availHeight` is less than `screen.height`, as it is with a panel and unlike headless (PROJ-29).
 - Timezone and locale always match the exit IP. Chromium's interface languages are installed, so `Intl` agrees with `navigator.languages`.
 - WebRTC sends no UDP, so it can't leak the host IP behind a proxy.
 - No fingerprint spoofing: each profile keeps one real, consistent fingerprint over time.
 - Persistent, aged profiles with real logins help on their own.
-- **Validation** (PROJ-15): `images/chromium/ANTI-BOT.md` has the results against public detection pages, and the signals that remain (SwiftShader, no taskbar). `TestVisualModeLooksLikeAPerson` checks Visual mode in CI's Docker tests.
+- **Validation** (PROJ-15): `images/chromium/ANTI-BOT.md` has the results against public detection pages, and the signals that remain (SwiftShader, and a 0×0 window as a page's first script often sees it, which comes from Chromium rather than the desktop). `TestVisualModeLooksLikeAPerson` checks Visual mode in CI's Docker tests.
 
 ---
 
@@ -401,6 +403,7 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 | Profile storage | Bind-mounted folders in the data dir, not named Docker volumes | One directory to back up or move; export and downloads read files directly. The host path is detected from the orchestrator's own mounts. |
 | License | Apache 2.0, not AGPL | Self-hosters are the users, and many companies forbid AGPL code, even for internal tools. Same license as Steel; the patent grant and NOTICE come with it. |
 | Chromium sandbox | On, with a seccomp profile that allows user namespaces | Pages are untrusted; the container is a second boundary, not the only one. |
+| Desktop in the browser container | JWM with a 32-pixel taskbar along the bottom (a clock only); the browser window at 0,0, unframed, fills the rest | A bare Xvfb screen has no work area, which detection reads as headless. A real window manager reserves the taskbar's strip, so nothing is faked. At the bottom, the window stays at 0,0 and Visual-mode coordinates stay screen coordinates. About 8 MB. |
 | AppArmor for browser containers | Docker's, except none on AppArmor 4 hosts without Ubuntu's userns restriction (Debian 13, umbrelOS 2.0), until BrowserPier ships its own profile (PROJ-37) | Docker's profile refuses the sandbox there. Losing that backup layer costs less than losing Chromium's sandbox. |
 
 ### Still open
