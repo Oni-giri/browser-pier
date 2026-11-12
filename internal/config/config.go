@@ -33,8 +33,8 @@ type Config struct {
 	// (BROWSERPIER_USERNS_MODE): "keep-id" under rootless Podman.
 	UsernsMode string
 	// BrowserAppArmor names the browser containers' AppArmor profile
-	// (BROWSERPIER_BROWSER_APPARMOR). Empty means none where Docker uses
-	// AppArmor: its docker-default refuses Chromium's sandbox on AppArmor 4.
+	// (BROWSERPIER_BROWSER_APPARMOR). Empty means BrowserPier picks one:
+	// Docker's docker-default refuses Chromium's sandbox on AppArmor 4.
 	BrowserAppArmor string
 
 	// AdminPassword, when set (BROWSERPIER_ADMIN_PASSWORD), is the admin

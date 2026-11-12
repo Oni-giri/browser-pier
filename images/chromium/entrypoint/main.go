@@ -26,6 +26,9 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == sandboxCheckArg {
+		os.Exit(runSandboxCheck())
+	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if err := run(log); err != nil {
 		log.Error("exiting", "err", err)

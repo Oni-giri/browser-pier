@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -95,10 +94,11 @@ type Client struct {
 	seccompOpt string
 	// apparmorOpt sets the containers' AppArmor profile, or is empty for
 	// the daemon's default (see UseDataDir).
-	apparmorOpt string
-	apparmor    string // the profile asked for (Options.AppArmor)
-	userns      string
-	instance    string
+	apparmorOpt  string
+	apparmorNote AppArmorNote // how it was chosen, for the log
+	apparmor     string       // the profile asked for (Options.AppArmor)
+	userns       string
+	instance     string
 }
 
 // Options configure a Client.
@@ -111,8 +111,8 @@ type Options struct {
 	// Instance identifies this BrowserPier among others on the same
 	// Docker host; it only sees and removes its own containers.
 	Instance string
-	// AppArmor names the containers' AppArmor profile. Empty means none
-	// where the daemon uses AppArmor (see appArmorOpt).
+	// AppArmor names the containers' AppArmor profile. Empty means one is
+	// chosen to suit the host (see planAppArmor).
 	AppArmor string
 }
 
@@ -139,20 +139,31 @@ func New(o Options) (*Client, error) {
 // UseDataDir finishes setting up against the daemon, given the data dir as
 // this process and as the daemon see it. Podman's Docker API takes the
 // seccomp profile as a path rather than inline, so for Podman the profile
-// is written into the data dir and passed by its host path.
+// is written into the data dir and passed by its host path. It then picks
+// the browser containers' AppArmor profile, which may take starting a
+// short-lived container to check (see planAppArmor).
 func (c *Client) UseDataDir(ctx context.Context, dataDir, hostDataDir string) error {
 	info, err := c.api.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		return err
 	}
-	c.apparmorOpt = appArmorOpt(info.Info.SecurityOptions, c.apparmor, ubuntuUsernsRestriction())
 	v, err := c.api.ServerVersion(ctx, client.ServerVersionOptions{})
 	if err != nil {
 		return err
 	}
-	if !isPodman(v.Components) {
-		return nil
+	if isPodman(v.Components) {
+		if err := c.writeSeccomp(dataDir, hostDataDir); err != nil {
+			return err
+		}
 	}
+	plan := planAppArmor(info.Info.SecurityOptions, c.apparmor, ubuntuUsernsRestriction())
+	c.apparmorOpt, c.apparmorNote = chooseAppArmor(plan, func(opt string) (bool, string, error) {
+		return c.checkSandbox(ctx, opt)
+	})
+	return nil
+}
+
+func (c *Client) writeSeccomp(dataDir, hostDataDir string) error {
 	root, err := os.OpenRoot(dataDir)
 	if err != nil {
 		return err
@@ -167,77 +178,6 @@ func (c *Client) UseDataDir(ctx context.Context, dataDir, hostDataDir string) er
 	c.seccompOpt = "seccomp=" + filepath.Join(hostDataDir, "seccomp.json")
 	return nil
 }
-
-// restrictSysctl is Ubuntu's switch for its user namespace restriction.
-// Other kernels don't have it. A container sees the host's.
-const restrictSysctl = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns"
-
-// RemoteDaemon reports whether the daemon may run on another kernel than
-// this process: whenever DOCKER_HOST is set, since even a unix socket can
-// be forwarded from elsewhere. Only the default socket counts as local.
-func RemoteDaemon() bool { return os.Getenv("DOCKER_HOST") != "" }
-
-// ubuntuUsernsRestriction reports whether the Docker host's kernel has
-// Ubuntu's user namespace restriction: "absent", or "present" (on, off,
-// unreadable, or a remote daemon's kernel, which can't be checked).
-func ubuntuUsernsRestriction() string {
-	if RemoteDaemon() {
-		return "present"
-	}
-	if _, err := os.Stat(restrictSysctl); errors.Is(err, fs.ErrNotExist) {
-		return "absent"
-	}
-	return "present"
-}
-
-// appArmorOpt is the browser containers' AppArmor option, given the
-// daemon's security options, the profile asked for and Ubuntu's restriction
-// (see ubuntuUsernsRestriction). Chromium's sandbox needs a user namespace:
-//   - Under AppArmor 4 without Ubuntu's restriction (Debian 13, umbrelOS
-//     2), Docker's docker-default has no userns rule and refuses it, while
-//     an unconfined process may create one. Browsers run unconfined on any
-//     AppArmor host without that restriction, since the version isn't
-//     visible from here: on AppArmor 3 (Debian 12) that's needless.
-//   - With Ubuntu's restriction, it's the other way round: an unconfined
-//     process gets a namespace without the capabilities the sandbox needs,
-//     and docker-default works. Browsers keep Docker's profile.
-//
-// The seccomp profile, dropped capabilities and no-new-privileges apply
-// either way. PROJ-37: ship our own profile, docker-default plus userns.
-func appArmorOpt(daemonOpts []string, profile, ubuntuRestriction string) string {
-	if profile != "" {
-		return "apparmor=" + profile
-	}
-	if ubuntuRestriction != "absent" {
-		return ""
-	}
-	// Only Docker's stock profile, reported as "name=apparmor" before Docker
-	// 29.x and "name=apparmor,profile=default" since. A default the admin
-	// set for the daemon ("name=apparmor,profile=/path") may allow userns,
-	// and is kept.
-	for _, o := range daemonOpts {
-		if o == "name=apparmor" || o == "name=apparmor,profile=default" {
-			return "apparmor=unconfined"
-		}
-	}
-	return ""
-}
-
-// Spec is the definition version this client labels its containers with:
-// docker.Spec, plus the AppArmor option when there is one, so that a
-// browser started under another AppArmor choice isn't picked up after a
-// restart (see sessions.Reconcile).
-func (c *Client) Spec() string {
-	if c.apparmorOpt == "" {
-		return Spec
-	}
-	return Spec + ";" + c.apparmorOpt
-}
-
-// AppArmor is the browser containers' AppArmor profile: "unconfined", a
-// profile's name, or empty for none on a daemon without AppArmor. Known
-// after UseDataDir.
-func (c *Client) AppArmor() string { return strings.TrimPrefix(c.apparmorOpt, "apparmor=") }
 
 func isPodman(components []system.ComponentVersion) bool {
 	for _, comp := range components {
@@ -336,7 +276,7 @@ func browserConfig(image, seccompOpt, apparmorOpt string, spec BrowserSpec) (*co
 
 func (c *Client) Start(ctx context.Context, id string) error {
 	_, err := c.api.ContainerStart(ctx, id, client.ContainerStartOptions{})
-	return err
+	return appArmorStartError(err, c.apparmor)
 }
 
 // Stop asks the container to stop and returns once it has, killing it after
