@@ -31,6 +31,14 @@ services:
       # below. With your own proxy on this host, set it to the network's
       # gateway (10.247.74.1) instead; set it empty to believe none.
       BROWSERPIER_TRUSTED_PROXIES: ${BROWSERPIER_TRUSTED_PROXIES-10.247.74.3}
+      # TURN, for viewers on networks that block UDP or direct connections:
+      # the bundled server below, or another. See "TURN" in README.md.
+      BROWSERPIER_TURN_URLS: ${BROWSERPIER_TURN_URLS:-}
+      BROWSERPIER_TURN_SECRET: ${BROWSERPIER_TURN_SECRET:-}
+      BROWSERPIER_TURN_USERNAME: ${BROWSERPIER_TURN_USERNAME:-}
+      BROWSERPIER_TURN_PASSWORD: ${BROWSERPIER_TURN_PASSWORD:-}
+      # The bundled TURN server relays to BrowserPier here, on this network.
+      BROWSERPIER_TURN_PEER_IPS: ${BROWSERPIER_NET:-10.247.74}.2
     networks:
       default:
         ipv4_address: ${BROWSERPIER_NET:-10.247.74}.2
@@ -64,6 +72,65 @@ services:
     networks:
       default:
         ipv4_address: ${BROWSERPIER_NET:-10.247.74}.3
+
+  turn:
+    # coturn, for live viewers on networks that block UDP or direct
+    # connections (`--profile turn`, with BROWSERPIER_TURN_SECRET and
+    # BROWSERPIER_TURN_URLS in .env). It relays only to BrowserPier's
+    # live-view port, over this network, so it publishes no relay ports
+    # and can't be used to reach anything else.
+    image: docker.io/coturn/coturn:4.7.0
+    profiles: [turn]
+    restart: unless-stopped
+    environment:
+      BROWSERPIER_TURN_SECRET: ${BROWSERPIER_TURN_SECRET:-}
+      TURN_IP: ${BROWSERPIER_NET:-10.247.74}.4
+      BROWSERPIER_IP: ${BROWSERPIER_NET:-10.247.74}.2
+    # The settings, secret included, go to a file only coturn reads, not
+    # its command line, which every process on the host can see.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        if [ "$${#BROWSERPIER_TURN_SECRET}" -lt 16 ]; then
+          echo "turn: set BROWSERPIER_TURN_SECRET in .env, at least 16 characters (openssl rand -hex 32)" >&2
+          exit 1
+        fi
+        umask 077
+        cat >/tmp/turnserver.conf <<EOF
+        listening-ip=$$TURN_IP
+        listening-port=$${TURN_PORT:-3478}
+        relay-ip=$$TURN_IP
+        no-tls
+        no-dtls
+        realm=browserpier
+        use-auth-secret
+        static-auth-secret=$$BROWSERPIER_TURN_SECRET
+        fingerprint
+        stale-nonce=600
+        # Relay to BrowserPier and nowhere else: not to the host, its LAN
+        # or other containers, and not to the internet.
+        denied-peer-ip=0.0.0.0-255.255.255.255
+        denied-peer-ip=::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+        allowed-peer-ip=$$BROWSERPIER_IP
+        no-tcp-relay
+        no-multicast-peers
+        user-quota=10
+        total-quota=100
+        no-cli
+        log-file=stdout
+        simple-log
+        EOF
+        unset BROWSERPIER_TURN_SECRET
+        exec turnserver -c /tmp/turnserver.conf
+    ports:
+      # Open to the people who'll watch or take over browsers. TCP is
+      # for networks that block UDP.
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+    networks:
+      default:
+        ipv4_address: ${BROWSERPIER_NET:-10.247.74}.4
 
 # A network of its own, with fixed addresses, so BrowserPier can believe
 # Caddy and no one else. If 10.247.74.0/24 clashes with a network you
