@@ -126,6 +126,7 @@ Self-hosted, persistent browsers for AI agents. Agents start a browser when they
 - A start takes a few seconds. The UI shows Starting… with a spinner and disables the action until the browser is ready.
 - **Orchestrator restarts:** browsers keep running while the orchestrator restarts, and it picks them up again. Each container is labelled with the version of its definition (`io.browserpier.spec`); a browser from an older one, such as one started before pages went through the egress filter, is stopped the usual way instead, logins kept, and the next start gets a current one.
 - Stopping never loses logins, because the profile is written continuously and Chrome is closed gracefully.
+- **A stop Docker reports as failed** still counts when the container has in fact stopped: it is logged as a warning, and the exit status decides Stopped or Failed as usual. Rootless Podman on Ubuntu does this when AppArmor keeps it from stopping `pasta` (PROJ-64). If the container is still running, the session goes back to the state it was in and the error is returned.
 
 ---
 
@@ -391,6 +392,7 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 | Frontend | Go templates + htmx, small vanilla JS for WebRTC | No build step; everything ships in the one binary. |
 | Notifications | None from BrowserPier | The agent already messages the human with the handoff link. |
 | RAM limit | Stop the longest-idle unused browser, else refuse; the same when the host is short of free memory, with no extra setting | Agents get a browser when possible and a clear error when not, instead of hanging in a queue. A host short because of other apps would otherwise swap, or have its OOM killer end another app or a browser mid-task. |
+| Stop errors | A stop Docker reports as failed counts when the container has stopped, with a warning in the log | The browser closed the usual way, and its exit status still tells a clean close from a crash. Refusing answered 502 and could record the session as crashed, over a fault in the host's network teardown that only the host can fix. |
 | Profile backups | Encrypted export and import in the UI | Losing the server shouldn't mean logging in everywhere again. |
 | Deployment | Generic docker-compose first (any VPS), Umbrel app second | The author runs it on Umbrel, but it should work for anyone on a plain server. |
 | Fingerprints | No spoofing; one stable real fingerprint per profile | Spoofing needs CDP on every page, and a changing fingerprint flags logged-in accounts. |

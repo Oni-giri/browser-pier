@@ -68,6 +68,25 @@ DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock BROWSERPIER_USERNS_MODE=k
   BROWSERPIER_TEST_SITE_HOST=host.docker.internal make test-docker
 ```
 
+With Podman 5, that passes only after two changes to the host.
+
+**Where the test sites are.** Podman 5 maps `host.docker.internal` to the link-local `169.254.1.2`, which the browser's egress filter always refuses, so every test page fails with `chrome-error://chromewebdata/`. Point it at another address of this machine in `~/.config/containers/containers.conf`:
+
+```toml
+[containers]
+host_containers_internal_ip = "100.64.0.7"
+```
+
+Not the address on your default route: pasta copies that one into the containers' network, where it means the container itself. A second interface's address works, such as a Tailscale one. `podman run --rm alpine getent hosts host.docker.internal` shows the address containers get. Setting `BROWSERPIER_TEST_SITE_HOST` to that address instead works too.
+
+**Stopping the last container** (Ubuntu). When the last container on the rootless network stops, Podman kills `pasta`, and Ubuntu's AppArmor profile for `pasta` refuses the signal, so the stop returns `rootless netns: kill network process: permission denied`. The container has stopped, so BrowserPier only logs a warning, but the host should still be fixed: add this line to the profile in `/etc/apparmor.d/usr.bin.pasta`, after `include <abstractions/pasta>`,
+
+```
+  signal (receive) peer=podman,
+```
+
+then reload it with `sudo apparmor_parser -r /etc/apparmor.d/usr.bin.pasta`.
+
 ## Running it locally
 
 ```sh
