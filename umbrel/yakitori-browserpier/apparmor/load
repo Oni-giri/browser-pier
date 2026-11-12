@@ -1,0 +1,72 @@
+#!/bin/sh
+# Loads BrowserPier's AppArmor profile (./browserpier) into the kernel, on
+# the hosts that need it: AppArmor 4 without Ubuntu's user namespace
+# restriction (Debian 13, umbrelOS 2.0), where Docker's own profile refuses
+# Chromium's sandbox. Anywhere else it says why and does nothing.
+#
+#   load [--persist DIR]
+#
+# --persist DIR also installs the profile as DIR/browserpier, the host's
+# /etc/apparmor.d as this process sees it, so the host loads it at boot.
+#
+# Run as root with CAP_MAC_ADMIN and the host's /sys/kernel/security: on
+# the host (Umbrel's hooks/pre-start), or in the browser image's loader
+# service (deploy/docker-compose.yml). Exits non-zero only when loading
+# fails; BrowserPier then runs browsers without AppArmor, and says so.
+set -eu
+
+here="$(dirname "$0")"
+profile="${here}/browserpier"
+persist=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --persist) persist="${2:?--persist needs a directory}"; shift 2 ;;
+    *) echo "usage: $0 [--persist DIR]" >&2; exit 2 ;;
+  esac
+done
+
+say() { echo "BrowserPier AppArmor: $*"; }
+
+aa=/sys/kernel/security/apparmor
+if [ ! -d "${aa}" ]; then
+  say "AppArmor isn't on (no ${aa}); nothing to load"
+  exit 0
+fi
+if [ ! -e "${aa}/features/namespaces/userns_create" ]; then
+  say "this kernel doesn't mediate user namespaces, so Docker's profile works; nothing to load"
+  exit 0
+fi
+if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+  say "Ubuntu's user namespace restriction is here, and Docker's profile works under it; nothing to load"
+  exit 0
+fi
+# Docker's profile is compiled by the host's parser. Before AppArmor 4 it
+# doesn't know user namespaces, so it doesn't mediate them and Docker's
+# profile works. The host's parser must also read ours at boot.
+abi="${persist:-/etc/apparmor.d}/abi/4.0"
+if [ ! -e "${abi}" ]; then
+  say "the host's AppArmor is older than 4.0 (no ${abi}), so Docker's profile works; nothing to load"
+  exit 0
+fi
+
+if [ -n "${persist}" ] && ! cmp -s "${profile}" "${persist}/browserpier"; then
+  # Not fatal: loaded below, it holds until the host restarts.
+  if cp "${profile}" "${persist}/.browserpier.tmp" &&
+    chmod 644 "${persist}/.browserpier.tmp" &&
+    mv -f "${persist}/.browserpier.tmp" "${persist}/browserpier"; then
+    say "installed ${persist}/browserpier, for the host to load at boot"
+  else
+    rm -f "${persist}/.browserpier.tmp"
+    say "couldn't install ${persist}/browserpier, so after the host restarts, browsers run without AppArmor until this runs again" >&2
+  fi
+fi
+
+if ! command -v apparmor_parser >/dev/null 2>&1; then
+  say "no apparmor_parser here; can't load the profile" >&2
+  exit 1
+fi
+if ! apparmor_parser --replace --skip-cache "${profile}"; then
+  say "loading the profile failed; browsers will run without AppArmor" >&2
+  exit 1
+fi
+say "loaded the browserpier profile"

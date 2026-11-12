@@ -19,3 +19,9 @@ Geist and Geist Mono (internal/ui/static/fonts/)
 Docker's default seccomp profile (images/chromium/seccomp.json, generated)
   https://github.com/moby/profiles
   Licensed under the Apache License, Version 2.0.
+
+Docker's default AppArmor profile (images/chromium/apparmor/browserpier,
+adapted, with copies in umbrel/yakitori-browserpier/apparmor/)
+  https://github.com/moby/profiles (apparmor/template.go, apparmor/v0.2.0)
+  Copyright The Moby Authors.
+  Licensed under the Apache License, Version 2.0.

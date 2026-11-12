@@ -18,6 +18,7 @@ RUN apt-get update \
       gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-ugly \
       fonts-liberation fonts-dejavu-core fonts-noto-color-emoji fonts-noto-cjk \
       ca-certificates tzdata \
+      apparmor \
  && rm -rf /var/lib/apt/lists/*
 
 # Fail the build, not the first session, if a plugin or a switch the entrypoint
@@ -51,6 +52,11 @@ COPY LICENSE NOTICE /usr/share/doc/browserpier/
 # to /files/downloads without asking, in both modes and without CDP, and
 # turns off DNS-over-HTTPS, which would go around a profile's proxy.
 COPY images/chromium/policies.json /etc/chromium/policies/managed/browserpier.json
+# BrowserPier's AppArmor profile and its loader, which the compose file's
+# apparmor service runs as root (apparmor_parser comes from the apparmor
+# package above). Browsers never run it. See images/chromium/apparmor.
+COPY images/chromium/apparmor/ /usr/share/browserpier/apparmor/
+RUN apparmor_parser --skip-kernel-load --skip-cache /usr/share/browserpier/apparmor/browserpier
 
 # Changing REBUILD forces a new image without reinstalling packages (used by the persistence test).
 ARG REBUILD=0
