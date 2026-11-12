@@ -35,15 +35,20 @@ type Signals struct {
 	// OuterWidth and OuterHeight are read as the page's first script runs,
 	// when headless (and pages opened over CDP) report 0; AfterLoad once
 	// it has loaded.
-	OuterWidth           int    `json:"outerWidth"`
-	OuterHeight          int    `json:"outerHeight"`
-	OuterWidthAfterLoad  int    `json:"outerWidthAfterLoad"`
-	OuterHeightAfterLoad int    `json:"outerHeightAfterLoad"`
-	HasFocus             bool   `json:"hasFocus"`
-	ScreenWidth          int    `json:"screenWidth"`
-	ScreenHeight         int    `json:"screenHeight"`
-	WebGLVendor          string `json:"webglVendor"`
-	WebGLRenderer        string `json:"webglRenderer"`
+	OuterWidth           int  `json:"outerWidth"`
+	OuterHeight          int  `json:"outerHeight"`
+	OuterWidthAfterLoad  int  `json:"outerWidthAfterLoad"`
+	OuterHeightAfterLoad int  `json:"outerHeightAfterLoad"`
+	HasFocus             bool `json:"hasFocus"`
+	ScreenWidth          int  `json:"screenWidth"`
+	ScreenHeight         int  `json:"screenHeight"`
+	// AvailWidth and AvailHeight are the screen less what a taskbar
+	// reserves; a desktop with no panel (headless, bare Xvfb) has them
+	// equal to the screen.
+	AvailWidth    int    `json:"availWidth"`
+	AvailHeight   int    `json:"availHeight"`
+	WebGLVendor   string `json:"webglVendor"`
+	WebGLRenderer string `json:"webglRenderer"`
 	// NotificationPermission and PermissionQuery disagree (denied and
 	// prompt) in headless Chrome.
 	NotificationPermission string `json:"notificationPermission"`
@@ -81,6 +86,7 @@ const detectPage = `<!doctype html><title>Detector</title><pre id="out">checking
   s.chrome = typeof window.chrome === 'object' && window.chrome !== null;
   s.outerWidth = outerWidth; s.outerHeight = outerHeight;
   s.screenWidth = screen.width; s.screenHeight = screen.height;
+  s.availWidth = screen.availWidth; s.availHeight = screen.availHeight;
   try {
     const gl = document.createElement('canvas').getContext('webgl');
     const ext = gl.getExtension('WEBGL_debug_renderer_info');
