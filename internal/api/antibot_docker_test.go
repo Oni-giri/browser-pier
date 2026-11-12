@@ -57,10 +57,8 @@ func TestVisualModeLooksLikeAPerson(t *testing.T) {
 		t.Error("in Visual mode the page isn't focused")
 	}
 	// Known and not asserted: often, in both modes, the page's first script
-	// sees a 0x0 window. The window manager didn't change that (PROJ-29): a
-	// new document's widget hears its window's bounds from the browser only
-	// once it's shown, after the commit, by when the first script has often
-	// run. See images/chromium/ANTI-BOT.md.
+	// sees a 0x0 window. A window manager didn't change that (PROJ-29); its
+	// cause is being checked in PROJ-65. See images/chromium/ANTI-BOT.md.
 	t.Logf("Visual mode: window %dx%d as the page's first script ran", vis.OuterWidth, vis.OuterHeight)
 	looksLikeChrome(t, vis)
 	// And from the browser's side: no client is attached to the page.

@@ -341,7 +341,7 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 - WebRTC sends no UDP, so it can't leak the host IP behind a proxy.
 - No fingerprint spoofing: each profile keeps one real, consistent fingerprint over time.
 - Persistent, aged profiles with real logins help on their own.
-- **Validation** (PROJ-15): `images/chromium/ANTI-BOT.md` has the results against public detection pages, and the signals that remain (SwiftShader, and a 0×0 window as a page's first script often sees it, which comes from Chromium rather than the desktop). `TestVisualModeLooksLikeAPerson` checks Visual mode in CI's Docker tests.
+- **Validation** (PROJ-15): `images/chromium/ANTI-BOT.md` has the results against public detection pages, and the signals that remain (SwiftShader, and a 0×0 window as a page's first script often sees it, which a window manager didn't change; its cause is being checked in PROJ-65). `TestVisualModeLooksLikeAPerson` checks Visual mode in CI's Docker tests.
 
 ---
 
