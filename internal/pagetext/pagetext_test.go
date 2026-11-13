@@ -91,6 +91,13 @@ func TestMarkdownBlocks(t *testing.T) {
 	}
 }
 
+func TestMarkdownListItemsStayTight(t *testing.T) {
+	got := md(t, `<ul><li><div>Overview</div><button>Toggle</button><ul><li><p>Nested</p><p>Twice</p></li></ul></li><li><p>Next</p></li></ul><p>After</p>`)
+	if want := "- Overview\n  Toggle\n  - Nested\n    Twice\n- Next\n\nAfter"; got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 func TestMarkdownLinksAndImages(t *testing.T) {
 	got := md(t, `<p><a href="other.html">Relative</a> <a href="/abs?q=a b">Absolute</a> <a href="#top">Fragment</a>
 <a href="javascript:alert(1)">Script</a> <a href="mailto:a@example.com">Mail</a> <a href="https://x.example/(paren)">Paren</a>
@@ -221,6 +228,14 @@ func TestReadableScoresDivSoup(t *testing.T) {
 	}
 	if strings.Contains(out, "A link somewhere") {
 		t.Errorf("the link list is in:\n%s", out)
+	}
+}
+
+func TestReadableKeepsAFrontPageOfLinks(t *testing.T) {
+	card := `<div><a href="/story"><h2>A headline about something that happened today</h2><p>The summary of the story, in a sentence or two.</p></a></div>`
+	out, _ := Readable(parse(t, `<nav><a href="/">Home</a></nav><main>`+strings.Repeat(card, 8)+`</main>`), 0)
+	if strings.Count(out, "A headline") != 8 || strings.Contains(out, "Home") {
+		t.Errorf("a front page:\n%s", out)
 	}
 }
 

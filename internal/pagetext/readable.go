@@ -58,15 +58,15 @@ func Article(root *Node) *Node {
 		return nil
 	}
 	if a := pick(func(n *Node) bool { return n.Tag == "article" || n.Attr("role") == "article" }); a != nil {
-		return m.trim(a)
+		return m.final(a)
 	}
 	if a := pick(func(n *Node) bool { return n.Tag == "main" || n.Attr("role") == "main" }); a != nil {
-		return m.trim(a)
+		return m.final(a)
 	}
 	if a := m.best(clean); a != nil && m.text[a] >= minArticle {
-		return m.trim(a)
+		return m.final(a)
 	}
-	return m.trim(clean)
+	return m.final(clean)
 }
 
 var (
@@ -272,6 +272,16 @@ func (m *measures) best(root *Node) *Node {
 		m.links[out] += m.links[k]
 	}
 	return out
+}
+
+// final is the article trimmed of its link lists, unless that leaves
+// little of it: a page made of links (a news front page) keeps them.
+func (m *measures) final(n *Node) *Node {
+	t := m.trim(n)
+	if left := len(innerText(t)); left < minArticle || left*3 < m.text[n] {
+		return n
+	}
+	return t
 }
 
 // trim copies the article without its blocks that are mostly links:

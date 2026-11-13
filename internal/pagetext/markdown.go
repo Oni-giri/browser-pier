@@ -50,14 +50,16 @@ type writer struct {
 	code    int  // inside inline code: no escaping
 	opened  bool // a quote just opened: no blank line before its first block
 	lists   int  // open lists
+	items   int  // open list items
 }
 
 func (w *writer) String() string { return strings.Join(w.out, "\n") }
 
-// want asks for at least gap before the next block. A list item's first
-// block keeps the item's own line break.
+// want asks for at least gap before the next block. Inside a list item
+// blocks are a line apart, not a blank line: menus and tables of
+// contents are lists of blocks, and blank lines would double them.
 func (w *writer) want(gap int) {
-	if w.marker != "" && gap > 1 {
+	if w.items > 0 && gap > 1 {
 		gap = 1
 	}
 	w.gap = max(w.gap, gap)
@@ -496,8 +498,10 @@ func (w *writer) item(n *Node, marker string) {
 	w.want(1)
 	w.prefix = append(w.prefix, strings.Repeat(" ", len(marker)))
 	w.marker = marker
+	w.items++
 	w.kids(n)
 	w.flush()
+	w.items--
 	w.marker = "" // an empty item writes nothing
 	w.prefix = w.prefix[:len(w.prefix)-1]
 	w.want(1)
