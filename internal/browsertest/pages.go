@@ -129,6 +129,36 @@ var pageSitePages = map[string]string{ //nolint:gosec // test pages, not credent
 <button onmouseover="report('hovered')">Hover me</button>
 <label>Upload <input type="file"></label>`,
 	"/signed-in": `<!doctype html><title>Account</title><h1>Signed in</h1>`,
+	// An article among a site's furniture, for the content endpoints
+	// (PROJ-20): a nav, a cookie banner, a sidebar, hidden and transparent
+	// text, a page-filled password, a closed shadow root and an iframe.
+	"/article": `<!doctype html><title>Library opens</title>
+<div id="cookies" style="position:fixed;bottom:0;left:0;right:0;background:#eee;padding:8px" class="cookie-banner">We use cookies. <button>Accept all</button></div>
+<header><a href="/">Example News</a></header>
+<nav><a href="/world">World</a> <a href="/sport">Sport</a> <a href="/weather">Weather</a></nav>
+<main><article>
+<h1>Library opens next spring</h1>
+<p>The committee met on Tuesday to discuss the new library, which opens next spring. Members agreed on the budget, the opening hours and the staffing plan, after a long debate about parking. Read <a href="/plan.pdf">the full plan</a>.</p>
+<p>The building has three floors, a reading garden and a children's wing. Volunteers will run a book swap on Saturdays, and the café will stay open late on Thursdays, the committee said.</p>
+<h2>Opening hours</h2>
+<table><tr><th>Day</th><th>Hours</th></tr><tr><td>Monday</td><td>9–18</td></tr><tr><td>Saturday</td><td>10–16</td></tr></table>
+<ul><li>Free cards for residents</li><li>Late returns forgiven in May</li></ul>
+<pre><code class="language-sh">curl https://library.example/api</code></pre>
+<p style="display:none">DISPLAY-NONE-TEXT</p>
+<p style="visibility:hidden">VISIBILITY-HIDDEN-TEXT</p>
+<p style="opacity:0">OPACITY-ZERO-TEXT</p>
+<div id="host"></div>
+<label for="pw">Password</label> <input id="pw" type="password" value="PAGE-FILLED-SECRET">
+</article>
+<aside class="sidebar">Most read: <a href="/x">Something else</a></aside></main>
+<iframe src="/login" width="300" height="200"></iframe>
+<footer>© Example News</footer>
+<script>document.getElementById('host').attachShadow({mode: 'closed'}).innerHTML = '<p>Text in a closed shadow root.</p>';</script>`,
+	// A page with a quarter of a million elements.
+	"/huge": `<!doctype html><title>Huge</title><div id="d"></div><script>
+const d = document.getElementById('d'); const f = document.createDocumentFragment();
+for (let i = 0; i < 250000; i++) { const s = document.createElement('i'); f.appendChild(s); }
+d.appendChild(f);</script>`,
 	// Buttons inside a closed shadow root: one free, one under a cover.
 	"/shadow": `<!doctype html><title>Shadow</title>` + report + `
 <div id="host"></div>
