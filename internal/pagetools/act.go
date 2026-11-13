@@ -322,7 +322,8 @@ const (
 	jsField = `/*bp:field*/ function() {
   return {tag: this.localName, type: (this.getAttribute('type') || '').toLowerCase(), editable: !!this.isContentEditable,
     disabled: !!this.disabled, checked: typeof this.checked === 'boolean' ? this.checked : null,
-    aria: this.getAttribute('aria-checked'), role: this.getAttribute('role')};
+    aria: this.getAttribute('aria-checked'), role: this.getAttribute('role'),
+    file: (this.localName === 'input' && this.type === 'file') || !!(this.control && this.control.type === 'file')};
 }`
 	// jsSelect chooses a <select>'s option by value, else by its text, as
 	// Playwright does: it sets the option and dispatches input and change.
@@ -360,6 +361,15 @@ func (c *call) step(ctx context.Context, st Step) (string, error) {
 	}
 	switch st.Action {
 	case "click":
+		// A file chooser is a window of the browser's own: nothing over
+		// CDP could close it, and it would block the person too.
+		var f fieldInfo
+		if err := c.callOn(ctx, n.obj, jsField, nil, &f); err != nil {
+			return "", err
+		}
+		if f.File {
+			return "", &Error{Status: 422, Msg: n.ref + " opens a file chooser, which act doesn't click; upload the file with POST /api/sessions/{id}/files and set it with your own CDP client (DOM.setFileInputFiles)"}
+		}
 		x, y, err := c.aim(ctx, n)
 		if err != nil {
 			return "", err
@@ -506,7 +516,11 @@ func (c *call) click(ctx context.Context, x, y float64, button string, double bo
 	for i := 1; i <= clicks; i++ {
 		// Once a press is sent it may have landed, even if its answer
 		// never came (a cancel, a timeout): the release goes out anyway.
+		// One that was never sent needs none.
 		err := c.mouse(ctx, "mousePressed", x, y, button, i)
+		if errors.Is(err, cdp.ErrNotSent) {
+			return err
+		}
 		rctx, cancel := c.letGo(ctx)
 		rerr := c.mouse(rctx, "mouseReleased", x, y, button, i)
 		cancel()
@@ -552,29 +566,34 @@ func (c *call) pressCombo(ctx context.Context, cb combo, commands ...string) err
 			_ = c.key(rctx, "keyUp", down[i], mods)
 		}
 	}()
+	// press sends a key-down. The key is noted as down unless it was never
+	// sent: it may land even if the answer never comes, and the deferred
+	// release covers it.
+	press := func(k keyDef, mods int, commands ...string) error {
+		err := c.key(ctx, "rawKeyDown", k, mods, commands...)
+		if !errors.Is(err, cdp.ErrNotSent) {
+			down = append(down, k)
+		}
+		return err
+	}
 	shiftDown := false
 	for _, m := range cb.mods {
 		mods |= modBit(m)
 		if m.key == "Shift" {
 			shiftDown = true
 		}
-		// Noted as down before it's sent: it may land even if the
-		// answer never comes, and the deferred release covers it.
-		down = append(down, m)
-		if err := c.key(ctx, "rawKeyDown", m, mods); err != nil {
+		if err := press(m, mods); err != nil {
 			return err
 		}
 	}
 	if cb.key.shift && !shiftDown {
 		sh := modifierKeys["shift"].def
 		mods |= modShift
-		down = append(down, sh)
-		if err := c.key(ctx, "rawKeyDown", sh, mods); err != nil {
+		if err := press(sh, mods); err != nil {
 			return err
 		}
 	}
-	down = append(down, cb.key)
-	if err := c.key(ctx, "rawKeyDown", cb.key, mods, commands...); err != nil {
+	if err := press(cb.key, mods, commands...); err != nil {
 		return err
 	}
 	if cb.key.text != "" && mods&(modCtrl|modAlt|modMeta) == 0 && len(commands) == 0 {
@@ -618,6 +637,7 @@ type fieldInfo struct {
 	Checked  *bool  `json:"checked"`
 	Aria     string `json:"aria"`
 	Role     string `json:"role"`
+	File     bool   `json:"file"` // a file input, or a label for one
 }
 
 // typeInto fills or types into a field: focus it, check it has the

@@ -314,6 +314,119 @@ func TestCancellingMidActLetsGo(t *testing.T) {
 	}
 }
 
+// Every call closes its connection: after success, a failure in the
+// page, a refusal, a timeout and a cancel alike.
+func TestEveryCallClosesItsConnection(t *testing.T) {
+	f := newFixture(t)
+	p := newActPage(f.fb)
+	tb := f.fb.addTab("https://example.com/", p.doc, true)
+	r := f.refs()
+	bg := context.Background()
+	calls := []struct {
+		name string
+		run  func() error
+	}{
+		{"snapshot", func() error { _, err := f.snapshot(nil); return err }},
+		{"a stale ref", func() error { _, err := f.act(Step{Action: "click", Ref: r["Sign in"][:2] + "e999"}); return err }},
+		{"a covered element", func() error { _, err := f.act(Step{Action: "click", Ref: r["Buy now"]}); return err }},
+		{"an unsupported input", func() error { _, err := f.act(Step{Action: "fill", Ref: r["Birthday"], Text: text("x")}); return err }},
+		{"a wait that times out", func() error {
+			_, err := f.tools.WaitFor(bg, f.session(), f.who, WaitIn{Text: "never", TimeoutMS: 50})
+			return err
+		}},
+		{"an unknown tab", func() error {
+			_, err := f.tools.Tabs(bg, f.session(), f.who, TabsIn{Action: "switch", ID: "t9"})
+			return err
+		}},
+		{"no page to go back to", func() error {
+			_, err := f.tools.Navigate(bg, f.session(), f.who, NavigateIn{Action: "back"})
+			return err
+		}},
+		{"a stuck page", func() error {
+			f.fb.mu.Lock()
+			tb.stuck = true
+			f.fb.mu.Unlock()
+			defer func() { f.fb.mu.Lock(); tb.stuck = false; f.fb.mu.Unlock() }()
+			_, err := f.snapshot(nil)
+			return err
+		}},
+		{"a call whose caller goes away", func() error {
+			ctx, cancel := context.WithTimeout(bg, 50*time.Millisecond)
+			defer cancel()
+			_, err := f.tools.WaitFor(ctx, f.session(), f.who, WaitIn{Text: "never", TimeoutMS: 5000})
+			return err
+		}},
+		{"a hold", func() error {
+			done := make(chan error, 1)
+			go func() {
+				_, err := f.tools.WaitFor(bg, f.session(), f.who, WaitIn{Text: "never", TimeoutMS: 5000})
+				done <- err
+			}()
+			time.Sleep(100 * time.Millisecond)
+			release, _ := f.m.HoldSession(f.sess.ID)
+			defer release()
+			return <-done
+		}},
+	}
+	for _, c := range calls {
+		err := c.run()
+		if ok := c.name == "snapshot" || c.name == "a wait that times out"; !ok && err == nil {
+			t.Errorf("%s: no error", c.name)
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		for f.fb.Open() > 0 && time.Now().Before(deadline) {
+			time.Sleep(5 * time.Millisecond)
+		}
+		if n := f.fb.Open(); n > 0 {
+			t.Errorf("%s (%v): %d connections still open", c.name, err, n)
+		}
+	}
+	if f.fb.Dials() < len(calls) {
+		t.Errorf("only %d connections for %d calls", f.fb.Dials(), len(calls))
+	}
+}
+
+func TestClickingAFileInputIsRefused(t *testing.T) {
+	f := newFixture(t)
+	p := newActPage(f.fb)
+	tb := f.fb.addTab("https://example.com/", p.doc, true)
+	r := f.refs()
+	if _, err := f.act(Step{Action: "click", Ref: r["Upload"]}); !isStatus(err, 422) || !strings.Contains(err.Error(), "file chooser") {
+		t.Fatalf("got %v", err)
+	}
+	for _, e := range f.fb.input(tb).events {
+		if strings.HasPrefix(e, "mouse") {
+			t.Errorf("a mouse event went out: %s", e)
+		}
+	}
+}
+
+// A cancel that comes before a press is sent sends no release for it.
+func TestNoStrayReleaseForAPressNeverSent(t *testing.T) {
+	f := newFixture(t)
+	p := newActPage(f.fb)
+	tb := f.fb.addTab("https://example.com/", p.doc, true)
+	r := f.refs()
+	var once sync.Once
+	f.fb.onInput = func(typ string) {
+		if typ == "mouseMoved" {
+			once.Do(func() {
+				go func() { _, _ = f.m.SetNeedsHelp(f.sess.ID, true) }()
+				time.Sleep(200 * time.Millisecond)
+			})
+		}
+	}
+	if _, err := f.act(Step{Action: "click", Ref: r["Sign in"]}); !isStatus(err, http.StatusConflict) {
+		t.Fatalf("got %v", err)
+	}
+	f.fb.mu.Lock()
+	ev := strings.Join(f.fb.input(tb).events, "|")
+	f.fb.mu.Unlock()
+	if strings.Contains(ev, "mousePressed") || strings.Contains(ev, "mouseReleased") {
+		t.Errorf("events after the cancel: %s", ev)
+	}
+}
+
 func TestConcurrentActsDontInterleave(t *testing.T) {
 	f := newFixture(t)
 	p := newActPage(f.fb)

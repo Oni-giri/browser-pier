@@ -251,7 +251,7 @@ func (fb *fakeBrowser) function(tb *ftab, n *fnode, p map[string]any) (any, bool
 		if len(bh.options) > 0 {
 			tag, typ = "select", ""
 		}
-		return value(map[string]any{"tag": tag, "type": typ, "editable": false, "disabled": false, "checked": checked}), true, nil
+		return value(map[string]any{"tag": tag, "type": typ, "editable": false, "disabled": false, "checked": checked, "file": typ == "file"}), true, nil
 	case "select":
 		want := args[0].(string)
 		for _, o := range bh.options {
