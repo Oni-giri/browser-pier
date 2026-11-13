@@ -16,17 +16,29 @@
 //     and DOM.resolveNode are refused anywhere else. The page's own world
 //     never sees BrowserPier's scripts, and nothing is added to the page.
 //
-// Typical use:
+// Typical use, for a caller with its own unexported allow-list:
 //
-//	c, err := cdp.Dial(ctx, sock, myAllowList, cdp.Options{})
+//	var contentList = cdp.NewAllowList("content endpoints", "Target.getTargets", "Target.attachToTarget", …)
+//
+//	lease, err := m.PageLease(ctx, sessionID, tokenID) // sessions.Manager: one call at a time, cancelled by a handoff
+//	defer lease.Release()
+//	c, err := cdp.Dial(lease.Ctx, m.Layout().ControlSocket(profile), contentList, cdp.Options{})
 //	defer c.Close()
-//	t, err := c.Attach(ctx, targetID)        // a flat session on a page
-//	world, err := t.IsolatedWorld(ctx, frameID)
-//	var v struct{ Result cdp.RemoteObject }
-//	err = t.Call(ctx, "Runtime.evaluate", map[string]any{"expression": "document.title", "contextId": world, "returnByValue": true}, &v)
+//	t, err := c.Attach(lease.Ctx, targetID)  // a flat session on a page
+//	world, err := t.IsolatedWorld(lease.Ctx, frameID)
+//	var title string
+//	err = t.Eval(lease.Ctx, world, "document.title", &title)
+//
+// Contexts: Dial's bounds only the dial, and a Call's only the wait for
+// its answer. Neither ever cuts the connection, which lives until Close:
+// a caller whose context has ended can still send what finishes its work
+// (a button's release) with a fresh context. A renderer blocked by a
+// JavaScript dialog answers no renderer-side method (see
+// images/chromium/ANTI-BOT.md), so give each Call a timeout.
 //
 // Events are never subscribed to (nothing is enabled), so the few the
-// browser sends anyway are dropped.
+// browser sends anyway are dropped. internal/cdp/cdptest has a fake
+// browser for tests.
 package cdp
 
 import (
