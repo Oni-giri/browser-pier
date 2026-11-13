@@ -114,7 +114,12 @@ func TestContent(t *testing.T) {
 	}
 	// Parts end at a line's end, or mid-line on a long one: compare
 	// without whitespace.
-	if strings.Join(strings.Fields(parts.String()), "") != strings.Join(strings.Fields(whole[strings.Index(whole, "\n\n"):]), "") {
+	// A part starting inside the code block opens it again: compare
+	// without fences too.
+	bare := func(s string) string {
+		return strings.NewReplacer("```sh", "", "```", "").Replace(strings.Join(strings.Fields(s), ""))
+	}
+	if bare(parts.String()) != bare(whole[strings.Index(whole, "\n\n"):]) {
 		t.Errorf("the parts don't add up to the page:\n%s\n---\n%s", parts.String(), whole)
 	}
 
@@ -154,6 +159,55 @@ func TestContent(t *testing.T) {
 	for _, tg := range targets(t, a.m.Layout().ControlSocket(s.Profile)) {
 		if tg.Attached {
 			t.Errorf("%s is still attached", tg.URL)
+		}
+	}
+}
+
+// TestContentLeavesOutWhatItMust is the review's probe of PROJ-20: form
+// fields' values (typed by script, in a shadow root, or prefixed in
+// XHTML), scripts, styles and templates stay out; a page's "<!--" doesn't
+// hide the text after it; an iframe's address can't make a heading; and a
+// hidden chain of 190,000 elements renders at once.
+func TestContentLeavesOutWhatItMust(t *testing.T) {
+	a := newRealAPI(t)
+	site := browsertest.NewPageSite(t, siteHost(t))
+	s := a.startAPIBrowser(t, "cf")
+	a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/probe-fields"})
+	for _, format := range []string{"markdown", "readability"} {
+		out := a.contentText(s.ID, map[string]any{"format": format})
+		for _, want := range []string{"VISIBLE-PARA", "CONTENTS-TEXT", "SHADOW-P", "AFTER-COMMENT"} {
+			if !inFence(out, want) {
+				t.Errorf("%s: %s isn't in the fence:\n%s", format, want, out)
+			}
+		}
+		for _, gone := range []string{"JS-TEXT-VALUE", "OTP-123456", "TA-TYPED", "TA-DEFAULT", "SHADOW-INPUT-VALUE", "OPT-ONE", "OPT-TWO",
+			"SUBMIT-VALUE", "PLACEHOLDER-TEXT", "NOSCRIPT-TEXT", "TEMPLATE-TEXT", "HIDDEN-ALT", "<!--"} {
+			if strings.Contains(out, gone) {
+				t.Errorf("%s has %s:\n%s", format, gone, out)
+			}
+		}
+		for _, l := range strings.Split(out, "\n") {
+			if strings.HasPrefix(l, "#") && strings.Contains(l, "FAKE") {
+				t.Errorf("%s: an iframe's address made a heading: %q", format, l)
+			}
+		}
+	}
+	a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/probe.xhtml"})
+	out := a.contentText(s.ID, map[string]any{"format": "markdown"})
+	if !inFence(out, "XHTML-PARA") {
+		t.Errorf("xhtml:\n%s", out)
+	}
+	for _, gone := range []string{"XHTML-PREFIXED-SECRET", "XHTML-TEXTAREA", "XHTMLSCRIPT", "XHTMLSTYLE"} {
+		if strings.Contains(out, gone) {
+			t.Errorf("xhtml has %s:\n%s", gone, out)
+		}
+	}
+	a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/probe-deep?d=19000&c=10"})
+	for _, format := range []string{"markdown", "readability"} {
+		start := time.Now()
+		out := a.contentText(s.ID, map[string]any{"format": format})
+		if d := time.Since(start); d > 10*time.Second || !inFence(out, "DEEP-PAGE") {
+			t.Errorf("%s of a hidden chain of 190,000 elements: %v\n%s", format, d, out)
 		}
 	}
 }

@@ -154,6 +154,39 @@ var pageSitePages = map[string]string{ //nolint:gosec // test pages, not credent
 <iframe src="/login" width="300" height="200"></iframe>
 <footer>© Example News</footer>
 <script>document.getElementById('host').attachShadow({mode: 'closed'}).innerHTML = '<p>Text in a closed shadow root.</p>';</script>`,
+	// Fields and hidden things, for what content leaves out (PROJ-20 review).
+	"/probe-fields": `<!doctype html><title>Fields</title>
+<style>#g::before{content:"GENERATED-TEXT"}</style>
+<p>VISIBLE-PARA</p>
+<input id=t type=text><input id=otp autocomplete=one-time-code><textarea id=ta>TA-DEFAULT</textarea>
+<select><option>OPT-ONE<option selected>OPT-TWO</select>
+<div contenteditable id=ce>CE-TEXT</div>
+<input type=submit value=SUBMIT-VALUE><input placeholder=PLACEHOLDER-TEXT>
+<output>OUTPUT-TEXT</output>
+<noscript>NOSCRIPT-TEXT</noscript><template>TEMPLATE-TEXT</template>
+<details><summary>SUM</summary>DETAILS-CLOSED</details>
+<p aria-hidden=true>ARIA-HIDDEN</p>
+<p style="font-size:0">FONT-ZERO</p>
+<p style="position:absolute;left:-9999px">OFFSCREEN</p>
+<div style="display:contents"><p>CONTENTS-TEXT</p></div>
+<p style="height:0;overflow:hidden">CLIPPED-ZERO</p>
+<p id=g></p>
+<img alt=HIDDEN-ALT style=display:none src=x><img alt=BROKEN-ALT src=nope.png width=40 height=40>
+<x-f id=xf></x-f>
+<a href="javascript:alert(1)">JS-LINK</a> <a href="/rel?a=(1)">REL-LINK</a>
+<iframe src="http://127.0.0.1:9/%zz&#10;# FAKE-HEADING&#10;" width=50 height=50></iframe>
+<iframe src="data:text/html,hi]&#10;# FAKE-TWO" width=50 height=50></iframe>
+<p>code sample: &lt;!-- a comment</p><p>AFTER-COMMENT</p>
+<script>t.value='JS-TEXT-VALUE'; otp.value='OTP-123456'; ta.value='TA-TYPED';
+xf.attachShadow({mode:'closed'}).innerHTML='<input value=SHADOW-INPUT-VALUE><p>SHADOW-P</p>';</script>`,
+	"/probe.xhtml": `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:h="http://www.w3.org/1999/xhtml"><head><title>X</title></head><body>
+<p>XHTML-PARA</p><h:input type="password" value="XHTML-PREFIXED-SECRET"/><h:textarea>XHTML-TEXTAREA</h:textarea><h:script>var XHTMLSCRIPT=1;</h:script><h:style>.XHTMLSTYLE{}</h:style></body></html>`,
+	// A hidden chain of elements, d deep, c times (PROJ-20 review).
+	"/probe-deep": `<!doctype html><title>Deep</title><p>DEEP-PAGE</p><div id="d" style="display:none"></div><script>
+const q = new URLSearchParams(location.search); const depth = +q.get('d'), chains = +q.get('c'), tag = q.get('t') || 'em';
+const d = document.getElementById('d');
+for (let c = 0; c < chains; c++) { let cur = d; for (let i = 0; i < depth; i++) { const e = document.createElement(tag); cur.appendChild(e); cur = e; } }
+document.title = 'Deep ready';</script>`,
 	// A page with a quarter of a million elements.
 	"/huge": `<!doctype html><title>Huge</title><div id="d"></div><script>
 const d = document.getElementById('d'); const f = document.createDocumentFragment();
@@ -216,6 +249,9 @@ func NewPageSite(t *testing.T, host string) *PageSite {
 	}
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if strings.HasSuffix(r.URL.Path, ".xhtml") {
+			w.Header().Set("Content-Type", "application/xhtml+xml")
+		}
 		mux.ServeHTTP(w, r)
 	})
 	srv := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second}
