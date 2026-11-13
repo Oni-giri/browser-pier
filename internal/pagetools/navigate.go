@@ -2,10 +2,12 @@ package pagetools
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/Oni-giri/browser-pier/internal/cdp"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
@@ -138,7 +140,10 @@ func (c *call) waitLoad(ctx context.Context, before, beforeURL, want string, new
 		}
 		var pi pageInfo
 		if changed {
-			if err := c.eval(ctx, jsPageInfo, &pi); err != nil {
+			err := c.eval(ctx, jsPageInfo, &pi)
+			if errors.Is(err, cdp.ErrWorldGone) {
+				pi.Ready = "" // still navigating: look again
+			} else if err != nil {
 				return pageInfo{}, false, err
 			}
 			if pi.Ready == "complete" {

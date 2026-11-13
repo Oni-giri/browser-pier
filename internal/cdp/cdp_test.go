@@ -2,8 +2,10 @@ package cdp_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,7 +13,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/cdp/cdptest"
 )
 
-var testList = cdp.NewAllowList("test", "Target.attachToTarget", "Target.getTargets", "Page.createIsolatedWorld",
+var testList = cdp.NewAllowList("test", "Target.attachToTarget", "Target.getTargets", "Page.createIsolatedWorld", "Page.getFrameTree",
 	"Runtime.evaluate", "Runtime.callFunctionOn", "Runtime.releaseObject", "DOM.resolveNode", "Accessibility.getFullAXTree")
 
 func fake(t *testing.T, h cdptest.Handler) (*cdptest.Browser, string) {
@@ -77,54 +79,160 @@ func TestOnlyAllowedMethodsAreSent(t *testing.T) {
 	}
 }
 
-func TestCodeRunsOnlyInTheConnectionsIsolatedWorlds(t *testing.T) {
-	b, sock := fake(t, answers)
+// worldPage is a fake page for the isolated-world tests: its frame's
+// document can change between calls, and the world's handle with it.
+type worldPage struct {
+	mu        sync.Mutex
+	loaders   []string // what successive Page.getFrameTree calls say
+	handleOK  bool     // the world's globalThis handle still resolves
+	sameWorld bool     // a resolved node is in the world
+}
+
+func (w *worldPage) handle(m cdptest.Message) (any, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	var p struct {
+		ObjectID            string `json:"objectId"`
+		FunctionDeclaration string `json:"functionDeclaration"`
+	}
+	_ = json.Unmarshal(m.Params, &p)
+	switch m.Method {
+	case "Target.attachToTarget":
+		return map[string]any{"sessionId": "S1"}, nil
+	case "Page.getFrameTree":
+		l := w.loaders[0]
+		if len(w.loaders) > 1 {
+			w.loaders = w.loaders[1:]
+		}
+		return map[string]any{"frameTree": map[string]any{"frame": map[string]any{"id": "F", "loaderId": "L-top"},
+			"childFrames": []any{map[string]any{"frame": map[string]any{"id": "F2", "loaderId": l}}}}}, nil
+	case "Page.createIsolatedWorld":
+		return map[string]any{"executionContextId": 7}, nil
+	case "Runtime.evaluate":
+		return map[string]any{"result": map[string]any{"type": "object", "objectId": "global-7"}}, nil
+	case "DOM.resolveNode":
+		return map[string]any{"object": map[string]any{"type": "object", "subtype": "node", "objectId": "node-1"}}, nil
+	case "Runtime.callFunctionOn":
+		switch {
+		case p.ObjectID == "global-7" && !w.handleOK:
+			return nil, cdptest.Error{Message: "Could not find object with given id"}
+		case p.ObjectID == "node-1" && strings.Contains(p.FunctionDeclaration, "globalThis") && !w.sameWorld:
+			return nil, cdptest.Error{Message: "Argument should belong to the same JavaScript world as target object"}
+		case strings.Contains(p.FunctionDeclaration, "return g === globalThis"):
+			return map[string]any{"result": map[string]any{"type": "boolean", "value": true}}, nil
+		case strings.Contains(p.FunctionDeclaration, "document.title"):
+			return map[string]any{"result": map[string]any{"type": "string", "value": "Title"}}, nil
+		}
+		return map[string]any{"result": map[string]any{"type": "object", "objectId": "made-by-" + p.ObjectID}}, nil
+	}
+	return map[string]any{}, nil
+}
+
+func TestCodeRunsOnlyInVerifiedIsolatedWorlds(t *testing.T) {
+	w := &worldPage{loaders: []string{"L1"}, handleOK: true, sameWorld: true}
+	b, sock := fake(t, w.handle)
 	c := dial(t, sock, cdp.Options{})
 	ctx := context.Background()
-	if _, err := c.Attach(ctx, "T1"); err != nil {
+	tg, err := c.Attach(ctx, "T1")
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Call(ctx, "", "Target.attachToTarget", map[string]any{"targetId": "T1"}, nil); !errors.Is(err, cdp.ErrNotAllowed) {
 		t.Errorf("attach without flatten: %v", err)
 	}
-	refused := func(what, method string, params map[string]any, session string) {
+	refused := func(what, method string, params map[string]any) {
 		t.Helper()
-		if err := c.Call(ctx, session, method, params, nil); !errors.Is(err, cdp.ErrNotAllowed) {
+		if err := tg.Call(ctx, method, params, nil); !errors.Is(err, cdp.ErrNotAllowed) || !errors.Is(err, cdp.ErrNotSent) {
 			t.Errorf("%s: %v, want ErrNotAllowed", what, err)
 		}
 	}
-	// The page's own world: no contextId, or one this connection didn't make.
-	refused("evaluate in the main world", "Runtime.evaluate", map[string]any{"expression": "1"}, "S1")
-	refused("evaluate in another context", "Runtime.evaluate", map[string]any{"expression": "1", "contextId": 1}, "S1")
-	refused("evaluate by unique id", "Runtime.evaluate", map[string]any{"expression": "1", "uniqueContextId": "x"}, "S1")
-	refused("resolveNode into the main world", "DOM.resolveNode", map[string]any{"backendNodeId": 3}, "S1")
-	refused("callFunctionOn a foreign object", "Runtime.callFunctionOn", map[string]any{"objectId": "page-object", "functionDeclaration": "function(){}"}, "S1")
-	refused("releaseObject of a foreign object", "Runtime.releaseObject", map[string]any{"objectId": "page-object"}, "S1")
+	// Nothing runs in the page's own world, or by a number this
+	// connection didn't make.
+	refused("evaluate in the main world", "Runtime.evaluate", map[string]any{"expression": "1"})
+	refused("evaluate in another context", "Runtime.evaluate", map[string]any{"expression": "globalThis", "contextId": 1})
+	refused("evaluate by unique id", "Runtime.evaluate", map[string]any{"expression": "globalThis", "uniqueContextId": "x"})
+	refused("resolveNode into the main world", "DOM.resolveNode", map[string]any{"backendNodeId": 3})
+	refused("callFunctionOn a foreign object", "Runtime.callFunctionOn", map[string]any{"objectId": "page-object", "functionDeclaration": "function(){}"})
+	refused("releaseObject of a foreign object", "Runtime.releaseObject", map[string]any{"objectId": "page-object"})
 
-	var w struct{ ExecutionContextID int64 }
-	if err := c.Call(ctx, "S1", "Page.createIsolatedWorld", map[string]any{"frameId": "F"}, &w); err != nil {
+	world, err := tg.IsolatedWorld(ctx, "F2")
+	if err != nil || world != 7 {
+		t.Fatalf("IsolatedWorld: %d %v", world, err)
+	}
+	// Even in our own world, code never runs by number: numbers can be
+	// re-pointed by a cross-process navigation.
+	refused("evaluate code by number", "Runtime.evaluate", map[string]any{"expression": "document.title", "contextId": world})
+	refused("evaluate by value by number", "Runtime.evaluate", map[string]any{"expression": "globalThis", "contextId": world, "returnByValue": true})
+	refused("callFunctionOn by number", "Runtime.callFunctionOn", map[string]any{"executionContextId": world, "functionDeclaration": "function(){}"})
+	var title string
+	if err := tg.Eval(ctx, world, "document.title", &title); err != nil || title != "Title" {
+		t.Errorf("Eval: %q %v", title, err)
+	}
+	// A resolved node takes only the check that it's in the world first.
+	if err := tg.Call(ctx, "DOM.resolveNode", map[string]any{"backendNodeId": 3, "executionContextId": world}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Call(ctx, "S1", "Runtime.evaluate", map[string]any{"expression": "1", "contextId": w.ExecutionContextID}, nil); err != nil {
-		t.Errorf("evaluate in the isolated world: %v", err)
+	refused("callFunctionOn an unverified node", "Runtime.callFunctionOn", map[string]any{"objectId": "node-1", "functionDeclaration": "function(){ return this.click(); }"})
+	node, err := tg.ResolveNode(ctx, world, 3)
+	if err != nil || node != "node-1" {
+		t.Fatalf("ResolveNode: %q %v", node, err)
 	}
-	// The same context ID in another session is another page's.
-	refused("evaluate in another session", "Runtime.evaluate", map[string]any{"expression": "1", "contextId": w.ExecutionContextID}, "S2")
-	if err := c.Call(ctx, "S1", "DOM.resolveNode", map[string]any{"backendNodeId": 3, "executionContextId": w.ExecutionContextID}, nil); err != nil {
-		t.Errorf("resolveNode into the isolated world: %v", err)
+	if err := tg.Call(ctx, "Runtime.callFunctionOn", map[string]any{"objectId": node, "functionDeclaration": "function(){ return this; }"}, nil); err != nil {
+		t.Errorf("callFunctionOn a verified node: %v", err)
 	}
-	for _, obj := range []string{"obj-S1", "node-1"} {
-		if err := c.Call(ctx, "S1", "Runtime.callFunctionOn", map[string]any{"objectId": obj, "functionDeclaration": "function(){}"}, nil); err != nil {
-			t.Errorf("callFunctionOn %s: %v", obj, err)
-		}
-		if err := c.Call(ctx, "S1", "Runtime.releaseObject", map[string]any{"objectId": obj}, nil); err != nil {
-			t.Errorf("releaseObject %s: %v", obj, err)
-		}
+	// What a function in the world returns is in the world.
+	if err := tg.Call(ctx, "Runtime.callFunctionOn", map[string]any{"objectId": "made-by-node-1", "functionDeclaration": "function(){}"}, nil); err != nil {
+		t.Errorf("callFunctionOn an object from the world: %v", err)
+	}
+	if err := tg.Call(ctx, "Runtime.releaseObject", map[string]any{"objectId": node}, nil); err != nil {
+		t.Errorf("releaseObject: %v", err)
+	}
+	// Another session's world isn't this one's.
+	if err := c.Call(ctx, "S2", "Runtime.callFunctionOn", map[string]any{"objectId": node, "functionDeclaration": "function(){}"}, nil); !errors.Is(err, cdp.ErrNotAllowed) {
+		t.Errorf("an object in another session: %v", err)
 	}
 	for _, m := range b.Received() {
-		if m.Method == "Runtime.evaluate" && !strings.Contains(string(m.Params), `"contextId":7`) {
+		if m.Method == "Runtime.evaluate" && !strings.Contains(string(m.Params), `"expression":"globalThis"`) {
 			t.Errorf("sent %s %s", m.Method, m.Params)
 		}
+	}
+}
+
+func TestAWorldWhoseDocumentChangesIsGone(t *testing.T) {
+	ctx := context.Background()
+	// The document changes while the world is made: not kept.
+	w := &worldPage{loaders: []string{"L1", "L2"}, handleOK: true, sameWorld: true}
+	_, sock := fake(t, w.handle)
+	tg, err := dial(t, sock, cdp.Options{}).Attach(ctx, "T1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tg.IsolatedWorld(ctx, "F2"); !errors.Is(err, cdp.ErrWorldGone) {
+		t.Fatalf("a world made across a navigation: %v", err)
+	}
+	if err := tg.Eval(ctx, 7, "document.title", nil); !errors.Is(err, cdp.ErrWorldGone) {
+		t.Errorf("Eval in a world that wasn't kept: %v", err)
+	}
+	// Later, the document goes (a cross-process navigation): its handle
+	// no longer resolves, and nodes aren't in the world.
+	w.mu.Lock()
+	w.loaders = []string{"L2"}
+	w.mu.Unlock()
+	world, err := tg.IsolatedWorld(ctx, "F2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.mu.Lock()
+	w.handleOK, w.sameWorld = false, false
+	w.mu.Unlock()
+	if err := tg.Eval(ctx, world, "document.title", nil); !errors.Is(err, cdp.ErrWorldGone) {
+		t.Errorf("Eval after the document went: %v", err)
+	}
+	if _, err := tg.ResolveNode(ctx, world, 3); !errors.Is(err, cdp.ErrWorldGone) {
+		t.Errorf("ResolveNode after the document went: %v", err)
+	}
+	if err := tg.Call(ctx, "Runtime.callFunctionOn", map[string]any{"objectId": "node-1", "functionDeclaration": "function(){}"}, nil); !errors.Is(err, cdp.ErrNotAllowed) {
+		t.Errorf("a node that failed its check took a call: %v", err)
 	}
 }
 

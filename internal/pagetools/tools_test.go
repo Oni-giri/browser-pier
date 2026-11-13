@@ -124,18 +124,50 @@ func checkSent(t *testing.T, fb *fakeBrowser) {
 			t.Errorf("sent %s", m.Method)
 		}
 		if m.Method == "Runtime.evaluate" {
+			// Code never runs by context number: only the bootstrap does.
 			var p struct {
-				ContextID int64 `json:"contextId"`
+				Expression    string `json:"expression"`
+				ReturnByValue bool   `json:"returnByValue"`
 			}
 			_ = json.Unmarshal(m.Params, &p)
-			fb.mu.Lock()
-			_, isolated := fb.worlds[p.ContextID]
-			fb.mu.Unlock()
-			if !isolated {
-				t.Errorf("evaluated outside an isolated world: %s", m.Params)
+			if p.Expression != "globalThis" || p.ReturnByValue {
+				t.Errorf("evaluated by context number: %s", m.Params)
 			}
 		}
 	}
+	fb.mu.Lock()
+	defer fb.mu.Unlock()
+	if fb.mainRuns > 0 {
+		t.Errorf("%d calls ran in a page's own world", fb.mainRuns)
+	}
+}
+
+// TestAWorldNumberThatNamesAnotherWorldIsNeverUsed: after a cross-process
+// navigation the renderer numbers its contexts again, and the number of
+// the old isolated world names a frame's main world. A wait polling
+// across that navigation must make its world again, not run there.
+func TestAWorldNumberThatNamesAnotherWorldIsNeverUsed(t *testing.T) {
+	f := newFixture(t)
+	f.fb.reuseIDs = true
+	tb := f.fb.addTab("https://a.example/", loginPage(), true)
+	f.fb.pages = func(string) *fnode {
+		return el("#document", "RootWebArea", "", box(0, 0, 1280, 800), el("p", "paragraph", "", box(0, 0, 100, 20), txt("Arrived", box(0, 0, 100, 20))))
+	}
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		f.fb.mu.Lock()
+		f.fb.go_(tb, "https://b.example/frames")
+		f.fb.mu.Unlock()
+	}()
+	out, err := f.tools.WaitFor(context.Background(), f.session(), f.who, WaitIn{Text: "arrived", TimeoutMS: 5000})
+	if err != nil || out != "ok" {
+		t.Fatalf("%v %q", err, out)
+	}
+	f.closedAfter()
+	if out := f.mustSnapshot(nil); !strings.Contains(out, "URL: https://b.example/frames") {
+		t.Errorf("snapshot after:\n%s", out)
+	}
+	checkSent(t, f.fb)
 }
 
 func TestSnapshotBudget(t *testing.T) {

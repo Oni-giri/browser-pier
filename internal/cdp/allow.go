@@ -18,9 +18,10 @@ import (
 //     would keep the connection busy;
 //   - DOM.getDocument and DOM.requestChildNodes, which enable the DOM
 //     agent's node tracking implicitly;
-//   - Runtime.evaluate and Runtime.callFunctionOn outside an isolated
-//     world the connection created itself (see Conn): code never runs in
-//     the page's own world.
+//   - code anywhere but an isolated world the connection created and
+//     verified (see Conn.check): Runtime.evaluate only reads a world's
+//     globalThis, and Runtime.callFunctionOn only runs on objects from
+//     such a world, so code never runs in the page's own world.
 type AllowList struct {
 	name    string
 	methods map[string]bool

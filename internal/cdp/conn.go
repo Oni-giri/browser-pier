@@ -12,9 +12,15 @@
 //   - Each caller sends only what its own AllowList names. No allow-list
 //     may hold a domain's enable, or DOM.getDocument (see AllowList).
 //   - Code runs only in isolated worlds the connection created itself
-//     (Page.createIsolatedWorld): Runtime.evaluate, Runtime.callFunctionOn
-//     and DOM.resolveNode are refused anywhere else. The page's own world
+//     (Target.IsolatedWorld), and never by context number, which a
+//     cross-process navigation can re-point at a page's own world: it runs
+//     through Runtime.callFunctionOn on the world's globalThis handle (Eval,
+//     EvalObject), on verified nodes (ResolveNode) and on objects those
+//     return. Everything else is refused (see check). The page's own world
 //     never sees BrowserPier's scripts, and nothing is added to the page.
+//     A caller's allow-list needs Page.getFrameTree, Page.createIsolatedWorld,
+//     Runtime.evaluate (for the bootstrap only), Runtime.callFunctionOn and,
+//     for nodes, DOM.resolveNode.
 //
 // Typical use, for a caller with its own unexported allow-list:
 //
@@ -74,6 +80,13 @@ var (
 	// ErrNotAllowed: the caller's allow-list doesn't name the method, or
 	// the code would run outside an isolated world.
 	ErrNotAllowed = errors.New("not allowed")
+	// ErrNotSent: the call never reached the browser (refused, or its
+	// context had ended, or the connection was gone). A call that fails
+	// any other way may have been carried out.
+	ErrNotSent = errors.New("not sent")
+	// ErrWorldGone: the isolated world's document changed or went (a
+	// navigation); make the world again with IsolatedWorld.
+	ErrWorldGone = errors.New("the isolated world's document is gone")
 )
 
 // Error is an error the browser answered with.
@@ -99,12 +112,16 @@ type Conn struct {
 
 	mu      sync.Mutex
 	nextID  int64
-	pending map[int64]chan reply
+	waiting map[int64]chan reply
 	err     error // why the connection ended; set once, before done closes
 	// worlds are the isolated worlds this connection created, by session
-	// and execution context; objects are the remote objects from them.
+	// and execution context. globals are their verified globalThis objects;
+	// trusted are objects known to live in such a world; pending are nodes
+	// resolved into one and not yet verified (see check).
 	worlds  map[worldKey]bool
-	objects map[string]bool
+	globals map[objKey]bool
+	trusted map[objKey]bool
+	pending map[objKey]bool
 
 	done chan struct{}
 }
@@ -112,6 +129,11 @@ type Conn struct {
 type worldKey struct {
 	session string
 	context int64
+}
+
+type objKey struct {
+	session string
+	object  string
 }
 
 type reply struct {
@@ -161,8 +183,9 @@ func Dial(ctx context.Context, sock string, allow *AllowList, opts Options) (*Co
 		limit = DefaultMaxMessage
 	}
 	ws.SetReadLimit(limit)
-	c := &Conn{ws: ws, allow: allow, end: end, pending: map[int64]chan reply{},
-		worlds: map[worldKey]bool{}, objects: map[string]bool{}, done: make(chan struct{})}
+	c := &Conn{ws: ws, allow: allow, end: end, waiting: map[int64]chan reply{},
+		worlds: map[worldKey]bool{}, globals: map[objKey]bool{}, trusted: map[objKey]bool{}, pending: map[objKey]bool{},
+		done: make(chan struct{})}
 	go c.read() //nolint:gosec // the reader lives as long as the connection, not the dial
 	return c, nil
 }
@@ -240,8 +263,8 @@ func (c *Conn) read() {
 			continue // an event: nothing is enabled, so nothing to follow
 		}
 		c.mu.Lock()
-		ch := c.pending[msg.ID]
-		delete(c.pending, msg.ID)
+		ch := c.waiting[msg.ID]
+		delete(c.waiting, msg.ID)
 		c.mu.Unlock()
 		if ch == nil {
 			continue
@@ -265,18 +288,18 @@ func (c *Conn) Call(ctx context.Context, sessionID, method string, params, out a
 		raw = []byte("{}")
 	}
 	if err := c.check(sessionID, method, raw); err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrNotSent, err)
 	}
 	c.mu.Lock()
 	if c.err != nil {
 		err := c.err
 		c.mu.Unlock()
-		return err
+		return fmt.Errorf("%w: %w", ErrNotSent, err)
 	}
 	c.nextID++
 	id := c.nextID
 	ch := make(chan reply, 1)
-	c.pending[id] = ch
+	c.waiting[id] = ch
 	c.mu.Unlock()
 	msg := map[string]any{"id": id, "method": method, "params": json.RawMessage(raw)}
 	if sessionID != "" {
@@ -285,7 +308,7 @@ func (c *Conn) Call(ctx context.Context, sessionID, method string, params, out a
 	b, _ := json.Marshal(msg)
 	if err := ctx.Err(); err != nil {
 		c.forget(id)
-		return err
+		return fmt.Errorf("%w: %w", ErrNotSent, err)
 	}
 	// The WebSocket closes the whole connection if a write's context ends,
 	// even just after the message went out; so ctx only bounds the wait
@@ -296,7 +319,7 @@ func (c *Conn) Call(ctx context.Context, sessionID, method string, params, out a
 	cancel()
 	if err != nil {
 		c.forget(id)
-		return fmt.Errorf("%w: %w", ErrClosed, err)
+		return fmt.Errorf("%w: %w: %w", ErrNotSent, ErrClosed, err)
 	}
 	select {
 	case r := <-ch:
@@ -304,7 +327,7 @@ func (c *Conn) Call(ctx context.Context, sessionID, method string, params, out a
 			r.err.Method = method
 			return r.err
 		}
-		c.record(sessionID, method, r.result)
+		c.record(sessionID, method, raw, r.result)
 		if out != nil && len(r.result) > 0 {
 			return json.Unmarshal(r.result, out)
 		}
@@ -322,12 +345,26 @@ func (c *Conn) Call(ctx context.Context, sessionID, method string, params, out a
 
 func (c *Conn) forget(id int64) {
 	c.mu.Lock()
-	delete(c.pending, id)
+	delete(c.waiting, id)
 	c.mu.Unlock()
 }
 
 // check refuses what the allow-list doesn't name, and code outside the
 // isolated worlds this connection made.
+//
+// A world is named by a number (its execution context ID), but numbers
+// are only unique within one renderer: after a cross-process navigation
+// the same flat session talks to a new renderer, whose numbers start
+// again, so a remembered number can name the page's own world. So code
+// never runs by number. Runtime.evaluate by number is allowed only for
+// the bootstrap that reads the world's globalThis (harmless anywhere),
+// which Target.IsolatedWorld keeps only if the frame's document didn't
+// change around it. Code then runs through Runtime.callFunctionOn on that
+// object, or on objects it gave: remote object IDs carry their renderer's
+// isolate, so they can't be re-pointed. A node DOM.resolveNode gives is
+// verified first (Target.ResolveNode): one call, with the world's global
+// as its argument, that the browser refuses unless both are in the same
+// world.
 func (c *Conn) check(sessionID, method string, params []byte) error {
 	if err := forbidden(method); err != nil {
 		return fmt.Errorf("cdp: %w: %w", ErrNotAllowed, err)
@@ -336,33 +373,41 @@ func (c *Conn) check(sessionID, method string, params []byte) error {
 		return fmt.Errorf("cdp: %w: %s may not send %s", ErrNotAllowed, c.allow.name, method)
 	}
 	var p struct {
-		ContextID          int64  `json:"contextId"`
-		UniqueContextID    string `json:"uniqueContextId"`
-		ExecutionContextID int64  `json:"executionContextId"`
-		ObjectID           string `json:"objectId"`
-		Flatten            *bool  `json:"flatten"`
+		ContextID           int64  `json:"contextId"`
+		UniqueContextID     string `json:"uniqueContextId"`
+		ExecutionContextID  int64  `json:"executionContextId"`
+		ObjectID            string `json:"objectId"`
+		Flatten             *bool  `json:"flatten"`
+		Expression          string `json:"expression"`
+		ReturnByValue       bool   `json:"returnByValue"`
+		FunctionDeclaration string `json:"functionDeclaration"`
+		Arguments           []struct {
+			ObjectID string `json:"objectId"`
+		} `json:"arguments"`
 	}
 	_ = json.Unmarshal(params, &p)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	inWorld := func(id int64) bool { return id != 0 && c.worlds[worldKey{sessionID, id}] }
+	obj := func(id string) objKey { return objKey{sessionID, id} }
 	switch method {
 	case "Runtime.evaluate":
-		if p.UniqueContextID != "" || !inWorld(p.ContextID) {
-			return fmt.Errorf("cdp: %w: Runtime.evaluate outside an isolated world", ErrNotAllowed)
+		if p.UniqueContextID != "" || !inWorld(p.ContextID) || p.Expression != "globalThis" || p.ReturnByValue {
+			return fmt.Errorf("cdp: %w: Runtime.evaluate runs only the isolated-world bootstrap; use Target.Eval", ErrNotAllowed)
 		}
 	case "Runtime.callFunctionOn":
-		ownObject := p.ObjectID != "" && c.objects[p.ObjectID]
-		inOwnWorld := p.ObjectID == "" && inWorld(p.ExecutionContextID)
-		if !ownObject && !inOwnWorld {
-			return fmt.Errorf("cdp: %w: Runtime.callFunctionOn outside an isolated world", ErrNotAllowed)
+		trusted := p.ObjectID != "" && c.trusted[obj(p.ObjectID)]
+		verifying := p.ObjectID != "" && c.pending[obj(p.ObjectID)] && p.FunctionDeclaration == verifyFn &&
+			len(p.Arguments) == 1 && c.globals[obj(p.Arguments[0].ObjectID)]
+		if !trusted && !verifying {
+			return fmt.Errorf("cdp: %w: Runtime.callFunctionOn on an object not from a verified isolated world", ErrNotAllowed)
 		}
 	case "DOM.resolveNode":
 		if !inWorld(p.ExecutionContextID) {
 			return fmt.Errorf("cdp: %w: DOM.resolveNode outside an isolated world", ErrNotAllowed)
 		}
 	case "Runtime.releaseObject":
-		if !c.objects[p.ObjectID] {
+		if !c.trusted[obj(p.ObjectID)] && !c.pending[obj(p.ObjectID)] {
 			return fmt.Errorf("cdp: %w: Runtime.releaseObject of an object from elsewhere", ErrNotAllowed)
 		}
 	case "Target.attachToTarget":
@@ -375,31 +420,65 @@ func (c *Conn) check(sessionID, method string, params []byte) error {
 	return nil
 }
 
-// record notes the isolated worlds and their objects a call returned.
-func (c *Conn) record(sessionID, method string, result json.RawMessage) {
+// verifyFn is the only function run on a node DOM.resolveNode gave, with
+// the world's global as its argument: the browser refuses the call unless
+// both are in the same world, and the function itself touches nothing.
+const verifyFn = "function(g) { return g === globalThis; }"
+
+// record notes the isolated worlds a call made and the objects it gave.
+func (c *Conn) record(sessionID, method string, params, result json.RawMessage) {
+	switch method {
+	case "Page.createIsolatedWorld", "Runtime.callFunctionOn", "DOM.resolveNode":
+	default:
+		return
+	}
 	var r struct {
 		ExecutionContextID int64         `json:"executionContextId"`
 		Result             *RemoteObject `json:"result"`
 		Object             *RemoteObject `json:"object"`
 	}
-	switch method {
-	case "Page.createIsolatedWorld", "Runtime.evaluate", "Runtime.callFunctionOn", "DOM.resolveNode":
-	default:
-		return
+	var p struct {
+		ObjectID string `json:"objectId"`
 	}
 	if json.Unmarshal(result, &r) != nil {
 		return
 	}
+	_ = json.Unmarshal(params, &p)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if method == "Page.createIsolatedWorld" && r.ExecutionContextID != 0 {
-		c.worlds[worldKey{sessionID, r.ExecutionContextID}] = true
-	}
-	for _, o := range []*RemoteObject{r.Result, r.Object} {
-		if o != nil && o.ObjectID != "" {
-			c.objects[o.ObjectID] = true
+	switch method {
+	case "Page.createIsolatedWorld":
+		if r.ExecutionContextID != 0 {
+			c.worlds[worldKey{sessionID, r.ExecutionContextID}] = true
+		}
+	case "DOM.resolveNode":
+		if r.Object != nil && r.Object.ObjectID != "" {
+			c.pending[objKey{sessionID, r.Object.ObjectID}] = true
+		}
+	case "Runtime.callFunctionOn":
+		on := objKey{sessionID, p.ObjectID}
+		if c.pending[on] {
+			// The verification call: it ran, so both are in the world.
+			if r.Result != nil && string(r.Result.Value) == "true" {
+				delete(c.pending, on)
+				c.trusted[on] = true
+			}
+			return
+		}
+		// What a function in the world returns lives in the world.
+		if r.Result != nil && r.Result.ObjectID != "" {
+			c.trusted[objKey{sessionID, r.Result.ObjectID}] = true
 		}
 	}
+}
+
+// trustGlobal records a world's globalThis, read by the bootstrap and
+// checked by Target.IsolatedWorld.
+func (c *Conn) trustGlobal(sessionID, objectID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	k := objKey{sessionID, objectID}
+	c.globals[k], c.trusted[k] = true, true
 }
 
 // RemoteObject is a value in the page, as CDP's Runtime domain gives it.
@@ -421,6 +500,9 @@ type Target struct {
 	c         *Conn
 	ID        string // the target's ID
 	SessionID string
+
+	mu      sync.Mutex
+	globals map[int64]string // world (execution context) → its verified globalThis
 }
 
 // Attach attaches a flat session to a target. It detaches when the
@@ -432,7 +514,7 @@ func (c *Conn) Attach(ctx context.Context, targetID string) (*Target, error) {
 	if err := c.Call(ctx, "", "Target.attachToTarget", map[string]any{"targetId": targetID, "flatten": true}, &r); err != nil {
 		return nil, err
 	}
-	return &Target{c: c, ID: targetID, SessionID: r.SessionID}, nil
+	return &Target{c: c, ID: targetID, SessionID: r.SessionID, globals: map[int64]string{}}, nil
 }
 
 // Detach ends the session; best effort, with a short timeout of its own
@@ -448,33 +530,121 @@ func (t *Target) Call(ctx context.Context, method string, params, out any) error
 	return t.c.Call(ctx, t.SessionID, method, params, out)
 }
 
+// Conn is the connection the target's session is on.
+func (t *Target) Conn() *Conn { return t.c }
+
 // worldName names BrowserPier's isolated world. Chromium keeps one world
 // per name and frame, so asking again on the same document returns the
 // same context instead of making another.
 const worldName = "browserpier"
 
-// IsolatedWorld returns an isolated world in frameID's current document,
-// creating it if needed. A world dies with its document: after a
-// navigation, ask again.
-func (t *Target) IsolatedWorld(ctx context.Context, frameID string) (int64, error) {
+// frameLoader is the document (loader ID) frameID has now, "" if the
+// frame isn't there.
+func (t *Target) frameLoader(ctx context.Context, frameID string) (string, error) {
+	type frameTree struct {
+		Frame struct {
+			ID       string `json:"id"`
+			LoaderID string `json:"loaderId"`
+		} `json:"frame"`
+		ChildFrames []json.RawMessage `json:"childFrames"`
+	}
 	var r struct {
-		ExecutionContextID int64 `json:"executionContextId"`
+		FrameTree json.RawMessage `json:"frameTree"`
 	}
-	if err := t.Call(ctx, "Page.createIsolatedWorld", map[string]any{"frameId": frameID, "worldName": worldName}, &r); err != nil {
-		return 0, err
+	if err := t.Call(ctx, "Page.getFrameTree", nil, &r); err != nil {
+		return "", err
 	}
-	return r.ExecutionContextID, nil
+	queue := []json.RawMessage{r.FrameTree}
+	for len(queue) > 0 {
+		var f frameTree
+		if json.Unmarshal(queue[0], &f) != nil {
+			return "", errors.New("cdp: unexpected frame tree")
+		}
+		queue = queue[1:]
+		if f.Frame.ID == frameID {
+			return f.Frame.LoaderID, nil
+		}
+		queue = append(queue, f.ChildFrames...)
+	}
+	return "", nil
 }
 
-// Eval evaluates expression in an isolated world, returning its value as
-// JSON (returnByValue). A thrown exception is an error.
+// IsolatedWorld returns an isolated world in frameID's current document,
+// creating it if needed, and reads the world's globalThis, which Eval and
+// ResolveNode go through. The read is kept only if the frame's document
+// didn't change around it (Page.getFrameTree before and after, so the
+// caller's allow-list needs it); otherwise ErrWorldGone, and the caller
+// asks again. A world dies with its document: after a navigation, ask
+// again.
+func (t *Target) IsolatedWorld(ctx context.Context, frameID string) (int64, error) {
+	before, err := t.frameLoader(ctx, frameID)
+	if err != nil {
+		return 0, err
+	}
+	var w struct {
+		ExecutionContextID int64 `json:"executionContextId"`
+	}
+	if err := t.Call(ctx, "Page.createIsolatedWorld", map[string]any{"frameId": frameID, "worldName": worldName}, &w); err != nil {
+		return 0, err
+	}
+	var g struct {
+		Result RemoteObject `json:"result"`
+	}
+	if err := t.Call(ctx, "Runtime.evaluate", map[string]any{"expression": "globalThis", "contextId": w.ExecutionContextID}, &g); err != nil {
+		return 0, worldGone(err)
+	}
+	after, err := t.frameLoader(ctx, frameID)
+	if err != nil {
+		return 0, err
+	}
+	if before == "" || after != before || g.Result.ObjectID == "" {
+		return 0, ErrWorldGone
+	}
+	t.c.trustGlobal(t.SessionID, g.Result.ObjectID)
+	t.mu.Lock()
+	t.globals[w.ExecutionContextID] = g.Result.ObjectID
+	t.mu.Unlock()
+	return w.ExecutionContextID, nil
+}
+
+func (t *Target) global(world int64) (string, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	g, ok := t.globals[world]
+	if !ok {
+		return "", fmt.Errorf("%w: world %d wasn't made by IsolatedWorld on this target", ErrWorldGone, world)
+	}
+	return g, nil
+}
+
+// worldGone turns the browser's "that object or context is no more" into
+// ErrWorldGone.
+func worldGone(err error) error {
+	var ce *Error
+	if errors.As(err, &ce) && (strings.Contains(ce.Message, "find object") || strings.Contains(ce.Message, "find context") ||
+		strings.Contains(ce.Message, "context was destroyed") || strings.Contains(ce.Message, "same JavaScript world")) {
+		return fmt.Errorf("%w: %w", ErrWorldGone, err)
+	}
+	return err
+}
+
+// Eval evaluates an expression in an isolated world from IsolatedWorld,
+// returning its value as JSON (returnByValue). It runs as a function
+// called on the world's globalThis, never by context number. A thrown
+// exception is an error; ErrWorldGone means the document went.
 func (t *Target) Eval(ctx context.Context, world int64, expression string, out any) error {
+	g, err := t.global(world)
+	if err != nil {
+		return err
+	}
 	var r struct {
 		Result           RemoteObject      `json:"result"`
 		ExceptionDetails *ExceptionDetails `json:"exceptionDetails"`
 	}
-	if err := t.Call(ctx, "Runtime.evaluate", map[string]any{"expression": expression, "contextId": world, "returnByValue": true, "awaitPromise": true, "silent": true}, &r); err != nil {
-		return err
+	if err := t.Call(ctx, "Runtime.callFunctionOn", map[string]any{"objectId": g,
+		"functionDeclaration": "function() { return (\n" + expression + "\n); }",
+		"returnByValue":       true, "awaitPromise": true, "silent": true}, &r); err != nil {
+		return worldGone(err)
 	}
 	if r.ExceptionDetails != nil {
 		return fmt.Errorf("script error: %s", r.ExceptionDetails.Text)
@@ -485,5 +655,53 @@ func (t *Target) Eval(ctx context.Context, world int64, expression string, out a
 	return nil
 }
 
-// Conn is the connection the target's session is on.
-func (t *Target) Conn() *Conn { return t.c }
+// EvalObject is Eval returning the value as an object handle in the
+// world (an element, say), which Runtime.callFunctionOn and
+// DOM.describeNode then take.
+func (t *Target) EvalObject(ctx context.Context, world int64, expression string) (RemoteObject, error) {
+	g, err := t.global(world)
+	if err != nil {
+		return RemoteObject{}, err
+	}
+	var r struct {
+		Result           RemoteObject      `json:"result"`
+		ExceptionDetails *ExceptionDetails `json:"exceptionDetails"`
+	}
+	if err := t.Call(ctx, "Runtime.callFunctionOn", map[string]any{"objectId": g,
+		"functionDeclaration": "function() { return (\n" + expression + "\n); }", "silent": true}, &r); err != nil {
+		return RemoteObject{}, worldGone(err)
+	}
+	if r.ExceptionDetails != nil {
+		return RemoteObject{}, fmt.Errorf("script error: %s", r.ExceptionDetails.Text)
+	}
+	return r.Result, nil
+}
+
+// ResolveNode gives a node (by backend node ID) as an object in an
+// isolated world from IsolatedWorld, verified to be in that world before
+// any code runs on it; Runtime.callFunctionOn then works on it. A node
+// that's gone is the browser's *Error; ErrWorldGone means the document
+// went.
+func (t *Target) ResolveNode(ctx context.Context, world, backendNodeID int64) (string, error) {
+	g, err := t.global(world)
+	if err != nil {
+		return "", err
+	}
+	var r struct {
+		Object RemoteObject `json:"object"`
+	}
+	if err := t.Call(ctx, "DOM.resolveNode", map[string]any{"backendNodeId": backendNodeID, "executionContextId": world}, &r); err != nil {
+		return "", err
+	}
+	var v struct {
+		Result RemoteObject `json:"result"`
+	}
+	if err := t.Call(ctx, "Runtime.callFunctionOn", map[string]any{"objectId": r.Object.ObjectID, "functionDeclaration": verifyFn,
+		"arguments": []map[string]any{{"objectId": g}}, "returnByValue": true, "silent": true}, &v); err != nil {
+		return "", worldGone(err)
+	}
+	if string(v.Result.Value) != "true" {
+		return "", ErrWorldGone
+	}
+	return r.Object.ObjectID, nil
+}

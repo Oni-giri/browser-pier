@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Oni-giri/browser-pier/internal/cdp"
+
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
@@ -123,11 +125,17 @@ func (c *call) check1(ctx context.Context, in WaitIn, startURL string) (bool, er
 	case in.URLChange:
 		var href string
 		err := c.eval(ctx, jsHref, &href)
+		if errors.Is(err, cdp.ErrWorldGone) {
+			return false, nil // still navigating: look again
+		}
 		return err == nil && href != startURL, err
 	case in.Text != "":
 		arg, _ := json.Marshal(in.Text)
 		var ok bool
 		err := c.eval(ctx, jsHasText+"("+string(arg)+")", &ok)
+		if errors.Is(err, cdp.ErrWorldGone) {
+			return false, nil
+		}
 		return ok, err
 	}
 	hidden := in.State == "hidden"

@@ -62,6 +62,13 @@ func startSpike(t *testing.T) *spike {
 	if os.Getenv("BROWSERPIER_SPIKE") == "" {
 		t.Skip("set BROWSERPIER_SPIKE=1 to run PROJ-21's spike")
 	}
+	return startBrowser(t)
+}
+
+// startBrowser starts an API-mode browser whose pages may reach this
+// machine, and serves the spike's test pages.
+func startBrowser(t *testing.T) *spike {
+	t.Helper()
 	image := os.Getenv("BROWSERPIER_TEST_IMAGE")
 	if image == "" {
 		t.Skip("BROWSERPIER_TEST_IMAGE not set")
@@ -139,6 +146,10 @@ func spikeSite(t *testing.T, host string) string {
 		}
 	}
 	mux.HandleFunc("GET /blank", page(`<!doctype html><title>Blank</title><p>blank</p>`))
+	// Eight same-site iframes, each with a marker in its own (main) world.
+	mux.HandleFunc("GET /frames", page(`<!doctype html><title>Frames</title><script>window.marker = 'top main world'</script>`+
+		strings.Repeat(`<iframe src="/inner" width="100" height="50"></iframe>`, 8)))
+	mux.HandleFunc("GET /inner", page(`<!doctype html><title>Inner</title><script>window.marker = 'iframe main world'</script><p>inner</p>`))
 	mux.HandleFunc("GET /form", page(`<!doctype html><title>Form</title>
 <label>Email <input id="email" name="email"></label>
 <label>Password <input id="pw" name="password" type="password"></label>
@@ -284,8 +295,8 @@ func (tb tab) waitLoad(url string) {
 // node finds an element's backend node ID through the isolated world.
 func (tb tab) node(selector string) int64 {
 	tb.t.Helper()
-	var r struct{ Result cdp.RemoteObject }
-	if err := tb.Call(ctx(5), "Runtime.evaluate", map[string]any{"expression": "document.querySelector(" + strconv.Quote(selector) + ")", "contextId": tb.world()}, &r); err != nil || r.Result.ObjectID == "" {
+	o, err := tb.EvalObject(ctx(5), tb.world(), "document.querySelector("+strconv.Quote(selector)+")")
+	if err != nil || o.ObjectID == "" {
 		tb.t.Fatalf("%s: %v", selector, err)
 	}
 	var d struct {
@@ -293,7 +304,7 @@ func (tb tab) node(selector string) int64 {
 			BackendNodeID int64 `json:"backendNodeId"`
 		} `json:"node"`
 	}
-	if err := tb.Call(ctx(5), "DOM.describeNode", map[string]any{"objectId": r.Result.ObjectID}, &d); err != nil {
+	if err := tb.Call(ctx(5), "DOM.describeNode", map[string]any{"objectId": o.ObjectID}, &d); err != nil {
 		tb.t.Fatal(err)
 	}
 	return d.Node.BackendNodeID
@@ -411,9 +422,8 @@ func (s *spike) methodsWithoutEnable() {
 	})
 	var obj string
 	_ = try(s, "DOM.resolveNode (isolated world)", func() error {
-		var r struct{ Object cdp.RemoteObject }
-		err := tb.Call(ctx(5), "DOM.resolveNode", map[string]any{"backendNodeId": email, "executionContextId": world}, &r)
-		obj = r.Object.ObjectID
+		var err error
+		obj, err = tb.ResolveNode(ctx(5), world, email)
 		return err
 	})
 	_ = try(s, "Runtime.callFunctionOn (that object)", func() error {
@@ -883,9 +893,8 @@ func (s *spike) detector() {
 		"click (scroll, quads, hit-test, mouse events)": func(tb tab) {
 			n := tb.node("#go")
 			_ = tb.Call(ctx(5), "DOM.scrollIntoViewIfNeeded", map[string]any{"backendNodeId": n}, nil)
-			var r struct{ Object cdp.RemoteObject }
-			_ = tb.Call(ctx(5), "DOM.resolveNode", map[string]any{"backendNodeId": n, "executionContextId": tb.world()}, &r)
-			_ = tb.Call(ctx(5), "Runtime.callFunctionOn", map[string]any{"objectId": r.Object.ObjectID, "returnByValue": true,
+			obj, _ := tb.ResolveNode(ctx(5), tb.world(), n)
+			_ = tb.Call(ctx(5), "Runtime.callFunctionOn", map[string]any{"objectId": obj, "returnByValue": true,
 				"functionDeclaration": "function() { const b = this.getBoundingClientRect(); const e = this.getRootNode().elementFromPoint(b.x + b.width / 2, b.y + b.height / 2); return e === this || this.contains(e); }"}, nil)
 			s.click(tb, "#go")
 		},

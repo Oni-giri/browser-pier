@@ -92,6 +92,10 @@ type fakeBrowser struct {
 	inputs  map[*ftab]*fakeInput
 	// onInput is called (with the fake locked) on each input event.
 	onInput func(typ string)
+	// reuseIDs makes navigations start context numbers again, as a new
+	// renderer does; mainRuns counts code that ran in a page's own world.
+	reuseIDs bool
+	mainRuns int
 }
 
 func newFakeBrowser(t *testing.T) *fakeBrowser {
@@ -216,18 +220,22 @@ func (fb *fakeBrowser) handle(m cdptest.Message) (any, error) {
 		return map[string]any{"frameTree": map[string]any{"frame": map[string]any{"id": "F-" + tb.id, "loaderId": tb.loader, "url": strings.SplitN(tb.url, "#", 2)[0]}}}, nil
 	case "Page.createIsolatedWorld":
 		fb.nextCtx++
+		for strings.HasSuffix(fb.worlds[fb.nextCtx], "/main") && strings.HasPrefix(fb.worlds[fb.nextCtx], tb.id+"/"+tb.loader) {
+			fb.nextCtx++ // taken by a main world of this document
+		}
 		fb.worlds[fb.nextCtx] = tb.id + "/" + tb.loader
 		return map[string]any{"executionContextId": fb.nextCtx}, nil
 	case "Runtime.evaluate":
+		// Only the bootstrap reaches the browser: globalThis, as a handle.
 		ctx := int64(p["contextId"].(float64))
-		if fb.worlds[ctx] != tb.id+"/"+tb.loader {
+		w, ok := fb.worlds[ctx]
+		if !ok {
 			return nil, cdptest.Error{Message: "Cannot find context with specified id"}
 		}
-		v, err := fb.evaluate(tb, p["expression"].(string))
-		if err != nil {
-			return nil, err
+		if strings.HasSuffix(w, "/main") && p["expression"] != "globalThis" {
+			fb.mainRuns++
 		}
-		return map[string]any{"result": map[string]any{"type": "object", "value": v}}, nil
+		return map[string]any{"result": map[string]any{"type": "object", "objectId": fmt.Sprintf("g/%d/%s", ctx, w)}}, nil
 	case "DOMSnapshot.captureSnapshot":
 		return fb.snapshot(tb), nil
 	case "Accessibility.getFullAXTree":
@@ -258,6 +266,10 @@ func (fb *fakeBrowser) handle(m cdptest.Message) (any, error) {
 			return res, err
 		}
 	}
+	if m.Method == "Runtime.callFunctionOn" && strings.HasPrefix(p["objectId"].(string), "g/") {
+		res, err := fb.onGlobal(tb, p)
+		return res, err
+	}
 	if res, ok, err := fb.dom(tb, m, p); ok {
 		return res, err
 	}
@@ -271,6 +283,37 @@ func (fb *fakeBrowser) go_(tb *ftab, url string) {
 	tb.loader = fmt.Sprintf("L-%d", time.Now().UnixNano())
 	tb.doc = fb.pages(url)
 	number(tb.doc)
+	if fb.reuseIDs {
+		// A new renderer: its context numbers start again, and the first
+		// ones are the main worlds of the new document's frames, where
+		// the old isolated world's number now points.
+		fb.nextCtx = 100
+		for range 8 {
+			fb.nextCtx++
+			fb.worlds[fb.nextCtx] = tb.id + "/" + tb.loader + "/main"
+		}
+		fb.nextCtx = 100
+	}
+}
+
+// onGlobal runs a function called on a world's globalThis handle
+// ("g/<context>/<tab>/<loader>[/main]"): the handle dies with its document.
+func (fb *fakeBrowser) onGlobal(tb *ftab, p map[string]any) (any, error) {
+	id := p["objectId"].(string)
+	parts := strings.SplitN(id, "/", 3)
+	if len(parts) != 3 || !strings.HasPrefix(parts[2], tb.id+"/"+tb.loader) {
+		return nil, cdptest.Error{Message: "Could not find object with given id"}
+	}
+	if strings.HasSuffix(parts[2], "/main") {
+		fb.mainRuns++
+	}
+	fn := p["functionDeclaration"].(string)
+	expr := strings.TrimSuffix(strings.TrimPrefix(fn, "function() { return (\n"), "\n); }")
+	v, err := fb.evaluate(tb, expr)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"result": map[string]any{"type": "object", "value": v}}, nil
 }
 
 func (fb *fakeBrowser) evaluate(tb *ftab, expr string) (any, error) {

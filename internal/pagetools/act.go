@@ -199,17 +199,17 @@ func (c *call) resolve(ctx context.Context, ref string) (*node, error) {
 	if k.loader != c.loader || k.frame != c.frame {
 		return nil, errStale(ref)
 	}
-	var r struct {
-		Object cdp.RemoteObject `json:"object"`
-	}
-	if err := c.renderer(ctx, c.t.quick, "DOM.resolveNode", map[string]any{"backendNodeId": k.backend, "executionContextId": c.world}, &r); err != nil {
+	cctx, cancel := context.WithTimeout(ctx, c.t.quick)
+	obj, err := c.tgt.ResolveNode(cctx, c.world, k.backend)
+	cancel()
+	if err != nil {
 		var ce *cdp.Error
-		if errors.As(err, &ce) {
+		if errors.As(err, &ce) || errors.Is(err, cdp.ErrWorldGone) {
 			return nil, errStale(ref)
 		}
-		return nil, err
+		return nil, c.timedOut(ctx, err)
 	}
-	n := &node{ref: ref, backend: k.backend, obj: r.Object.ObjectID}
+	n := &node{ref: ref, backend: k.backend, obj: obj}
 	var connected bool
 	if err := c.callOn(ctx, n.obj, jsConnected, nil, &connected); err != nil {
 		return nil, err

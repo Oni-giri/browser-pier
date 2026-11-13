@@ -290,24 +290,38 @@ func (c *call) frameTree(ctx context.Context, tgt *cdp.Target) (id, loader, url 
 }
 
 // refresh reads the active tab's current document and isolated world.
+//
+// The world is made (and its globalThis read) only while the document
+// stays the same; a navigation in between (ErrWorldGone) makes it read
+// the frame again, a few times, before giving up.
 func (c *call) refresh(ctx context.Context) error {
-	frame, loader, u, err := c.frameTree(ctx, c.tgt)
-	if err != nil {
-		return err
-	}
-	c.url = u
-	if loader != c.loader || frame != c.frame || c.world == 0 {
-		c.frame, c.loader = frame, loader
+	for try := 0; ; try++ {
+		frame, loader, u, err := c.frameTree(ctx, c.tgt)
+		if err != nil {
+			return err
+		}
+		c.url = u
+		if loader == c.loader && frame == c.frame && c.world != 0 {
+			return nil
+		}
+		c.frame, c.loader, c.world = frame, loader, 0
 		cctx, cancel := context.WithTimeout(ctx, c.t.quick)
-		defer cancel()
 		w, err := c.tgt.IsolatedWorld(cctx, frame)
+		cancel()
+		if errors.Is(err, cdp.ErrWorldGone) && try < worldTries {
+			continue
+		}
 		if err != nil {
 			return c.timedOut(ctx, err)
 		}
 		c.world = w
+		return nil
 	}
-	return nil
 }
+
+// worldTries is how many times a call makes the isolated world again when
+// the page navigates under it.
+const worldTries = 3
 
 func (c *call) timedOut(ctx context.Context, err error) error {
 	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
@@ -329,8 +343,7 @@ func (c *call) eval(ctx context.Context, expr string, out any) error {
 		if err == nil {
 			return nil
 		}
-		var ce *cdp.Error
-		if try == 0 && errors.As(err, &ce) && strings.Contains(ce.Message, "context") {
+		if errors.Is(err, cdp.ErrWorldGone) && try < worldTries {
 			c.world = 0 // the document changed under us
 			continue
 		}

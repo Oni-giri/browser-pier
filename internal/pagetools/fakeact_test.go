@@ -115,6 +115,19 @@ func (fb *fakeBrowser) dom(tb *ftab, m cdptest.Message, p map[string]any) (any, 
 		if n == nil {
 			return nil, true, cdptest.Error{Message: "Could not find object with given id"}
 		}
+		if fn, _ := p["functionDeclaration"].(string); !strings.Contains(fn, "/*bp:") {
+			// The helper's check that the node is in the world: the
+			// world's global must still be this document's.
+			as, _ := p["arguments"].([]any)
+			if len(as) != 1 {
+				return nil, true, cdptest.Error{Message: "fake: unexpected function " + fn}
+			}
+			g, _ := as[0].(map[string]any)["objectId"].(string)
+			if !strings.Contains(g, "/"+tb.id+"/"+tb.loader) || strings.HasSuffix(g, "/main") {
+				return nil, true, cdptest.Error{Message: "Argument should belong to the same JavaScript world as target object"}
+			}
+			return value(true), true, nil
+		}
 		return fb.function(tb, n, p)
 	case "Input.dispatchMouseEvent":
 		typ := p["type"].(string)
