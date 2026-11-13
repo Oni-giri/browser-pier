@@ -105,6 +105,7 @@ type rareInts struct {
 type domSnapshot struct {
 	Documents []struct {
 		DocumentURL int `json:"documentURL"`
+		BaseURL     int `json:"baseURL"`
 		Title       int `json:"title"`
 		FrameID     int `json:"frameId"`
 		Nodes       struct {
