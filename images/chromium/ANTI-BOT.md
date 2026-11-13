@@ -83,4 +83,4 @@ Measured by `TestSpike` (`internal/cdp/spike_docker_test.go`, run with `BROWSERP
 - `fill` puts its text in with one `insertText` after a select-all key press: a detector that checks that typed text matches the keys pressed can tell. Typing with `type` sends one key per character.
 - Key events come as fast as CDP sends them, with no typing rhythm.
 
-The tools themselves are run against the detector in `TestPageToolsStayQuiet` (`internal/pagetools`), with the same criterion.
+**The tools themselves, 20 runs each** (`TestPageToolsStayQuiet`, `internal/api/page_tabs_docker_test.go`, in `make test-docker`), nothing else attached: nothing recorded for `snapshot`, `find`, `act` (click, fill, type, press and hover, each its own run), `wait_for` (text, and a ref), `tabs` and `navigate` (reload), while the positive control in the same test was caught (main-world calls and its binding). So there is no hit to decide on; the residuals above still stand.

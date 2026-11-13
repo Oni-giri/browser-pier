@@ -103,6 +103,15 @@ func TestPageToolsRead(t *testing.T) {
 			t.Errorf("%s is still attached", tg.URL)
 		}
 	}
+	// The agent's own CDP client can be connected at the same time.
+	p := browsertest.PageVia(t, strings.Replace(s.CDPURL, "ws://", "http://", 1)+"/json/list", a.header())
+	if got := p.Eval("document.title"); got != "Saved password" {
+		t.Errorf("the agent's own client reads %v", got)
+	}
+	if snap := a.mustTool(s.ID, "snapshot", nil); !strings.Contains(snap, "Title: Saved password") {
+		t.Errorf("snapshot with the agent's client connected:\n%s", snap)
+	}
+	p.Close()
 }
 
 // TestPageToolsRefuseVisualMode is scenario 13: every page tool answers

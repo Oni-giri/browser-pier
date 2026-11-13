@@ -120,7 +120,7 @@ Self-hosted, persistent browsers for AI agents. Agents start a browser when they
 | Failed | Browser crashed or did not start; last log line shown. | Retry |
 
 - Auto-stop when idle: 5, 10, 15 (default), 30 minutes, or never, set per profile.
-  - **What counts as use:** any agent API call on the session (start or attach, screenshot, click, type, upload).
+  - **What counts as use:** any agent API call on the session (start or attach, screenshot, click, type, upload, and each API-mode page tool: snapshot, find, act, wait_for, navigate, tabs). A page tool's call keeps the browser busy while it runs (a 30-second `wait_for` too), but it holds no connection between calls, so a browser driven only by the page tools still stops when idle.
   - **In use the whole time:** an open CDP connection, and a browser a person has during a handoff, are never idle.
   - **Stopping:** an idle browser is stopped gracefully, so its logins are kept.
 - A start takes a few seconds. The UI shows Starting… with a spinner and disables the action until the browser is ready.
@@ -217,6 +217,12 @@ All endpoints take `Authorization: Bearer <agent token>`. The same actions are e
 | GET | `/api/profiles/{name}/files` | List downloaded files |
 | GET | `/api/profiles/{name}/files/{file}` | Fetch a file (DELETE to remove) |
 | POST | `/api/sessions/{id}/files` | Upload a file into the session |
+| POST | `/api/sessions/{id}/snapshot` | API mode: the page's URL, title, controls with refs and text, within a budget `{max_chars?}` |
+| POST | `/api/sessions/{id}/find` | API mode: text on the page, with context and the nearest ref `{text, limit?}` |
+| POST | `/api/sessions/{id}/act` | API mode: 1–20 steps on refs `{steps, snapshot?}` |
+| POST | `/api/sessions/{id}/wait` | API mode: wait for text, a ref visible or hidden, or a URL change `{text? \| ref, state? \| url_change, timeout_ms?}` |
+| POST | `/api/sessions/{id}/navigate` | API mode: open a URL, or go back, forward or reload `{url? \| action}` |
+| GET, POST | `/api/sessions/{id}/tabs` | API mode: list tabs, or switch, close or open one `{action, id?, url?}` |
 | POST | `/api/sessions/{id}/content` | v1.1: page as Markdown, readability text, screenshot or PDF |
 | WS | `/cdp/{profile}` | API mode: CDP, proxied and token-checked |
 | POST | `/api/sessions/{id}/cdp-ticket` | API mode: a one-minute, single-use CDP URL for clients that can't set headers |
@@ -238,6 +244,20 @@ Starting a session returns its id, the CDP URL (proxied through the orchestrator
 - **Computer actions:** `/computer` takes one action. `click {x, y, button?, double?}` and `type {text}` work as above; `scroll {x, y, dx?, dy?}` scrolls by whole wheel notches at a point, at most 20 each way; `key {keys}` presses a combination like `"ctrl+l"` or a list of up to 10, each made of X keysym names (`Return`, `Tab`, `a`…, with aliases such as `Enter`, `Esc`, `Cmd`, `PageDown`) joined by `+`; `drag {from: {x, y}, to: {x, y}, button?}` presses, moves in steps and releases. These run through xdotool with the same checks as click, never as an xdotool script. `wait {ms}` pauses up to 10 s. `zoom {x, y, w, h}` returns that region of the screen as a PNG at full resolution, cut off at the screen's edges. With `screenshot: true` any other action answers with the screen afterwards (scaled to `width` if given) instead of 204. During a handoff, wait and zoom still work. The activity log names each action but never typed text: keys that could spell something are logged only as a count.
 - **Tokens without the UI:** `browserpier token create NAME [-profiles a,b]`, `token list` and `token revoke ID` manage tokens from the command line, e.g. through `docker exec`.
 
+### API-mode page tools
+
+For agents that speak only MCP (or REST), six tools read and act on an API-mode page in a few hundred tokens, without raw HTML or a screenshot (PROJ-21). They answer `{"text": "…"}`, the same text the MCP tools return, and refuse a Visual-mode session (409). Another profile's session is 404, as everywhere.
+
+- **How they reach the page:** each call opens one short-lived CDP connection from the orchestrator through the container's control socket, never through the agent proxy, and closes it before answering. It sends only the methods on the tools' allow-list (`internal/pagetools`), never a domain's `enable` or `DOM.getDocument`, runs its scripts only in an isolated world, and writes nothing into the page; `fill` and `select` set values as Playwright does. The agent's own CDP client can be connected at the same time.
+- **Lifecycle:** a call takes a page lease on the session: one call at a time per session, refused while a person has the browser, cancelled by a handoff, a stop, the token's revocation or a session hold (which waits for it to end). A lease doesn't show the agent as connected, but like a click it keeps a person from taking control while it runs and for 5 seconds after.
+- **Refs** like `a7e12` name an element of one document: a 2-character epoch, random per session map (so refs from before an orchestrator restart answer stale), then a number never reused. A ref goes stale when its document changes, its node goes, or a person had the browser since; a ref from a tab that isn't active is refused. At most 5,000 are live per session.
+- **The active tab** is the browser's foreground tab, the one whose page is visible: `tabs switch` and `new` bring theirs to the front, so the tools, the live view and a handoff see the same one. When a page opens a tab (a sign-in popup), every tool's result says `a new tab opened: t3 (https://accounts.example)`, and the agent switches to it.
+- **snapshot** joins the accessibility tree and a DOM snapshot of the top frame (an iframe is one line, not read). It spends its budget (4,000 characters by default, at most 20,000) on an open modal, then what is in view, then the main landmark, then the rest, controls before text in each, sums up a navigation or menu of more than 20 controls in one line, and says what it left out. Secret fields (as `internal/fence` judges them) show only `[filled]` or `[empty]`. A page with more than 60,000 DOM nodes is too large for the accessibility tree: `snapshot` says so, and `find` reads its text alone.
+- **act** runs 1–20 steps in order, stopping at the first failure: `click`, `fill`, `type`, `press`, `select`, `check`, `uncheck`, `hover`. Pointer steps check that nothing covers the element's centre (its own label may), typing steps that it has the focus before and after. Each result names the element's role and name as they are when it acts; typed text is only counted. Date, range and file inputs are refused. The page can still change between a check and the input; act resolves, checks and dispatches back to back and echoes what it hit, and promises no more.
+- **wait_for** polls every 250 ms, for up to 30 s. **navigate** takes only `http` and `https` URLs without a user name or password, and waits up to 30 s for the page to load.
+- **Dialogs:** without `Page.enable` an `alert()` can't be seen or closed over CDP, so a call that the page stops answering while the browser still does says "the page isn't responding; a dialog may be open. Request a handoff."
+- **The activity log** records the action and refs only (`Clicked a7e12`, `Filled a7e13 (12 characters)`), never page text or typed text.
+
 ### Files
 
 Downloads land in a per-profile folder. The API lists, fetches and deletes them, and uploads files into the session so the agent or a human can pick them in a file chooser. Files are kept with the profile until deleted, or until a size cap evicts the oldest.
@@ -254,14 +274,15 @@ Downloads land in a per-profile folder. The API lists, fetches and deletes them,
 - **Setup guide:** `GET /mcp/setup` is a Markdown page for agents, with this BrowserPier's address filled in, that tells an agent how to connect itself. It covers checking `PIER_TOKEN` (without printing it), the setup for each common client with the token read from the variable at connect time, never written into a config, checking with `list_profiles`, and the REST API as the fallback without MCP. It holds no secret, so it needs no sign-in; under `/mcp/` Umbrel lets it through.
 - **Tools:**
   - `list_profiles`, `start_browser`, `stop_browser`
-  - `screenshot`, `click`, `type_text`, `press_keys`, `scroll`, `drag`, `wait`, `zoom`
+  - Visual mode: `screenshot`, `click`, `type_text`, `press_keys`, `scroll`, `drag`, `wait`, `zoom`
+  - API mode: `snapshot`, `find`, `act`, `wait_for`, `navigate`, `tabs` (see API-mode page tools)
   - `list_files`
   - `request_handoff`, `wait_for_handoff`, `cancel_handoff`
 - **Explicit handles:** `start_browser` returns a `session_id` and every stateful tool takes it as an argument. Nothing depends on the MCP connection staying open, so several browsers can run in one conversation.
-- **Untrusted content:** every piece of page-derived text returned to an agent (downloaded file names now; snapshots and markdown in v1.1) is handled the same way:
+- **Untrusted content:** every piece of page-derived text returned to an agent (downloaded file names, the page tools' snapshots, matches, step results and tab names, and errors that quote the page; markdown in v1.1) is handled the same way:
   - wrapped in an `<untrusted-content-…>` fence whose tag name carries a random marker, so the page can't write the closing tag, saying it is data, not instructions (look-alike tags in the text are defused)
   - stripped of invisible Unicode (zero-width, bidi, tag characters) and HTML comments
-  - password and one-time-code field values redacted (`internal/fence`)
+  - password and one-time-code field values redacted (`internal/fence`), at the source where the output is structured (a snapshot shows such a field as `[filled]`). Redaction prevents accidental leaks, not leaks by a manipulated agent: a code split across several boxes, one shown as page text (a webmail profile) or a token in a URL still reaches the agent.
 - **Visual-mode actions:**
   - Each action can return a screenshot after it.
   - Screenshots are downscaled server-side to fit 1280×720 (1440×900 becomes 1152×720). Tools take coordinates in the screenshot's pixels, and BrowserPier scales them to the screen.
@@ -340,6 +361,7 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 - No fingerprint spoofing: each profile keeps one real, consistent fingerprint over time.
 - Persistent, aged profiles with real logins help on their own.
 - **Validation** (PROJ-15): `images/chromium/ANTI-BOT.md` has the results against public detection pages, and the signals that remain (SwiftShader, no taskbar). `TestVisualModeLooksLikeAPerson` checks Visual mode in CI's Docker tests.
+- **BrowserPier's own CDP use** (the API-mode page tools, PROJ-21): one connection per call, no domain ever enabled, scripts only in an isolated world, nothing written into the page. `TestPageToolsStayQuiet` runs each tool 20 times against a continuous detector (`browsertest.Watch`, on the page's main thread and in a worker), which must catch its positive control, a client doing what Playwright does; the tools showed nothing. The measurements and the residuals (such as `fill` putting its text in at once) are in `images/chromium/ANTI-BOT.md`. Visual mode doesn't use them.
 
 ---
 
@@ -352,7 +374,7 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 - Tokens, the PIN and the admin password are hashed at rest.
 - Agent tokens are never taken in a URL. Clients that can't set headers connect to CDP with a single-use ticket that lasts a minute.
 - Treat profile folders as secrets, since they hold live session cookies. With `password-store=basic`, cookies on disk are effectively readable.
-- Page text returned to agents is fenced and sanitised (see MCP tools), since agents browse untrusted pages. So is the browser container's own output: a session's `last_log`, and Chromium's crash reason after its `error`, since a compromised page can write to it. The UI shows the reason unfenced.
+- Page text returned to agents is fenced and sanitised (see MCP tools), since agents browse untrusted pages. The page tools' snapshots leave out what is AX-ignored, `display:none`, `visibility:hidden` or zero-size, but keep text a person may not see (transparent, off-screen, clipped or the page's own colour) and accessible names (`aria-label`, `aria-labelledby` even to a hidden node, `alt`, `title`, placeholder): that text is contained, not filtered. It is fenced and capped like the rest, and the tool descriptions say so. So is the browser container's own output: a session's `last_log`, and Chromium's crash reason after its `error`, since a compromised page can write to it. The UI shows the reason unfenced.
 - Pages can't reach the local network, the Docker host or a VPS's metadata endpoint through the browser, unless the admin allows a profile the local network (see Egress).
 
 ---
@@ -427,7 +449,7 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 ### v1.1: efficiency and reach
 
 - Content endpoints: page to Markdown or readability text, screenshot, PDF (API mode)
-- Token-efficient API-mode tools: accessibility snapshot with stable refs, find, batch, covered-element check
+- Token-efficient API-mode tools: accessibility snapshot with stable refs, find, batch, covered-element check (done, PROJ-21: see API-mode page tools)
 - TURN support for viewers on UDP-blocking networks
 - Seed a profile from your own Chrome: cookie and localStorage JSON export/import, so you don't have to log in again inside BrowserPier
 - Navy-style logo

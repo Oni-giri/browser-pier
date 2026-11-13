@@ -129,7 +129,11 @@ New MCP servers usually load in a new session. If the browserpier tools (`list_p
 - A list of profiles, or "No profiles yet", means you're connected. If there are none yet, the user creates one at {{.Base}}/profiles and signs in to its site once.
 - 401 means the token is wrong or revoked, or `PIER_TOKEN` didn't reach your client. An editor started from its icon may not have the variables your terminal has.
 
-Once connected, the server tells you how to use its tools.
+Once connected, the server tells you how to use its tools. Which ones depend on the browser's mode, which `start_browser` reports:
+
+- **Visual mode** (sites with heavy anti-bot measures): `screenshot` to see the screen, then `click`, `type_text`, `press_keys`, `scroll`, `drag`, `wait` and `zoom`, with coordinates in the screenshot's pixels.
+- **API mode**: `snapshot` to read the page as text, with refs like `a7e12` for its controls, `find` to search it, `act` to click, fill, type, press, select, check or hover by ref, `wait_for`, `navigate` and `tabs` (sign-in popups open in a new tab). Or connect your own CDP client to the `cdp_url`.
+- **Both:** `request_handoff`, `wait_for_handoff`, `cancel_handoff`, `list_files`, `stop_browser`.
 
 ## 4. No MCP? Use the REST API
 
@@ -147,6 +151,11 @@ curl -s -X POST {{.Base}}/api/sessions/ID/computer -H "$H" -d '{"action": "click
 # a person is needed (sign-in, 2FA, CAPTCHA, payment): send them a link, then wait for them
 curl -s -X POST {{.Base}}/api/sessions/ID/handoff -H "$H" -d '{"reason": "sensitive_input", "detail": "Enter the 2FA code"}'
 curl -s "{{.Base}}/api/handoffs/HANDOFF_ID?wait=900" -H "$H"
+# API mode instead ("mode": "api"): read the page, act on refs from it, all as text
+curl -s -X POST {{.Base}}/api/sessions/ID/navigate -H "$H" -d '{"url": "https://example.com/login"}'
+curl -s -X POST {{.Base}}/api/sessions/ID/snapshot -H "$H"
+curl -s -X POST {{.Base}}/api/sessions/ID/act -H "$H" -d '{"steps": [{"action": "fill", "ref": "a7e12", "text": "ana@example.com"}, {"action": "click", "ref": "a7e14"}]}'
+#   also /find {"text"}, /wait {"text"} or {"ref", "state"} or {"url_change": true}, /tabs {"action": "list|switch|close|new"}
 # done: stop the browser; its logins are kept
 curl -s -X DELETE {{.Base}}/api/sessions/ID -H "$H"
 ```
