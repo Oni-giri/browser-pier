@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"regexp"
+	"slices"
 	"strconv"
 )
 
@@ -52,8 +53,11 @@ func newRefs() *refs {
 		byRef: map[string]refKey{}, byKey: map[refKey]string{}, perDoc: map[docKey][]string{}}
 }
 
-// ref returns the node's ref, making one if it has none.
+// ref returns the node's ref, making one if it has none. Its document
+// becomes the most recently used, the last to be dropped.
 func (r *refs) ref(k refKey) string {
+	d := docKey{k.target, k.loader}
+	r.touch(d)
 	if ref, ok := r.byKey[k]; ok {
 		return ref
 	}
@@ -61,38 +65,48 @@ func (r *refs) ref(k refKey) string {
 	ref := r.epoch + "e" + strconv.Itoa(r.next)
 	r.byRef[ref] = k
 	r.byKey[k] = ref
-	d := docKey{k.target, k.loader}
-	if _, ok := r.perDoc[d]; !ok {
-		r.docs = append(r.docs, d)
-	}
 	r.perDoc[d] = append(r.perDoc[d], ref)
 	for len(r.byRef) > maxRefs {
-		r.evict()
+		r.evict(d)
 	}
 	return ref
 }
 
-// evict drops the oldest document's refs; if that document is the only
-// one, its oldest refs.
-func (r *refs) evict() {
-	if len(r.docs) == 0 {
-		return
+// touch makes a document the most recently used.
+func (r *refs) touch(d docKey) {
+	if i := slices.Index(r.docs, d); i >= 0 {
+		if i == len(r.docs)-1 {
+			return
+		}
+		r.docs = slices.Delete(r.docs, i, i+1)
 	}
-	d := r.docs[0]
-	list := r.perDoc[d]
-	if len(r.docs) > 1 {
-		for _, ref := range list {
+	r.docs = append(r.docs, d)
+}
+
+// evict drops the least recently used document's refs, never those of
+// cur, the document being read. If cur is the only one, its oldest refs
+// go (refs from earlier calls: one call hands out far fewer than maxRefs).
+func (r *refs) evict(cur docKey) {
+	for i, d := range r.docs {
+		if d == cur {
+			continue
+		}
+		for _, ref := range r.perDoc[d] {
 			r.forget(ref)
 		}
-		r.docs = r.docs[1:]
+		r.docs = slices.Delete(r.docs, i, i+1)
 		delete(r.perDoc, d)
 		return
 	}
-	drop := len(r.byRef) - maxRefs
+	list := r.perDoc[cur]
+	drop := min(len(r.byRef)-maxRefs, len(list)-1)
+	if drop <= 0 {
+		return
+	}
 	for _, ref := range list[:drop] {
 		r.forget(ref)
 	}
-	r.perDoc[d] = list[drop:]
+	r.perDoc[cur] = list[drop:]
 }
 
 func (r *refs) forget(ref string) {

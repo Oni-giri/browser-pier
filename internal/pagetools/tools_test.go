@@ -605,6 +605,20 @@ func TestRefs(t *testing.T) {
 	if len(r.byRef) != maxRefs {
 		t.Errorf("%d live refs after more on one document", len(r.byRef))
 	}
+	// The document being read is never the one dropped, even if it was
+	// first seen long ago: using it makes it the most recent.
+	r = newRefs()
+	r.ref(refKey{target: "T1", loader: "read", backend: 1})
+	for i := range maxRefs - 1 {
+		r.ref(refKey{target: "T2", loader: "other", backend: int64(i + 1)})
+	}
+	fresh := r.ref(refKey{target: "T1", loader: "read", backend: 2})
+	if _, err := r.lookup(fresh); err != nil {
+		t.Errorf("a ref just handed out was dropped: %v", err)
+	}
+	if _, err := r.lookup(r.byKey[refKey{target: "T1", loader: "read", backend: 1}]); len(r.byRef) > maxRefs || err != nil {
+		t.Errorf("%d live refs; the read document's older ref: %v", len(r.byRef), err)
+	}
 }
 
 func TestRefsGoStaleWhenAPersonTakesTheBrowser(t *testing.T) {
