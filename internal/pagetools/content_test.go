@@ -51,7 +51,7 @@ func checkContentSent(t *testing.T, fb *fakeBrowser) {
 			t.Errorf("sent %s", m.Method)
 		}
 	}
-	for _, m := range []string{"Input.dispatchMouseEvent", "Input.insertText", "Page.navigate", "DOM.focus", "Runtime.callFunctionOn"} {
+	for _, m := range []string{"Input.dispatchMouseEvent", "Input.insertText", "Page.navigate", "DOM.focus", "DOM.resolveNode", "Accessibility.getFullAXTree"} {
 		if slices.Contains(allowed, m) {
 			t.Errorf("the content endpoints may send %s", m)
 		}

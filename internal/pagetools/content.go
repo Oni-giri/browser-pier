@@ -30,8 +30,8 @@ var contentAllowList = cdp.NewAllowList("content endpoints",
 	"Target.getTargets", "Target.attachToTarget", "Target.detachFromTarget",
 	"Page.getFrameTree", "Page.createIsolatedWorld", "Page.getNavigationHistory",
 	// The active tab is found as the page tools find it: its visibility,
-	// read in an isolated world.
-	"Runtime.evaluate",
+	// read in an isolated world (its globalThis, then a function on it).
+	"Runtime.evaluate", "Runtime.callFunctionOn",
 	"DOMSnapshot.captureSnapshot", "Page.printToPDF",
 )
 
@@ -158,6 +158,13 @@ func window(s string, offset, n int) (string, int) {
 // out into a pagetext tree. The tab's document is checked before and
 // after: a snapshot that straddles a navigation is taken again, once.
 func (c *call) readTree(ctx context.Context) (*pagetext.Node, *url.URL, string, error) {
+	// A whole-page read: it takes one of the few slots all sessions share.
+	select {
+	case c.t.reads <- struct{}{}:
+		defer func() { <-c.t.reads }()
+	case <-ctx.Done():
+		return nil, nil, "", ctx.Err()
+	}
 	for try := 0; ; try++ {
 		_, before, _, err := c.frameTree(ctx, c.tgt)
 		if err != nil {
