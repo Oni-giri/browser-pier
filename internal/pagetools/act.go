@@ -403,7 +403,11 @@ func (c *call) step(ctx context.Context, st Step) (string, error) {
 		case "not a select":
 			return "", &Error{Status: 422, Msg: n.ref + " isn't a <select>; click it, then click the option"}
 		case "no option":
-			return "", &Error{Status: 422, Msg: "no such option in " + n.ref + "; its first options: " + fence.Wrap("page options", strings.Join(r.Options, "\n"))}
+			opts := make([]string, 0, len(r.Options))
+			for _, o := range r.Options[:min(len(r.Options), 10)] {
+				opts = append(opts, quote(capText(o, maxField)))
+			}
+			return "", &Error{Status: 422, Msg: "no such option in " + n.ref + "; its first options: " + fence.Wrap("page options", strings.Join(opts, "\n"))}
 		default:
 			return "", &Error{Status: 422, Msg: n.ref + ": " + r.Error}
 		}
