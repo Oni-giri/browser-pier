@@ -85,6 +85,7 @@ type worldPage struct {
 	mu        sync.Mutex
 	loaders   []string // what successive Page.getFrameTree calls say
 	handleOK  bool     // the world's globalThis handle still resolves
+	navigated bool     // calls fail as the target navigates away
 	sameWorld bool     // a resolved node is in the world
 }
 
@@ -114,6 +115,8 @@ func (w *worldPage) handle(m cdptest.Message) (any, error) {
 		return map[string]any{"object": map[string]any{"type": "object", "subtype": "node", "objectId": "node-1"}}, nil
 	case "Runtime.callFunctionOn":
 		switch {
+		case w.navigated:
+			return nil, cdptest.Error{Message: "Inspected target navigated or closed"}
 		case p.ObjectID == "global-7" && !w.handleOK:
 			return nil, cdptest.Error{Message: "Could not find object with given id"}
 		case p.ObjectID == "node-1" && strings.Contains(p.FunctionDeclaration, "globalThis") && !w.sameWorld:
@@ -149,8 +152,8 @@ func TestCodeRunsOnlyInVerifiedIsolatedWorlds(t *testing.T) {
 	// Nothing runs in the page's own world, or by a number this
 	// connection didn't make.
 	refused("evaluate in the main world", "Runtime.evaluate", map[string]any{"expression": "1"})
-	refused("evaluate in another context", "Runtime.evaluate", map[string]any{"expression": "globalThis", "contextId": 1})
-	refused("evaluate by unique id", "Runtime.evaluate", map[string]any{"expression": "globalThis", "uniqueContextId": "x"})
+	refused("evaluate in another context", "Runtime.evaluate", map[string]any{"expression": "this", "contextId": 1})
+	refused("evaluate by unique id", "Runtime.evaluate", map[string]any{"expression": "this", "uniqueContextId": "x"})
 	refused("resolveNode into the main world", "DOM.resolveNode", map[string]any{"backendNodeId": 3})
 	refused("callFunctionOn a foreign object", "Runtime.callFunctionOn", map[string]any{"objectId": "page-object", "functionDeclaration": "function(){}"})
 	refused("releaseObject of a foreign object", "Runtime.releaseObject", map[string]any{"objectId": "page-object"})
@@ -162,7 +165,9 @@ func TestCodeRunsOnlyInVerifiedIsolatedWorlds(t *testing.T) {
 	// Even in our own world, code never runs by number: numbers can be
 	// re-pointed by a cross-process navigation.
 	refused("evaluate code by number", "Runtime.evaluate", map[string]any{"expression": "document.title", "contextId": world})
-	refused("evaluate by value by number", "Runtime.evaluate", map[string]any{"expression": "globalThis", "contextId": world, "returnByValue": true})
+	refused("evaluate by value by number", "Runtime.evaluate", map[string]any{"expression": "this", "contextId": world, "returnByValue": true})
+	// The name globalThis is the page's to redefine: not even it.
+	refused("evaluate globalThis by number", "Runtime.evaluate", map[string]any{"expression": "globalThis", "contextId": world})
 	refused("callFunctionOn by number", "Runtime.callFunctionOn", map[string]any{"executionContextId": world, "functionDeclaration": "function(){}"})
 	var title string
 	if err := tg.Eval(ctx, world, "document.title", &title); err != nil || title != "Title" {
@@ -192,7 +197,7 @@ func TestCodeRunsOnlyInVerifiedIsolatedWorlds(t *testing.T) {
 		t.Errorf("an object in another session: %v", err)
 	}
 	for _, m := range b.Received() {
-		if m.Method == "Runtime.evaluate" && !strings.Contains(string(m.Params), `"expression":"globalThis"`) {
+		if m.Method == "Runtime.evaluate" && !strings.Contains(string(m.Params), `"expression":"this"`) {
 			t.Errorf("sent %s %s", m.Method, m.Params)
 		}
 	}
@@ -230,6 +235,13 @@ func TestAWorldWhoseDocumentChangesIsGone(t *testing.T) {
 	}
 	if _, err := tg.ResolveNode(ctx, world, 3); !errors.Is(err, cdp.ErrWorldGone) {
 		t.Errorf("ResolveNode after the document went: %v", err)
+	}
+	// Chromium's other word for it, mid-navigation.
+	w.mu.Lock()
+	w.navigated = true
+	w.mu.Unlock()
+	if err := tg.Eval(ctx, world, "document.title", nil); !errors.Is(err, cdp.ErrWorldGone) {
+		t.Errorf("Eval as the target navigates: %v", err)
 	}
 	if err := tg.Call(ctx, "Runtime.callFunctionOn", map[string]any{"objectId": "node-1", "functionDeclaration": "function(){}"}, nil); !errors.Is(err, cdp.ErrNotAllowed) {
 		t.Errorf("a node that failed its check took a call: %v", err)

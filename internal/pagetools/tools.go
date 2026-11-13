@@ -100,13 +100,15 @@ type Tools struct {
 	settle time.Duration
 	// poll is how often wait_for and navigate look at the page.
 	poll time.Duration
-	// reads holds a slot per whole-page read under way (maxReads).
-	reads chan struct{}
+	// reads holds a slot per whole-page read under way (maxReads);
+	// readWait is how long a call waits for one before answering busy.
+	reads    chan struct{}
+	readWait time.Duration
 }
 
 func New(m *sessions.Manager, log *slog.Logger) *Tools {
 	return &Tools{m: m, log: log, pages: map[string]*state{}, quick: quickTimeout, slow: slowTimeout,
-		settle: 100 * time.Millisecond, poll: 250 * time.Millisecond, reads: make(chan struct{}, maxReads)}
+		settle: 100 * time.Millisecond, poll: 250 * time.Millisecond, reads: make(chan struct{}, maxReads), readWait: 10 * time.Second}
 }
 
 // state is what the tools remember about one session between calls.

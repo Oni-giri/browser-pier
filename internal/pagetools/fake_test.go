@@ -232,7 +232,7 @@ func (fb *fakeBrowser) handle(m cdptest.Message) (any, error) {
 		if !ok {
 			return nil, cdptest.Error{Message: "Cannot find context with specified id"}
 		}
-		if strings.HasSuffix(w, "/main") && p["expression"] != "globalThis" {
+		if strings.HasSuffix(w, "/main") && p["expression"] != "this" {
 			fb.mainRuns++
 		}
 		return map[string]any{"result": map[string]any{"type": "object", "objectId": fmt.Sprintf("g/%d/%s", ctx, w)}}, nil

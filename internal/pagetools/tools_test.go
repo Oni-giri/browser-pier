@@ -130,7 +130,7 @@ func checkSent(t *testing.T, fb *fakeBrowser) {
 				ReturnByValue bool   `json:"returnByValue"`
 			}
 			_ = json.Unmarshal(m.Params, &p)
-			if p.Expression != "globalThis" || p.ReturnByValue {
+			if p.Expression != "this" || p.ReturnByValue {
 				t.Errorf("evaluated by context number: %s", m.Params)
 			}
 		}
@@ -471,6 +471,51 @@ func TestNewTabNotice(t *testing.T) {
 	if out := f.mustSnapshot(nil); strings.Contains(out, "a new tab opened") {
 		t.Errorf("the notice came twice:\n%s", out)
 	}
+}
+
+// When other sessions' large pages hold every read slot, a read waits a
+// bounded time and answers busy (503); a handoff still ends the wait.
+func TestBusyReadSlots(t *testing.T) {
+	f := newFixture(t)
+	f.fb.addTab("https://example.com/", loginPage(), true)
+	for range maxReads {
+		f.tools.reads <- struct{}{}
+	}
+	f.tools.readWait = 200 * time.Millisecond
+	start := time.Now()
+	if _, err := f.snapshot(nil); !isStatus(err, http.StatusServiceUnavailable) || !strings.Contains(err.Error(), "busy") {
+		t.Fatalf("got %v", err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("waited %s", d)
+	}
+	f.closedAfter()
+	// Tools that don't read the whole page don't wait.
+	if _, err := f.tools.Navigate(context.Background(), f.session(), f.who, NavigateIn{URL: "https://example.com/b"}); err != nil {
+		t.Errorf("navigate: %v", err)
+	}
+	f.tools.readWait = 20 * time.Second
+	done := make(chan error, 1)
+	go func() { _, err := f.snapshot(nil); done <- err }()
+	time.Sleep(100 * time.Millisecond)
+	if _, err := f.m.SetNeedsHelp(f.sess.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if !isStatus(err, http.StatusConflict) {
+			t.Errorf("a handoff during the wait: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the handoff didn't end the wait")
+	}
+	if _, err := f.m.SetNeedsHelp(f.sess.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	for range maxReads {
+		<-f.tools.reads
+	}
+	f.mustSnapshot(nil)
 }
 
 func TestADialogMakesThePageUnresponsive(t *testing.T) {

@@ -57,7 +57,7 @@ func TestAnOldWorldNumberThatNamesAPageWorldNeverRunsCode(t *testing.T) {
 		// The bootstrap read is allowed by number (it runs nothing), but
 		// what it gives isn't trusted with code.
 		var g struct{ Result cdp.RemoteObject }
-		if tb.Call(ctx(5), "Runtime.evaluate", map[string]any{"expression": "globalThis", "contextId": old}, &g) == nil {
+		if tb.Call(ctx(5), "Runtime.evaluate", map[string]any{"expression": "this", "contextId": old}, &g) == nil {
 			named++
 			if err := tb.Call(ctx(5), "Runtime.callFunctionOn", map[string]any{"objectId": g.Result.ObjectID,
 				"functionDeclaration": "function() { return typeof marker; }", "returnByValue": true}, nil); !errors.Is(err, cdp.ErrNotAllowed) {

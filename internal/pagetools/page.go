@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/Oni-giri/browser-pier/internal/cdp"
@@ -307,6 +309,10 @@ func (n *axNode) prop(name string) string {
 	return ""
 }
 
+// errBusy: every whole-page read slot (maxReads) stayed taken for
+// readWait.
+var errBusy = &Error{Status: http.StatusServiceUnavailable, Msg: "BrowserPier is busy reading other large pages; try again in a few seconds"}
+
 // errTooLarge is snapshot's answer on a page past the size cap.
 var errTooLarge = &Error{Status: 422, Msg: "page too large to snapshot; use find"}
 
@@ -362,9 +368,15 @@ func (c *call) info(ctx context.Context) (pageInfo, error) {
 // read reads the active tab: the DOM snapshot first, then, unless the page
 // is past the size cap, the AX tree, joined on backend node IDs.
 func (c *call) read(ctx context.Context, needAX bool) (*page, error) {
+	wait := time.NewTimer(c.t.readWait)
+	defer wait.Stop()
 	select {
 	case c.t.reads <- struct{}{}:
 		defer func() { <-c.t.reads }()
+	case <-wait.C:
+		// Other sessions' large pages have the slots: don't hold this
+		// session's lease (and keep a person from taking control) for long.
+		return nil, errBusy
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}

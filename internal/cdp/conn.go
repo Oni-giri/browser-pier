@@ -357,7 +357,7 @@ func (c *Conn) forget(id int64) {
 // the same flat session talks to a new renderer, whose numbers start
 // again, so a remembered number can name the page's own world. So code
 // never runs by number. Runtime.evaluate by number is allowed only for
-// the bootstrap that reads the world's globalThis (harmless anywhere),
+// the bootstrap that reads the world's global object, `this` (harmless anywhere),
 // which Target.IsolatedWorld keeps only if the frame's document didn't
 // change around it. Code then runs through Runtime.callFunctionOn on that
 // object, or on objects it gave: remote object IDs carry their renderer's
@@ -392,7 +392,7 @@ func (c *Conn) check(sessionID, method string, params []byte) error {
 	obj := func(id string) objKey { return objKey{sessionID, id} }
 	switch method {
 	case "Runtime.evaluate":
-		if p.UniqueContextID != "" || !inWorld(p.ContextID) || p.Expression != "globalThis" || p.ReturnByValue {
+		if p.UniqueContextID != "" || !inWorld(p.ContextID) || p.Expression != bootstrap || p.ReturnByValue {
 			return fmt.Errorf("cdp: %w: Runtime.evaluate runs only the isolated-world bootstrap; use Target.Eval", ErrNotAllowed)
 		}
 	case "Runtime.callFunctionOn":
@@ -419,6 +419,12 @@ func (c *Conn) check(sessionID, method string, params []byte) error {
 	}
 	return nil
 }
+
+// bootstrap is the only expression Runtime.evaluate may send: the global
+// object, as `this` at the top level gives it. Unlike the name globalThis,
+// which a page can redefine with a getter, it looks nothing up, so even
+// if it ever landed in a page's own world the page couldn't notice.
+const bootstrap = "this"
 
 // verifyFn is the only function run on a node DOM.resolveNode gave, with
 // the world's global as its argument: the browser refuses the call unless
@@ -590,7 +596,7 @@ func (t *Target) IsolatedWorld(ctx context.Context, frameID string) (int64, erro
 	var g struct {
 		Result RemoteObject `json:"result"`
 	}
-	if err := t.Call(ctx, "Runtime.evaluate", map[string]any{"expression": "globalThis", "contextId": w.ExecutionContextID}, &g); err != nil {
+	if err := t.Call(ctx, "Runtime.evaluate", map[string]any{"expression": bootstrap, "contextId": w.ExecutionContextID}, &g); err != nil {
 		return 0, worldGone(err)
 	}
 	after, err := t.frameLoader(ctx, frameID)
@@ -622,6 +628,7 @@ func (t *Target) global(world int64) (string, error) {
 func worldGone(err error) error {
 	var ce *Error
 	if errors.As(err, &ce) && (strings.Contains(ce.Message, "find object") || strings.Contains(ce.Message, "find context") ||
+		strings.Contains(ce.Message, "Inspected target navigated or closed") ||
 		strings.Contains(ce.Message, "context was destroyed") || strings.Contains(ce.Message, "same JavaScript world")) {
 		return fmt.Errorf("%w: %w", ErrWorldGone, err)
 	}
