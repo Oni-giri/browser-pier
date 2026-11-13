@@ -57,7 +57,9 @@ func TestHandoffLiveViewThroughTURN(t *testing.T) {
 	_, _ = rand.Read(b[:])
 	secret := hex.EncodeToString(b[:])
 	addr := browsertest.Coturn(t, ip, ip, secret)
-	turn := webrtc.TURN{URLs: []string{"turn:" + addr + "?transport=udp", "turn:" + addr + "?transport=tcp"}, Secret: secret}
+	// A third TURN server the phone can't reach (TEST-NET, which goes
+	// nowhere), as one a network blocks: the page mustn't wait it out.
+	turn := webrtc.TURN{URLs: []string{"turn:" + addr + "?transport=udp", "turn:" + addr + "?transport=tcp", "turn:192.0.2.1:3478?transport=tcp"}, Secret: secret}
 	relay, err := webrtc.New(webrtc.Options{Port: 0, IPs: []string{ip}, TURN: turn}, f.m.Layout().ControlSocket, log)
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +77,12 @@ func TestHandoffLiveViewThroughTURN(t *testing.T) {
 	phone.Call("Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": `(() => {
 		const Real = RTCPeerConnection;
 		window.__pcs = [];
-		window.RTCPeerConnection = function (cfg) { const pc = new Real(cfg); window.__pcs.push({ pc, cfg }); return pc; };
+		window.RTCPeerConnection = function (cfg) {
+			const pc = new Real(cfg), rec = { pc, cfg, made: performance.now() };
+			pc.addEventListener("connectionstatechange", () => { if (pc.connectionState === "connected") rec.ms = Math.round(performance.now() - rec.made); });
+			window.__pcs.push(rec);
+			return pc;
+		};
 		window.RTCPeerConnection.prototype = Real.prototype;
 	})()`})
 	phone.Navigate(link) // opens the link here; it then loads without the query
@@ -111,7 +118,13 @@ func TestHandoffLiveViewThroughTURN(t *testing.T) {
 	if !strings.HasPrefix(via, "relay over ") {
 		t.Fatalf("connected, but not through TURN: %s", via)
 	}
-	t.Logf("the phone's live view connected through TURN: %s", via)
+	ms, _ := phone.Eval(`__pcs[0].ms`).(float64)
+	t.Logf("the phone's live view connected through TURN: %s, %v ms after the page made its connection", via, ms)
+	// The page waits at most 3 s for candidates; it mustn't spend them on
+	// the TURN server it can't reach once another has given it a relay.
+	if ms >= 2500 {
+		t.Fatalf("connecting took %v ms: the page waited for the unreachable TURN server", ms)
+	}
 }
 
 // phoneSeesHostAt is the address the phone's container reaches this

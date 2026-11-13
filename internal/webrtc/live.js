@@ -131,6 +131,10 @@
     await new Promise((done) => {
       if (pc.iceGatheringState === "complete") return done();
       pc.onicegatheringstatechange = () => pc.iceGatheringState === "complete" && done();
+      // Relayed candidates come last. Once one has, a TURN server the
+      // network blocks would only hold the offer up to the cap: BrowserPier
+      // learns any candidate that comes later from its connectivity checks.
+      pc.onicecandidate = (e) => { if (e.candidate && e.candidate.type === "relay") done(); };
       setTimeout(done, 3000);
     });
     const r = await fetch(offerURL, {
