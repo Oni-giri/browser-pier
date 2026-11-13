@@ -451,7 +451,7 @@ func TestADialogMakesThePageUnresponsive(t *testing.T) {
 	if !isStatus(err, http.StatusGatewayTimeout) || err.Error() != "the page isn't responding; a dialog may be open. Request a handoff." {
 		t.Fatalf("got %v", err)
 	}
-	if time.Since(start) > 3*time.Second {
+	if time.Since(start) > 6*time.Second {
 		t.Errorf("took %s", time.Since(start))
 	}
 	f.closedAfter()

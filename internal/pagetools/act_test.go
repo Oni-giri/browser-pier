@@ -305,7 +305,7 @@ func TestCancellingMidActLetsGo(t *testing.T) {
 				released = released || strings.HasPrefix(e, tc.after)
 			}
 			if pressed < 0 || !released {
-				t.Errorf("events %v: pressed but never let go", ev)
+				t.Errorf("events %v: pressed but never let go; the browser got %v; err %v", ev, f.fb.Methods(), err)
 			}
 			if strings.Count(strings.Join(ev, "|"), tc.press) > 1 {
 				t.Errorf("events %v: went on after the cancel", ev)

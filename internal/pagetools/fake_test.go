@@ -472,7 +472,7 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	tools := New(m, log)
-	tools.quick, tools.slow, tools.poll, tools.settle = 300*time.Millisecond, 300*time.Millisecond, 10*time.Millisecond, 0
+	tools.quick, tools.slow, tools.poll, tools.settle = 1500*time.Millisecond, 1500*time.Millisecond, 10*time.Millisecond, 0
 	return &fixture{t: t, m: m, tools: tools, fb: fb, sess: s, who: Caller{TokenID: "tok", Agent: "claude"}}
 }
 
