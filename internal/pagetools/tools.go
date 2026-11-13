@@ -181,8 +181,9 @@ type call struct {
 	notices []string
 }
 
-// begin starts a call on a session the caller may use.
-func (t *Tools) begin(ctx context.Context, s sessions.Session, who Caller) (*call, error) {
+// begin starts a call on a session the caller may use, sending only
+// what allow names.
+func (t *Tools) begin(ctx context.Context, s sessions.Session, who Caller, allow *cdp.AllowList) (*call, error) {
 	switch {
 	case s.Mode != profiles.ModeAPI:
 		return nil, &Error{Status: http.StatusConflict, Msg: "the page tools are for API-mode sessions; this one is in Visual mode, where nothing may attach to the page over CDP. Use screenshot, click and type_text, or restart the browser with mode api"}
@@ -197,7 +198,7 @@ func (t *Tools) begin(ctx context.Context, s sessions.Session, who Caller) (*cal
 	}
 	c := &call{t: t, sess: s, who: who, ctx: ctx, lease: lease}
 	c.st = t.state(s.ID, lease.Generation)
-	conn, err := cdp.Dial(lease.Ctx, t.m.Layout().ControlSocket(s.Profile), toolsAllowList, cdp.Options{MaxMessage: maxMessage})
+	conn, err := cdp.Dial(lease.Ctx, t.m.Layout().ControlSocket(s.Profile), allow, cdp.Options{MaxMessage: maxMessage})
 	if err != nil {
 		err = c.fail(err)
 		lease.Release()
@@ -413,14 +414,21 @@ func (c *call) result(source, body, trailer string) string {
 
 // run runs one tool call from start to end.
 func (t *Tools) run(ctx context.Context, s sessions.Session, who Caller, f func(c *call) (string, error)) (string, error) {
-	c, err := t.begin(ctx, s, who)
+	return runWith(ctx, t, s, who, toolsAllowList, f)
+}
+
+// runWith runs one call from start to end with a caller's own allow-list
+// (the content endpoints have theirs).
+func runWith[T any](ctx context.Context, t *Tools, s sessions.Session, who Caller, allow *cdp.AllowList, f func(c *call) (T, error)) (T, error) {
+	var zero T
+	c, err := t.begin(ctx, s, who, allow)
 	if err != nil {
-		return "", err
+		return zero, err
 	}
 	defer c.end()
 	out, err := f(c)
 	if err != nil {
-		return "", c.fail(err)
+		return zero, c.fail(err)
 	}
 	return out, nil
 }
