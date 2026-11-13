@@ -1,6 +1,7 @@
 package pagetext
 
 import (
+	"context"
 	"regexp"
 	"strings"
 )
@@ -8,20 +9,26 @@ import (
 // Readable renders a page's main text as plain text, as a reader view
 // would show it: without navigation, banners, sidebars, footers, forms
 // and dialogs, and only the part of the page that reads as its article.
-func Readable(root *Node, limit int) (string, bool) {
-	return Plain(Article(root), limit)
+// Like Markdown, it takes time and memory linear in the tree and limit.
+func Readable(ctx context.Context, root *Node, limit int) (string, bool, error) {
+	a := article(bound(root))
+	if err := ctx.Err(); err != nil {
+		return "", false, err
+	}
+	return render(ctx, bound(a), nil, true, limit)
 }
 
 // minArticle is how much text a page's article, main landmark or best
 // scored block needs to be taken as its main text.
 const minArticle = 200
 
-// Article finds a page's main content, after the heuristics of reader
+// article finds a page's main content, after the heuristics of reader
 // views such as Mozilla's Readability (written anew here, not ported):
 //
 //  1. Leave out what is never the article: navigation, headers and
 //     footers outside an article, sidebars, forms, dialogs, buttons, and
-//     blocks whose class or id says banner, cookie, comment, share…
+//     blocks whose class or id names a banner, cookies, comments, sharing…
+//     (as whole words, and never a block holding an article or main).
 //  2. A page with exactly one <article> (or role=article) of some length
 //     has its main content there; else one <main> (or role=main).
 //  3. Otherwise score blocks: each paragraph of 25 characters or more
@@ -33,12 +40,28 @@ const minArticle = 200
 //
 // What is left out of the winner (lists of links, say) is pruned the
 // same way. A page where nothing stands out comes back whole, cleaned.
-func Article(root *Node) *Node {
+// When what is found keeps less than a third of the page's text, or
+// less than minArticle, it is found again without the class names (as
+// Readability retries with its flags off), and the longer one wins.
+func article(root *Node) *Node {
 	body := find(root, func(n *Node) bool { return n.Tag == "body" })
 	if body == nil {
 		body = root
 	}
-	clean := prune(body, false)
+	first := articleOf(body, true)
+	got := textSize(first)
+	if got >= minArticle && got*3 >= textSize(prune(body, false, false)) {
+		return first
+	}
+	if second := articleOf(body, false); textSize(second) > got {
+		return second
+	}
+	return first
+}
+
+// articleOf is steps 1 to 3, with or without the class names.
+func articleOf(body *Node, classes bool) *Node {
+	clean := prune(body, false, classes)
 	if clean == nil {
 		return &Node{Tag: "div"}
 	}
@@ -69,14 +92,32 @@ func Article(root *Node) *Node {
 	return m.final(clean)
 }
 
+// textSize counts a tree's non-space text, without recursion.
+func textSize(n *Node) int {
+	t := 0
+	stack := []*Node{n}
+	for len(stack) > 0 {
+		c := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if c.Tag == "" {
+			t += len(strings.TrimFunc(c.Text, isSpace))
+			continue
+		}
+		if !skipped[c.Tag] {
+			stack = append(stack, c.Kids...)
+		}
+	}
+	return t
+}
+
 var (
 	// unlikely class or id words: blocks that are never the article.
-	unlikely = regexp.MustCompile(`(?i)ad-break|advert|agegate|banner|breadcrumb|comment|community|consent|cookie|disqus|footer|gdpr|masthead|menu|modal|newsletter|pager|pagination|popup|promo|related|remark|replies|share|shoutbox|sidebar|skip|social|sponsor|subscribe|toolbar|widget`)
+	unlikely = regexp.MustCompile(`(?i)\b(?:ad-break|adverts?|advertisement|agegate|banners?|breadcrumbs?|comments?|community|consent|cookies?|disqus|footer|gdpr|masthead|menus?|modal|newsletter|pager|pagination|popup|promos?|related|remarks?|replies|share|sharing|shoutbox|sidebar|skip|social|sponsors?|sponsored|subscribe|toolbar|widgets?)\b`)
 	// likely class or id words, which keep a block an unlikely word would drop.
 	likely = regexp.MustCompile(`(?i)article|body|column|content|entry|main|post|story|text`)
 	// positive and negative class or id words, for scoring.
 	positive = regexp.MustCompile(`(?i)article|blog|body|content|entry|h-entry|hentry|main|page|post|story|text`)
-	negative = regexp.MustCompile(`(?i)banner|byline|comment|contact|cookie|foot|hidden|masthead|media|menu|meta|nav|promo|related|share|sidebar|social|sponsor|tags|tool|widget`)
+	negative = regexp.MustCompile(`(?i)\b(?:banners?|byline|comments?|contact|cookies?|foot|footer|footnotes?|hidden|masthead|media|menus?|meta|nav|promos?|related|share|sidebar|social|sponsors?|tags|tools?|widgets?)\b`)
 )
 
 // boilerRoles are ARIA roles of what is never the article.
@@ -86,8 +127,9 @@ var boilerRoles = map[string]bool{
 }
 
 // prune copies a tree without its boilerplate. inArticle keeps headers
-// and footers inside an article or main, which hold its title and notes.
-func prune(n *Node, inArticle bool) *Node {
+// and footers inside an article or main, which hold its title and notes;
+// classes leaves out blocks by their class or id too.
+func prune(n *Node, inArticle, classes bool) *Node {
 	if n.Tag == "" {
 		return n
 	}
@@ -102,7 +144,7 @@ func prune(n *Node, inArticle bool) *Node {
 		return nil
 	case !inArticle && (n.Tag == "header" || n.Tag == "footer" || role == "banner" || role == "contentinfo"):
 		return nil
-	case n.Tag != "body" && n.Tag != "article" && n.Tag != "main":
+	case classes && !n.hasMain && n.Tag != "body":
 		if ci := n.Attr("class") + " " + n.Attr("id"); unlikely.MatchString(ci) && !likely.MatchString(ci) {
 			return nil
 		}
@@ -111,7 +153,7 @@ func prune(n *Node, inArticle bool) *Node {
 	c := *n
 	c.Kids = nil
 	for _, k := range n.Kids {
-		if p := prune(k, inArticle); p != nil {
+		if p := prune(k, inArticle, classes); p != nil {
 			c.Kids = append(c.Kids, p)
 		}
 	}
@@ -121,31 +163,33 @@ func prune(n *Node, inArticle bool) *Node {
 // measures holds each element's text length, link text length and
 // parent in a pruned tree.
 type measures struct {
-	text, links map[*Node]int
-	parent      map[*Node]*Node
+	text, links, commas map[*Node]int
+	parent              map[*Node]*Node
 }
 
 func measure(root *Node) *measures {
-	m := &measures{text: map[*Node]int{}, links: map[*Node]int{}, parent: map[*Node]*Node{}}
-	var walk func(n *Node, inLink bool) (int, int)
-	walk = func(n *Node, inLink bool) (int, int) {
+	m := &measures{text: map[*Node]int{}, links: map[*Node]int{}, commas: map[*Node]int{}, parent: map[*Node]*Node{}}
+	var walk func(n *Node, inLink bool) (int, int, int)
+	walk = func(n *Node, inLink bool) (int, int, int) {
 		if n.Tag == "" {
-			l := len(strings.Join(strings.Fields(n.Text), " "))
+			l := len(strings.TrimFunc(n.Text, isSpace))
+			c := strings.Count(n.Text, ",") + strings.Count(n.Text, "，")
 			if inLink {
-				return l, l
+				return l, l, c
 			}
-			return l, 0
+			return l, 0, c
 		}
 		inLink = inLink || n.Tag == "a"
-		t, ln := 0, 0
+		t, ln, cm := 0, 0, 0
 		for _, k := range n.Kids {
 			m.parent[k] = n
-			kt, kl := walk(k, inLink)
+			kt, kl, kc := walk(k, inLink)
 			t += kt
 			ln += kl
+			cm += kc
 		}
-		m.text[n], m.links[n] = t, ln
-		return t, ln
+		m.text[n], m.links[n], m.commas[n] = t, ln, cm
+		return t, ln, cm
 	}
 	walk(root, false)
 	return m
@@ -207,11 +251,11 @@ func (m *measures) best(root *Node) *Node {
 		if n.Tag == "" || !paragraph(n) {
 			return true
 		}
-		t := innerText(n)
-		if len(t) < 25 {
+		t := m.text[n]
+		if t < 25 {
 			return true
 		}
-		s := 1 + float64(strings.Count(t, ",")+strings.Count(t, "，")) + float64(min(len(t)/100, 3))
+		s := 1 + float64(m.commas[n]) + float64(min(t/100, 3))
 		for level, a := 0, m.parent[n]; a != nil && level < 5; level, a = level+1, m.parent[a] {
 			if _, ok := scores[a]; !ok {
 				scores[a] = baseScore(a)
@@ -278,7 +322,7 @@ func (m *measures) best(root *Node) *Node {
 // little of it: a page made of links (a news front page) keeps them.
 func (m *measures) final(n *Node) *Node {
 	t := m.trim(n)
-	if left := len(innerText(t)); left < minArticle || left*3 < m.text[n] {
+	if left := textSize(t); left < minArticle || left*3 < m.text[n] {
 		return n
 	}
 	return t

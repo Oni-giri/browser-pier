@@ -1,10 +1,12 @@
 package pagetext
 
 import (
+	"context"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // maxURL caps a link or image address; a longer one (a data: URL, a
@@ -13,30 +15,36 @@ const maxURL = 512
 
 // Markdown renders a page as Markdown: headings, paragraphs, lists,
 // quotes, code, simple tables, links and images, with addresses resolved
-// against base. It stops once the output passes limit bytes, and says so.
-func Markdown(root *Node, base *url.URL, limit int) (string, bool) {
-	w := &writer{base: base, limit: limit}
-	w.node(root)
-	w.flush()
-	return w.String(), w.full
+// against base. It stops once the output reaches limit bytes (keeping
+// what fits), and says so with full; it stops with ctx's error when ctx
+// ends. Rendering takes time and memory linear in the tree and the limit.
+func Markdown(ctx context.Context, root *Node, base *url.URL, limit int) (string, bool, error) {
+	return render(ctx, bound(root), base, false, limit)
 }
 
 // Plain renders a page as plain text: paragraphs, headings and list
 // items on their own lines, no links, images or markup.
-func Plain(root *Node, limit int) (string, bool) {
-	w := &writer{plain: true, limit: limit}
+func Plain(ctx context.Context, root *Node, limit int) (string, bool, error) {
+	return render(ctx, bound(root), nil, true, limit)
+}
+
+func render(ctx context.Context, root *Node, base *url.URL, plain bool, limit int) (string, bool, error) {
+	w := &writer{ctx: ctx, base: base, plain: plain, limit: limit}
 	w.node(root)
 	w.flush()
-	return w.String(), w.full
+	return w.String(), w.full, w.err
 }
 
 // writer renders blocks line by line. Inline content gathers in buf
 // until a block ends; prefix holds each open quote ("> ") or list item
 // (its indent), and marker the list marker the next line starts with.
 type writer struct {
+	ctx   context.Context
 	plain bool
 	base  *url.URL
 	limit int
+	err   error
+	seen  int // nodes visited, to look at ctx now and then
 
 	out  []string
 	size int
@@ -51,9 +59,43 @@ type writer struct {
 	opened  bool // a quote just opened: no blank line before its first block
 	lists   int  // open lists
 	items   int  // open list items
+	// marks are the open emphases and links, innermost last; each writes
+	// its opening mark only once some text comes, so an empty one leaves
+	// nothing and nothing is copied back.
+	marks []*mark
 }
 
-func (w *writer) String() string { return strings.Join(w.out, "\n") }
+type mark struct {
+	open    string
+	written bool
+}
+
+// String is the output, with every "<!--" defused: the untrusted-content
+// fence drops HTML comments, and a page's "<!--" would otherwise take
+// the rest of the text with it.
+func (w *writer) String() string {
+	return strings.ReplaceAll(strings.Join(w.out, "\n"), "<!--", `<\!--`)
+}
+
+// room is how many more bytes the output may take, counting what is
+// gathered in buf; -1 without a limit.
+func (w *writer) room() int {
+	if w.limit <= 0 {
+		return -1
+	}
+	return max(0, w.limit-w.size-len(w.buf))
+}
+
+// cut shortens s to at most n bytes, on a rune boundary.
+func cut(s string, n int) string {
+	if n < 0 || len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
 
 // want asks for at least gap before the next block. Inside a list item
 // blocks are a line apart, not a blank line: menus and tables of
@@ -65,13 +107,15 @@ func (w *writer) want(gap int) {
 	w.gap = max(w.gap, gap)
 }
 
+// add writes a line, or what fits of it.
 func (w *writer) add(line string) {
-	if w.full {
+	if w.size >= w.limit && w.limit > 0 {
+		w.full = true
 		return
 	}
 	if w.limit > 0 && w.size+len(line)+1 > w.limit {
+		line = cut(line, w.limit-w.size-1)
 		w.full = true
-		return
 	}
 	w.out = append(w.out, line)
 	w.size += len(line) + 1
@@ -107,10 +151,39 @@ func (w *writer) quotes() string {
 	return b.String()
 }
 
-var spaces = regexp.MustCompile(`[ \t\f\r\v]+`)
+// collapse turns each run of whitespace (nl too, if lines) into one
+// space, in one pass.
+func collapse(s string, lines bool) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	space := false
+	for _, r := range s {
+		if r == ' ' || r == '\t' || r == '\f' || r == '\r' || r == '\v' || lines && r == '\n' {
+			space = true
+			continue
+		}
+		if space {
+			b.WriteByte(' ')
+			space = false
+		}
+		b.WriteRune(r)
+	}
+	if space {
+		b.WriteByte(' ')
+	}
+	return b.String()
+}
 
 // flush ends the inline content gathered so far as one block.
 func (w *writer) flush() {
+	// Marks still open span the block's end: write them closed here and
+	// open again after, as Markdown needs.
+	for i := len(w.marks) - 1; i >= 0; i-- {
+		if m := w.marks[i]; m.written {
+			w.closeMark(m, closing(m.open))
+			m.written = false
+		}
+	}
 	raw := string(w.buf)
 	w.buf = w.buf[:0]
 	heading := w.heading
@@ -118,7 +191,7 @@ func (w *writer) flush() {
 	var lines []string
 	blank := true
 	for _, l := range strings.Split(raw, "\n") {
-		l = strings.TrimSpace(spaces.ReplaceAllString(l, " "))
+		l = strings.TrimSpace(collapse(l, false))
 		if l == "" {
 			if !blank {
 				lines = append(lines, "")
@@ -148,6 +221,15 @@ func (w *writer) flush() {
 	w.emit(lines)
 }
 
+// closing is the mark that closes open: the same for emphasis; a link's
+// is written by the link itself.
+func closing(open string) string {
+	if open == "[" {
+		return "]"
+	}
+	return open
+}
+
 // block runs f as a block of its own, a blank line before and after.
 func (w *writer) block(f func()) {
 	w.flush()
@@ -169,6 +251,12 @@ func (w *writer) kids(n *Node) {
 func (w *writer) node(n *Node) {
 	if w.full {
 		return
+	}
+	if w.seen++; w.seen%1024 == 0 && w.ctx != nil {
+		if err := w.ctx.Err(); err != nil {
+			w.err, w.full = err, true
+			return
+		}
 	}
 	if n.Tag == "" {
 		w.text(n)
@@ -201,7 +289,7 @@ func (w *writer) node(n *Node) {
 				w.kids(n)
 				return
 			}
-			if innerText(n) == "" {
+			if n.tlen == 0 {
 				return
 			}
 			// The blank line before the quote is outside it.
@@ -220,8 +308,8 @@ func (w *writer) node(n *Node) {
 		w.table(n)
 	case "iframe":
 		if !w.plain {
-			if src := n.Attr("src"); src != "" {
-				w.block(func() { w.emit([]string{"[iframe: " + src + "]"}) })
+			if src := strings.Join(strings.Fields(n.Attr("src")), " "); src != "" {
+				w.block(func() { w.emit([]string{"[iframe: " + escape(src) + "]"}) })
 			}
 		}
 	case "a":
@@ -245,31 +333,61 @@ func (w *writer) node(n *Node) {
 	}
 }
 
+// put adds inline content, writing first the opening marks still
+// pending, after any leading space, and keeping within the limit.
+func (w *writer) put(s string) {
+	if s == "" {
+		return
+	}
+	if pending := w.pending(); pending != "" {
+		t := strings.TrimLeft(s, " ")
+		if t == "" {
+			w.buf = append(w.buf, ' ')
+			return
+		}
+		lead := s[:len(s)-len(t)]
+		s = lead + pending + t
+		for _, m := range w.marks {
+			m.written = true
+		}
+	}
+	if r := w.room(); r >= 0 && len(s) > r {
+		s = cut(s, r)
+		w.full = true
+	}
+	w.buf = append(w.buf, s...)
+}
+
+// pending is the opening marks not written yet.
+func (w *writer) pending() string {
+	var b strings.Builder
+	for _, m := range w.marks {
+		if !m.written {
+			b.WriteString(m.open)
+		}
+	}
+	return b.String()
+}
+
 // text adds a text's content, whitespace collapsed unless it keeps line
 // breaks, escaped for Markdown outside code.
 func (w *writer) text(n *Node) {
 	s := n.Text
+	if r := w.room(); r >= 0 && len(s) > r+16 {
+		s = cut(s, r+16) // the rest can't fit
+	}
 	if n.Pre {
 		s = strings.ReplaceAll(s, "\r\n", "\n")
 	} else {
-		s = strings.Join(strings.FieldsFunc(s, isSpace), " ")
-		if s == "" {
-			if strings.TrimFunc(n.Text, isSpace) == "" && n.Text != "" {
-				w.buf = append(w.buf, ' ')
-			}
+		if s = collapse(s, true); s == " " {
+			w.buf = append(w.buf, ' ')
 			return
-		}
-		if isSpace(rune(n.Text[0])) {
-			s = " " + s
-		}
-		if isSpace(rune(n.Text[len(n.Text)-1])) {
-			s += " "
 		}
 	}
 	if !w.plain && w.code == 0 {
 		s = escape(s)
 	}
-	w.buf = append(w.buf, s...)
+	w.put(s)
 }
 
 func isSpace(r rune) bool {
@@ -282,11 +400,11 @@ func escape(s string) string { return escaper.Replace(s) }
 
 var (
 	ordered   = regexp.MustCompile(`^(\d{1,9})([.)])(\s|$)`)
-	lineStart = regexp.MustCompile(`^(#{1,6}(\s|$)|>|[-+](\s|$)|[-=]{2,}\s*$)`)
+	lineStart = regexp.MustCompile(`^(#{1,6}(\s|$)|>|[-+](\s|$)|[-=]{2,}\s*$|~{3,}|\|)`)
 )
 
 // escapeStart escapes what would make a line a heading, a quote, a list
-// item or a rule.
+// item, a rule, a code fence or a table row.
 func escapeStart(l string) string {
 	if m := ordered.FindStringSubmatchIndex(l); m != nil {
 		return l[:m[3]] + `\` + l[m[3]:]
@@ -297,78 +415,82 @@ func escapeStart(l string) string {
 	return l
 }
 
-// hasBlock reports whether an element holds a block, which inline
-// markup (a link, emphasis) can't span.
-func hasBlock(n *Node) bool {
-	for _, k := range n.Kids {
-		if k.Tag == "" || skipped[k.Tag] {
-			continue
-		}
-		if k.Tag != "br" && isBlock(k) || hasBlock(k) {
-			return true
-		}
-	}
-	return false
+// openMark starts emphasis or a link: its mark waits for the first text.
+func (w *writer) openMark(open string) *mark {
+	m := &mark{open: open}
+	w.marks = append(w.marks, m)
+	return m
 }
 
-// inline renders an element's children and returns them, trimmed, with
-// the whitespace that was around them; the caller writes them back
-// wrapped. ok is false when there is nothing to wrap.
-func (w *writer) inline(n *Node) (lead, inner, trail string, ok bool) {
-	start := len(w.buf)
-	w.kids(n)
-	s := string(w.buf[start:])
-	w.buf = w.buf[:start]
-	t := strings.TrimFunc(s, isSpace)
-	if t == "" {
-		if s != "" {
-			w.buf = append(w.buf, ' ')
-		}
-		return "", "", "", false
+// closeMark ends the innermost mark: if it was written, closing goes
+// after the text, before its trailing space.
+func (w *writer) closeMark(m *mark, closing string) {
+	if !m.written {
+		return
 	}
-	if s[0] != t[0] {
-		lead = " "
+	end := len(w.buf)
+	for end > 0 && w.buf[end-1] == ' ' {
+		end--
 	}
-	if s[len(s)-1] != t[len(t)-1] {
-		trail = " "
+	trail := len(w.buf) - end
+	w.buf = append(w.buf[:end], closing...)
+	if trail > 0 {
+		w.buf = append(w.buf, ' ')
 	}
-	return lead, t, trail, true
+}
+
+func (w *writer) popMark() *mark {
+	m := w.marks[len(w.marks)-1]
+	w.marks = w.marks[:len(w.marks)-1]
+	return m
 }
 
 // wrap renders emphasis: the children between two marks.
-func (w *writer) wrap(n *Node, mark string) {
-	if w.plain || w.code > 0 || hasBlock(n) {
+func (w *writer) wrap(n *Node, mk string) {
+	if w.plain || w.code > 0 || n.hasBlock {
 		w.kids(n)
 		return
 	}
-	lead, inner, trail, ok := w.inline(n)
-	if !ok {
-		return
-	}
-	if strings.Contains(inner, "\n") {
-		w.buf = append(w.buf, lead+inner+trail...)
-		return
-	}
-	w.buf = append(w.buf, lead+mark+inner+mark+trail...)
+	w.openMark(mk)
+	w.kids(n)
+	w.closeMark(w.popMark(), mk)
 }
 
+// inlineCode renders code in backticks, as it is: its text is gathered
+// apart, once, to choose a fence longer than any run of backticks in it.
 func (w *writer) inlineCode(n *Node) {
-	if w.plain || w.code > 0 || hasBlock(n) {
+	if w.plain || w.code > 0 || n.hasBlock {
 		w.kids(n)
 		return
 	}
+	marks := w.marks
+	w.marks = nil
+	start := len(w.buf)
 	w.code++
-	lead, inner, trail, ok := w.inline(n)
+	w.kids(n)
 	w.code--
-	if !ok {
+	s := string(w.buf[start:])
+	w.buf = w.buf[:start]
+	w.marks = marks
+	inner := strings.TrimFunc(strings.ReplaceAll(s, "\n", " "), isSpace)
+	if inner == "" {
+		if s != "" {
+			w.buf = append(w.buf, ' ')
+		}
 		return
 	}
-	inner = strings.ReplaceAll(inner, "\n", " ")
+	lead, trail := "", ""
+	if isSpace(rune(s[0])) {
+		lead = " "
+	}
+	if isSpace(rune(s[len(s)-1])) {
+		trail = " "
+	}
 	fence := strings.Repeat("`", longestRun(inner, '`')+1)
 	if strings.HasPrefix(inner, "`") || strings.HasSuffix(inner, "`") {
 		inner = " " + inner + " "
 	}
-	w.buf = append(w.buf, lead+fence+inner+fence+trail...)
+	w.put(lead + fence + inner + fence + trail)
 }
 
 func longestRun(s string, c byte) int {
@@ -384,26 +506,41 @@ func longestRun(s string, c byte) int {
 	return best
 }
 
-// link renders a link as [text](address); a link the agent can't follow
-// (a script, a fragment of this page, too long) keeps only its text.
+// href is a link's address for the agent, "" for one it can't follow (a
+// script, a fragment of this page, a user name in it, too long).
+func (w *writer) href(n *Node) string {
+	raw := strings.TrimSpace(n.Attr("href"))
+	if strings.HasPrefix(raw, "#") {
+		return ""
+	}
+	return w.resolve(raw, "http", "https", "mailto")
+}
+
+// link renders a link as [text](address). A link around blocks (a card on
+// a front page) has its blocks, then its address on a line of its own.
 func (w *writer) link(n *Node) {
-	if w.plain || w.code > 0 || hasBlock(n) {
+	if w.plain || w.code > 0 {
 		w.kids(n)
 		return
 	}
-	lead, inner, trail, ok := w.inline(n)
-	if !ok {
+	href := w.href(n)
+	if href == "" {
+		w.kids(n)
 		return
 	}
-	href := ""
-	if raw := strings.TrimSpace(n.Attr("href")); !strings.HasPrefix(raw, "#") {
-		href = w.resolve(raw, "http", "https", "mailto")
-	}
-	if href == "" || strings.Contains(inner, "\n") {
-		w.buf = append(w.buf, lead+inner+trail...)
+	if n.hasBlock {
+		w.kids(n)
+		if n.tlen > 0 {
+			w.flush()
+			w.want(1)
+			w.emit([]string{"<" + href + ">"})
+			w.want(2)
+		}
 		return
 	}
-	w.buf = append(w.buf, lead+"["+inner+"]("+href+")"+trail...)
+	w.openMark("[")
+	w.kids(n)
+	w.closeMark(w.popMark(), "]("+href+")")
 }
 
 // image renders an image with alt text as ![alt](address); one without
@@ -417,19 +554,19 @@ func (w *writer) image(n *Node) {
 		return
 	}
 	if w.code > 0 {
-		w.buf = append(w.buf, alt...)
+		w.put(alt)
 		return
 	}
 	alt = escape(alt)
 	if src := w.resolve(n.Attr("src"), "http", "https"); src != "" {
-		w.buf = append(w.buf, "!["+alt+"]("+src+")"...)
+		w.put("![" + alt + "](" + src + ")")
 		return
 	}
-	w.buf = append(w.buf, alt...)
+	w.put(alt)
 }
 
 // resolve makes raw absolute against the page's address, if its scheme
-// is one of schemes and it isn't too long; else "".
+// is one of schemes, it names no user and it isn't too long; else "".
 func (w *writer) resolve(raw string, schemes ...string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || len(raw) > maxURL*2 {
@@ -446,11 +583,12 @@ func (w *writer) resolve(raw string, schemes ...string) string {
 	for _, s := range schemes {
 		ok = ok || u.Scheme == s
 	}
-	if !ok {
+	// https://good.example@evil.example/ reads as good.example's.
+	if !ok || u.User != nil {
 		return ""
 	}
 	s := u.String()
-	s = strings.NewReplacer("(", "%28", ")", "%29", " ", "%20").Replace(s)
+	s = strings.NewReplacer("(", "%28", ")", "%29", " ", "%20", "<", "%3C", ">", "%3E", "\n", "", "\r", "").Replace(s)
 	if len(s) > maxURL {
 		return ""
 	}
@@ -511,9 +649,13 @@ func (w *writer) item(n *Node, marker string) {
 func (w *writer) pre(n *Node) {
 	w.flush()
 	w.want(2)
+	room := w.room()
 	var b strings.Builder
 	var walk func(*Node)
 	walk = func(n *Node) {
+		if room >= 0 && b.Len() > room {
+			return
+		}
 		switch {
 		case n.Tag == "":
 			b.WriteString(strings.ReplaceAll(n.Text, "\r\n", "\n"))
@@ -526,7 +668,7 @@ func (w *writer) pre(n *Node) {
 		}
 	}
 	walk(n)
-	lines := strings.Split(strings.TrimRight(b.String(), " \t\n"), "\n")
+	lines := strings.Split(strings.TrimRight(cut(b.String(), room), " \t\n"), "\n")
 	for len(lines) > 0 && strings.TrimSpace(lines[0]) == "" {
 		lines = lines[1:]
 	}

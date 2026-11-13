@@ -38,6 +38,100 @@ type Node struct {
 	// pre-line, break-spaces).
 	Pre  bool
 	Kids []*Node
+
+	// Worked out once by bound, bottom-up, so no renderer walks a subtree
+	// twice: whether the element holds a block (inline markup can't span
+	// it), a block a Markdown table cell can't hold, or an article or main
+	// landmark; and how much non-space text it holds.
+	hasBlock, hasTableBlock, hasMain bool
+	tlen                             int
+}
+
+// maxDepth caps how deep a tree is rendered. Past it, an element's
+// descendants are its text alone: real pages are a few dozen levels deep,
+// and a page nesting 200,000 elements gets no more than this.
+const maxDepth = 256
+
+// bound copies a tree, at most maxDepth deep, and works out each element's
+// facts (see Node). It runs without recursion, so any depth is safe.
+func bound(root *Node) *Node {
+	if root == nil {
+		return &Node{Tag: "#document"}
+	}
+	type frame struct {
+		src, dst *Node
+		depth    int
+	}
+	top := copyNode(root)
+	var order []*Node // elements in pre-order, for the bottom-up pass
+	stack := []frame{{root, top, 0}}
+	for len(stack) > 0 {
+		f := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		order = append(order, f.dst)
+		if f.depth >= maxDepth {
+			f.dst.Kids = flatText(f.src)
+			continue
+		}
+		f.dst.Kids = make([]*Node, len(f.src.Kids))
+		for i, k := range f.src.Kids {
+			c := copyNode(k)
+			f.dst.Kids[i] = c
+			if k.Tag != "" {
+				stack = append(stack, frame{k, c, f.depth + 1})
+			}
+		}
+	}
+	for i := len(order) - 1; i >= 0; i-- {
+		n := order[i]
+		n.hasMain = n.Tag == "article" || n.Tag == "main" || n.Attr("role") == "article" || n.Attr("role") == "main"
+		if skipped[n.Tag] {
+			continue
+		}
+		for _, k := range n.Kids {
+			if k.Tag == "" {
+				n.tlen += len(strings.TrimFunc(k.Text, isSpace))
+				continue
+			}
+			if skipped[k.Tag] {
+				continue
+			}
+			n.tlen += k.tlen
+			n.hasBlock = n.hasBlock || k.hasBlock || k.Tag != "br" && isBlock(k)
+			n.hasMain = n.hasMain || k.hasMain
+			switch k.Tag {
+			case "table", "ul", "ol", "pre", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6":
+				n.hasTableBlock = true
+			}
+			n.hasTableBlock = n.hasTableBlock || k.hasTableBlock
+		}
+	}
+	return top
+}
+
+func copyNode(n *Node) *Node {
+	return &Node{Tag: n.Tag, Text: n.Text, Attrs: n.Attrs, Display: n.Display, Pre: n.Pre}
+}
+
+// flatText is a subtree's texts, in order, without its elements.
+func flatText(n *Node) []*Node {
+	var out []*Node
+	stack := []*Node{n}
+	for len(stack) > 0 {
+		c := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if c.Tag == "" {
+			out = append(out, &Node{Text: c.Text + " ", Pre: c.Pre})
+			continue
+		}
+		if skipped[c.Tag] {
+			continue
+		}
+		for i := len(c.Kids) - 1; i >= 0; i-- {
+			stack = append(stack, c.Kids[i])
+		}
+	}
+	return out
 }
 
 // Attr is an attribute's value, "" if it isn't set.

@@ -1,6 +1,7 @@
 package pagetext
 
 import (
+	"context"
 	"net/url"
 	"strings"
 	"testing"
@@ -52,10 +53,12 @@ func parse(t *testing.T, doc string) *Node {
 	return conv(root, false)
 }
 
+var ctx = context.Background()
+
 func md(t *testing.T, doc string) string {
 	t.Helper()
 	base, _ := url.Parse("https://example.com/dir/page.html")
-	out, full := Markdown(parse(t, doc), base, 1<<20)
+	out, full, _ := Markdown(ctx, parse(t, doc), base, 1<<20)
 	if full {
 		t.Fatal("cut short")
 	}
@@ -172,17 +175,17 @@ func TestMarkdownLeavesOutFieldsAndHidden(t *testing.T) {
 
 func TestMarkdownLimit(t *testing.T) {
 	doc := strings.Repeat("<p>"+strings.Repeat("word ", 20)+"</p>", 1000)
-	out, full := Markdown(parse(t, doc), nil, 5000)
+	out, full, _ := Markdown(ctx, parse(t, doc), nil, 5000)
 	if !full || len(out) > 5000 || len(out) < 4000 {
 		t.Errorf("limit: full=%v, %d bytes", full, len(out))
 	}
-	if _, full := Markdown(parse(t, "<p>short</p>"), nil, 5000); full {
+	if _, full, _ := Markdown(ctx, parse(t, "<p>short</p>"), nil, 5000); full {
 		t.Error("a short page counts as cut")
 	}
 }
 
 func TestPlain(t *testing.T) {
-	out, _ := Plain(parse(t, `<h2>Head</h2><p>Some <a href="/x">link</a> and <b>bold</b> <img src="a.png" alt="pic"></p><ul><li>Item</li></ul><pre>  code</pre>
+	out, _, _ := Plain(ctx, parse(t, `<h2>Head</h2><p>Some <a href="/x">link</a> and <b>bold</b> <img src="a.png" alt="pic"></p><ul><li>Item</li></ul><pre>  code</pre>
 <table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>`), 0)
 	want := "Head\n\nSome link and bold\n\n- Item\n\n  code\n\nA | B\n1 | 2"
 	if out != want {
@@ -203,7 +206,7 @@ func TestReadableFindsTheArticle(t *testing.T) {
 <footer>Filed under news.</footer></article>
 <aside>Sidebar ad text</aside></main>
 <footer>Copyright footer</footer>`
-	out, _ := Readable(parse(t, doc), 0)
+	out, _, _ := Readable(ctx, parse(t, doc), 0)
 	for _, want := range []string{"Library opens", "The committee met", "Filed under news."} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
@@ -222,7 +225,7 @@ func TestReadableScoresDivSoup(t *testing.T) {
 <div id="wrap"><div class="sidebar"><p>` + prose + `</p></div>
 <div class="post-body"><div>` + prose + `</div><div>` + prose + `</div><div>` + prose + `</div></div>
 <div class="comments"><p>` + prose + `</p></div></div>`
-	out, _ := Readable(parse(t, doc), 0)
+	out, _, _ := Readable(ctx, parse(t, doc), 0)
 	if n := strings.Count(out, "The committee met"); n != 3 {
 		t.Errorf("want the post's 3 paragraphs, got %d:\n%s", n, out)
 	}
@@ -233,14 +236,14 @@ func TestReadableScoresDivSoup(t *testing.T) {
 
 func TestReadableKeepsAFrontPageOfLinks(t *testing.T) {
 	card := `<div><a href="/story"><h2>A headline about something that happened today</h2><p>The summary of the story, in a sentence or two.</p></a></div>`
-	out, _ := Readable(parse(t, `<nav><a href="/">Home</a></nav><main>`+strings.Repeat(card, 8)+`</main>`), 0)
+	out, _, _ := Readable(ctx, parse(t, `<nav><a href="/">Home</a></nav><main>`+strings.Repeat(card, 8)+`</main>`), 0)
 	if strings.Count(out, "A headline") != 8 || strings.Contains(out, "Home") {
 		t.Errorf("a front page:\n%s", out)
 	}
 }
 
 func TestReadableShortPageComesBackWhole(t *testing.T) {
-	out, _ := Readable(parse(t, `<nav><a href="/">Home</a></nav><h1>Signed in</h1><p>Welcome back.</p>`), 0)
+	out, _, _ := Readable(ctx, parse(t, `<nav><a href="/">Home</a></nav><h1>Signed in</h1><p>Welcome back.</p>`), 0)
 	if out != "Signed in\n\nWelcome back." {
 		t.Errorf("got %q", out)
 	}
