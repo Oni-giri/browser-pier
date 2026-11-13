@@ -120,7 +120,7 @@ Self-hosted, persistent browsers for AI agents. Agents start a browser when they
 | Failed | Browser crashed or did not start; last log line shown. | Retry |
 
 - Auto-stop when idle: 5, 10, 15 (default), 30 minutes, or never, set per profile.
-  - **What counts as use:** any agent API call on the session (start or attach, screenshot, click, type, upload, and each API-mode page tool: snapshot, find, act, wait_for, navigate, tabs). A page tool's call keeps the browser busy while it runs (a 30-second `wait_for` too), but it holds no connection between calls, so a browser driven only by the page tools still stops when idle.
+  - **What counts as use:** any agent API call on the session (start or attach, screenshot, click, type, upload, each API-mode page tool: snapshot, find, act, wait_for, navigate, tabs, and each content call). A page tool's call keeps the browser busy while it runs (a 30-second `wait_for` too), but it holds no connection between calls, so a browser driven only by the page tools still stops when idle.
   - **In use the whole time:** an open CDP connection, and a browser a person has during a handoff, are never idle.
   - **Stopping:** an idle browser is stopped gracefully, so its logins are kept.
 - A start takes a few seconds. The UI shows Starting… with a spinner and disables the action until the browser is ready.
@@ -223,7 +223,7 @@ All endpoints take `Authorization: Bearer <agent token>`. The same actions are e
 | POST | `/api/sessions/{id}/wait` | API mode: wait for text, a ref visible or hidden, or a URL change `{text? \| ref, state? \| url_change, timeout_ms?}` |
 | POST | `/api/sessions/{id}/navigate` | API mode: open a URL, or go back, forward or reload `{url? \| action}` |
 | GET, POST | `/api/sessions/{id}/tabs` | API mode: list tabs, or switch, close or open one `{action, id?, url?}` |
-| POST | `/api/sessions/{id}/content` | v1.1: page as Markdown, readability text, screenshot or PDF |
+| POST | `/api/sessions/{id}/content` | The active tab as Markdown or its main text (API mode), a screenshot (either mode) or a PDF (API mode) `{format, …}` |
 | WS | `/cdp/{profile}` | API mode: CDP, proxied and token-checked |
 | POST | `/api/sessions/{id}/cdp-ticket` | API mode: a one-minute, single-use CDP URL for clients that can't set headers |
 | POST | `/api/sessions/{id}/handoff` | One-time link for a human: `{reason, detail, require?}` |
@@ -261,6 +261,26 @@ For agents that speak only MCP (or REST), six tools read and act on an API-mode 
 - **Dialogs:** without `Page.enable` an `alert()` can't be seen or closed over CDP, so a call that the page stops answering while the browser still does says "the page is busy or has a dialog open; if it stays that way, request a handoff."
 - **The activity log** records the action and refs only (`Clicked a7e12`, `Filled a7e13 (12 characters)`), never page text or typed text.
 
+### Page content
+
+`POST /api/sessions/{id}/content` returns the active tab (the page tools' active tab) in one of four formats, for an agent that wants a whole page or article rather than its controls (PROJ-20). MCP has the same as `page_content`.
+
+| `format` | Mode | Answer | Options |
+|---|---|---|---|
+| `markdown` | API | `{"text": "…"}`: the whole page as Markdown (headings, lists, quotes, code, simple tables, links and images with absolute addresses), fenced | `max_chars` (default 20,000, at most 100,000), `offset` |
+| `readability` | API | `{"text": "…"}`: the main text only, as plain text without links, as a reader view shows it; the fewest tokens | the same |
+| `screenshot` | both | `image/png` of the screen, as `/screenshot` | `width` |
+| `pdf` | API | `application/pdf`, as an attachment, never rendered; over MCP an embedded `application/pdf` resource | `landscape`, `background`, `pages` (like `"1-5, 8"`) |
+
+- **How Markdown and the main text are made:** one DOM snapshot (`DOMSnapshot.captureSnapshot`) through the same kind of per-call connection as the page tools, with its own allow-list (`internal/pagetools`: targets, frame tree, isolated world for finding the active tab, the DOM snapshot and `Page.printToPDF`; no input, navigation or DOM writes). The snapshot is turned into text in Go (`internal/pagetext`); no script of BrowserPier's runs to read the page. The tab's document is checked before and after: a snapshot that straddles a navigation is taken again once, then refused.
+- **What is left out:** what the snapshot shows isn't rendered (`display:none`, `visibility:hidden`, zero-size, scripts, styles, templates, SVG), form fields with their values (a password never comes this way; read controls with `snapshot`), and iframes' documents (one `[iframe: origin]` line). Text a person may not see but that is laid out (transparent, off-screen, clipped) stays, fenced, as in a snapshot. Shadow roots are read where they are shown.
+- **The main text** (`readability`) follows reader views' heuristics, written for BrowserPier rather than ported: navigation, headers and footers outside the article, sidebars, forms, dialogs, buttons and blocks whose class says banner, cookie, comment, share… go; a page with one `<article>`, else one `<main>`, has its main text there; otherwise blocks are scored on their paragraphs' length and commas and penalised for link text. Link lists in the result are dropped, unless the page is mostly links (a news front page). A page where nothing stands out comes back whole, cleaned.
+- **Length:** the text is cut at `max_chars` characters, at a line's end when one is near, and the line after the fence says `Characters 0 to 20,000 of 54,321. Read on with offset 20000.` BrowserPier renders at most 2 MB of text and 200,000 DOM nodes of a page; beyond that it says so (`page too large to read; use find`).
+- **Screenshots** come from the X display, in both modes, with no CDP at all: the same picture as `/screenshot` and the `screenshot` tool, browser window included. `Page.captureScreenshot` would give the page alone and a full-page capture, but a full-page capture resizes the page, which it can see.
+- **PDF** is Chromium's print (`Page.printToPDF`), at most 10 MiB (ask for fewer `pages` beyond it) and 60 seconds. The page sees it print, as when a person presses ctrl+P (see Anti-bot approach).
+- **Visual mode:** `markdown`, `readability` and `pdf` answer 409 before anything connects; `screenshot` works. During a handoff only `screenshot` works, as for `/screenshot`.
+- **The activity log** says `Read the page as Markdown`, `Read the page's main text`, `Took a screenshot` or `Printed the page to PDF (120 kB)`, never page text.
+
 ### Files
 
 Downloads land in a per-profile folder. The API lists, fetches and deletes them, and uploads files into the session so the agent or a human can pick them in a file chooser. Files are kept with the profile until deleted, or until a size cap evicts the oldest.
@@ -279,10 +299,11 @@ Downloads land in a per-profile folder. The API lists, fetches and deletes them,
   - `list_profiles`, `start_browser`, `stop_browser`
   - Visual mode: `screenshot`, `click`, `type_text`, `press_keys`, `scroll`, `drag`, `wait`, `zoom`
   - API mode: `snapshot`, `find`, `act`, `wait_for`, `navigate`, `tabs` (see API-mode page tools)
+  - `page_content`: Markdown, the main text or a PDF in API mode, a screenshot in either (see Page content)
   - `list_files`
   - `request_handoff`, `wait_for_handoff`, `cancel_handoff`
 - **Explicit handles:** `start_browser` returns a `session_id` and every stateful tool takes it as an argument. Nothing depends on the MCP connection staying open, so several browsers can run in one conversation.
-- **Untrusted content:** every piece of page-derived text returned to an agent (downloaded file names, the page tools' snapshots, matches, step results and tab names, and errors that quote the page; markdown in v1.1) is handled the same way:
+- **Untrusted content:** every piece of page-derived text returned to an agent (downloaded file names, the page tools' snapshots, matches, step results and tab names, errors that quote the page, and the page as Markdown or main text) is handled the same way:
   - wrapped in an `<untrusted-content-…>` fence whose tag name carries a random marker, so the page can't write the closing tag, saying it is data, not instructions (look-alike tags in the text are defused)
   - stripped of invisible Unicode (zero-width, bidi, tag characters) and HTML comments
   - password and one-time-code field values redacted (`internal/fence`), at the source where the output is structured (a snapshot shows such a field as `[filled]`). Redaction prevents accidental leaks, not leaks by a manipulated agent: a code split across several boxes, one shown as page text (a webmail profile) or a token in a URL still reaches the agent.
@@ -364,6 +385,7 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 - No fingerprint spoofing: each profile keeps one real, consistent fingerprint over time.
 - Persistent, aged profiles with real logins help on their own.
 - **Validation** (PROJ-15): `images/chromium/ANTI-BOT.md` has the results against public detection pages, and the signals that remain (SwiftShader, no taskbar). `TestVisualModeLooksLikeAPerson` checks Visual mode in CI's Docker tests.
+- **Page content** (PROJ-20): Markdown and the main text read only a DOM snapshot, the screenshot comes from the X display, and 20 runs of each against the same detector showed nothing. A PDF is a print: the page sees `beforeprint` and the print media query, as when a person presses ctrl+P, and nothing else. That is recorded in `images/chromium/ANTI-BOT.md` and accepted, since printing is something people do; an agent on a site that watches for it uses Markdown instead.
 - **BrowserPier's own CDP use** (the API-mode page tools, PROJ-21): one connection per call, no domain ever enabled, scripts only in an isolated world, nothing written into the page. `TestPageToolsStayQuiet` runs each tool 20 times against a continuous detector (`browsertest.Watch`, on the page's main thread and in a worker), which must catch its positive control, a client doing what Playwright does; the tools showed nothing. The measurements and the residuals (such as `fill` putting its text in at once) are in `images/chromium/ANTI-BOT.md`. Visual mode doesn't use them.
 
 ---
@@ -377,7 +399,7 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 - Tokens, the PIN and the admin password are hashed at rest.
 - Agent tokens are never taken in a URL. Clients that can't set headers connect to CDP with a single-use ticket that lasts a minute.
 - Treat profile folders as secrets, since they hold live session cookies. With `password-store=basic`, cookies on disk are effectively readable.
-- Page text returned to agents is fenced and sanitised (see MCP tools), since agents browse untrusted pages. The page tools' snapshots leave out what is AX-ignored, `display:none`, `visibility:hidden` or zero-size, but keep text a person may not see (transparent, off-screen, clipped or the page's own colour) and accessible names (`aria-label`, `aria-labelledby` even to a hidden node, `alt`, `title`, placeholder): that text is contained, not filtered. On a page too large for the accessibility tree, `find` reads the DOM snapshot's laid-out text alone, which includes `aria-hidden` text (contained the same way). It is fenced and capped like the rest, and the tool descriptions say so. So is the browser container's own output: a session's `last_log`, and Chromium's crash reason after its `error`, since a compromised page can write to it. The UI shows the reason unfenced.
+- Page text returned to agents is fenced and sanitised (see MCP tools), since agents browse untrusted pages. The page tools' snapshots leave out what is AX-ignored, `display:none`, `visibility:hidden` or zero-size, but keep text a person may not see (transparent, off-screen, clipped or the page's own colour) and accessible names (`aria-label`, `aria-labelledby` even to a hidden node, `alt`, `title`, placeholder): that text is contained, not filtered. On a page too large for the accessibility tree, `find` reads the DOM snapshot's laid-out text alone, which includes `aria-hidden` text (contained the same way). It is fenced and capped like the rest, and the tool descriptions say so. So is the browser container's own output: a session's `last_log`, and Chromium's crash reason after its `error`, since a compromised page can write to it. The UI shows the reason unfenced. The page as Markdown or main text (Page content) follows the same rule, without the AX tree, so `aria-hidden` text a person sees stays; a PDF or a screenshot is the page itself, which no fence can wrap, and a PDF's MCP result says it comes from a web page.
 - Pages can't reach the local network, the Docker host or a VPS's metadata endpoint through the browser, unless the admin allows a profile the local network (see Egress).
 
 ---
@@ -426,6 +448,8 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 | Profile storage | Bind-mounted folders in the data dir, not named Docker volumes | One directory to back up or move; export and downloads read files directly. The host path is detected from the orchestrator's own mounts. |
 | License | Apache 2.0, not AGPL | Self-hosters are the users, and many companies forbid AGPL code, even for internal tools. Same license as Steel; the patent grant and NOTICE come with it. |
 | Chromium sandbox | On, with a seccomp profile that allows user namespaces | Pages are untrusted; the container is a second boundary, not the only one. |
+| Page to Markdown and main text | Rendered in Go from a DOM snapshot (`internal/pagetext`), not with html-to-markdown or go-readability | The libraries read HTML and can't see computed styles, so they would keep hidden text; each brings half a dozen modules for a few hundred lines; and the DOM snapshot is already read, measured and quiet. |
+| Screenshot in API mode | From the X display, as in Visual mode | No CDP at all, so nothing for a page to notice, and the same picture in both modes. |
 | AppArmor for browser containers | Docker's, except none on AppArmor 4 hosts without Ubuntu's userns restriction (Debian 13, umbrelOS 2.0), until BrowserPier ships its own profile (PROJ-37) | Docker's profile refuses the sandbox there. Losing that backup layer costs less than losing Chromium's sandbox. |
 
 ### Still open
@@ -451,7 +475,7 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 
 ### v1.1: efficiency and reach
 
-- Content endpoints: page to Markdown or readability text, screenshot, PDF (API mode)
+- Content endpoints: page to Markdown or readability text, screenshot, PDF (done, PROJ-20: see Page content)
 - Token-efficient API-mode tools: accessibility snapshot with stable refs, find, batch, covered-element check (done, PROJ-21: see API-mode page tools)
 - TURN support for viewers on UDP-blocking networks
 - Seed a profile from your own Chrome: cookie and localStorage JSON export/import, so you don't have to log in again inside BrowserPier
