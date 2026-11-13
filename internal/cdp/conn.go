@@ -50,6 +50,10 @@ import (
 // fails the call with ErrTooLarge and closes the connection.
 const DefaultMaxMessage = 32 << 20
 
+// writeTimeout bounds sending one message; a write that takes longer
+// means the connection is gone.
+const writeTimeout = 10 * time.Second
+
 var (
 	// ErrTooLarge: the browser's answer was bigger than the connection's cap.
 	ErrTooLarge = errors.New("the browser's answer was too large")
@@ -79,6 +83,7 @@ type Options struct {
 type Conn struct {
 	ws    *websocket.Conn
 	allow *AllowList
+	end   context.CancelFunc // ends the connection's own context
 
 	mu      sync.Mutex
 	nextID  int64
@@ -103,7 +108,9 @@ type reply struct {
 }
 
 // Dial opens a browser-level connection through the control socket at
-// sock, sending only what allow names.
+// sock, sending only what allow names. ctx bounds the dial only: the
+// connection lives until Close, whatever happens to ctx after Dial
+// returns. Each Call takes its own context.
 func Dial(ctx context.Context, sock string, allow *AllowList, opts Options) (*Conn, error) {
 	if allow == nil {
 		return nil, errors.New("cdp: no allow-list")
@@ -118,9 +125,23 @@ func Dial(ctx context.Context, sock string, allow *AllowList, opts Options) (*Co
 	if err != nil {
 		return nil, err
 	}
+	// net/http ties an upgraded connection to its request's context, so
+	// the WebSocket is dialled with one that ctx cancels only while the
+	// handshake lasts: afterwards the connection lives until Close, and a
+	// caller whose ctx ends can still finish what it started (release a
+	// pressed button, say).
+	life, end := context.WithCancel(context.WithoutCancel(ctx))
+	stop := context.AfterFunc(ctx, end)
 	//nolint:bodyclose // after an upgrade the connection owns the body
-	ws, _, err := websocket.Dial(ctx, "ws://control/cdp"+path, &websocket.DialOptions{HTTPClient: hc})
+	ws, _, err := websocket.Dial(life, "ws://control/cdp"+path, &websocket.DialOptions{HTTPClient: hc})
+	if !stop() {
+		err = errors.Join(ctx.Err(), err)
+		if ws != nil {
+			_ = ws.CloseNow()
+		}
+	}
 	if err != nil {
+		end()
 		return nil, fmt.Errorf("connecting to the browser: %w", err)
 	}
 	limit := opts.MaxMessage
@@ -128,7 +149,7 @@ func Dial(ctx context.Context, sock string, allow *AllowList, opts Options) (*Co
 		limit = DefaultMaxMessage
 	}
 	ws.SetReadLimit(limit)
-	c := &Conn{ws: ws, allow: allow, pending: map[int64]chan reply{},
+	c := &Conn{ws: ws, allow: allow, end: end, pending: map[int64]chan reply{},
 		worlds: map[worldKey]bool{}, objects: map[string]bool{}, done: make(chan struct{})}
 	go c.read() //nolint:gosec // the reader lives as long as the connection, not the dial
 	return c, nil
@@ -163,7 +184,9 @@ func browserPath(ctx context.Context, hc *http.Client) (string, error) {
 // Closing detaches every session the connection attached.
 func (c *Conn) Close() error {
 	c.fail(ErrClosed)
-	return c.ws.CloseNow()
+	err := c.ws.CloseNow()
+	c.end()
+	return err
 }
 
 // Done is closed once the connection has ended.
@@ -248,11 +271,19 @@ func (c *Conn) Call(ctx context.Context, sessionID, method string, params, out a
 		msg["sessionId"] = sessionID
 	}
 	b, _ := json.Marshal(msg)
-	if err := c.ws.Write(ctx, websocket.MessageText, b); err != nil {
+	if err := ctx.Err(); err != nil {
 		c.forget(id)
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
+		return err
+	}
+	// The WebSocket closes the whole connection if a write's context ends,
+	// even just after the message went out; so ctx only bounds the wait
+	// for the answer, and a cancelled call never cuts the connection
+	// (another call on it may still need it, such as a button's release).
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), writeTimeout)
+	err = c.ws.Write(wctx, websocket.MessageText, b)
+	cancel()
+	if err != nil {
+		c.forget(id)
 		return fmt.Errorf("%w: %w", ErrClosed, err)
 	}
 	select {

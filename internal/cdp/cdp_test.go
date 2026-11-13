@@ -178,3 +178,43 @@ func TestBrowserErrors(t *testing.T) {
 		t.Fatalf("got %#v", err)
 	}
 }
+
+// A caller whose context ends can still finish what it started on the
+// same connection (release a pressed button): neither the dial's context
+// nor a call's cuts the connection; only Close does.
+func TestOnlyCloseEndsAConnection(t *testing.T) {
+	slow := make(chan struct{})
+	b, sock := fake(t, func(m cdptest.Message) (any, error) {
+		if m.Method == "Accessibility.getFullAXTree" {
+			<-slow
+		}
+		return map[string]any{}, nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	c, err := cdp.Dial(ctx, sock, testList, cdp.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	callCtx, cancelCall := context.WithCancel(context.Background())
+	go func() { time.Sleep(50 * time.Millisecond); cancelCall() }()
+	if err := c.Call(callCtx, "", "Accessibility.getFullAXTree", nil, nil); !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled call: %v", err)
+	}
+	close(slow)
+	if err := c.Call(context.Background(), "", "Target.getTargets", nil, nil); err != nil {
+		t.Fatalf("after the dial's and a call's contexts ended: %v", err)
+	}
+	if err := c.Call(callCtx, "", "Target.getTargets", nil, nil); !errors.Is(err, context.Canceled) {
+		t.Errorf("a call with an ended context was sent: %v", err)
+	}
+	_ = c.Close()
+	select {
+	case <-b.Closed():
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close didn't close the connection")
+	}
+	if _, err := cdp.Dial(ctx, sock, testList, cdp.Options{}); err == nil {
+		t.Error("dialled with a cancelled context")
+	}
+}
