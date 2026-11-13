@@ -170,6 +170,43 @@ func TestStoppingCancelsPageCalls(t *testing.T) {
 	}
 }
 
+// The browser exits while Stop waits for a page call to end: Stop then
+// has nothing left to stop, and doesn't ask Docker to.
+func TestABrowserThatExitsWhileStopWaitsIsntStoppedAgain(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	ls, err := f.m.PageLease(context.Background(), s.ID, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan Session, 1)
+	go func() {
+		got, err := f.m.Stop(context.Background(), s.ID)
+		if err != nil {
+			t.Error(err)
+		}
+		done <- got
+	}()
+	_ = leaseEnds(t, ls) // Stop has cancelled it, and waits
+	f.rt.Exit(s.ContainerID, 0)
+	eventually(t, "the session to end", func() bool { _, live := f.m.Live("google"); return !live })
+	ls.Release()
+	select {
+	case got := <-done:
+		if got.State != Stopped {
+			t.Errorf("Stop returned %s", got.State)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop didn't return")
+	}
+	f.rt.Mu.Lock()
+	stops := f.rt.Stops
+	f.rt.Mu.Unlock()
+	if stops != 0 {
+		t.Errorf("Docker was asked to stop an exited browser %d times", stops)
+	}
+}
+
 func TestPageCallsTakeTurns(t *testing.T) {
 	f := newFixture(t)
 	s := f.start(f.m)

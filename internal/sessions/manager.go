@@ -996,6 +996,13 @@ func (m *Manager) stopIf(ctx context.Context, id string, cond func(*live) bool) 
 		for len(l.leases) > 0 {
 			m.inputsDone.Wait()
 		}
+		// The wait let go of the lock: the browser may have exited and
+		// the session ended meanwhile, with nothing left to stop.
+		if m.findLocked(id) != l || l.sess.State != Stopping {
+			close(attempt.done)
+			m.mu.Unlock()
+			return m.waitStopped(ctx, l)
+		}
 		cid := l.sess.ContainerID
 		if !m.spawn(func() { m.runStop(l, attempt, cid, prev) }) {
 			m.mu.Unlock()
@@ -1011,6 +1018,14 @@ func (m *Manager) stopIf(ctx context.Context, id string, cond func(*live) bool) 
 			return m.snapshot(l), fmt.Errorf("stopping the browser: %w", attempt.err)
 		}
 	}
+	if err := m.wait(ctx, l.done); err != nil {
+		return m.snapshot(l), err
+	}
+	return m.snapshot(l), nil
+}
+
+// waitStopped waits for a session to end and returns it.
+func (m *Manager) waitStopped(ctx context.Context, l *live) (Session, error) {
 	if err := m.wait(ctx, l.done); err != nil {
 		return m.snapshot(l), err
 	}
