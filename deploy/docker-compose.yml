@@ -127,9 +127,12 @@ services:
         allowed-peer-ip=$$BROWSERPIER_IP
         no-tcp-relay
         no-multicast-peers
-        # Relays per viewer (BrowserPier gives each its own user), and in all.
-        user-quota=10
-        total-quota=100
+        # Relays per viewer (BrowserPier gives each its own user), and in
+        # all. Generous: a page asks for one per TURN URL and network
+        # interface, and a UDP relay a page left without releasing it
+        # counts until it times out (up to 10 minutes).
+        user-quota=40
+        total-quota=300
         no-cli
         pidfile=/tmp/turnserver.pid
         log-file=stdout

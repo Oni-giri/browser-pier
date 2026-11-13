@@ -211,7 +211,8 @@ func TestBundledTURNHoldsEachViewerToItsQuota(t *testing.T) {
 	key := secret(t)
 	addr := coturn(t, ip, ip, key)
 	tr := TURN{URLs: []string{"turn:" + addr}, Secret: key}
-	const userQuota = 10 // as in the compose file
+	// As in the compose file: this fails if the two differ, either way.
+	const userQuota = 40
 	for i := range userQuota + 1 {
 		// Fresh credentials each time, as each request to /ice gives.
 		s := tr.Servers(time.Now().Add(time.Hour+time.Duration(i)*time.Second), "handoff greedy")[0]
