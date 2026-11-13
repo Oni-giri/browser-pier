@@ -86,6 +86,15 @@ func TestPageToolsAct(t *testing.T) {
 	if !strings.Contains(out, "checked") || !waitEvent("terms true") {
 		t.Errorf("styled checkbox: %s %v", out, site.Events())
 	}
+	// A display:none checkbox has no ref: the agent finds its label and clicks it.
+	if strings.Contains(snap, `checkbox "Send me news"`) || !strings.Contains(snap, "Send me news") {
+		t.Errorf("hidden checkbox:\n%s", snap)
+	}
+	label := refFor(t, a.mustTool(s.ID, "find", map[string]any{"text": "send me news"}), "Send me news")
+	a.mustTool(s.ID, "act", steps(map[string]any{"action": "click", "ref": label}))
+	if !waitEvent("news true") {
+		t.Errorf("clicking the label didn't check the hidden checkbox: %v", site.Events())
+	}
 
 	// Buttons in a closed shadow root: the free one is clicked, the
 	// covered one isn't.

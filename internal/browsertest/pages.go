@@ -80,7 +80,8 @@ var pageSitePages = map[string]string{ //nolint:gosec // test pages, not credent
 <style>.box{position:relative;display:inline-block;padding:10px 10px 10px 40px;border:1px solid #888}
 .box input{position:absolute;left:12px;top:12px;opacity:0;margin:0}
 .box::before{content:'';position:absolute;left:10px;top:10px;width:20px;height:20px;border:2px solid #333}</style>
-<label class="box"><input type="checkbox" id="terms" onchange="report('terms ' + this.checked)">I accept the terms</label>`,
+<label class="box"><input type="checkbox" id="terms" onchange="report('terms ' + this.checked)">I accept the terms</label>
+<p><label><input type="checkbox" style="display:none" onchange="report('news ' + this.checked)"> Send me news</label></p>`,
 	// Text a person can't see: some is excluded, some kept (fenced).
 	"/hidden": `<!doctype html><title>Hidden text</title>
 <p>Visible text.</p>

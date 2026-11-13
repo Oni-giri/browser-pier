@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -44,6 +45,8 @@ type item struct {
 	// group is the navigation or menu the control is in (0: none);
 	// snapshot sums up a big one in a line (find still sees each).
 	group int
+	// label marks the text of a <label>; its ref is the label itself.
+	label bool
 }
 
 // group is a navigation landmark or a menu.
@@ -415,18 +418,19 @@ func join(nodes []axNode, d *dom, view [4]float64) ([]item, map[int]*group) {
 	}
 	runs := map[int]*run{}
 	groups := map[int]*group{}
-	var walk func(n *axNode, tier int, inMain, inControl bool, grp int, inLabel bool)
-	walk = func(n *axNode, tier int, inMain, inControl bool, grp int, inLabel bool) {
+	var walk func(n *axNode, tier int, inMain, inControl bool, grp int, label int64)
+	walk = func(n *axNode, tier int, inMain, inControl bool, grp int, label int64) {
 		role := n.Role.String()
 		if !n.Ignored && (role == "navigation" || role == "menubar" || role == "menu") && grp == 0 {
 			grp = len(groups) + 1
 			groups[grp] = &group{role: role, name: n.Name.String()}
 		}
-		if !n.Ignored && role == "LabelText" {
-			// A label's text is the name of the control it labels.
-			inLabel = true
-		}
 		ni, hasDOM := d.byBack[n.Backend]
+		if !n.Ignored && role == "LabelText" && hasDOM {
+			// Its text is gathered on the label itself, which a click can
+			// hit (a hidden checkbox's label, say).
+			label = n.Backend
+		}
 		if !n.Ignored && (role == "dialog" || role == "alertdialog") && hasDOM {
 			_, hasOpen := d.attr(ni, "open")
 			if n.prop("modal") == "true" || (strings.EqualFold(d.name(ni), "DIALOG") && hasOpen) {
@@ -465,34 +469,55 @@ func join(nodes []axNode, d *dom, view [4]float64) ([]item, map[int]*group) {
 			}
 			// A hidden or zero-size control's content is hidden with it.
 			inControl = true
-		case role == "StaticText" && !inControl && !inLabel:
+		case role == "StaticText" && !inControl:
 			box, ok := d.shown(ni)
 			text := strings.Join(strings.Fields(n.Name.String()), " ")
 			if !ok || text == "" {
 				break
 			}
-			b := d.block(ni)
-			r := runs[b]
+			key, ref := d.block(ni), int64(0)
+			if label != 0 {
+				key, ref = -int(label), label
+			} else {
+				ref = d.s.Documents[0].Nodes.BackendNodeID[key]
+			}
+			r := runs[key]
 			if r == nil || out[r.at].tier != tierOf(box) {
 				r = &run{at: len(out)}
-				runs[b] = r
-				out = append(out, item{backend: d.s.Documents[0].Nodes.BackendNodeID[b], tier: tierOf(box)})
+				runs[key] = r
+				out = append(out, item{backend: ref, tier: tierOf(box), label: label != 0})
 			}
 			r.text = append(r.text, text)
 			out[r.at].text = strings.Join(r.text, " ")
 		}
 		for _, id := range n.ChildIDs {
 			if c := byID[id]; c != nil {
-				walk(c, tier, inMain, inControl, grp, inLabel)
+				walk(c, tier, inMain, inControl, grp, label)
 			}
 		}
 	}
 	for i := range nodes {
 		if nodes[i].ParentID == "" {
-			walk(&nodes[i], tierRest, false, false, 0, false)
+			walk(&nodes[i], tierRest, false, false, 0, 0)
 		}
 	}
-	return out, groups
+	return dropLabelEchoes(out), groups
+}
+
+// dropLabelEchoes drops label text that a shown control already has as
+// its name ("Email" by textbox "Email"). A label whose control isn't
+// shown (a display:none checkbox under a styled one) stays: the agent
+// finds it and clicks it instead.
+func dropLabelEchoes(items []item) []item {
+	names := map[string]bool{}
+	for _, it := range items {
+		if it.control {
+			names[strings.ToLower(strings.Join(strings.Fields(it.name), " "))] = true
+		}
+	}
+	return slices.DeleteFunc(items, func(it item) bool {
+		return it.label && names[strings.ToLower(it.text)]
+	})
 }
 
 // control makes a control's line from its AX node and DOM node.

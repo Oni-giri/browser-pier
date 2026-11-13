@@ -107,6 +107,39 @@ func TestTabsListIsCapped(t *testing.T) {
 	}
 }
 
+func TestLabels(t *testing.T) {
+	f := newFixture(t)
+	email := el("input", "textbox", "Email", box(60, 0, 100, 20))
+	email.value = new("")
+	hiddenBox := el("input", "checkbox", "Send me news", nil)
+	news := el("label", "LabelText", "", box(0, 40, 120, 20), hiddenBox, txt("Send me news", box(20, 40, 100, 20)))
+	doc := el("#document", "RootWebArea", "", box(0, 0, 1280, 800),
+		el("label", "LabelText", "", box(0, 0, 50, 20), txt("Email", box(0, 0, 50, 20))), email, news)
+	f.fb.addTab("https://example.com/", doc, true)
+	out := f.mustSnapshot(nil)
+	if strings.Count(out, "Email") != 1 || !strings.Contains(out, `textbox "Email"`) {
+		t.Errorf("the label's text repeats the field's name:\n%s", out)
+	}
+	if !strings.Contains(out, "Send me news") || strings.Contains(out, `checkbox "Send me news"`) {
+		t.Errorf("a hidden checkbox's label:\n%s", out)
+	}
+	found, err := f.tools.Find(context.Background(), f.session(), f.who, FindIn{Text: "news"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := refRE.FindStringSubmatch(found)
+	if ref == nil {
+		t.Fatalf("find: %s", found)
+	}
+	// The ref names the label, which a click can hit.
+	f.tools.mu.Lock()
+	k, err := f.tools.pages[f.sess.ID].refs.lookup(ref[1])
+	f.tools.mu.Unlock()
+	if err != nil || k.backend != news.backend {
+		t.Errorf("find's ref %s names node %d, not the label (%d): %v", ref[1], k.backend, news.backend, err)
+	}
+}
+
 func TestClosingAPopupBringsBackItsOpener(t *testing.T) {
 	f := newFixture(t)
 	f.fb.addTab("https://example.com/", loginPage(), true)
