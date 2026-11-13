@@ -10,7 +10,8 @@ func TestPageToolRoutes(t *testing.T) {
 	f := newFixture(t)
 	visual := f.start(f.all, "google", "visual")
 	other := f.start(f.all, "github", "api")
-	bodies := map[string]string{"snapshot": `{}`, "find": `{"text": "x"}`, "navigate": `{"url": "https://example.com"}`}
+	bodies := map[string]string{"snapshot": `{}`, "find": `{"text": "x"}`, "navigate": `{"url": "https://example.com"}`,
+		"act": `{"steps": [{"action": "press", "keys": "Enter"}]}`, "wait": `{"text": "x"}`, "tabs": `{"action": "list"}`}
 	for tool, body := range bodies {
 		path := "/api/sessions/" + visual.ID + "/" + tool
 		if code := f.call("", http.MethodPost, path, body, nil); code != http.StatusUnauthorized {

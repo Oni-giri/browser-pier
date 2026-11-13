@@ -126,7 +126,8 @@ var pageSitePages = map[string]string{ //nolint:gosec // test pages, not credent
 	"/select": `<!doctype html><title>Select</title>` + report + `
 <label for="c">Country</label> <select id="c" onchange="report('country ' + this.value)"><option value="fr">France</option><option value="de">Germany</option><option value="lv">Latvia</option></select>
 <label for="d">Date</label> <input id="d" type="date">
-<button onmouseover="report('hovered')">Hover me</button>`,
+<button onmouseover="report('hovered')">Hover me</button>
+<label>Upload <input type="file"></label>`,
 	"/signed-in": `<!doctype html><title>Account</title><h1>Signed in</h1>`,
 	// Buttons inside a closed shadow root: one free, one under a cover.
 	"/shadow": `<!doctype html><title>Shadow</title>` + report + `

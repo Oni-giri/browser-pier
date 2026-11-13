@@ -135,6 +135,10 @@ func TestPageToolsAct(t *testing.T) {
 	if !strings.Contains(out, `selected "Latvia"`) || !waitEvent("country lv") || !waitEvent("hovered") {
 		t.Errorf("select and hover: %s %v", out, site.Events())
 	}
+	// A file input opens a chooser nothing could close: refused.
+	if code, msg := a.tool(s.ID, "act", steps(map[string]any{"action": "click", "ref": refFor(t, snap, "Upload")})); code != http.StatusUnprocessableEntity || !strings.Contains(msg, "file chooser") {
+		t.Errorf("clicking a file input: %d %s", code, msg)
+	}
 
 	// 8. find and wait_for: text that appears after 2 s, an element hidden after 2 s.
 	open("/later")
