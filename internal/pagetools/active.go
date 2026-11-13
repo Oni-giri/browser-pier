@@ -43,8 +43,8 @@ func (c *call) listTabs(ctx context.Context) ([]targetInfo, error) {
 			continue
 		}
 		c.st.next++
-		c.st.seq++
-		tb := &tabState{id: "t" + strconv.Itoa(c.st.next), target: ti.TargetID, opener: ti.OpenerID, activated: c.st.seq}
+		// Ranked only once it has been in front (use, bringToFront).
+		tb := &tabState{id: "t" + strconv.Itoa(c.st.next), target: ti.TargetID, opener: ti.OpenerID}
 		c.st.tabs[ti.TargetID] = tb
 		c.st.order = append(c.st.order, ti.TargetID)
 		if c.st.listed {

@@ -15,6 +15,7 @@ func (s *Server) addPageTools(srv *sdk.Server) {
 	sdk.AddTool(srv, &sdk.Tool{Name: "find", Description: "API mode only. Find text on the page (case-insensitive), with the text around each match and the nearest ref."}, s.find)
 	sdk.AddTool(srv, &sdk.Tool{Name: "act", Description: "API mode only. Act on refs from snapshot or find, 1 to 20 steps in order, stopping at the first that fails: click, fill (replace a field's text), type (key by key), press (keys, like Enter or ctrl+a), select (an option of a <select>), check, uncheck, hover. Each result names what was hit. A step that navigates makes later refs stale. No date, range or file inputs."}, s.actOnPage)
 	sdk.AddTool(srv, &sdk.Tool{Name: "wait_for", Description: "API mode only. Wait for text to appear, a ref to be visible or hidden, or the URL to change; up to 10 s by default, 30 s at most. Answers ok or timed out."}, s.waitFor)
+	sdk.AddTool(srv, &sdk.Tool{Name: "tabs", Description: "API mode only. List the browser's tabs (the active one is the one in front), or switch to one, close one, or open a new one. Tools always act on the active tab; when a page opens a tab, results say so and you switch to it."}, s.tabs)
 	sdk.AddTool(srv, &sdk.Tool{Name: "navigate", Description: "API mode only. Open an http(s) URL in the active tab, or go back, forward or reload; waits for the page to load. The tab's refs go stale."}, s.navigate)
 }
 
@@ -96,4 +97,15 @@ type waitForArgs struct {
 
 func (s *Server) waitFor(ctx context.Context, req *sdk.CallToolRequest, in waitForArgs) (*sdk.CallToolResult, any, error) {
 	return s.pageCall(ctx, req, in.SessionID, "wait", map[string]any{"text": in.Text, "ref": in.Ref, "state": in.State, "url_change": in.URLChange, "timeout_ms": in.TimeoutMS})
+}
+
+type tabsArgs struct {
+	SessionID string `json:"session_id" jsonschema:"from start_browser"`
+	Action    string `json:"action,omitempty" jsonschema:"list (default), switch, close or new"`
+	ID        string `json:"id,omitempty" jsonschema:"for switch and close: the tab, like t2 (close takes the active tab without one)"`
+	URL       string `json:"url,omitempty" jsonschema:"for new: an http or https URL (default about:blank)"`
+}
+
+func (s *Server) tabs(ctx context.Context, req *sdk.CallToolRequest, in tabsArgs) (*sdk.CallToolResult, any, error) {
+	return s.pageCall(ctx, req, in.SessionID, "tabs", map[string]any{"action": in.Action, "id": in.ID, "url": in.URL})
 }
