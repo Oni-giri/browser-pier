@@ -67,7 +67,7 @@ func (t *Tools) Tabs(ctx context.Context, s sessions.Session, who Caller, in Tab
 			var r struct {
 				TargetID string `json:"targetId"`
 			}
-			if err := c.conn.Call(ctx, "", "Target.createTarget", map[string]any{"url": url}, &r); err != nil {
+			if err := c.browser(ctx, "Target.createTarget", map[string]any{"url": url}, &r); err != nil {
 				return "", err
 			}
 			if _, err := c.listTabs(ctx); err != nil {
@@ -99,7 +99,7 @@ func (t *Tools) Tabs(ctx context.Context, s sessions.Session, who Caller, in Tab
 				return "", &Error{Status: http.StatusConflict, Msg: "that's the last tab, and closing it would close the browser; open another first, or stop the browser with stop_browser"}
 			}
 			wasActive := tb.target == c.tgt.ID
-			if err := c.conn.Call(ctx, "", "Target.closeTarget", map[string]any{"targetId": tb.target}, nil); err != nil {
+			if err := c.browser(ctx, "Target.closeTarget", map[string]any{"targetId": tb.target}, nil); err != nil {
 				return "", err
 			}
 			c.forgetTab(tb.target)
@@ -138,10 +138,10 @@ func (c *call) tabByID(id string) (*tabState, error) {
 // bringToFront activates a tab, waits (briefly) until the page sees it is
 // in front, and makes it the call's tab.
 func (c *call) bringToFront(ctx context.Context, target string) error {
-	if err := c.conn.Call(ctx, "", "Target.activateTarget", map[string]any{"targetId": target}, nil); err != nil {
+	if err := c.browser(ctx, "Target.activateTarget", map[string]any{"targetId": target}, nil); err != nil {
 		return err
 	}
-	tgt, err := c.conn.Attach(ctx, target)
+	tgt, err := c.attach(ctx, target)
 	if err != nil {
 		return err
 	}

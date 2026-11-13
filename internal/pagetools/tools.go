@@ -51,8 +51,14 @@ var toolsAllowList = cdp.NewAllowList("page tools",
 func AllowedMethods() []string { return toolsAllowList.Methods() }
 
 const (
-	// maxMessage caps one answer from the browser (see the spike).
-	maxMessage = 48 << 20
+	// maxMessage caps one answer from the browser: about a 30,000-element
+	// page's AX tree (see the spike). What a page makes the orchestrator
+	// hold is bounded by it, and by maxReads.
+	maxMessage = 32 << 20
+	// maxReads is how many whole-page reads (DOM snapshot and AX tree)
+	// run at once, across all sessions, so a few large pages can't take a
+	// small host's memory.
+	maxReads = 2
 	// quickTimeout is how long a renderer gets for a small call before
 	// the page counts as not responding; slowTimeout is for reading a
 	// whole page.
@@ -94,11 +100,13 @@ type Tools struct {
 	settle time.Duration
 	// poll is how often wait_for and navigate look at the page.
 	poll time.Duration
+	// reads holds a slot per whole-page read under way (maxReads).
+	reads chan struct{}
 }
 
 func New(m *sessions.Manager, log *slog.Logger) *Tools {
 	return &Tools{m: m, log: log, pages: map[string]*state{}, quick: quickTimeout, slow: slowTimeout,
-		settle: 100 * time.Millisecond, poll: 250 * time.Millisecond}
+		settle: 100 * time.Millisecond, poll: 250 * time.Millisecond, reads: make(chan struct{}, maxReads)}
 }
 
 // state is what the tools remember about one session between calls.
@@ -245,7 +253,31 @@ func (c *call) fail(err error) error {
 		// Chromium's own words, which can quote the page (a URL, say).
 		return &Error{Status: http.StatusBadGateway, Msg: "the browser refused: " + fence.Wrap("browser error", ce.Message)}
 	}
-	return &Error{Status: http.StatusBadGateway, Msg: "can't reach the browser: " + err.Error()}
+	// The error's words can carry the page's (a script error's text).
+	return &Error{Status: http.StatusBadGateway, Msg: "can't reach the browser: " + fence.Wrap("browser error", err.Error())}
+}
+
+// browser sends a browser-level method (Target.*), with the quick
+// timeout: the browser process answers those even when a page is stuck.
+func (c *call) browser(ctx context.Context, method string, params, out any) error {
+	cctx, cancel := context.WithTimeout(ctx, c.t.quick)
+	defer cancel()
+	err := c.conn.Call(cctx, "", method, params, out)
+	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+		return &Error{Status: http.StatusBadGateway, Msg: "the browser isn't answering"}
+	}
+	return err
+}
+
+// attach attaches to a tab, with the quick timeout.
+func (c *call) attach(ctx context.Context, target string) (*cdp.Target, error) {
+	cctx, cancel := context.WithTimeout(ctx, c.t.quick)
+	defer cancel()
+	t, err := c.conn.Attach(cctx, target)
+	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+		return nil, &Error{Status: http.StatusBadGateway, Msg: "the browser isn't answering"}
+	}
+	return t, err
 }
 
 // renderer sends a method to the active tab, giving the page timeout to

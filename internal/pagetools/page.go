@@ -362,6 +362,12 @@ func (c *call) info(ctx context.Context) (pageInfo, error) {
 // read reads the active tab: the DOM snapshot first, then, unless the page
 // is past the size cap, the AX tree, joined on backend node IDs.
 func (c *call) read(ctx context.Context, needAX bool) (*page, error) {
+	select {
+	case c.t.reads <- struct{}{}:
+		defer func() { <-c.t.reads }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	pi, err := c.info(ctx)
 	if err != nil {
 		return nil, err

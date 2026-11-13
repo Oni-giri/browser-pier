@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/cdp"
+	"github.com/Oni-giri/browser-pier/internal/fence"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
@@ -78,7 +79,7 @@ func (t *Tools) Navigate(ctx context.Context, s sessions.Session, who Caller, in
 				return "", err
 			}
 			if r.ErrorText != "" {
-				return "", &Error{Status: 502, Msg: "couldn't open the page: " + r.ErrorText}
+				return "", &Error{Status: 502, Msg: "couldn't open the page: " + fence.Wrap("browser error", r.ErrorText)}
 			}
 			want = r.LoaderID
 			what = "Opened " + origin(target)
@@ -94,7 +95,11 @@ func (t *Tools) Navigate(ctx context.Context, s sessions.Session, who Caller, in
 					ID int `json:"id"`
 				} `json:"entries"`
 			}
-			if err := c.tgt.Call(ctx, "Page.getNavigationHistory", nil, &h); err != nil {
+			// Browser-side: it answers even while the page is stuck.
+			hctx, cancel := context.WithTimeout(ctx, c.t.quick)
+			err := c.tgt.Call(hctx, "Page.getNavigationHistory", nil, &h)
+			cancel()
+			if err != nil {
 				return "", err
 			}
 			i := h.CurrentIndex - 1

@@ -28,7 +28,7 @@ func (c *call) listTabs(ctx context.Context) ([]targetInfo, error) {
 	var r struct {
 		TargetInfos []targetInfo `json:"targetInfos"`
 	}
-	if err := c.conn.Call(ctx, "", "Target.getTargets", nil, &r); err != nil {
+	if err := c.browser(ctx, "Target.getTargets", nil, &r); err != nil {
 		return nil, err
 	}
 	var pages []targetInfo
@@ -106,7 +106,7 @@ func (c *call) findActive() error {
 	})
 	stuck := ""
 	for i, ti := range cands {
-		tgt, err := c.conn.Attach(ctx, ti.TargetID)
+		tgt, err := c.attach(ctx, ti.TargetID)
 		if err != nil {
 			continue // closed meanwhile
 		}
@@ -136,7 +136,7 @@ func (c *call) findActive() error {
 	// None in front (it happens while a window is being made): the last
 	// one used, or the newest.
 	pick := cands[0].TargetID
-	tgt, err := c.conn.Attach(ctx, pick)
+	tgt, err := c.attach(ctx, pick)
 	if err != nil {
 		return err
 	}
