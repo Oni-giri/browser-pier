@@ -30,7 +30,7 @@ var contentAllowList = cdp.NewAllowList("content endpoints",
 	"Target.getTargets", "Target.attachToTarget", "Target.detachFromTarget",
 	"Page.getFrameTree", "Page.createIsolatedWorld", "Page.getNavigationHistory",
 	// The active tab is found as the page tools find it: its visibility,
-	// read in an isolated world (its globalThis, then a function on it).
+	// read in an isolated world (its `this`, then a function on it).
 	"Runtime.evaluate", "Runtime.callFunctionOn",
 	"DOMSnapshot.captureSnapshot", "Page.printToPDF",
 )
@@ -93,25 +93,48 @@ func (t *Tools) Text(ctx context.Context, s sessions.Session, who Caller, in Tex
 		return "", errContentVisual
 	}
 	return runWith(ctx, t, s, who, contentAllowList, func(c *call) (string, error) {
+		// The slot is held through rendering: the snapshot and what is
+		// made from it are in memory until then.
+		release, err := c.readSlot(c.lease.Ctx)
+		if err != nil {
+			return "", err
+		}
+		defer release()
 		root, base, header, err := c.readTree(c.lease.Ctx)
 		if err != nil {
 			return "", err
 		}
+		// Rendering is linear, but a handoff, a stop or the caller going
+		// away still ends it, and it never runs long.
+		rctx, cancel := context.WithTimeout(c.lease.Ctx, c.t.slow)
+		defer cancel()
 		var body, source, what string
 		var full bool
 		if in.Format == "markdown" {
-			body, full = pagetext.Markdown(root, base, maxRendered)
+			body, full, err = pagetext.Markdown(rctx, root, base, maxRendered)
 			source, what = "page as Markdown", "Read the page as Markdown"
 		} else {
-			body, full = pagetext.Readable(root, maxRendered)
+			body, full, err = pagetext.Readable(rctx, root, maxRendered)
 			source, what = "page's main text", "Read the page's main text"
 		}
-		c.note(what)
+		if err != nil {
+			if c.lease.Ctx.Err() == nil {
+				return "", &Error{Status: 422, Msg: "page too large to read; use find"}
+			}
+			return "", err
+		}
 		total := utf8.RuneCountInString(body)
 		if in.Offset > total || in.Offset > 0 && in.Offset == total {
 			return "", &Error{Status: 400, Msg: fmt.Sprintf("offset: the text has %s characters", thousands(total))}
 		}
+		c.note(what)
 		part, end := window(body, in.Offset, limit)
+		if in.Format == "markdown" && part != "" {
+			// A part that starts inside a code block opens it again.
+			if open := openFence(body, in.Offset); open != "" {
+				part = open + "\n" + part
+			}
+		}
 		trailer := ""
 		switch {
 		case in.Offset > 0 || end < total:
@@ -129,7 +152,7 @@ func (t *Tools) Text(ctx context.Context, s sessions.Session, who Caller, in Tex
 		if in.Offset == 0 && part != "" {
 			text += "\n\n" + part
 		} else if part != "" {
-			text += "\n\n…" + part
+			text += "\n\n…\n" + part
 		}
 		return c.result(source, text, trailer), nil
 	})
@@ -154,17 +177,32 @@ func window(s string, offset, n int) (string, int) {
 	return strings.TrimRight(string(r[offset:end]), "\n"), end
 }
 
+// openFence is the line that opened the fenced code block offset (in
+// characters) falls inside, "" if it isn't in one. Fences are what
+// pagetext writes: a run of three or more backticks, after any list
+// indent or quote marks.
+func openFence(s string, offset int) string {
+	r := []rune(s)
+	if offset <= 0 || offset > len(r) {
+		return ""
+	}
+	open, fence := "", ""
+	for _, l := range strings.Split(string(r[:offset]), "\n") {
+		l = strings.TrimLeft(l, " >")
+		switch {
+		case open == "" && strings.HasPrefix(l, "```"):
+			open, fence = l, strings.TrimRight(l, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_+#-")
+		case open != "" && l == fence:
+			open, fence = "", ""
+		}
+	}
+	return open
+}
+
 // readTree takes a DOM snapshot of the active tab and turns what it lays
 // out into a pagetext tree. The tab's document is checked before and
 // after: a snapshot that straddles a navigation is taken again, once.
 func (c *call) readTree(ctx context.Context) (*pagetext.Node, *url.URL, string, error) {
-	// A whole-page read: it takes one of the few slots all sessions share.
-	select {
-	case c.t.reads <- struct{}{}:
-		defer func() { <-c.t.reads }()
-	case <-ctx.Done():
-		return nil, nil, "", ctx.Err()
-	}
 	for try := 0; ; try++ {
 		_, before, _, err := c.frameTree(ctx, c.tgt)
 		if err != nil {
@@ -191,6 +229,9 @@ func (c *call) readTree(ctx context.Context) (*pagetext.Node, *url.URL, string, 
 			base, _ = url.Parse(pageURL)
 		}
 		header := "URL: " + capText(pageURL, maxHeader) + "\nTitle: " + capText(strings.Join(strings.Fields(d.str(doc.Title)), " "), maxHeader)
+		// The fence drops HTML comments: a "<!--" in a title would take
+		// the page's text with it.
+		header = strings.ReplaceAll(header, "<!--", `<\!--`)
 		return contentTree(d), base, header, nil
 	}
 }
@@ -233,7 +274,20 @@ func contentTree(d *dom) *pagetext.Node {
 			nodes[i] = root
 			continue
 		case 1:
+			if _, laidOut := d.layout[i]; !laidOut {
+				// Not laid out: display:none and what is under it (its
+				// texts aren't shown either), or display:contents, whose
+				// children go to its parent. Either way the element
+				// itself adds nothing, and a hidden chain of thousands
+				// of elements costs nothing to render.
+				nodes[i] = parentOf(nodes, d.parent(i), root)
+				continue
+			}
 			tag := strings.ToLower(d.name(i))
+			// XHTML can prefix names (h:input): the local name is the tag.
+			if k := strings.LastIndexByte(tag, ':'); k >= 0 {
+				tag = tag[k+1:]
+			}
 			n = &pagetext.Node{Tag: tag, Display: d.display(i), Pre: preWhiteSpace(d, i)}
 			if attrs := doc.Nodes.Attributes; i < len(attrs) {
 				for k := 0; k+1 < len(attrs[i]); k += 2 {
@@ -266,17 +320,23 @@ func contentTree(d *dom) *pagetext.Node {
 		if n == nil {
 			continue
 		}
-		nodes[i] = n
-		parent := root
-		if p := d.parent(i); p >= 0 && p < len(nodes) {
-			if nodes[p] == nil {
-				continue // under something left out
-			}
-			parent = nodes[p]
+		parent := parentOf(nodes, d.parent(i), root)
+		if parent == nil {
+			continue // under something left out
 		}
+		nodes[i] = n
 		parent.Kids = append(parent.Kids, n)
 	}
 	return root
+}
+
+// parentOf is the tree node that snapshot node p's children go under:
+// root for none, nil when p was left out.
+func parentOf(nodes []*pagetext.Node, p int, root *pagetext.Node) *pagetext.Node {
+	if p < 0 || p >= len(nodes) {
+		return root
+	}
+	return nodes[p]
 }
 
 // preWhiteSpace reports whether node i's white-space keeps line breaks.
@@ -304,6 +364,10 @@ type PDFIn struct {
 	Pages string
 }
 
+// pageRangeError matches Chromium's refusals of a page range ("Page range
+// syntax error", "Page range exceeds page count").
+var pageRangeError = regexp.MustCompile(`(?i)page range`)
+
 var pageRanges = regexp.MustCompile(`^\s*\d{1,5}(\s*-\s*\d{0,5})?(\s*,\s*\d{1,5}(\s*-\s*\d{0,5})?)*\s*$`)
 
 // PDF prints the active tab to PDF, as Chromium's print does: the page
@@ -317,6 +381,13 @@ func (t *Tools) PDF(ctx context.Context, s sessions.Session, who Caller, in PDFI
 		return nil, errContentVisual
 	}
 	return runWith(ctx, t, s, who, contentAllowList, func(c *call) ([]byte, error) {
+		// A PDF is held in memory as a whole (its base64, then its bytes):
+		// it takes a read slot like a whole-page read.
+		release, err := c.readSlot(c.lease.Ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
 		params := map[string]any{"landscape": in.Landscape, "printBackground": in.Background}
 		if p := strings.TrimSpace(in.Pages); p != "" {
 			params["pageRanges"] = strings.Join(strings.Fields(p), "")
@@ -324,13 +395,15 @@ func (t *Tools) PDF(ctx context.Context, s sessions.Session, who Caller, in PDFI
 		var r struct {
 			Data string `json:"data"`
 		}
-		err := c.renderer(c.lease.Ctx, pdfTimeout, "Page.printToPDF", params, &r)
+		err = c.renderer(c.lease.Ctx, pdfTimeout, "Page.printToPDF", params, &r)
 		var ce *cdp.Error
 		switch {
 		case errors.Is(err, cdp.ErrTooLarge):
 			return nil, &Error{Status: 422, Msg: fmt.Sprintf("the PDF is larger than %d MiB; ask for fewer pages", MaxPDF>>20)}
-		case errors.As(err, &ce) && in.Pages != "":
+		case errors.As(err, &ce) && in.Pages != "" && pageRangeError.MatchString(ce.Message):
 			return nil, &Error{Status: 400, Msg: "pages: the page has no such page range"}
+		case errors.As(err, &ce) && strings.Contains(ce.Message, "navigated or closed"):
+			return nil, &Error{Status: http.StatusConflict, Msg: "the page changed while it was printed; try again"}
 		case err != nil:
 			return nil, err
 		}

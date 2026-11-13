@@ -270,3 +270,109 @@ func TestContentLeavesNothingAttachedOnCancel(t *testing.T) {
 	}
 	f.closedAfter()
 }
+
+// Content calls share the whole-page read slots with the page tools:
+// when other sessions hold them all, they answer busy.
+func TestContentWaitsForAReadSlot(t *testing.T) {
+	f := newFixture(t)
+	f.fb.addTab("https://example.com/", articlePage(), true)
+	f.fb.call = printer(nil)
+	for range maxReads {
+		f.tools.reads <- struct{}{}
+	}
+	f.tools.readWait = 100 * time.Millisecond
+	if _, err := f.text(TextIn{Format: "markdown"}); !isStatus(err, http.StatusServiceUnavailable) {
+		t.Errorf("markdown: %v", err)
+	}
+	if _, err := f.tools.PDF(context.Background(), f.session(), f.who, PDFIn{}); !isStatus(err, http.StatusServiceUnavailable) {
+		t.Errorf("pdf: %v", err)
+	}
+	for range maxReads {
+		<-f.tools.reads
+	}
+	if _, err := f.text(TextIn{Format: "markdown"}); err != nil {
+		t.Errorf("with a slot free: %v", err)
+	}
+	if len(f.tools.reads) != 0 {
+		t.Errorf("%d read slots still held", len(f.tools.reads))
+	}
+	f.closedAfter()
+}
+
+// A hidden chain of many elements (display:none: nothing laid out) costs
+// nothing to render; the page around it is read as usual.
+func TestHiddenDeepChainIsCheap(t *testing.T) {
+	f := newFixture(t)
+	vb := box(0, 0, 800, 20)
+	leaf := txt("HIDDEN-LEAF", nil)
+	cur := leaf
+	for range 50000 {
+		cur = el("em", "", "", nil, cur)
+	}
+	f.fb.addTab("https://example.com/", el("#document", "RootWebArea", "", box(0, 0, 1280, 800),
+		el("body", "", "", vb, el("p", "paragraph", "", vb, txt("VISIBLE", vb)), el("div", "", "", nil, cur))), true)
+	start := time.Now()
+	for _, format := range []string{"markdown", "readability"} {
+		out, err := f.text(TextIn{Format: format})
+		if err != nil || !strings.Contains(out, "VISIBLE") || strings.Contains(out, "HIDDEN-LEAF") {
+			t.Errorf("%s: %v\n%s", format, err, out)
+		}
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("took %v", d)
+	}
+}
+
+// An offset that turns out past the end is refused, and not logged as a
+// read; a part starting inside a code block opens it again.
+func TestTextOffsets(t *testing.T) {
+	f := newFixture(t)
+	vb := box(0, 0, 800, 20)
+	var code []string
+	for i := range 200 {
+		code = append(code, fmt.Sprintf("line %03d of the code", i))
+	}
+	f.fb.addTab("https://example.com/", el("#document", "RootWebArea", "", box(0, 0, 1280, 800),
+		el("body", "", "", vb, el("p", "paragraph", "", vb, txt("Intro.", vb)),
+			el("pre", "", "", vb, el("code", "", "", vb, txt(strings.Join(code, "\n"), vb)).attr("class", "language-go")))), true)
+	before := len(f.m.Activity(f.sess.ID))
+	if _, err := f.text(TextIn{Format: "markdown", Offset: 1_000_000}); !isStatus(err, 400) {
+		t.Fatalf("offset past the end: %v", err)
+	}
+	if n := len(f.m.Activity(f.sess.ID)); n != before {
+		t.Errorf("a refused read was logged (%d → %d)", before, n)
+	}
+	out, err := f.text(TextIn{Format: "markdown", Offset: 2000, MaxChars: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "\n\n…\n```go\n") {
+		t.Errorf("a part inside the code block doesn't open it:\n%s", out)
+	}
+}
+
+// Only Chromium's refusal of a page range is the agent's mistake; a page
+// that navigates while printing is a conflict.
+func TestPDFErrors(t *testing.T) {
+	f := newFixture(t)
+	f.fb.addTab("https://example.com/", articlePage(), true)
+	for _, tc := range []struct {
+		msg    string
+		status int
+	}{
+		{"Page range syntax error", 400},
+		{"Inspected target navigated or closed", 409},
+		{"Printing failed", http.StatusBadGateway},
+	} {
+		f.fb.call = func(_ *ftab, m cdptest.Message) (any, bool, error) {
+			if m.Method != "Page.printToPDF" {
+				return nil, false, nil
+			}
+			return nil, true, cdptest.Error{Message: tc.msg}
+		}
+		if _, err := f.tools.PDF(context.Background(), f.session(), f.who, PDFIn{Pages: "1"}); !isStatus(err, tc.status) {
+			t.Errorf("%s: %v", tc.msg, err)
+		}
+	}
+	f.closedAfter()
+}
