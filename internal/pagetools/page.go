@@ -150,6 +150,8 @@ type dom struct {
 	// secrets caches fence.Secret's verdict by the string indices of the
 	// attributes it reads: fields that share them are judged once.
 	secrets map[[6]int]bool
+	// cut is set once some text was cut short (collapsed).
+	cut bool
 }
 
 // The DOM snapshot keeps one copy of each string, so a page can give
@@ -159,19 +161,22 @@ type dom struct {
 // output can use first, text is collapsed once per distinct string, and
 // the text gathered has a byte budget.
 const (
-	// maxAttr is how much of an attribute fence.Secret reads.
-	maxAttr = 256
+	// maxAttr is how much of an attribute fence.Secret reads: enough
+	// for any real label or name (its verdict is cached per set of
+	// attribute strings, so this is paid once per distinct set).
+	maxAttr = 8 << 10
 	// maxURL is how much of an iframe's src is parsed.
 	maxURL = 2048
 	// maxName is how much of an AX name a control or group keeps.
 	maxName = 1024
-	// maxNodeText is how much of one text node (or AX text) is kept,
-	// once its whitespace is collapsed.
-	maxNodeText = 8 << 10
-	// maxRunText caps one item of text (a block's), maxPageText all of
-	// a page's together.
-	maxRunText  = 64 << 10
+	// maxPageText caps all the text a page read keeps. One text node,
+	// and one block's text, may take all of it: find searches whole
+	// blocks; snapshot's budget shows less. Text is collapsed once per
+	// distinct string, and the distinct strings are bounded by the
+	// answer's size, so the work stays linear.
 	maxPageText = 4 << 20
+	maxNodeText = maxPageText
+	maxRunText  = maxPageText
 	// checkEvery is how many nodes a loop handles between looks at its
 	// context, so a handoff or stop isn't kept waiting.
 	checkEvery = 1024
@@ -192,12 +197,16 @@ func cutBytes(s string, n int) string {
 func collapse(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // collapsed is string i collapsed and cut to maxNodeText, worked out once
-// per distinct string however many nodes share it.
+// per distinct string however many nodes share it. A cut sets d.cut.
 func (d *dom) collapsed(i int) string {
 	if t, ok := d.text[i]; ok {
 		return t
 	}
-	t := cutBytes(collapse(d.str(i)), maxNodeText)
+	c := collapse(d.str(i))
+	t := cutBytes(c, maxNodeText)
+	if len(t) < len(c) {
+		d.cut = true
+	}
 	d.text[i] = t
 	return t
 }
@@ -605,7 +614,11 @@ func join(ctx context.Context, nodes []axNode, d *dom, view [4]float64) ([]item,
 				budget.cut = budget.cut || ok
 				break
 			}
-			text := cutBytes(collapse(cutBytes(n.Name.String(), 4*maxNodeText)), maxNodeText)
+			name := n.Name.String()
+			text := cutBytes(collapse(cutBytes(name, 4*maxNodeText)), maxNodeText)
+			if len(name) > 4*maxNodeText || len(text) == maxNodeText {
+				budget.cut = true
+			}
 			if text == "" {
 				break
 			}
@@ -642,7 +655,7 @@ func join(ctx context.Context, nodes []axNode, d *dom, view [4]float64) ([]item,
 		out[r.at].text = r.String()
 	}
 	out = slices.DeleteFunc(out, func(it item) bool { return !it.control && !it.iframe && it.text == "" })
-	return dropLabelEchoes(out), groups, budget.cut, nil
+	return dropLabelEchoes(out), groups, budget.cut || d.cut, nil
 }
 
 // run gathers a block's text, joined once at the end (joining as it grew
@@ -802,7 +815,7 @@ func textOnly(ctx context.Context, d *dom, view [4]float64) ([]item, bool, error
 		out[r.at].text = r.String()
 	}
 	out = slices.DeleteFunc(out, func(it item) bool { return it.text == "" })
-	return out, budget.cut, nil
+	return out, budget.cut || d.cut, nil
 }
 
 // maxField caps names and values in a line.

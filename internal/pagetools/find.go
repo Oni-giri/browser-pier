@@ -103,21 +103,20 @@ func (t *Tools) Find(ctx context.Context, s sessions.Session, who Caller, in Fin
 			}
 		}
 		c.note("Searched the page")
-		if total == 0 {
-			return c.result("find results", "", "No match."), nil
-		}
 		trailer := fmt.Sprintf("%d of %d matches.", len(out), total)
-		if len(out) == total {
+		switch {
+		case total == 0:
+			trailer = "No match."
+		case len(out) == total && total == 1:
+			trailer = "1 match."
+		case len(out) == total:
 			trailer = fmt.Sprintf("%d matches.", total)
-			if total == 1 {
-				trailer = "1 match."
-			}
 		}
 		if !p.axRead {
 			trailer += " The page is too large to read its controls: refs are the text's elements."
 		}
 		if p.textCut {
-			trailer += " The page has more text than BrowserPier reads: only its first 4 MB were searched."
+			trailer += " The page has more text than BrowserPier reads (4 MB): some of it was left out of the search."
 		}
 		return c.result("find results", strings.Join(out, "\n"), trailer), nil
 	})

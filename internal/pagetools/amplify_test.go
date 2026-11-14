@@ -168,6 +168,84 @@ func TestSharedLongStringsCostLittle(t *testing.T) {
 	}
 }
 
+// Long text is searched whole: a 30 KB <pre> or <p>, and a block of 3,000
+// spans (96 KB), each with its marker at the end; on a page too large for
+// the AX tree too.
+func TestFindSearchesLongTextWhole(t *testing.T) {
+	filler := strings.Repeat("filler words ", 30<<10/13)
+	spans := make([]*fnode, 3000)
+	for i := range spans {
+		s := "span text number " + strings.Repeat("x", 12)
+		if i == len(spans)-1 {
+			s = "MARKERTHREE"
+		}
+		spans[i] = el("span", "", "", box(0, 0, 10, 10), txt(s, box(0, 0, 10, 10)))
+		spans[i].display = "inline"
+	}
+	doc := el("#document", "RootWebArea", "", box(0, 0, 1280, 800),
+		el("pre", "", "", box(0, 0, 100, 100), txt(filler+"MARKERONE", box(0, 0, 100, 100))),
+		el("p", "paragraph", "", box(0, 200, 100, 100), txt(filler+"MARKERTWO", box(0, 200, 100, 100))),
+		el("div", "", "", box(0, 400, 100, 100), spans...),
+	)
+	for _, big := range []bool{false, true} {
+		f := newFixture(t)
+		f.fb.addTab("https://example.com/", doc, true)
+		if big {
+			f.fb.bigDOM = maxDOMNodes + 1 // read as text alone
+		}
+		for _, m := range []string{"markerone", "markertwo", "markerthree"} {
+			out, err := f.tools.Find(context.Background(), f.session(), f.who, FindIn{Text: m})
+			if err != nil || !strings.Contains(out, "1 match.") || strings.Contains(out, "left out") {
+				t.Errorf("text only %t, %s: %v\n%s", big, m, err, out)
+			}
+		}
+	}
+}
+
+// When text is left out, find says so, even when nothing matched.
+func TestFindSaysWhenTextWasLeftOut(t *testing.T) {
+	f := newFixture(t)
+	var kids []*fnode
+	for i := range 6 {
+		s := strings.Repeat("y", 1<<20) + string(rune('a'+i))
+		kids = append(kids, el("p", "paragraph", "", box(0, 0, 10, 10), &fnode{tag: "#text", text: s, role: "StaticText", name: s, box: box(0, 0, 10, 10), display: "inline", visib: "visible"}))
+	}
+	f.fb.addTab("https://example.com/", el("#document", "RootWebArea", "", box(0, 0, 1280, 800), kids...), true)
+	out, err := f.tools.Find(context.Background(), f.session(), f.who, FindIn{Text: "absent"})
+	if err != nil || !strings.HasPrefix(out, "No match.") || !strings.Contains(out, "left out of the search") {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// fence.Secret reads enough of each attribute to see a keyword at its end.
+func TestSecretKeywordsLateInLongAttributes(t *testing.T) {
+	f := newFixture(t)
+	field := func(name, value string, attrs ...string) *fnode {
+		n := el("input", "textbox", name, box(0, 0, 100, 20))
+		n.value = new(value)
+		for i := 0; i+1 < len(attrs); i += 2 {
+			n.attr(attrs[i], attrs[i+1])
+		}
+		return n
+	}
+	pad := strings.Repeat("please type it here ", 15) // 300 bytes
+	doc := el("#document", "RootWebArea", "", box(0, 0, 1280, 800),
+		field("A", "SECRET-A", "type", "text", "aria-label", pad+"your password"),
+		field("B", "SECRET-B", "type", "text", "placeholder", pad+"one time code"),
+		field("C", "SECRET-C", "type", "text", "autocomplete", strings.Repeat("section-x ", 30)+"one-time-code"),
+		field("D", "SECRET-D", "type", "text", "name", strings.Repeat("я", 150)+" otp"),
+		// The verdict is cached by the attribute strings: same names, but
+		// another type, is another verdict.
+		field("E", "SECRET-E", "type", "password", "name", "login", "placeholder", pad),
+		field("F", "shown-F", "type", "text", "name", "login", "placeholder", pad),
+	)
+	f.fb.addTab("https://example.com/", doc, true)
+	out := f.mustSnapshot(nil)
+	if strings.Contains(out, "SECRET-") || strings.Count(out, "[filled]") != 5 || !strings.Contains(out, `"F" = "shown-F"`) {
+		t.Errorf("snapshot:\n%s", out)
+	}
+}
+
 func TestPageReadsStopWithTheirContext(t *testing.T) {
 	d, nodes := readFake(t, manyNodes(5000, func(int) *fnode { return txt("word", box(0, 0, 10, 10)) }))
 	ctx, cancel := context.WithCancel(context.Background())
