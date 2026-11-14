@@ -38,10 +38,11 @@ func (h Hit) String() string { return h.Kind + "@" + h.Where + " " + h.Detail }
 //     closed in recent Chromium; getters on message and name aren't
 //     usable, as Chromium's own console reads them with nothing attached);
 //   - console-proxy: a Proxy logged to the console that is inspected;
-//   - console-slow: console.debug of a large object costing much more
-//     than it did when the page loaded, as when the inspector serialises
-//     it (timing, so a busy machine trips it too; reported with the
-//     numbers, every time, where the other checks report once a page);
+//   - console-slow: 50 console.debug calls of a large object costing
+//     five times what they did when the page loaded, and over 50 ms, as
+//     when the inspector serialises them (timing, so a starved machine
+//     trips it too; reported with the numbers, every time, where the
+//     other checks report once a page);
 //   - webdriver and automation globals (cdc_…, __playwright…,
 //     __puppeteer…), and bindings Playwright adds to the main world.
 //
@@ -109,8 +110,10 @@ const watchPage = `<!doctype html><title>Watch</title>
       const cost = performance.now() - t0;
       if (probe.base === undefined) probe.base = Math.max(cost, 0.5);
       // Every slow check is reported, not only the first: Watch.Quiet
-      // compares a batch's with a control batch's on the same page.
-      if (cost > probe.base * 5 && cost > 5) report('console-slow', where, cost.toFixed(1) + ' ms vs ' + probe.base.toFixed(1) + ' ms at load');
+      // compares a batch's with a control batch's on the same page. Over
+      // 50 ms: a CPU-starved machine makes them 5 to 30 ms, with or
+      // without calls that share the page's thread.
+      if (cost > probe.base * 5 && cost > 50) report('console-slow', where, cost.toFixed(1) + ' ms vs ' + probe.base.toFixed(1) + ' ms at load');
       if (typeof navigator !== 'undefined' && navigator.webdriver) fire('webdriver', '');
     }
   ` + "`" + `;
