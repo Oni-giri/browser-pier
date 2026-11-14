@@ -34,10 +34,7 @@ func chain(tag string, depth int, leaf *Node) *Node {
 // used to take seconds (deep inline chains, nested quotes and tables) or
 // that are merely wide; each must take well under a second.
 func TestRenderingIsLinear(t *testing.T) {
-	limit := time.Second
-	if raceEnabled {
-		limit = 5 * time.Second // the race detector slows everything ~5×
-	}
+	limit := time.Second * raceSlowdown
 	// Each shape is built only when it is rendered, so one big tree is in
 	// memory at a time (the machine running the tests is shared).
 	shapes := map[string]func() *Node{}
@@ -216,9 +213,7 @@ func TestDeepTreesKeepTheirTextInOrder(t *testing.T) {
 // (scaled under the race detector) or allocates over maxMB (without it).
 func timed(t *testing.T, name string, root *Node, limit time.Duration, maxMB uint64) {
 	t.Helper()
-	if raceEnabled {
-		limit *= 5
-	}
+	limit *= raceSlowdown
 	base, _ := url.Parse("https://x.example/")
 	var m0, m1 runtime.MemStats
 	runtime.GC()
