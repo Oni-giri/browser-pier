@@ -61,10 +61,12 @@ type appArmorPlan struct {
 // daemon's security options, the profile asked for and Ubuntu's restriction
 // (see ubuntuUsernsRestriction). Chromium's sandbox needs a user namespace:
 //   - Under AppArmor 4 without Ubuntu's restriction (Debian 13, umbrelOS
-//     2), Docker's docker-default has no userns rule and refuses it.
+//     2), Docker's docker-default has no userns rule, and as Docker 29.1
+//     and earlier generate it (no ABI line) it refuses it. Docker 29.9 pins
+//     it to ABI 3.0, which doesn't mediate user namespaces, and it works.
 //     BrowserPier's own profile allows it, once loaded on the host, and so
 //     does running unconfined. Under AppArmor 3 (Debian 12) docker-default
-//     works. The version isn't visible from here, so a short-lived
+//     works. Neither version is visible from here, so a short-lived
 //     container checks, in this order: browserpier, Docker's default, and
 //     unconfined as the last resort. The same goes for a remote daemon.
 //   - With Ubuntu's restriction, an unconfined process gets a namespace
@@ -121,6 +123,16 @@ const (
 	fails // the sandbox fails, or the daemon can't apply the profile
 )
 
+func (v verdict) String() string {
+	switch v {
+	case works:
+		return "works"
+	case fails:
+		return "fails"
+	}
+	return "unknown"
+}
+
 // appArmorChoice is where following a plan got.
 type appArmorChoice struct {
 	opt string
@@ -168,7 +180,7 @@ func appArmorNote(opt string, failed []string) AppArmorNote {
 	case "":
 		return AppArmorNote{slog.LevelInfo, "browser containers keep Docker's default AppArmor profile: Chromium's sandbox works under it here"}
 	}
-	return AppArmorNote{slog.LevelWarn, "browser containers run without an AppArmor profile: Docker's default refuses Chromium's sandbox on this host (AppArmor 4, as on Debian 13), " +
+	return AppArmorNote{slog.LevelWarn, "browser containers run without an AppArmor profile: Docker's default refuses Chromium's sandbox on this host (AppArmor 4 with Docker 29.1 or earlier, as on Debian 13), " +
 		`and BrowserPier's own profile isn't loaded. Load it to keep AppArmor: with the compose file, "docker compose --profile apparmor up -d"; see "AppArmor" in deploy/README.md. Tried ` + strings.Join(failed, "; ")}
 }
 
@@ -368,7 +380,7 @@ func appArmorStartError(err error, profile string, auto bool) error {
 		return err
 	}
 	if auto {
-		return fmt.Errorf("%w: docker couldn't apply %q, loaded when BrowserPier checked (reloading AppArmor on the host unloads it; Umbrel loads it again when the app starts), so it checks again before the next start: %w", ErrAppArmorNotLoaded, profile, err)
+		return fmt.Errorf("%w: docker couldn't apply %q, loaded when BrowserPier checked (unloaded since, say with apparmor_parser -R, or by a host restart where it isn't kept in /etc/apparmor.d), so it checks again before the next start: %w", ErrAppArmorNotLoaded, profile, err)
 	}
 	return fmt.Errorf("%w: docker couldn't apply %q, set in BROWSERPIER_BROWSER_APPARMOR; is it loaded? See \"AppArmor\" in deploy/README.md: %w", ErrAppArmorSetNotLoaded, profile, err)
 }

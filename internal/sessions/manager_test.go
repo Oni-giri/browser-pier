@@ -238,8 +238,8 @@ func TestStartFailsWhenTheBrowserExits(t *testing.T) {
 	}
 }
 
-// An AppArmor profile unloaded since BrowserPier chose it (an AppArmor
-// reload, say) gets one more try, which the runtime chooses again for.
+// An AppArmor profile unloaded since BrowserPier chose it (by
+// apparmor_parser -R, say) gets one more try, which the runtime chooses again for.
 func TestStartRetriesOnceWhenTheAppArmorProfileIsGone(t *testing.T) {
 	f := newFixture(t)
 	gone := fmt.Errorf("%w: unable to apply apparmor profile", docker.ErrAppArmorNotLoaded)

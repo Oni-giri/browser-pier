@@ -34,7 +34,7 @@ type Config struct {
 	UsernsMode string
 	// BrowserAppArmor names the browser containers' AppArmor profile
 	// (BROWSERPIER_BROWSER_APPARMOR). Empty means BrowserPier picks one:
-	// Docker's docker-default refuses Chromium's sandbox on AppArmor 4.
+	// Docker's docker-default may refuse Chromium's sandbox on AppArmor 4.
 	BrowserAppArmor string
 
 	// AdminPassword, when set (BROWSERPIER_ADMIN_PASSWORD), is the admin

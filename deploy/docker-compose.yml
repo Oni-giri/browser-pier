@@ -53,8 +53,9 @@ services:
 
   # With --profile apparmor: runs once at `docker compose up` and exits. On
   # AppArmor 4 hosts without Ubuntu's user namespace restriction (Debian
-  # 13), Docker's AppArmor profile refuses Chromium's sandbox, so this
-  # loads BrowserPier's own (docker-default plus user namespaces) and
+  # 13), the AppArmor profile of Docker 29.1 and earlier refuses Chromium's
+  # sandbox, so this loads BrowserPier's own (docker-default plus user
+  # namespaces), whatever Docker's version, and
   # installs it in the host's /etc/apparmor.d, which the host loads at
   # boot. Anywhere else it says so and does nothing. It needs rootful
   # Docker and a host with /etc/apparmor.d: not rootless Docker or Podman.

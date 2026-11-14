@@ -304,7 +304,7 @@ func (c *Client) Start(ctx context.Context, id string) error {
 	defer c.apparmorMu.Unlock()
 	profile, auto := strings.TrimPrefix(c.apparmorOpt, "apparmor="), c.plan.try != nil
 	if auto {
-		// Unloaded since the check, say by an AppArmor reload: check
+		// Unloaded since the check, say with apparmor_parser -R: check
 		// again before the next start.
 		c.apparmorSettled = false
 	}

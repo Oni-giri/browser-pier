@@ -426,8 +426,8 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 		if err == nil {
 			break
 		}
-		// The AppArmor profile BrowserPier chose was unloaded since, say by
-		// an AppArmor reload: the runtime checks again at the next Create.
+		// The AppArmor profile BrowserPier chose was unloaded since, say with
+		// apparmor_parser -R: the runtime checks again at the next Create.
 		if !retried && errors.Is(err, docker.ErrAppArmorNotLoaded) {
 			m.log.Warn("the browser's AppArmor profile isn't loaded any more; choosing again", "profile", p.Name, "err", err)
 			if rmErr := m.rt.Remove(ctx, cid); rmErr == nil {
