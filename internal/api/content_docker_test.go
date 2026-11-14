@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -341,63 +342,33 @@ func TestContentInVisualMode(t *testing.T) {
 // detector, which must catch its positive control. Markdown, readability
 // and screenshots must leave nothing; a PDF is a print, which the page
 // sees as it sees a person's ctrl+P (images/chromium/ANTI-BOT.md), and
-// nothing else but, on a loaded machine, the worker's timing check.
+// nothing else.
 func TestContentStaysQuiet(t *testing.T) {
 	a := newRealAPI(t)
 	w := browsertest.NewWatch(t, browsertest.SiteHost(t))
 	s := a.startAPIBrowser(t, "cq")
+	w.Attached = attachedPages(t, a.m.Layout().ControlSocket(s.Profile))
 	a.mustTool(s.ID, "navigate", map[string]string{"url": w.URL})
 	w.Ready(t)
 	time.Sleep(2 * time.Second)
-	w.Settle()
-	if k := w.Kinds(); len(k) > 0 {
-		t.Fatalf("the detector sees something before any content call: %v", k)
+	if !w.Calm(t, "before any content call") {
+		t.FailNow()
 	}
-	for _, body := range []map[string]any{{"format": "markdown"}, {"format": "readability"}, {"format": "screenshot"}} {
-		w.Reset()
-		for range 20 {
-			if code, _, raw := a.content(s.ID, body); code != http.StatusOK {
-				t.Fatalf("%v: %d %s", body, code, raw)
+	// Each batch goes through w.Quiet, which tells a busy machine's
+	// console-slow from one the calls cause with a control batch.
+	for _, format := range []string{"markdown", "readability", "screenshot"} {
+		w.Quiet(t, "20 × "+format, 20, func() {
+			if code, _, raw := a.content(s.ID, map[string]any{"format": format}); code != http.StatusOK {
+				t.Fatalf("%s: %d %s", format, code, raw)
 			}
-		}
-		w.Settle()
-		if k := w.Kinds(); len(k) > 0 {
-			t.Errorf("20 × %v: the detector saw %v", body, k)
-		} else {
-			t.Logf("20 × %v: nothing seen", body)
-		}
+		})
 	}
-	w.Reset()
-	for range 20 {
+	hits, _ := w.Quiet(t, "20 × pdf", 20, func() {
 		if code, _, raw := a.content(s.ID, map[string]any{"format": "pdf"}); code != http.StatusOK {
 			t.Fatalf("pdf: %d %s", code, raw)
 		}
-	}
-	w.Settle()
-	t.Logf("20 × pdf: the detector saw %v", w.Kinds())
-	for _, h := range w.Hits() {
-		if h.Kind != "print" {
-			t.Logf("20 × pdf: %s", h)
-		}
-	}
-	for _, k := range w.Kinds() {
-		// console-slow is timing alone: 50 console.debug calls costing
-		// five times what they did at load, as when an inspector
-		// serialises them. Nothing can serialise them in the worker: a
-		// PDF is Page.printToPDF on the page's own session, the content
-		// endpoints attach to page targets only and no allow-list may
-		// auto-attach or enable a domain; and markdown and readability,
-		// which attach the same way, leave the worker quiet above. But
-		// printing lays the page out again and rasterises it, and on a
-		// loaded two-CPU runner that starves the worker, which runs
-		// alongside it. So the worker's console-slow is the runner's
-		// noise here; anything else, console-slow on the main thread
-		// included, still counts.
-		if k != "print@main" && k != "console-slow@worker" {
-			t.Errorf("20 × pdf: the detector saw %s, more than a print", k)
-		}
-	}
-	if !w.HasKind("print") {
+	}, "print@main")
+	if !slices.ContainsFunc(hits, func(h browsertest.Hit) bool { return h.Kind == "print" }) {
 		t.Errorf("printing went unseen: the detector's print check doesn't work, or Chromium changed")
 	}
 	// The positive control: what Playwright does.
