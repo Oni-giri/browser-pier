@@ -86,8 +86,9 @@ func TestSharedLongStringsCostLittle(t *testing.T) {
 			}
 		}},
 		{"iframes sharing a megabyte src", func() *fnode {
+			src := "https://example.com/" + long // one string, as the snapshot sends it
 			return manyNodes(n, func(int) *fnode {
-				return el("iframe", "Iframe", "", box(0, 0, 10, 10)).attr("src", "https://example.com/"+long)
+				return el("iframe", "Iframe", "", box(0, 0, 10, 10)).attr("src", src)
 			})
 		}, func(t *testing.T, items []item, textOnly bool) {
 			if !textOnly && items[0].name != "https://example.com" {
