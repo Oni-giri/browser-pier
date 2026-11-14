@@ -67,3 +67,37 @@ So the taskbar hint is gone, and the 0×0 at load is unchanged (see Signals that
 ## Fixed along the way
 
 - **`Intl` contradicted the browser's languages.** The image had only Chromium's `en-US` interface, so whatever `LANGUAGE` said, `Intl` reported `en-US` while `navigator.languages` and Accept-Language followed the exit location (`fr-FR`). The image now installs `chromium-l10n` (about 120 MB), and its build fails if the locales are missing. `Intl` now follows the interface language: `de` for a German exit, as Chromium on a German Linux desktop reports.
+
+## API-mode page tools (PROJ-21)
+
+BrowserPier's own page tools (`snapshot`, `find`, `act`, `wait_for`, `navigate`, `tabs`) drive API-mode browsers over CDP from the orchestrator. They are built to stay quieter than Playwright: one short-lived browser-level connection per call through the control socket, **no domain is ever enabled**, scripts run only in an isolated world, and nothing is written into the page. The allow-list is in `internal/pagetools`; the CDP helper that enforces it is `internal/cdp`.
+
+### Phase 0: what works without any `*.enable` (2026-11-12, Chromium 156.0.8078.79)
+
+Measured by `TestSpike` (`internal/cdp/spike_docker_test.go`, run with `BROWSERPIER_SPIKE=1`) through the control socket, sending only the tools' allow-list.
+
+| Question | Result |
+|---|---|
+| `Accessibility.getFullAXTree`, `DOMSnapshot.captureSnapshot`, `DOM.describeNode`, `DOM.resolveNode` (into an isolated world), `DOM.getContentQuads`, `DOM.scrollIntoViewIfNeeded`, `DOM.focus`, `Page.createIsolatedWorld`, `Runtime.callFunctionOn` / `releaseObject` on isolated objects | All work with nothing enabled, in a few milliseconds on a small page. `Accessibility.getPartialAXTree` (one node, no relatives) works too, and the tools use it to echo what a step hit. |
+| `Page.handleJavaScriptDialog` | **Doesn't work** without `Page.enable` ("No dialog is showing", even with an `alert()` open). So the tools have **no `dialog` step**. |
+| A source for an open dialog's type and message, without `*.enable` | **None.** `Target.getTargets` and `/json/list` don't mention it. While an `alert()` is open, every renderer-side method (`Page.getFrameTree`, `Runtime.evaluate`, `Page.createIsolatedWorld`, the AX tree, the DOM snapshot) gets no answer; browser-side ones (`Page.getNavigationHistory`, `Target.getTargets`) still answer. The tools use that difference to say "the page is busy or has a dialog open; if it stays that way, request a handoff." |
+| Keys after `Page.navigate` (focus in the address bar) | `DOM.focus` moves the page's focus and `document.hasFocus()` turns true. Right after a navigation, Chromium drops events until the first raw key-down, so a CDP `keyDown` with text can lose its first character ("abc" arrives as "bc"). Sent as a keyboard sends them, `rawKeyDown`, `char`, `keyUp`, the text always arrives in full; the page can still miss the very first `keydown` event. The tools type that way. |
+| `Input.insertText` right after `Page.navigate` | Reaches the focused field in full (7/7 characters into a password field). `fill`'s replace, the `selectAll` editing command then `insertText`, works too. |
+| The foreground tab without a window manager, 20 tabs | `document.visibilityState` (read in an isolated world) is `visible` in exactly one tab: the one created last, or the one `Target.activateTarget` named. Reading all 20 takes 30–80 ms on one connection. A popup window (`window.open` with features) is `visible` and its opener turns `hidden`; a `target=_blank` link opened from a CDP click left its opener in front. |
+| Large pages (AX tree / DOM snapshot) | 4,000 elements: 4.0 MB in 0.3 s / 0.9 MB in 0.1 s. 20,000: 20 MB in 2.0 s / 4.9 MB in 0.4 s. 80,000: 81 MB in 28 s / 20 MB in 1.7 s. 200,000: neither answered within 60 s. A real long page (Wikipedia's population list, 10,000 elements): 8.0 MB in 0.5 s / 3.4 MB in 0.3 s. The HTML spec (340,000 elements): no AX tree in 60 s; DOM snapshot 99 MB in 9 s. **The cap:** the tools take the DOM snapshot first, and a page with more than 60,000 DOM nodes (about 30,000 elements) is too large for the AX tree; `snapshot` says so and `find` reads the DOM snapshot's text alone. Messages are capped at 32 MiB, and at most two whole-page reads run at once. |
+| Isolated-world build-up | 1,000 calls on one document (each: dial, attach, `getFrameTree`, `createIsolatedWorld`, `evaluate`, close) got the **same** execution context every time (Chromium keeps one world per name and document), with no measurable growth in renderer memory (1,876 → 1,901 MB on an already-large renderer, within noise). About 6 ms of overhead per call. |
+| Anything left attached | After the connection closes, `Target.getTargets` shows the page `attached: false`. |
+
+### The continuous detector
+
+`browsertest.Watch` (`internal/browsertest/watch.go`) is a page that keeps checking, every 200 ms on its main thread and in a worker, for what pages use to spot CDP automation: the `Error.stack` console leak of an enabled `Runtime`, a logged `Proxy` being inspected, console calls getting slow, `navigator.webdriver` and automation globals; hooks on the DOM methods automation calls in the page's own world (`querySelector`, `getBoundingClientRect`, `focus`, `elementFromPoint`…); and input tells (screen position equal to client position, a click with no mouse movement, a key event without a code, text with no key pressed). It is shared with PROJ-57.
+
+**Positive control** (`browsertest.WatchPositiveControl`: what Playwright does when it connects and acts): detected, through main-world calls (`querySelector`, `getBoundingClientRect`, `focus`), its binding (`__playwright__binding__`), a click with no movement and text with no key pressed. `Runtime.enable` **alone** is no longer detected by the console checks on Chromium 156 (the `Error.stack` leak is closed; getters on an Error's `message` or `name` can't be used, as Chromium's console reads them with nothing attached).
+
+**The tools' CDP calls, 20 runs each, nothing else attached:** nothing recorded, for reading (frame tree, AX tree, partial AX tree, DOM snapshot, isolated world), clicking (scroll into view, quads, hit-test in an isolated world, mouse move, press and release), `fill` (focus, `selectAll`, `insertText`), `type` (focus, key events) and tabs (targets, visibility of each).
+
+**Accepted residuals** (each is what Playwright does as well, and API mode is the mode that isn't for protected sites):
+- `fill` puts its text in with one `insertText` after a select-all key press: a detector that checks that typed text matches the keys pressed can tell. Typing with `type` sends one key per character.
+- Key events come as fast as CDP sends them, with no typing rhythm.
+
+**The tools themselves, 20 runs each** (`TestPageToolsStayQuiet`, `internal/api/page_tabs_docker_test.go`, in `make test-docker`), nothing else attached: nothing recorded for `snapshot`, `find`, `act` (click, fill, type, press and hover, each its own run), `wait_for` (text, and a ref), `tabs` and `navigate` (reload), while the positive control in the same test was caught (main-world calls and its binding). So there is no hit to decide on; the residuals above still stand.

@@ -152,6 +152,14 @@ type live struct {
 	lastAgentInput time.Time
 	// inputs counts agent input actions under way (AgentInput leases).
 	inputs int
+	// leases are BrowserPier's own calls into the page under way
+	// (PageLease); turn lets one run at a time.
+	leases map[*lease]struct{}
+	turn   chan struct{}
+	// holds counts HoldSession holds: page calls wait while there is one.
+	holds int
+	// generation changes each time a person takes the browser.
+	generation uint64
 	// human is set while a person has control from the live view.
 	human bool
 	// viewers counts open live views.
@@ -810,6 +818,7 @@ func (m *Manager) end(l *live, lastLog string, final func(*Session)) {
 		delete(m.live, s.Profile)
 	}
 	l.disconnectLocked()
+	l.cancelLeasesLocked(ErrStopping)
 	m.mu.Unlock()
 	if s.State == Failed {
 		m.log.Warn("session failed", "session", s.ID, "profile", s.Profile, "err", s.Error, "last_log", s.LastLog)
@@ -909,21 +918,33 @@ func (m *Manager) DisconnectToken(tokenID string) {
 				c.cancel()
 			}
 		}
+		for ls := range l.leases {
+			if ls.tokenID == tokenID {
+				ls.cancel(ErrRevoked)
+			}
+		}
 	}
 }
 
-// ConnectedTokens lists the tokens with an open connection to any browser.
+// ConnectedTokens lists the tokens with an open connection to any
+// browser, or a page call under way (PageLease).
 func (m *Manager) ConnectedTokens() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	seen := map[string]bool{}
 	var out []string
+	add := func(id string) {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
 	for _, l := range m.live {
 		for c := range l.conns {
-			if !seen[c.tokenID] {
-				seen[c.tokenID] = true
-				out = append(out, c.tokenID)
-			}
+			add(c.tokenID)
+		}
+		for ls := range l.leases {
+			add(ls.tokenID)
 		}
 	}
 	return out
@@ -984,6 +1005,19 @@ func (m *Manager) stopIf(ctx context.Context, id string, cond func(*live) bool) 
 		}
 		attempt = &stopAttempt{done: make(chan struct{})}
 		l.stop = attempt
+		// Page calls under way stop first (an act lets go of what it
+		// pressed), then the browser closes.
+		l.cancelLeasesLocked(ErrStopping)
+		for len(l.leases) > 0 {
+			m.inputsDone.Wait()
+		}
+		// The wait let go of the lock: the browser may have exited and
+		// the session ended meanwhile, with nothing left to stop.
+		if m.findLocked(id) != l || l.sess.State != Stopping {
+			close(attempt.done)
+			m.mu.Unlock()
+			return m.waitStopped(ctx, l)
+		}
 		cid := l.sess.ContainerID
 		if !m.spawn(func() { m.runStop(l, attempt, cid, prev) }) {
 			m.mu.Unlock()
@@ -999,6 +1033,14 @@ func (m *Manager) stopIf(ctx context.Context, id string, cond func(*live) bool) 
 			return m.snapshot(l), fmt.Errorf("stopping the browser: %w", attempt.err)
 		}
 	}
+	if err := m.wait(ctx, l.done); err != nil {
+		return m.snapshot(l), err
+	}
+	return m.snapshot(l), nil
+}
+
+// waitStopped waits for a session to end and returns it.
+func (m *Manager) waitStopped(ctx context.Context, l *live) (Session, error) {
 	if err := m.wait(ctx, l.done); err != nil {
 		return m.snapshot(l), err
 	}
@@ -1064,11 +1106,12 @@ func (m *Manager) SetNeedsHelp(id string, needsHelp bool) (Session, error) {
 			// The agent is paused while a person has the browser: its
 			// connections close, and new ones are refused until hand-back.
 			l.disconnectLocked()
-			// Input already on its way finishes before the person gets
-			// the browser; new input is refused from now on.
-			for l.inputs > 0 {
-				m.inputsDone.Wait()
-			}
+			l.generation++
+			// Page calls under way are cancelled; they and input already
+			// on its way finish before the person gets the browser. New
+			// ones are refused from now on.
+			l.cancelLeasesLocked(ErrHandedOver)
+			m.waitLeasesLocked(l)
 		}
 		if to == Running {
 			l.lastActivity = m.now() // idle time starts at hand-back

@@ -22,6 +22,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/fence"
 	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/handoff"
+	"github.com/Oni-giri/browser-pier/internal/pagetools"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/settings"
@@ -36,10 +37,11 @@ type API struct {
 	settings *settings.Store // the admin's defaults for new profiles, if set
 	log      *slog.Logger
 	public   string // BROWSERPIER_PUBLIC_URL, if set
+	tools    *pagetools.Tools
 }
 
 func New(m *sessions.Manager, web *auth.Web, fs *files.Store, log *slog.Logger, publicURL string) *API {
-	return &API{m: m, web: web, files: fs, log: log, public: strings.TrimRight(publicURL, "/")}
+	return &API{m: m, web: web, files: fs, log: log, public: strings.TrimRight(publicURL, "/"), tools: pagetools.New(m, log)}
 }
 
 // SetSettings makes profiles created through the API start from the
@@ -64,6 +66,7 @@ func (a *API) Register(mux *http.ServeMux) {
 	mux.Handle("GET /api/profiles/{name}/files/{file}", t(a.getFile))
 	mux.Handle("DELETE /api/profiles/{name}/files/{file}", t(a.deleteFile))
 	mux.Handle("POST /api/sessions/{id}/cdp-ticket", t(a.cdpTicket))
+	a.registerPageTools(mux)
 	if a.handoffs != nil {
 		a.registerHandoffs(mux)
 	}
