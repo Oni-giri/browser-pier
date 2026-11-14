@@ -393,17 +393,6 @@ func contentTree(ctx context.Context, d *dom) (*pagetext.Node, error) {
 	return root, nil
 }
 
-// cutBytes cuts s to at most n bytes, on a rune boundary.
-func cutBytes(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	for n > 0 && !utf8.RuneStart(s[n]) {
-		n--
-	}
-	return s[:n]
-}
-
 // parentOf is the tree node that snapshot node p's children go under:
 // root for none, nil when p was left out.
 func parentOf(nodes []*pagetext.Node, p int, root *pagetext.Node) *pagetext.Node {
