@@ -20,7 +20,7 @@ import (
 // what it must.
 func TestPageToolsRead(t *testing.T) {
 	a := newRealAPI(t)
-	site := browsertest.NewPageSite(t, siteHost(t))
+	site := browsertest.NewPageSite(t, browsertest.SiteHost(t))
 	s := a.startAPIBrowser(t, "r")
 	open := func(path string) string {
 		t.Helper()

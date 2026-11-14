@@ -117,24 +117,13 @@ func startBrowser(t *testing.T) *spike {
 	}
 	sock := m.Layout().ControlSocket(name)
 	s := &spike{t: t, sock: sock, name: name, control: browsertest.ControlClient(sock)}
-	s.site = spikeSite(t, siteHost(t))
+	s.site = spikeSite(t, browsertest.SiteHost(t))
 	t.Cleanup(func() {
 		if f := os.Getenv("BROWSERPIER_SPIKE_OUT"); f != "" {
 			_ = os.WriteFile(f, []byte(s.out.String()), 0o600)
 		}
 	})
 	return s
-}
-
-func siteHost(t *testing.T) string {
-	if h := os.Getenv("BROWSERPIER_TEST_SITE_HOST"); h != "" {
-		return h
-	}
-	out, err := exec.Command("docker", "network", "inspect", "bridge", "-f", "{{(index .IPAM.Config 0).Gateway}}").Output()
-	if err != nil {
-		t.Fatalf("set BROWSERPIER_TEST_SITE_HOST: %v", err)
-	}
-	return strings.TrimSpace(string(out))
 }
 
 func spikeSite(t *testing.T, host string) string {
@@ -872,7 +861,7 @@ func (s *spike) isolatedWorlds() {
 
 func (s *spike) detector() {
 	s.logf("## Continuous detector")
-	w := browsertest.NewWatch(s.t, siteHost(s.t))
+	w := browsertest.NewWatch(s.t, browsertest.SiteHost(s.t))
 	c := s.dial()
 	tb := s.firstTab(c)
 	tb.navigate(w.URL)

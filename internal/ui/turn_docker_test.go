@@ -141,7 +141,7 @@ func TestHandoffLiveViewThroughTURN(t *testing.T) {
 // there.
 func phoneSeesHostAt(t *testing.T, container string) string {
 	t.Helper()
-	host := siteHost(t)
+	host := browsertest.SiteHost(t)
 	if net.ParseIP(host) != nil {
 		return host
 	}

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Oni-giri/browser-pier/internal/browsertest"
 )
 
 // sharedPage builds, by script, n nodes that share one long string: the
@@ -50,7 +52,7 @@ func TestSharedStringsOnARealPage(t *testing.T) {
 	})}
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
-	base := fmt.Sprintf("http://%s:%d/", siteHost(t), ln.Addr().(*net.TCPAddr).Port)
+	base := fmt.Sprintf("http://%s:%d/", browsertest.SiteHost(t), ln.Addr().(*net.TCPAddr).Port)
 	s := a.startAPIBrowser(t, "sh")
 	// Long text is searched whole (first: the heavy pages below keep
 	// Chrome busy for a while after).

@@ -17,7 +17,7 @@ func steps(s ...map[string]any) map[string]any { return map[string]any{"steps": 
 // TestPageToolsAct is PROJ-21's acting scenarios on a real browser.
 func TestPageToolsAct(t *testing.T) {
 	a := newRealAPI(t)
-	site := browsertest.NewPageSite(t, siteHost(t))
+	site := browsertest.NewPageSite(t, browsertest.SiteHost(t))
 	s := a.startAPIBrowser(t, "a")
 	open := func(path string) string {
 		t.Helper()

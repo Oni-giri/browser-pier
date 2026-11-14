@@ -30,7 +30,7 @@ func activeTab(t *testing.T, list string) string {
 // and the opener is active again.
 func TestPageToolsTabs(t *testing.T) {
 	a := newRealAPI(t)
-	site := browsertest.NewPageSite(t, siteHost(t))
+	site := browsertest.NewPageSite(t, browsertest.SiteHost(t))
 	s := a.startAPIBrowser(t, "t")
 	a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/popups"})
 	snap := a.mustTool(s.ID, "snapshot", nil)
@@ -124,7 +124,7 @@ func TestPageToolsTabs(t *testing.T) {
 // images/chromium/ANTI-BOT.md with a decision.
 func TestPageToolsStayQuiet(t *testing.T) {
 	a := newRealAPI(t)
-	w := browsertest.NewWatch(t, siteHost(t))
+	w := browsertest.NewWatch(t, browsertest.SiteHost(t))
 	s := a.startAPIBrowser(t, "q")
 	a.mustTool(s.ID, "navigate", map[string]string{"url": w.URL})
 	w.Ready(t)

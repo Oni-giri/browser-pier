@@ -58,7 +58,7 @@ func inFence(out, want string) bool {
 // attached and the activity log has no page text.
 func TestContent(t *testing.T) {
 	a := newRealAPI(t)
-	site := browsertest.NewPageSite(t, siteHost(t))
+	site := browsertest.NewPageSite(t, browsertest.SiteHost(t))
 	s := a.startAPIBrowser(t, "c")
 	a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/article"})
 
@@ -170,7 +170,7 @@ func TestContent(t *testing.T) {
 // hidden chain of 190,000 elements renders at once.
 func TestContentLeavesOutWhatItMust(t *testing.T) {
 	a := newRealAPI(t)
-	site := browsertest.NewPageSite(t, siteHost(t))
+	site := browsertest.NewPageSite(t, browsertest.SiteHost(t))
 	s := a.startAPIBrowser(t, "cf")
 	a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/probe-fields"})
 	for _, format := range []string{"markdown", "readability"} {
@@ -217,7 +217,7 @@ func TestContentLeavesOutWhatItMust(t *testing.T) {
 // once) read in a few seconds, and a handoff during a read ends it at once.
 func TestContentWithSharedStrings(t *testing.T) {
 	a := newRealAPI(t)
-	site := browsertest.NewPageSite(t, siteHost(t))
+	site := browsertest.NewPageSite(t, browsertest.SiteHost(t))
 	s := a.startAPIBrowser(t, "cs")
 	open := func(q string) {
 		t.Helper()
@@ -266,7 +266,7 @@ func TestContentWithSharedStrings(t *testing.T) {
 // says the structure was flattened.
 func TestContentDisplayContents(t *testing.T) {
 	a := newRealAPI(t)
-	site := browsertest.NewPageSite(t, siteHost(t))
+	site := browsertest.NewPageSite(t, browsertest.SiteHost(t))
 	s := a.startAPIBrowser(t, "cc")
 	a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/probe-contents"})
 	md := a.contentText(s.ID, map[string]any{"format": "markdown"})
@@ -292,7 +292,7 @@ func TestContentDisplayContents(t *testing.T) {
 // and isn't reported as a cut.
 func TestContentHiddenTextSpendsNoBudget(t *testing.T) {
 	a := newRealAPI(t)
-	site := browsertest.NewPageSite(t, siteHost(t))
+	site := browsertest.NewPageSite(t, browsertest.SiteHost(t))
 	s := a.startAPIBrowser(t, "cb")
 	for _, q := range []string{"k=none&mb=9", "k=script&mb=9"} {
 		a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/probe-budget?" + q})
@@ -345,7 +345,7 @@ func TestContentInVisualMode(t *testing.T) {
 // nothing else.
 func TestContentStaysQuiet(t *testing.T) {
 	a := newRealAPI(t)
-	w := browsertest.NewWatch(t, siteHost(t))
+	w := browsertest.NewWatch(t, browsertest.SiteHost(t))
 	s := a.startAPIBrowser(t, "cq")
 	a.mustTool(s.ID, "navigate", map[string]string{"url": w.URL})
 	w.Ready(t)

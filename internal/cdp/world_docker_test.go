@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Oni-giri/browser-pier/internal/browsertest"
 	"github.com/Oni-giri/browser-pier/internal/cdp"
 )
 
@@ -23,7 +24,7 @@ func TestAnOldWorldNumberThatNamesAPageWorldNeverRunsCode(t *testing.T) {
 	s := startBrowser(t)
 	// The same server under another site: its address instead of its name,
 	// or, when the site is already an address, another of this machine's.
-	host := siteHost(t)
+	host := browsertest.SiteHost(t)
 	_, port, _ := net.SplitHostPort(strings.TrimPrefix(s.site, "http://"))
 	ip := otherAddress(t, s.name, host, port)
 	other := strings.Replace(s.site, host, ip, 1)
