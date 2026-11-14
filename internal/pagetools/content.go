@@ -104,7 +104,7 @@ func (t *Tools) Text(ctx context.Context, s sessions.Session, who Caller, in Tex
 			return "", err
 		}
 		defer release()
-		root, base, header, err := c.readTree(c.lease.Ctx)
+		root, cut, base, header, err := c.readTree(c.lease.Ctx)
 		if err != nil {
 			return "", err
 		}
@@ -127,6 +127,9 @@ func (t *Tools) Text(ctx context.Context, s sessions.Session, who Caller, in Tex
 			}
 			return "", err
 		}
+		// What the page had past the text budget isn't in the body: say so
+		// after the last part, as for text past the render limit.
+		full = full || cut
 		total := utf8.RuneCountInString(body)
 		if in.Offset > total || in.Offset > 0 && in.Offset == total {
 			return "", &Error{Status: 400, Msg: fmt.Sprintf("offset: the text has %s characters", thousands(total))}
@@ -206,25 +209,25 @@ func openFence(s string, offset int) string {
 // readTree takes a DOM snapshot of the active tab and turns what it lays
 // out into a pagetext tree. The tab's document is checked before and
 // after: a snapshot that straddles a navigation is taken again, once.
-func (c *call) readTree(ctx context.Context) (*pagetext.Node, *url.URL, string, error) {
+func (c *call) readTree(ctx context.Context) (*pagetext.Node, bool, *url.URL, string, error) {
 	for try := 0; ; try++ {
 		_, before, _, err := c.frameTree(ctx, c.tgt)
 		if err != nil {
-			return nil, nil, "", err
+			return nil, false, nil, "", err
 		}
 		d, err := c.readContentDOM(ctx)
 		if err != nil {
-			return nil, nil, "", err
+			return nil, false, nil, "", err
 		}
 		_, after, _, err := c.frameTree(ctx, c.tgt)
 		if err != nil {
-			return nil, nil, "", err
+			return nil, false, nil, "", err
 		}
 		if before != after {
 			if try == 0 {
 				continue
 			}
-			return nil, nil, "", &Error{Status: http.StatusConflict, Msg: "the page kept changing while it was read; try again"}
+			return nil, false, nil, "", &Error{Status: http.StatusConflict, Msg: "the page kept changing while it was read; try again"}
 		}
 		doc := &d.s.Documents[0]
 		pageURL := d.str(doc.DocumentURL)
@@ -236,8 +239,8 @@ func (c *call) readTree(ctx context.Context) (*pagetext.Node, *url.URL, string, 
 		// The fence drops HTML comments: a "<!--" in a title would take
 		// the page's text with it.
 		header = strings.ReplaceAll(header, "<!--", `<\!--`)
-		tree, err := contentTree(ctx, d)
-		return tree, base, header, err
+		tree, cut, err := contentTree(ctx, d)
+		return tree, cut, base, header, err
 	}
 }
 
@@ -276,41 +279,59 @@ var contentAttrs = map[string]bool{"href": true, "src": true, "alt": true, "clas
 // to its cap and texts are read against one budget for the page
 // (pagetext.TextBudget): the work is linear in the nodes, however many
 // share one long string. It stops with ctx's error when ctx ends.
-func contentTree(ctx context.Context, d *dom) (*pagetext.Node, error) {
+func contentTree(ctx context.Context, d *dom) (*pagetext.Node, bool, error) {
 	doc := d.s.Documents[0]
 	types := doc.Nodes.NodeType
 	// Which texts are shown, then, bottom-up (a parent comes before its
-	// children in the snapshot), which elements have shown content.
+	// children in the snapshot), which elements have shown content. Only
+	// text that is shown, and not under an element whose content is never
+	// page text (a script, a style, a field), spends the budget: hidden
+	// text must not push visible text out.
 	texts := make([]string, len(types))
 	shown := make([]bool, len(types))
-	budget, truncated := pagetext.TextBudget, false
+	under := make([]bool, len(types))  // under a skipped element
+	boiler := make([]bool, len(types)) // under navigation, a form…: its own budget
+	budget, boilerBudget, truncated := pagetext.TextBudget, pagetext.MaxText, false
 	for i, typ := range types {
 		if i%4096 == 0 {
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				return nil, false, err
 			}
 		}
+		p := d.parent(i)
+		if p >= 0 && p < len(under) && under[p] {
+			under[i] = true
+			continue
+		}
+		inBoiler := p >= 0 && p < len(boiler) && boiler[p]
 		switch typ {
 		case 1:
 			_, shown[i] = d.layout[i]
+			tag := localName(d.name(i))
+			under[i] = pagetext.Skipped(tag)
+			role, _ := d.attr(i, "role")
+			boiler[i] = inBoiler || pagetext.Boilerplate(tag, cutBytes(role, 64))
 		case 3:
-			if budget <= 0 {
-				truncated = truncated || !pagetext.Blank(cutBytes(d.str(doc.Nodes.NodeValue[i]), 64))
+			if _, ok := d.shown(i); !ok {
+				continue // not laid out, hidden or zero-size: read nothing of it
+			}
+			b := &budget
+			if inBoiler {
+				b = &boilerBudget
+			}
+			if *b <= 0 {
+				// Boilerplate past its budget isn't a cut: the main text
+				// never shows it, and Markdown's output is full first.
+				truncated = truncated || !inBoiler && !pagetext.Blank(cutBytes(d.str(doc.Nodes.NodeValue[i]), 64))
 				continue
 			}
-			t := cutBytes(d.str(doc.Nodes.NodeValue[i]), min(pagetext.MaxText, budget))
-			budget -= max(1, len(t))
-			if pagetext.Blank(t) {
-				// Whitespace between elements, shown or not.
-				if t != "" {
-					texts[i], shown[i] = " ", true
-					if p := d.parent(i); p >= 0 && preWhiteSpace(d, p) {
-						texts[i] = t
-					}
-				}
-				continue
-			}
-			if _, ok := d.shown(i); ok {
+			t := cutBytes(d.str(doc.Nodes.NodeValue[i]), min(pagetext.MaxText, *b))
+			*b -= max(1, len(t))
+			switch {
+			case t == "":
+			case pagetext.Blank(t) && (p < 0 || !preWhiteSpace(d, p)):
+				texts[i], shown[i] = " ", true
+			default:
 				texts[i], shown[i] = t, true
 			}
 		}
@@ -331,8 +352,11 @@ func contentTree(ctx context.Context, d *dom) (*pagetext.Node, error) {
 	for i, typ := range types {
 		if i%4096 == 0 {
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				return nil, false, err
 			}
+		}
+		if under[i] && typ != 1 {
+			continue
 		}
 		var n *pagetext.Node
 		switch typ {
@@ -343,11 +367,7 @@ func contentTree(ctx context.Context, d *dom) (*pagetext.Node, error) {
 			if !keep[i] {
 				continue // nothing of it is shown
 			}
-			tag := strings.ToLower(d.name(i))
-			// XHTML can prefix names (h:input): the local name is the tag.
-			if k := strings.LastIndexByte(tag, ':'); k >= 0 {
-				tag = tag[k+1:]
-			}
+			tag := localName(d.name(i))
 			display := d.display(i)
 			if !shown[i] {
 				display = "contents" // no box, but shown content
@@ -387,10 +407,17 @@ func contentTree(ctx context.Context, d *dom) (*pagetext.Node, error) {
 		nodes[i] = n
 		parent.Kids = append(parent.Kids, n)
 	}
-	if truncated {
-		root.Kids = append(root.Kids, &pagetext.Node{Tag: "p", Kids: []*pagetext.Node{pagetext.Note(pagetext.TruncatedNote)}})
+	return root, truncated, nil
+}
+
+// localName is an element's lower-case name without an XHTML prefix
+// (h:input is input).
+func localName(name string) string {
+	tag := strings.ToLower(name)
+	if k := strings.LastIndexByte(tag, ':'); k >= 0 {
+		tag = tag[k+1:]
 	}
-	return root, nil
+	return tag
 }
 
 // parentOf is the tree node that snapshot node p's children go under:

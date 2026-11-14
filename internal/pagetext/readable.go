@@ -12,7 +12,7 @@ import (
 // and dialogs, and only the part of the page that reads as its article.
 // Like Markdown, it takes time and memory linear in the tree and limit.
 func Readable(ctx context.Context, root *Node, limit int) (string, bool, error) {
-	b, err := bound(ctx, root)
+	b, cut, err := bound(ctx, root)
 	if err != nil {
 		return "", false, err
 	}
@@ -21,10 +21,11 @@ func Readable(ctx context.Context, root *Node, limit int) (string, bool, error) 
 	if chk.err != nil {
 		return "", false, chk.err
 	}
-	if b, err = bound(ctx, a); err != nil {
+	if b, _, err = bound(ctx, a); err != nil {
 		return "", false, err
 	}
-	return render(ctx, b, nil, true, limit)
+	out, full, err := render(ctx, b, nil, true, limit)
+	return out, full || cut, err
 }
 
 // checker looks at a context every few thousand nodes.
@@ -70,10 +71,12 @@ const minArticle = 200
 // same way. A page where nothing stands out comes back whole, cleaned.
 //
 // One retry, for a wrapper whose class misled step 1 (a page wrapped in
-// <div id="community-page">): when the page has no article or main, what
-// was found is under minArticle, and a single block left out by its class
-// held more than half the page's text, the article is found again with
-// that block kept, and taken only if it keeps everything found first.
+// <div id="community-page"> or <div class="layout has-sidebar">): when
+// the page has no article or main, and a single block left out by its
+// class held most of the page's text (more than half when under
+// minArticle was found, 80% whatever was found), the article is found
+// again with that block kept, and taken only if it keeps everything found
+// first. Comments, footers and banners are never taken for wrappers.
 func article(root *Node, chk *checker) *Node {
 	body := find(root, func(n *Node) bool { return n.Tag == "body" })
 	if body == nil {
@@ -81,13 +84,19 @@ func article(root *Node, chk *checker) *Node {
 	}
 	var dropped []*Node
 	first := articleOf(body, chk, nil, &dropped)
-	if body.hasMain || textSize(first) >= minArticle || chk.err != nil {
+	if body.hasMain || len(dropped) == 0 || chk.err != nil {
 		return first
 	}
+	got := textSize(first)
 	page := textSize(prune(body, false, false, chk, nil, nil))
 	var wrapper *Node
 	for _, d := range dropped {
-		if d.tlen*2 > page && (wrapper == nil || d.tlen > wrapper.tlen) {
+		if neverWrapper.MatchString(classWords(d)) {
+			continue // comments, a footer, a banner: never around the article
+		}
+		// A wrapper holds most of the page: more than half when little was
+		// found, 80% whatever was.
+		if (got < minArticle && d.tlen*2 > page || d.tlen*5 >= page*4) && (wrapper == nil || d.tlen > wrapper.tlen) {
 			wrapper = d
 		}
 	}
@@ -95,10 +104,69 @@ func article(root *Node, chk *checker) *Node {
 		return first
 	}
 	second := articleOf(body, chk, wrapper, nil)
-	if textSize(second) > textSize(first) && keepsAll(second, first) {
-		return second
+	switch {
+	case keepsAll(second, first):
+		if textSize(second) > got {
+			return second
+		}
+	case disjoint(second, first):
+		// What was found first lies outside the wrapper (a legal notice
+		// beside it): keep both, in the page's order.
+		return inOrder(body, second, first)
 	}
 	return first
+}
+
+// texts lists a tree's non-blank texts.
+func texts(n *Node) []*Node {
+	var out []*Node
+	stack := []*Node{n}
+	for len(stack) > 0 {
+		c := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if c.Tag == "" {
+			if strings.TrimSpace(c.Text) != "" {
+				out = append(out, c)
+			}
+			continue
+		}
+		for i := len(c.Kids) - 1; i >= 0; i-- {
+			stack = append(stack, c.Kids[i])
+		}
+	}
+	return out
+}
+
+// disjoint reports whether a and b share no text.
+func disjoint(a, b *Node) bool {
+	in := map[*Node]bool{}
+	for _, t := range texts(a) {
+		in[t] = true
+	}
+	for _, t := range texts(b) {
+		if in[t] {
+			return false
+		}
+	}
+	return true
+}
+
+// inOrder joins two disjoint trees in the order their first texts come in
+// body.
+func inOrder(body, a, b *Node) *Node {
+	ta, tb := texts(a), texts(b)
+	if len(ta) == 0 || len(tb) == 0 {
+		return &Node{Tag: "div", Kids: []*Node{a, b}}
+	}
+	for _, t := range texts(body) {
+		switch t {
+		case ta[0]:
+			return &Node{Tag: "div", Kids: []*Node{a, b}}
+		case tb[0]:
+			return &Node{Tag: "div", Kids: []*Node{b, a}}
+		}
+	}
+	return &Node{Tag: "div", Kids: []*Node{a, b}}
 }
 
 // keepsAll reports whether every text of b is in a (pruning keeps texts'
@@ -148,7 +216,7 @@ func articleOf(body *Node, chk *checker, keep *Node, dropped *[]*Node) *Node {
 		}
 		return nil
 	}
-	if a := pick(func(n *Node) bool { return n.Tag == "article" || n.Attr("role") == "article" }); a != nil {
+	if a := pick(func(n *Node) bool { return (n.Tag == "article" || n.Attr("role") == "article") && !unlikelyClass(n) }); a != nil {
 		return m.final(a)
 	}
 	if a := pick(func(n *Node) bool { return n.Tag == "main" || n.Attr("role") == "main" }); a != nil {
@@ -181,8 +249,14 @@ func textSize(n *Node) int {
 var (
 	// unlikely class or id words: blocks that are never the article.
 	unlikely = regexp.MustCompile(` (?:ad break|adverts?|advertisement|agegate|banners?|breadcrumbs?|comments?|community|consent|cookies?|disqus|footer|gdpr|masthead|menus?|modal|newsletter|pager|pagination|popup|promos?|related|remarks?|replies|share|sharing|shoutbox|sidebar|skip|social|sponsors?|sponsored|subscribe|toolbar|widgets?) `)
-	// likely class or id words, which keep a block an unlikely word would drop.
+	// likely class or id words, which keep a block an unlikely word would
+	// drop, unless it is a strong one: post-comments and footer-content
+	// are comments and a footer.
 	likely = regexp.MustCompile(`article|body|column|content|entry|main|post|story|text`)
+	strong = regexp.MustCompile(` (?:comments?|replies|disqus|footer|sidebar) `)
+	// neverWrapper words: blocks that are never around the article, so the
+	// retry never keeps them.
+	neverWrapper = regexp.MustCompile(` (?:comments?|replies|disqus|footer|cookies?|consent|gdpr|banners?|newsletter|subscribe|related|promos?|sponsors?|sponsored|adverts?|advertisement) `)
 	// positive and negative class or id words, for scoring.
 	positive = regexp.MustCompile(`article|blog|body|content|entry|h ?entry|main|page|post|story|text`)
 	negative = regexp.MustCompile(` (?:banners?|byline|comments?|contact|cookies?|foot|footer|footnotes?|hidden|masthead|media|menus?|meta|nav|promos?|related|share|sidebar|social|sponsors?|tags|tools?|widgets?) `)
@@ -218,7 +292,7 @@ func unlikelyClass(n *Node) bool {
 		return false
 	}
 	w := classWords(n)
-	return unlikely.MatchString(w) && !likely.MatchString(w)
+	return unlikely.MatchString(w) && (!likely.MatchString(w) || strong.MatchString(w))
 }
 
 // boilerRoles are ARIA roles of what is never the article.

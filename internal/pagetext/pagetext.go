@@ -75,15 +75,26 @@ const (
 const (
 	// DeepNote marks where structure past maxDepth was flattened.
 	DeepNote = "[BrowserPier: nested too deep; text only from here] "
-	// TruncatedNote ends a page whose text went past TextBudget.
-	TruncatedNote = "[BrowserPier: the page has more text than it reads]"
 )
 
 // noteTag marks BrowserPier's own words in a tree: written as they are.
 const noteTag = "#note"
 
-// Note is BrowserPier's own words for a tree, written as they are.
-func Note(text string) *Node { return &Node{Tag: noteTag, Text: text} }
+// Skipped reports whether an element's content is never page text (a
+// script, a style, a form field…): it spends no text budget.
+func Skipped(tag string) bool { return skipped[tag] }
+
+// Boilerplate reports whether an element is never part of a page's main
+// text, by its tag or role (navigation, a sidebar, a form, a dialog): its
+// text spends a budget of its own, MaxText, so a huge menu can't push the
+// article out.
+func Boilerplate(tag, role string) bool {
+	switch tag {
+	case "nav", "aside", "form", "dialog", "button":
+		return true
+	}
+	return boilerRoles[role]
+}
 
 // CutAttr cuts an attribute's value to its cap.
 func CutAttr(name, value string) string {
@@ -108,38 +119,48 @@ func Blank(s string) bool {
 
 // bound copies a tree, at most maxDepth deep, with attributes cut to their
 // caps and at most TextBudget of text (a blank text is one space), and
-// works out each element's facts (see Node). It runs without recursion,
-// so any depth is safe, and stops with ctx's error when ctx ends.
-func bound(ctx context.Context, root *Node) (*Node, error) {
+// works out each element's facts (see Node). Skipped elements (scripts,
+// fields) are copied without their content, which spends no budget.
+// truncated says text was left out past the budget. It runs without
+// recursion, so any depth is safe, and stops with ctx's error when ctx
+// ends.
+func bound(ctx context.Context, root *Node) (top *Node, truncated bool, err error) {
 	if root == nil {
-		return &Node{Tag: "#document"}, nil
+		return &Node{Tag: "#document"}, false, nil
 	}
 	type frame struct {
 		src, dst *Node
 		depth    int
+		boiler   bool // under boilerplate: its own budget
 	}
-	top := copyNode(root)
+	top = copyNode(root)
 	var order []*Node // elements in pre-order, for the bottom-up pass
-	stack := []frame{{root, top, 0}}
-	budget := TextBudget
-	truncated := false
+	stack := []frame{{src: root, dst: top}}
+	budget, boilerBudget := TextBudget, MaxText
 	for seen := 0; len(stack) > 0; seen++ {
 		if seen%4096 == 0 && ctx != nil {
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				return nil, false, err
 			}
 		}
 		f := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		if f.src.Tag == "" {
-			// Texts are read in document order, against one budget.
-			if budget <= 0 {
-				truncated = truncated || !Blank(cut(f.src.Text, 64))
+			// Texts are read in document order, against one budget (and
+			// boilerplate's against its own).
+			b := &budget
+			if f.boiler {
+				b = &boilerBudget
+			}
+			if *b <= 0 {
+				// Boilerplate past its budget isn't a cut: the main text
+				// never shows it, and Markdown's output is full first.
+				truncated = truncated || !f.boiler && !Blank(cut(f.src.Text, 64))
 				f.dst.Text = ""
 				continue
 			}
-			t := cut(f.src.Text, min(MaxText, budget))
-			budget -= max(1, len(t))
+			t := cut(f.src.Text, min(MaxText, *b))
+			*b -= max(1, len(t))
 			if !f.src.Pre && Blank(t) && t != "" {
 				t = " "
 			}
@@ -147,6 +168,9 @@ func bound(ctx context.Context, root *Node) (*Node, error) {
 			continue
 		}
 		order = append(order, f.dst)
+		if skipped[f.src.Tag] {
+			continue // its content is never rendered
+		}
 		if f.depth >= maxDepth {
 			f.dst.Kids = append([]*Node{{Tag: noteTag, Text: DeepNote}}, flatText(f.src)...)
 			continue
@@ -155,13 +179,10 @@ func bound(ctx context.Context, root *Node) (*Node, error) {
 		for i, k := range f.src.Kids {
 			f.dst.Kids[i] = copyNode(k)
 		}
+		boiler := f.boiler || Boilerplate(f.src.Tag, f.src.Attr("role"))
 		for i := len(f.src.Kids) - 1; i >= 0; i-- {
-			stack = append(stack, frame{f.src.Kids[i], f.dst.Kids[i], f.depth + 1})
+			stack = append(stack, frame{f.src.Kids[i], f.dst.Kids[i], f.depth + 1, boiler})
 		}
-	}
-	if truncated {
-		top.Kids = append(top.Kids, &Node{Tag: "p", Kids: []*Node{{Tag: noteTag, Text: TruncatedNote}}})
-		order = append(order, top.Kids[len(top.Kids)-1])
 	}
 	for i := len(order) - 1; i >= 0; i-- {
 		n := order[i]
@@ -190,7 +211,7 @@ func bound(ctx context.Context, root *Node) (*Node, error) {
 			n.hasTableBlock = n.hasTableBlock || k.hasTableBlock
 		}
 	}
-	return top, nil
+	return top, truncated, nil
 }
 
 func copyNode(n *Node) *Node {

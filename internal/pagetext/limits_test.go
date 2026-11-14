@@ -259,14 +259,41 @@ func TestSharedStringsStayCheap(t *testing.T) {
 	timed(t, "20,000 images sharing a 1 MB blank alt", el("html", el("body", imgs...)), time.Second, 200)
 	timed(t, "20,000 pre sharing a 140 KB class", el("html", el("body", pres...)), time.Second, 200)
 	timed(t, "one image with a 30 MB alt", el("html", el("body", at("img", map[string]string{"alt": strings.Repeat("a ", 15<<20), "src": "/i"}))), time.Second, 40)
-	// Text past the budget ends with a note saying so.
+	// Text past the budget is reported as full, so the caller says so.
 	var big []*Node
 	for range 20 {
 		big = append(big, el("p", tx(strings.Repeat("word ", 1<<20))))
 	}
-	out, _, _ := Plain(context.Background(), el("body", big...), 0)
-	if !strings.HasSuffix(out, TruncatedNote) {
-		t.Errorf("no note at the end of a page past the budget: %q", out[max(0, len(out)-200):])
+	for name, render := range map[string]func(*Node) (string, bool, error){
+		"plain":       func(n *Node) (string, bool, error) { return Plain(context.Background(), n, 0) },
+		"readability": func(n *Node) (string, bool, error) { return Readable(context.Background(), n, 0) },
+	} {
+		if _, full, _ := render(el("html", el("body", big...))); !full {
+			t.Errorf("%s: a page past the budget isn't reported as full", name)
+		}
+	}
+}
+
+// TestHiddenTextSpendsNoBudget: text never rendered (a script, a style, a
+// field) doesn't push the article after it out; nor does the caller's
+// hidden text, which never reaches the tree.
+func TestHiddenTextSpendsNoBudget(t *testing.T) {
+	long := strings.Repeat("The committee met on Tuesday, and agreed on the budget, the hours and the plan. ", 6)
+	blob := strings.Repeat("var words = 1; ", 140000) // 2 MB
+	var scripts []*Node
+	for range 5 {
+		scripts = append(scripts, el("script", tx(blob)), el("style", tx(blob)), el("textarea", tx(blob)))
+	}
+	page := el("#document", el("html", el("body", append(scripts, el("article", el("h1", tx("AFTER-BIG-HEADING")), el("p", tx(long+" AFTER-BIG-END"))))...)))
+	md, mdFull, _ := Markdown(context.Background(), page, nil, 2<<20)
+	rd, rdFull, _ := Readable(context.Background(), page, 2<<20)
+	for name, out := range map[string]string{"markdown": md, "readability": rd} {
+		if !strings.Contains(out, "AFTER-BIG-HEADING") || !strings.Contains(out, "AFTER-BIG-END") {
+			t.Errorf("%s: the article after 30 MB of scripts, styles and fields is lost: %.200q", name, out)
+		}
+	}
+	if mdFull || rdFull {
+		t.Errorf("text never rendered counted as cut: markdown %v, readability %v", mdFull, rdFull)
 	}
 }
 

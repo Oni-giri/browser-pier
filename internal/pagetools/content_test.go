@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -443,5 +445,50 @@ func TestDisplayContentsKeepsItsRole(t *testing.T) {
 	}
 	if strings.Contains(out, "NONE-HIDDEN") {
 		t.Errorf("hidden text in\n%s", out)
+	}
+}
+
+// TestHiddenTextSpendsNoBudget: 9 MB of display:none text before an
+// article doesn't push it out; 9 MB of shown text does, and both formats
+// then say the page has more, after the fence.
+func TestHiddenTextSpendsNoBudget(t *testing.T) {
+	vb := box(0, 0, 800, 20)
+	blob := strings.Repeat("var words = 1; ", 69906) // 1 MB
+	long := strings.Repeat("The committee met on Tuesday, and agreed on the budget, the hours and the plan. ", 4)
+	page := func(shown bool) *fnode {
+		kids := []*fnode{el("p", "paragraph", "", vb, txt("BEFORE-BIG", vb))}
+		for range 9 {
+			b := vb
+			if !shown {
+				b = nil
+			}
+			kids = append(kids, el("div", "", "", b, txt(blob, b)))
+		}
+		kids = append(kids, el("article", "article", "", vb, el("h1", "heading", "", vb, txt("AFTER-BIG-HEADING", vb)), el("p", "paragraph", "", vb, txt(long+"AFTER-BIG-END", vb))))
+		return el("#document", "RootWebArea", "", box(0, 0, 1280, 800), el("body", "", "", vb, kids...))
+	}
+	for _, shown := range []bool{false, true} {
+		f := newFixture(t)
+		f.fb.addTab("https://example.com/", page(shown), true)
+		for _, format := range []string{"markdown", "readability"} {
+			out, err := f.text(TextIn{Format: format, MaxChars: MaxContentChars})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The notice comes after the last part.
+			if m := regexp.MustCompile(`of ([0-9,]+)\.`).FindStringSubmatch(out[strings.LastIndex(out, "</untrusted-content-"):]); m != nil {
+				total, _ := strconv.Atoi(strings.ReplaceAll(m[1], ",", ""))
+				if out, err = f.text(TextIn{Format: format, Offset: total - 100}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			says := strings.Contains(out[strings.LastIndex(out, "</untrusted-content-"):], "more than BrowserPier renders")
+			switch {
+			case !shown && (!strings.Contains(out, "AFTER-BIG-HEADING") || says):
+				t.Errorf("%s after 9 MB of hidden text: says %v\n%.300s", format, says, out)
+			case shown && !says:
+				t.Errorf("%s after 9 MB of shown text doesn't say the page has more:\n%s", format, out[max(0, len(out)-300):])
+			}
+		}
 	}
 }

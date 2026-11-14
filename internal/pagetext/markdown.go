@@ -16,24 +16,27 @@ const maxURL = 512
 // Markdown renders a page as Markdown: headings, paragraphs, lists,
 // quotes, code, simple tables, links and images, with addresses resolved
 // against base. It stops once the output reaches limit bytes (keeping
-// what fits), and says so with full; it stops with ctx's error when ctx
+// what fits), and says so with full, as it does when the page had more
+// text than it reads (TextBudget); it stops with ctx's error when ctx
 // ends. Rendering takes time and memory linear in the tree and the limit.
 func Markdown(ctx context.Context, root *Node, base *url.URL, limit int) (string, bool, error) {
-	b, err := bound(ctx, root)
+	b, cut, err := bound(ctx, root)
 	if err != nil {
 		return "", false, err
 	}
-	return render(ctx, b, base, false, limit)
+	out, full, err := render(ctx, b, base, false, limit)
+	return out, full || cut, err
 }
 
 // Plain renders a page as plain text: paragraphs, headings and list
 // items on their own lines, no links, images or markup.
 func Plain(ctx context.Context, root *Node, limit int) (string, bool, error) {
-	b, err := bound(ctx, root)
+	b, cut, err := bound(ctx, root)
 	if err != nil {
 		return "", false, err
 	}
-	return render(ctx, b, nil, true, limit)
+	out, full, err := render(ctx, b, nil, true, limit)
+	return out, full || cut, err
 }
 
 func render(ctx context.Context, root *Node, base *url.URL, plain bool, limit int) (string, bool, error) {
