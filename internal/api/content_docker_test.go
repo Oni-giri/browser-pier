@@ -212,6 +212,81 @@ func TestContentLeavesOutWhatItMust(t *testing.T) {
 	}
 }
 
+// TestContentWithSharedStrings is the second review's probe: thousands of
+// elements sharing one long class, text or alt (the DOM snapshot sends it
+// once) read in a few seconds, and a handoff during a read ends it at once.
+func TestContentWithSharedStrings(t *testing.T) {
+	a := newRealAPI(t)
+	site := browsertest.NewPageSite(t, siteHost(t))
+	s := a.startAPIBrowser(t, "cs")
+	open := func(q string) {
+		t.Helper()
+		a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/probe-shared?" + q})
+		if out := a.mustTool(s.ID, "wait", map[string]any{"text": "SHARED-PAGE"}); out != "ok" {
+			t.Fatalf("%s: %s", q, out)
+		}
+	}
+	for _, q := range []string{"k=class&n=5000&kb=100", "k=text&n=2000&kb=1000", "k=alt&n=2000&kb=1000"} {
+		open(q)
+		for _, format := range []string{"markdown", "readability"} {
+			start := time.Now()
+			out := a.contentText(s.ID, map[string]any{"format": format})
+			if d := time.Since(start); d > 15*time.Second || !inFence(out, "SHARED-PAGE") {
+				t.Errorf("%s %s: %v\n%.300s", q, format, d, out)
+			} else {
+				t.Logf("%s %s: %v", q, format, d.Round(time.Millisecond))
+			}
+		}
+	}
+	open("k=class&n=5000&kb=100")
+	done := make(chan time.Time, 1)
+	go func() {
+		a.content(s.ID, map[string]any{"format": "readability"})
+		done <- time.Now()
+	}()
+	time.Sleep(300 * time.Millisecond)
+	asked := time.Now()
+	if _, err := a.m.SetNeedsHelp(s.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(asked); d > 3*time.Second {
+		t.Errorf("the handoff waited %v for the read", d)
+	}
+	select {
+	case end := <-done:
+		t.Logf("the read ended %v after the handoff", end.Sub(asked).Round(time.Millisecond))
+	case <-time.After(10 * time.Second):
+		t.Error("the read went on 10 s after the handoff")
+	}
+}
+
+// TestContentDisplayContents: display:contents keeps an element's role
+// (a heading, a link, a table row, a nav still left out of the main text)
+// without letting field values or hidden text in; past 256 levels a marker
+// says the structure was flattened.
+func TestContentDisplayContents(t *testing.T) {
+	a := newRealAPI(t)
+	site := browsertest.NewPageSite(t, siteHost(t))
+	s := a.startAPIBrowser(t, "cc")
+	a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/probe-contents"})
+	md := a.contentText(s.ID, map[string]any{"format": "markdown"})
+	for _, want := range []string{"# CONTENTS-HEADING", "[CONTENTS-LINK](" + site.URL + "/contents-link)", "| CELL-A | CELL-B |",
+		"- LI-ONE", "VIS-REVEALED", "DEEP-VISIBLE", "nested too deep", "line one\nline two"} {
+		if !inFence(md, want) {
+			t.Errorf("markdown: %q isn't in the fence:\n%s", want, md)
+		}
+	}
+	for _, gone := range []string{"TYPED-IN-CONTENTS", "TA-CONTENTS-DEFAULT", "ATTR-VALUE-IN-CONTENTS", "DEEP-INPUT-VALUE", "NONE-THEN-CONTENTS", "VIS-HIDDEN "} {
+		if strings.Contains(md, gone) {
+			t.Errorf("markdown has %s:\n%s", gone, md)
+		}
+	}
+	main := a.contentText(s.ID, map[string]any{"format": "readability"})
+	if !inFence(main, "Article body") || strings.Contains(main, "NAV-IN-CONTENTS") {
+		t.Errorf("readability:\n%s", main)
+	}
+}
+
 // TestContentInVisualMode: what needs CDP answers 409 and attaches
 // nothing; a screenshot works.
 func TestContentInVisualMode(t *testing.T) {

@@ -187,6 +187,38 @@ const q = new URLSearchParams(location.search); const depth = +q.get('d'), chain
 const d = document.getElementById('d');
 for (let c = 0; c < chains; c++) { let cur = d; for (let i = 0; i < depth; i++) { const e = document.createElement(tag); cur.appendChild(e); cur = e; } }
 document.title = 'Deep ready';</script>`,
+	// n elements sharing one long class, text or alt (PROJ-20 review).
+	"/probe-shared": `<!doctype html><title>Shared</title><p>SHARED-PAGE</p><div id="d"></div><script>
+const q = new URLSearchParams(location.search); const n = +q.get('n'), kb = +q.get('kb'), kind = q.get('k');
+const d = document.getElementById('d'); const f = document.createDocumentFragment();
+const cls = 'abcdefg hijkl '.repeat(kb * 73); const ws = ' '.repeat(kb * 1024);
+for (let i = 0; i < n; i++) {
+  if (kind === 'class') { const e = document.createElement('div'); e.className = cls; e.textContent = 'x'; f.appendChild(e); }
+  else if (kind === 'text') { const e = document.createElement('span'); e.appendChild(document.createTextNode(ws)); f.appendChild(e); }
+  else if (kind === 'alt') { const e = document.createElement('img'); e.alt = ws; e.width = 1; e.height = 1; e.src = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=='; f.appendChild(e); }
+}
+d.appendChild(f); document.title = 'Shared ready';</script>`,
+	// display:contents in its forms, hidden content and a deep tree (PROJ-20 review).
+	"/probe-contents": `<!doctype html><title>Contents</title>
+<p>line one<br>line two</p>
+<input id=i1 style="display:contents"><textarea id=t1 style="display:contents">TA-CONTENTS-DEFAULT</textarea>
+<select style="display:contents"><option selected>SEL-CONTENTS</option></select>
+<select size=3 multiple><option style="display:contents">LISTBOX-OPT</option></select>
+<button style="display:contents">BUTTON-CONTENTS</button>
+<div style="display:contents"><input id=i2 value="ATTR-VALUE-IN-CONTENTS"></div>
+<details style="display:contents"><summary>S</summary>DETAILS-CONTENTS-CLOSED</details>
+<div style="display:none"><div style="display:contents"><p style="display:block">NONE-THEN-CONTENTS</p></div></div>
+<div style="visibility:hidden"><p>VIS-HIDDEN <span style="visibility:visible">VIS-REVEALED</span></p></div>
+<div style="content-visibility:hidden"><p>CV-HIDDEN</p></div>
+<a href="/contents-link" style="display:contents">CONTENTS-LINK</a>
+<ul style="display:contents"><li>LI-ONE</li><li>LI-TWO</li></ul>
+<table><tr style="display:contents"><td>CELL-A</td><td>CELL-B</td></tr></table>
+<article style="display:contents"><h1 style="display:contents">CONTENTS-HEADING</h1><p>Article body, long enough, with commas, to be an article of its own, and then some more text, to be sure of it, and more, and more, and more, and more again, until it passes the two hundred characters that an article needs to count.</p></article>
+<nav style="display:contents"><a href="/n1">NAV-IN-CONTENTS one</a> <a href="/n2">NAV-IN-CONTENTS two</a></nav>
+<div id="deep"></div>
+<script>i1.value='TYPED-IN-CONTENTS-INPUT'; t1.value='TYPED-IN-CONTENTS-TA';
+let cur = document.getElementById('deep'); for (let i = 0; i < 300; i++) { const e = document.createElement('div'); cur.appendChild(e); cur = e; }
+cur.innerHTML = '<p>DEEP-VISIBLE <a href="/deep-link">DEEP-LINK</a><br>DEEP-SECOND <input value="DEEP-INPUT-VALUE"><img alt="DEEP-ALT" width=20 height=20 src=x></p>';</script>`,
 	// A page with a quarter of a million elements.
 	"/huge": `<!doctype html><title>Huge</title><div id="d"></div><script>
 const d = document.getElementById('d'); const f = document.createDocumentFragment();
