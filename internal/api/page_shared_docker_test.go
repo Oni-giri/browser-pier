@@ -52,6 +52,14 @@ func TestSharedStringsOnARealPage(t *testing.T) {
 	t.Cleanup(func() { _ = srv.Close() })
 	base := fmt.Sprintf("http://%s:%d/", siteHost(t), ln.Addr().(*net.TCPAddr).Port)
 	s := a.startAPIBrowser(t, "sh")
+	// Long text is searched whole (first: the heavy pages below keep
+	// Chrome busy for a while after).
+	a.mustTool(s.ID, "navigate", map[string]string{"url": base + "long"})
+	for _, m := range []string{"MARKERONE", "MARKERTWO", "MARKERTHREE"} {
+		if found := a.mustTool(s.ID, "find", map[string]any{"text": m}); !strings.Contains(found, "1 match.") {
+			t.Errorf("find %s in long text: %s", m, lastLine(found))
+		}
+	}
 	// Sized so Chrome itself can build and lay the page out in time: it
 	// handles each long attribute and visible text per element. Hidden
 	// text, which it doesn't lay out, takes a megabyte each. (Iframes
@@ -84,13 +92,6 @@ func TestSharedStringsOnARealPage(t *testing.T) {
 		}
 		if c.kind == "text" && !strings.Contains(found, "matches.") {
 			t.Errorf("find on shared text: %d %s", code, lastLine(found))
-		}
-	}
-	// Long text is searched whole.
-	a.mustTool(s.ID, "navigate", map[string]string{"url": base + "long"})
-	for _, m := range []string{"MARKERONE", "MARKERTWO", "MARKERTHREE"} {
-		if found := a.mustTool(s.ID, "find", map[string]any{"text": m}); !strings.Contains(found, "1 match.") {
-			t.Errorf("find %s in long text: %s", m, lastLine(found))
 		}
 	}
 }
