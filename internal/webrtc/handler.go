@@ -37,12 +37,14 @@ func NewHandler(relay *Relay, m *sessions.Manager, web *auth.Web, log *slog.Logg
 	return &Handler{relay: relay, m: m, web: web, log: log}
 }
 
-// Register adds /live/{profile}'s status and offer, and the client script.
+// Register adds /live/{profile}'s status, ICE servers and offer, and the
+// client script.
 // The page itself is the web UI's /profiles/{profile}.
 func (h *Handler) Register(mux *http.ServeMux) {
 	admin := func(f http.HandlerFunc) http.Handler { return h.web.RequireAdmin(f) }
 	mux.Handle("GET /live/{profile}", admin(h.page))
 	mux.Handle("GET /live/{profile}/status", admin(h.status))
+	mux.Handle("GET /live/{profile}/ice", admin(h.ice))
 	mux.Handle("POST /live/{profile}/offer", admin(h.offer))
 	mux.HandleFunc("GET /static/live.js", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
@@ -71,6 +73,28 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+// LiveTURNLifetime is how long the admin's TURN credentials can open new
+// relays. A relay already open outlives them (coturn checks them only for
+// new allocations), and a live view can stay open all day: the page gets
+// new ones whenever it reconnects.
+const LiveTURNLifetime = 12 * time.Hour
+
+func (h *Handler) ice(w http.ResponseWriter, r *http.Request) {
+	// One viewer per signed-in browser, for the TURN server's quota.
+	s, _ := auth.SessionFromContext(r.Context())
+	h.ICE(w, r, time.Now().Add(LiveTURNLifetime), "admin session "+s.ID)
+}
+
+// ICE sends the iceServers a viewer connects with, TURN credentials
+// included, which open new relays until the given time. viewer names who
+// asks, the same on each request (see TURN.Servers). The caller has
+// already checked who may watch: they're for that viewer alone.
+func (h *Handler) ICE(w http.ResponseWriter, _ *http.Request, until time.Time, viewer string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(map[string]any{"iceServers": h.relay.ICEServers(until, viewer)})
 }
 
 func (h *Handler) offer(w http.ResponseWriter, r *http.Request) {

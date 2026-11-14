@@ -25,6 +25,24 @@ import (
 // TestRealBrowserReachesAViewer: frames from a real browser's display
 // arrive at a WebRTC viewer as H.264.
 func TestRealBrowserReachesAViewer(t *testing.T) {
+	m, name := startBrowser(t)
+	relay, err := New(Options{Port: 0, IPs: []string{"127.0.0.1"}}, m.Layout().ControlSocket, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = relay.Close() }()
+	n := watch(t, relay, name, pion.Configuration{})
+	// 30 fps for 3 s is far more than this, even for a static page.
+	if n < 30 {
+		t.Fatalf("only %d RTP packets in 3 s", n)
+	}
+	t.Logf("%d RTP packets in 3 s", n)
+}
+
+// startBrowser starts a real browser for a new profile, stopped when the
+// test ends.
+func startBrowser(t *testing.T) (*sessions.Manager, string) {
+	t.Helper()
 	image := os.Getenv("BROWSERPIER_TEST_IMAGE")
 	if image == "" {
 		t.Skip("BROWSERPIER_TEST_IMAGE not set; run `make test-docker`")
@@ -46,9 +64,8 @@ func TestRealBrowserReachesAViewer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = d.Close() }()
-	log := slog.New(slog.DiscardHandler)
-	m, err := sessions.NewManager(d, rt, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)
+	t.Cleanup(func() { _ = d.Close() })
+	m, err := sessions.NewManager(d, rt, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,20 +80,20 @@ func TestRealBrowserReachesAViewer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
+	t.Cleanup(func() {
 		sctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		_, _ = m.Stop(sctx, s.ID)
 		cancel()
 		m.Close()
-	}()
+	})
+	return m, name
+}
 
-	relay, err := New(Options{Port: 0, IPs: []string{"127.0.0.1"}}, m.Layout().ControlSocket, log)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = relay.Close() }()
-
-	viewer, err := pion.NewPeerConnection(pion.Configuration{})
+// watch connects a viewer configured so to the profile's live view, and
+// counts the video's RTP packets for 3 s.
+func watch(t *testing.T, relay *Relay, name string, cfg pion.Configuration) int {
+	t.Helper()
+	viewer, err := pion.NewPeerConnection(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,23 +119,24 @@ func TestRealBrowserReachesAViewer(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-gathered
-	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	if len(candidates(viewer.LocalDescription().SDP)) == 0 {
+		t.Fatal("the viewer has no candidates")
+	}
+	cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	_, answer, err := relay.Connect(cctx, name, viewer.LocalDescription().SDP, func([]byte, func(string)) {})
+	v, answer, err := relay.Connect(cctx, name, viewer.LocalDescription().SDP, func([]byte, func(string)) {})
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer v.Close()
 	if err := viewer.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: answer}); err != nil {
 		t.Fatal(err)
 	}
 	select {
 	case n := <-packets:
-		// 30 fps for 3 s is far more than this, even for a static page.
-		if n < 30 {
-			t.Fatalf("only %d RTP packets in 3 s", n)
-		}
-		t.Logf("%d RTP packets in 3 s", n)
+		return n
 	case <-time.After(30 * time.Second):
 		t.Fatal("no video from the browser")
+		return 0
 	}
 }

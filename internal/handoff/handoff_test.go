@@ -81,7 +81,8 @@ func newFixture(t *testing.T, policy profiles.HandoffPolicy, opts auth.WebOption
 	}
 	web := auth.NewWeb(admin, auth.NewTokens(d), log, opts)
 	svc := New(d, m, log)
-	relay, err := webrtc.New(webrtc.Options{Port: 0, IPs: []string{"127.0.0.1"}}, m.Layout().ControlSocket, log)
+	turn := webrtc.TURN{URLs: []string{"turn:pier.example.com:3478"}, Secret: testTURNSecret}
+	relay, err := webrtc.New(webrtc.Options{Port: 0, IPs: []string{"127.0.0.1"}, TURN: turn}, m.Layout().ControlSocket, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -734,4 +735,59 @@ func TestHandoffPageHasThePhonesTheme(t *testing.T) {
 	if p := f.do(phone, "GET", "/h/"+token, nil, nil); strings.Contains(p.body, "appearance") {
 		t.Fatal("the handoff page has a theme control")
 	}
+}
+
+const testTURNSecret = "north-wind-secret-123"
+
+// TURN credentials go only to the browser holding the link, while it's
+// open, and run out shortly after the link does.
+func TestTURNCredentialsOnlyForTheHolder(t *testing.T) {
+	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
+	h, token := f.open("")
+	phone, other := browser(), browser()
+	refused := func(c *http.Client, when string) {
+		t.Helper()
+		if p := f.do(c, "GET", "/h/"+token+"/ice", nil, nil); p.code != http.StatusForbidden || strings.Contains(p.body, "credential") {
+			t.Fatalf("%s: %d %s", when, p.code, p.body)
+		}
+	}
+	refused(phone, "before the PIN")
+	if p := f.do(phone, "POST", "/h/"+token+"/pin", url.Values{"pin": {"4821"}}, nil); p.code != http.StatusSeeOther {
+		t.Fatalf("right PIN: %d", p.code)
+	}
+	if p := f.do(phone, "GET", "/h/"+token, nil, nil); !strings.Contains(p.body, `data-ice="/h/`+token+`/ice"`) {
+		t.Fatalf("the control page doesn't point the live view at its ICE servers: %.600s", p.body)
+	}
+	refused(other, "another browser")
+	refused(browser(), "no cookie")
+
+	p := f.do(phone, "GET", "/h/"+token+"/ice", nil, nil)
+	var out struct {
+		ICEServers []webrtc.ICEServer `json:"iceServers"`
+	}
+	if err := json.Unmarshal([]byte(p.body), &out); p.code != http.StatusOK || err != nil || len(out.ICEServers) != 1 || out.ICEServers[0].Credential == "" {
+		t.Fatalf("the holder: %d %s", p.code, p.body)
+	}
+	if strings.Contains(p.body, testTURNSecret) {
+		t.Fatal("the shared secret reached the phone")
+	}
+	exp, _, _ := strings.Cut(out.ICEServers[0].Username, ":")
+	n, _ := strconv.ParseInt(exp, 10, 64)
+	if until := time.Unix(n, 0); until.Before(h.ExpiresAt) || until.After(h.ExpiresAt.Add(2*time.Minute)) {
+		t.Fatalf("credentials until %v for a link that expires at %v", until, h.ExpiresAt)
+	}
+	// Asking again gets the same TURN user, so the TURN server's per-user
+	// quota holds the link however often its page reloads, and the user
+	// says nothing of the link or the handoff.
+	if again := f.do(phone, "GET", "/h/"+token+"/ice", nil, nil); !strings.Contains(again.body, `"username":"`+out.ICEServers[0].Username+`"`) {
+		t.Fatalf("a second request got another TURN user: %s, then %s", out.ICEServers[0].Username, again.body)
+	}
+	if u := out.ICEServers[0].Username; strings.Contains(u, h.ID) || strings.Contains(u, token) {
+		t.Fatalf("the TURN user %q names the handoff", u)
+	}
+
+	if p := f.do(phone, "POST", "/h/"+token+"/finish", url.Values{"status": {"done"}}, nil); p.code != http.StatusOK {
+		t.Fatalf("finish: %d", p.code)
+	}
+	refused(phone, "after hand-back")
 }

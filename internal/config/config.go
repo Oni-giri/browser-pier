@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/pion/stun/v4"
 )
 
 const (
@@ -56,6 +58,22 @@ type Config struct {
 	// public IP or the Tailscale IP (BROWSERPIER_WEBRTC_IPS, comma
 	// separated). Empty advertises every local address.
 	WebRTCIPs []string
+	// TURNURLs are the TURN servers live viewers may relay through, on
+	// networks that block UDP or direct connections (BROWSERPIER_TURN_URLS,
+	// comma separated), e.g. turn:pier.example.com:3478?transport=tcp.
+	TURNURLs []string
+	// TURNSecret is the TURN REST API's shared secret
+	// (BROWSERPIER_TURN_SECRET; coturn's static-auth-secret), from which
+	// each viewer gets credentials that expire. Never log it.
+	TURNSecret string
+	// TURNUsername and TURNPassword are one static TURN login that every
+	// viewer gets (BROWSERPIER_TURN_USERNAME, BROWSERPIER_TURN_PASSWORD),
+	// for services without the REST API. Never log the password.
+	TURNUsername, TURNPassword string
+	// TURNPeerIPs are this server's addresses as the TURN server reaches
+	// it, advertised besides WebRTCIPs (BROWSERPIER_TURN_PEER_IPS): the
+	// compose network's address, for the bundled coturn.
+	TURNPeerIPs []string
 	// RAMLimitPercent caps the memory all browsers may use together, as a
 	// share of the host's (BROWSERPIER_RAM_LIMIT_PERCENT, default 70; 0 for
 	// no cap). Past it, the longest-idle unused browser is stopped to make
@@ -110,6 +128,67 @@ func parseProxies(v string) ([]*net.IPNet, error) {
 	return out, nil
 }
 
+func parseIPs(key, v string) ([]string, error) {
+	var out []string
+	for _, ip := range strings.Split(v, ",") {
+		if ip = strings.TrimSpace(ip); ip == "" {
+			continue
+		}
+		if net.ParseIP(ip) == nil {
+			return nil, fmt.Errorf("%s: %q is not an IP address", key, ip)
+		}
+		out = append(out, ip)
+	}
+	return out, nil
+}
+
+// minTURNSecret is the shortest shared secret taken: anyone given
+// credentials can test guesses at it offline, and one found mints more.
+const minTURNSecret = 16
+
+// loadTURN reads the TURN settings. Errors never echo the secret or the
+// password.
+func (c *Config) loadTURN(get func(key, def string) string) error {
+	for _, u := range strings.Split(get("BROWSERPIER_TURN_URLS", ""), ",") {
+		if u = strings.TrimSpace(u); u == "" {
+			continue
+		}
+		uri, err := stun.ParseURI(u)
+		if err != nil || uri.Host == "" {
+			return fmt.Errorf("BROWSERPIER_TURN_URLS: %q isn't a turn:, turns:, stun: or stuns: URL", u)
+		}
+		c.TURNURLs = append(c.TURNURLs, u)
+	}
+	c.TURNSecret = get("BROWSERPIER_TURN_SECRET", "")
+	c.TURNUsername = get("BROWSERPIER_TURN_USERNAME", "")
+	c.TURNPassword = get("BROWSERPIER_TURN_PASSWORD", "")
+	var err error
+	if c.TURNPeerIPs, err = parseIPs("BROWSERPIER_TURN_PEER_IPS", get("BROWSERPIER_TURN_PEER_IPS", "")); err != nil {
+		return err
+	}
+	static := c.TURNUsername != "" || c.TURNPassword != ""
+	switch {
+	case c.TURNSecret != "" && static:
+		return errors.New("BROWSERPIER_TURN_SECRET and BROWSERPIER_TURN_USERNAME/PASSWORD: set one or the other")
+	case static && (c.TURNUsername == "" || c.TURNPassword == ""):
+		return errors.New("BROWSERPIER_TURN_USERNAME and BROWSERPIER_TURN_PASSWORD: set both")
+	case c.TURNSecret != "" && len(c.TURNSecret) < minTURNSecret:
+		return fmt.Errorf("BROWSERPIER_TURN_SECRET: use at least %d characters (openssl rand -hex 32)", minTURNSecret)
+	case (c.TURNSecret != "" || static) && len(c.TURNURLs) == 0:
+		return errors.New("BROWSERPIER_TURN_URLS: set it to the TURN server's URLs, or unset the TURN credentials")
+	}
+	if c.TURNSecret == "" && !static {
+		for _, u := range c.TURNURLs {
+			if strings.HasPrefix(u, "turn:") || strings.HasPrefix(u, "turns:") {
+				// Browsers refuse a TURN URL without credentials, and a
+				// TURN server that asks for none relays for anyone.
+				return errors.New("BROWSERPIER_TURN_URLS: a TURN server needs BROWSERPIER_TURN_SECRET (or BROWSERPIER_TURN_USERNAME and BROWSERPIER_TURN_PASSWORD)")
+			}
+		}
+	}
+	return nil
+}
+
 // Load reads the configuration from the process environment.
 func Load() (Config, error) {
 	return load(os.LookupEnv)
@@ -161,14 +240,11 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	if c.WebRTCPort, err = strconv.Atoi(rtcPort); err != nil || c.WebRTCPort < 1 || c.WebRTCPort > 65535 {
 		return Config{}, fmt.Errorf("BROWSERPIER_WEBRTC_PORT: want a port number, got %q", rtcPort)
 	}
-	for _, ip := range strings.Split(get("BROWSERPIER_WEBRTC_IPS", ""), ",") {
-		if ip = strings.TrimSpace(ip); ip == "" {
-			continue
-		}
-		if net.ParseIP(ip) == nil {
-			return Config{}, fmt.Errorf("BROWSERPIER_WEBRTC_IPS: %q is not an IP address", ip)
-		}
-		c.WebRTCIPs = append(c.WebRTCIPs, ip)
+	if c.WebRTCIPs, err = parseIPs("BROWSERPIER_WEBRTC_IPS", get("BROWSERPIER_WEBRTC_IPS", "")); err != nil {
+		return Config{}, err
+	}
+	if err := c.loadTURN(get); err != nil {
+		return Config{}, err
 	}
 	ram := get("BROWSERPIER_RAM_LIMIT_PERCENT", "70")
 	_, c.RAMLimitFromEnv = set("BROWSERPIER_RAM_LIMIT_PERCENT")

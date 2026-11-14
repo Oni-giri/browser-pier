@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -31,12 +32,16 @@ type Options struct {
 	// IPs, if set, are the addresses to advertise to viewers: a VPS's
 	// public IP or the Tailscale IP. Otherwise every local address is.
 	IPs []string
+	// TURN is offered to viewers on networks that block UDP or direct
+	// connections. Its PeerIPs are advertised as well.
+	TURN TURN
 }
 
 // Relay serves live views.
 type Relay struct {
 	api     *webrtc.API
 	socket  func(profile string) string // a profile's control socket
+	turn    TURN
 	log     *slog.Logger
 	closers []io.Closer
 
@@ -72,9 +77,8 @@ func New(o Options, socket func(profile string) string, log *slog.Logger) (*Rela
 	se.SetICEUDPMux(udp)
 	se.SetICETCPMux(tcp)
 	se.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4, webrtc.NetworkTypeUDP6, webrtc.NetworkTypeTCP4, webrtc.NetworkTypeTCP6})
-	if len(o.IPs) > 0 {
-		// Advertise these instead of the host's own addresses.
-		if err := se.SetICEAddressRewriteRules(webrtc.ICEAddressRewriteRule{External: o.IPs, AsCandidateType: webrtc.ICECandidateTypeHost}); err != nil {
+	if rule, ok := rewriteRule(o); ok {
+		if err := se.SetICEAddressRewriteRules(rule); err != nil {
 			_ = udp.Close()
 			_ = tcp.Close()
 			return nil, err
@@ -83,10 +87,39 @@ func New(o Options, socket func(profile string) string, log *slog.Logger) (*Rela
 	return &Relay{
 		api:     webrtc.NewAPI(webrtc.WithMediaEngine(me), webrtc.WithSettingEngine(se)),
 		socket:  socket,
+		turn:    o.TURN,
 		log:     log,
 		closers: []io.Closer{udp, tcp},
 		streams: map[string]*stream{},
 	}, nil
+}
+
+// rewriteRule says which addresses to advertise, if not the host's own:
+// o.IPs instead of them, and a TURN server's way in (o.TURN.PeerIPs) on
+// top, so the server can relay to an address it reaches directly.
+func rewriteRule(o Options) (webrtc.ICEAddressRewriteRule, bool) {
+	var peers []string
+	if o.TURN.Enabled() {
+		for _, ip := range o.TURN.PeerIPs {
+			if !slices.Contains(o.IPs, ip) && !slices.Contains(peers, ip) {
+				peers = append(peers, ip)
+			}
+		}
+	}
+	switch {
+	case len(o.IPs) > 0:
+		return webrtc.ICEAddressRewriteRule{External: append(slices.Clone(o.IPs), peers...), AsCandidateType: webrtc.ICECandidateTypeHost, Mode: webrtc.ICEAddressRewriteReplace}, true
+	case len(peers) > 0:
+		return webrtc.ICEAddressRewriteRule{External: peers, AsCandidateType: webrtc.ICECandidateTypeHost, Mode: webrtc.ICEAddressRewriteAppend}, true
+	}
+	return webrtc.ICEAddressRewriteRule{}, false
+}
+
+// ICEServers returns the iceServers a viewer connects with: the TURN
+// server, if there is one, with credentials for that viewer (see
+// TURN.Servers). Give them only to someone already allowed to watch.
+func (r *Relay) ICEServers(until time.Time, viewer string) []ICEServer {
+	return r.turn.Servers(until, viewer)
 }
 
 // Close stops listening.
