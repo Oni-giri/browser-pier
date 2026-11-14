@@ -61,6 +61,39 @@ func (a agent) mustTool(id, name string, body any) string {
 	return text
 }
 
+// openBuilt navigates to a page that a script builds as it loads, and
+// waits until the script has finished, which its title says. Building a
+// stress page can keep Chrome busy past navigate's quick check, which
+// then rightly answers 504 (the page is busy); the page goes on loading,
+// so a 504 is accepted and the page polled, with snapshot {max_chars: 0},
+// for up to 90 s. Whatever the test then measures starts on a built page.
+func (a agent) openBuilt(id, url, title string) {
+	a.t.Helper()
+	start := time.Now()
+	navCode, text := a.tool(id, "navigate", map[string]string{"url": url})
+	if navCode != http.StatusOK && navCode != http.StatusGatewayTimeout {
+		a.t.Fatalf("navigate %s: %d %s", url, navCode, text)
+	}
+	want := "URL: " + url + "\nTitle: " + title + "\n"
+	deadline := time.Now().Add(90 * time.Second)
+	for {
+		code, text := a.tool(id, "snapshot", map[string]any{"max_chars": 0})
+		if code == http.StatusOK && strings.Contains(text, want) {
+			if navCode != http.StatusOK {
+				a.t.Logf("navigate %s: %d; the page was built after %v", url, navCode, time.Since(start).Round(time.Millisecond))
+			}
+			return
+		}
+		if code != http.StatusOK && code != http.StatusGatewayTimeout {
+			a.t.Fatalf("snapshot of %s: %d %s", url, code, text)
+		}
+		if time.Now().After(deadline) {
+			a.t.Fatalf("%s wasn't built after 90 s: %d %s", url, code, text)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
 // refFor finds the ref on the snapshot line naming what.
 func refFor(t *testing.T, snapshot, what string) string {
 	t.Helper()

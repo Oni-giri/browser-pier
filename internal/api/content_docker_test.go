@@ -202,12 +202,14 @@ func TestContentLeavesOutWhatItMust(t *testing.T) {
 			t.Errorf("xhtml has %s:\n%s", gone, out)
 		}
 	}
-	a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/probe-deep?d=19000&c=10"})
+	a.openBuilt(s.ID, site.URL+"/probe-deep?d=19000&c=10", "Deep ready")
 	for _, format := range []string{"markdown", "readability"} {
 		start := time.Now()
 		out := a.contentText(s.ID, map[string]any{"format": format})
-		if d := time.Since(start); d > 10*time.Second || !inFence(out, "DEEP-PAGE") {
+		if d := time.Since(start); d > 10*time.Second*raceSlowdown || !inFence(out, "DEEP-PAGE") {
 			t.Errorf("%s of a hidden chain of 190,000 elements: %v\n%s", format, d, out)
+		} else {
+			t.Logf("%s of a hidden chain of 190,000 elements: %v", format, d.Round(time.Millisecond))
 		}
 	}
 }
@@ -221,17 +223,14 @@ func TestContentWithSharedStrings(t *testing.T) {
 	s := a.startAPIBrowser(t, "cs")
 	open := func(q string) {
 		t.Helper()
-		a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/probe-shared?" + q})
-		if out := a.mustTool(s.ID, "wait", map[string]any{"text": "SHARED-PAGE"}); out != "ok" {
-			t.Fatalf("%s: %s", q, out)
-		}
+		a.openBuilt(s.ID, site.URL+"/probe-shared?"+q, "Shared ready")
 	}
 	for _, q := range []string{"k=class&n=5000&kb=100", "k=text&n=2000&kb=1000", "k=alt&n=2000&kb=1000"} {
 		open(q)
 		for _, format := range []string{"markdown", "readability"} {
 			start := time.Now()
 			out := a.contentText(s.ID, map[string]any{"format": format})
-			if d := time.Since(start); d > 15*time.Second || !inFence(out, "SHARED-PAGE") {
+			if d := time.Since(start); d > 15*time.Second*raceSlowdown || !inFence(out, "SHARED-PAGE") {
 				t.Errorf("%s %s: %v\n%.300s", q, format, d, out)
 			} else {
 				t.Logf("%s %s: %v", q, format, d.Round(time.Millisecond))

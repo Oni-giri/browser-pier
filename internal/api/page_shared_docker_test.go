@@ -71,12 +71,12 @@ func TestSharedStringsOnARealPage(t *testing.T) {
 		kind    string
 		n, size int
 	}{{"text", 2000, 100 << 10}, {"hidden", 5000, 1 << 20}, {"fields", 2000, 100 << 10}} {
-		a.mustTool(s.ID, "navigate", map[string]string{"url": fmt.Sprintf("%s?kind=%s&n=%d&size=%d", base, c.kind, c.n, c.size)})
+		a.openBuilt(s.ID, fmt.Sprintf("%s?kind=%s&n=%d&size=%d", base, c.kind, c.n, c.size), "Shared "+c.kind)
 		start := time.Now()
 		code, snap := a.tool(s.ID, "snapshot", nil)
 		took := time.Since(start)
 		t.Logf("%s × %d: snapshot %d in %s (%d characters)", c.kind, c.n, code, took.Round(time.Millisecond), len(snap))
-		if took > 15*time.Second {
+		if took > 15*time.Second*raceSlowdown {
 			t.Errorf("%s: snapshot took %s", c.kind, took)
 		}
 		if code != http.StatusOK || !strings.Contains(snap, "Title: Shared "+c.kind) {
@@ -86,7 +86,7 @@ func TestSharedStringsOnARealPage(t *testing.T) {
 		code, found := a.tool(s.ID, "find", map[string]any{"text": "needle"})
 		took = time.Since(start)
 		t.Logf("%s × %d: find %d in %s: %s", c.kind, c.n, code, took.Round(time.Millisecond), lastLine(found))
-		if took > 15*time.Second {
+		if took > 15*time.Second*raceSlowdown {
 			t.Errorf("%s: find took %s", c.kind, took)
 		}
 		if c.kind == "fields" && !strings.Contains(snap, `textbox "Field"`) {
