@@ -126,7 +126,7 @@ func (t *Tools) Find(ctx context.Context, s sessions.Session, who Caller, in Fin
 // a snapshot shows them (secret fields show no value).
 func searchable(it item) string {
 	if it.iframe {
-		return "iframe " + it.name
+		return "iframe " + quoteOdd(it.name)
 	}
 	s := it.role + " " + quote(strings.Join(strings.Fields(it.name), " "))
 	if it.value != "" {
