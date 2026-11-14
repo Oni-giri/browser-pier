@@ -85,11 +85,13 @@ services:
     # One capability: 3478 isn't a privileged port, but the image's
     # turnserver carries NET_BIND_SERVICE as a file capability and won't
     # start without it. It writes only its settings and pid file, to /tmp.
+    # The image declares /var/lib/coturn a volume; a tmpfs there keeps
+    # Docker from leaving an anonymous volume behind for it.
     cap_drop: [ALL]
     cap_add: [NET_BIND_SERVICE]
     security_opt: [no-new-privileges:true]
     read_only: true
-    tmpfs: [/tmp]
+    tmpfs: [/tmp, /var/lib/coturn]
     environment:
       BROWSERPIER_TURN_SECRET: ${BROWSERPIER_TURN_SECRET:-}
       TURN_IP: ${BROWSERPIER_NET:-10.247.74}.4
