@@ -101,3 +101,19 @@ Measured by `TestSpike` (`internal/cdp/spike_docker_test.go`, run with `BROWSERP
 - Key events come as fast as CDP sends them, with no typing rhythm.
 
 **The tools themselves, 20 runs each** (`TestPageToolsStayQuiet`, `internal/api/page_tabs_docker_test.go`, in `make test-docker`), nothing else attached: nothing recorded for `snapshot`, `find`, `act` (click, fill, type, press and hover, each its own run), `wait_for` (text, and a ref), `tabs` and `navigate` (reload), while the positive control in the same test was caught (main-world calls and its binding). So there is no hit to decide on; the residuals above still stand.
+
+## Page content (PROJ-20)
+
+`POST /api/sessions/{id}/content` (MCP `page_content`) reads the active tab as Markdown or its main text, takes a screenshot or prints a PDF. Its CDP calls go through the same per-call connection as the page tools, with their own allow-list (`contentAllowList` in `internal/pagetools`), and nothing is enabled.
+
+**Measured** on Chromium 156.0.8078.79, 2026-11-13, with a page listening for `beforeprint`, `afterprint`, the print media query, `resize` and `visibilitychange`:
+
+| Call | What the page saw |
+|---|---|
+| `DOMSnapshot.captureSnapshot` (Markdown and main text) | Nothing. The snapshot walks the flat tree, so shadow roots and slotted content come in place. |
+| `Page.printToPDF` | `beforeprint`, the print media query matching, `afterprint`, and the query no longer matching, on every call; no resize. It works in the headful browser (about 25 ms for a small page, under a second for a news front page). |
+| `Page.captureScreenshot` | Nothing (viewport only). Not used: screenshots come from the X display, with no CDP at all, in both modes. A full-page capture (`captureBeyondViewport`) resizes the page, which it can see. |
+
+**The content calls, 20 runs each** (`TestContentStaysQuiet`, `internal/api/content_docker_test.go`, in `make test-docker`), nothing else attached, against the continuous detector, which now also reports printing (`print`): nothing recorded for `markdown`, `readability` and `screenshot`; `pdf` recorded `print` and nothing else. The positive control in the same test was caught.
+
+**Decision:** a PDF is a print, and the page sees what it sees when a person presses ctrl+P. Printing is something people do, so it isn't a sign of automation by itself; a page could notice a print with no key pressed before it. Accepted: an agent on a site that watches for it reads the page as Markdown instead, and Visual mode never prints.

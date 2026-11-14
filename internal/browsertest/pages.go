@@ -129,6 +129,110 @@ var pageSitePages = map[string]string{ //nolint:gosec // test pages, not credent
 <button onmouseover="report('hovered')">Hover me</button>
 <label>Upload <input type="file"></label>`,
 	"/signed-in": `<!doctype html><title>Account</title><h1>Signed in</h1>`,
+	// An article among a site's furniture, for the content endpoints
+	// (PROJ-20): a nav, a cookie banner, a sidebar, hidden and transparent
+	// text, a page-filled password, a closed shadow root and an iframe.
+	"/article": `<!doctype html><title>Library opens</title>
+<div id="cookies" style="position:fixed;bottom:0;left:0;right:0;background:#eee;padding:8px" class="cookie-banner">We use cookies. <button>Accept all</button></div>
+<header><a href="/">Example News</a></header>
+<nav><a href="/world">World</a> <a href="/sport">Sport</a> <a href="/weather">Weather</a></nav>
+<main><article>
+<h1>Library opens next spring</h1>
+<p>The committee met on Tuesday to discuss the new library, which opens next spring. Members agreed on the budget, the opening hours and the staffing plan, after a long debate about parking. Read <a href="/plan.pdf">the full plan</a>.</p>
+<p>The building has three floors, a reading garden and a children's wing. Volunteers will run a book swap on Saturdays, and the café will stay open late on Thursdays, the committee said.</p>
+<h2>Opening hours</h2>
+<table><tr><th>Day</th><th>Hours</th></tr><tr><td>Monday</td><td>9–18</td></tr><tr><td>Saturday</td><td>10–16</td></tr></table>
+<ul><li>Free cards for residents</li><li>Late returns forgiven in May</li></ul>
+<pre><code class="language-sh">curl https://library.example/api</code></pre>
+<p style="display:none">DISPLAY-NONE-TEXT</p>
+<p style="visibility:hidden">VISIBILITY-HIDDEN-TEXT</p>
+<p style="opacity:0">OPACITY-ZERO-TEXT</p>
+<div id="host"></div>
+<label for="pw">Password</label> <input id="pw" type="password" value="PAGE-FILLED-SECRET">
+</article>
+<aside class="sidebar">Most read: <a href="/x">Something else</a></aside></main>
+<iframe src="/login" width="300" height="200"></iframe>
+<footer>© Example News</footer>
+<script>document.getElementById('host').attachShadow({mode: 'closed'}).innerHTML = '<p>Text in a closed shadow root.</p>';</script>`,
+	// Fields and hidden things, for what content leaves out (PROJ-20 review).
+	"/probe-fields": `<!doctype html><title>Fields</title>
+<style>#g::before{content:"GENERATED-TEXT"}</style>
+<p>VISIBLE-PARA</p>
+<input id=t type=text><input id=otp autocomplete=one-time-code><textarea id=ta>TA-DEFAULT</textarea>
+<select><option>OPT-ONE<option selected>OPT-TWO</select>
+<div contenteditable id=ce>CE-TEXT</div>
+<input type=submit value=SUBMIT-VALUE><input placeholder=PLACEHOLDER-TEXT>
+<output>OUTPUT-TEXT</output>
+<noscript>NOSCRIPT-TEXT</noscript><template>TEMPLATE-TEXT</template>
+<details><summary>SUM</summary>DETAILS-CLOSED</details>
+<p aria-hidden=true>ARIA-HIDDEN</p>
+<p style="font-size:0">FONT-ZERO</p>
+<p style="position:absolute;left:-9999px">OFFSCREEN</p>
+<div style="display:contents"><p>CONTENTS-TEXT</p></div>
+<p style="height:0;overflow:hidden">CLIPPED-ZERO</p>
+<p id=g></p>
+<img alt=HIDDEN-ALT style=display:none src=x><img alt=BROKEN-ALT src=nope.png width=40 height=40>
+<x-f id=xf></x-f>
+<a href="javascript:alert(1)">JS-LINK</a> <a href="/rel?a=(1)">REL-LINK</a>
+<iframe src="http://127.0.0.1:9/%zz&#10;# FAKE-HEADING&#10;" width=50 height=50></iframe>
+<iframe src="data:text/html,hi]&#10;# FAKE-TWO" width=50 height=50></iframe>
+<p>code sample: &lt;!-- a comment</p><p>AFTER-COMMENT</p>
+<script>t.value='JS-TEXT-VALUE'; otp.value='OTP-123456'; ta.value='TA-TYPED';
+xf.attachShadow({mode:'closed'}).innerHTML='<input value=SHADOW-INPUT-VALUE><p>SHADOW-P</p>';</script>`,
+	"/probe.xhtml": `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:h="http://www.w3.org/1999/xhtml"><head><title>X</title></head><body>
+<p>XHTML-PARA</p><h:input type="password" value="XHTML-PREFIXED-SECRET"/><h:textarea>XHTML-TEXTAREA</h:textarea><h:script>var XHTMLSCRIPT=1;</h:script><h:style>.XHTMLSTYLE{}</h:style></body></html>`,
+	// A hidden chain of elements, d deep, c times (PROJ-20 review).
+	"/probe-deep": `<!doctype html><title>Deep</title><p>DEEP-PAGE</p><div id="d" style="display:none"></div><script>
+const q = new URLSearchParams(location.search); const depth = +q.get('d'), chains = +q.get('c'), tag = q.get('t') || 'em';
+const d = document.getElementById('d');
+for (let c = 0; c < chains; c++) { let cur = d; for (let i = 0; i < depth; i++) { const e = document.createElement(tag); cur.appendChild(e); cur = e; } }
+document.title = 'Deep ready';</script>`,
+	// n elements sharing one long class, text or alt (PROJ-20 review).
+	"/probe-shared": `<!doctype html><title>Shared</title><p>SHARED-PAGE</p><div id="d"></div><script>
+const q = new URLSearchParams(location.search); const n = +q.get('n'), kb = +q.get('kb'), kind = q.get('k');
+const d = document.getElementById('d'); const f = document.createDocumentFragment();
+const cls = 'abcdefg hijkl '.repeat(kb * 73); const ws = ' '.repeat(kb * 1024);
+for (let i = 0; i < n; i++) {
+  if (kind === 'class') { const e = document.createElement('div'); e.className = cls; e.textContent = 'x'; f.appendChild(e); }
+  else if (kind === 'text') { const e = document.createElement('span'); e.appendChild(document.createTextNode(ws)); f.appendChild(e); }
+  else if (kind === 'alt') { const e = document.createElement('img'); e.alt = ws; e.width = 1; e.height = 1; e.src = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=='; f.appendChild(e); }
+}
+d.appendChild(f); document.title = 'Shared ready';</script>`,
+	// display:contents in its forms, hidden content and a deep tree (PROJ-20 review).
+	"/probe-contents": `<!doctype html><title>Contents</title>
+<p>line one<br>line two</p>
+<input id=i1 style="display:contents"><textarea id=t1 style="display:contents">TA-CONTENTS-DEFAULT</textarea>
+<select style="display:contents"><option selected>SEL-CONTENTS</option></select>
+<select size=3 multiple><option style="display:contents">LISTBOX-OPT</option></select>
+<button style="display:contents">BUTTON-CONTENTS</button>
+<div style="display:contents"><input id=i2 value="ATTR-VALUE-IN-CONTENTS"></div>
+<details style="display:contents"><summary>S</summary>DETAILS-CONTENTS-CLOSED</details>
+<div style="display:none"><div style="display:contents"><p style="display:block">NONE-THEN-CONTENTS</p></div></div>
+<div style="visibility:hidden"><p>VIS-HIDDEN <span style="visibility:visible">VIS-REVEALED</span></p></div>
+<div style="content-visibility:hidden"><p>CV-HIDDEN</p></div>
+<a href="/contents-link" style="display:contents">CONTENTS-LINK</a>
+<ul style="display:contents"><li>LI-ONE</li><li>LI-TWO</li></ul>
+<table><tr style="display:contents"><td>CELL-A</td><td>CELL-B</td></tr></table>
+<article style="display:contents"><h1 style="display:contents">CONTENTS-HEADING</h1><p>Article body, long enough, with commas, to be an article of its own, and then some more text, to be sure of it, and more, and more, and more, and more again, until it passes the two hundred characters that an article needs to count.</p></article>
+<nav style="display:contents"><a href="/n1">NAV-IN-CONTENTS one</a> <a href="/n2">NAV-IN-CONTENTS two</a></nav>
+<div id="deep"></div>
+<script>i1.value='TYPED-IN-CONTENTS-INPUT'; t1.value='TYPED-IN-CONTENTS-TA';
+let cur = document.getElementById('deep'); for (let i = 0; i < 300; i++) { const e = document.createElement('div'); cur.appendChild(e); cur = e; }
+cur.innerHTML = '<p>DEEP-VISIBLE <a href="/deep-link">DEEP-LINK</a><br>DEEP-SECOND <input value="DEEP-INPUT-VALUE"><img alt="DEEP-ALT" width=20 height=20 src=x></p>';</script>`,
+	// Megabytes of hidden text (display:none, or a JSON script) before an article (PROJ-20 review).
+	"/probe-budget": `<!doctype html><title>Budget</title><p>BEFORE-BIG</p><div id="h"></div><script>
+const q = new URLSearchParams(location.search); const mb = +q.get('mb'), kind = q.get('k');
+const big = 'var words = 1; '.repeat(mb * 69906);
+const h = document.getElementById('h');
+if (kind === 'script') { const s = document.createElement('script'); s.type = 'application/json'; s.textContent = big; h.appendChild(s); }
+else if (kind === 'none') { for (let i = 0; i < mb; i++) { const d = document.createElement('div'); d.style.display = 'none'; d.textContent = 'var words = 1; '.repeat(69906); h.appendChild(d); } }
+document.title = 'Budget ready';</script>
+<article><h1>AFTER-BIG-HEADING</h1><p>Article body, long enough, with commas, to be an article of its own, and then some more text, to be sure of it, and more, and more, and more, and more again, until it passes the two hundred characters that an article needs to count. AFTER-BIG-END</p></article>`,
+	// A page with a quarter of a million elements.
+	"/huge": `<!doctype html><title>Huge</title><div id="d"></div><script>
+const d = document.getElementById('d'); const f = document.createDocumentFragment();
+for (let i = 0; i < 250000; i++) { const s = document.createElement('i'); f.appendChild(s); }
+d.appendChild(f);</script>`,
 	// Buttons inside a closed shadow root: one free, one under a cover.
 	"/shadow": `<!doctype html><title>Shadow</title>` + report + `
 <div id="host"></div>
@@ -186,6 +290,9 @@ func NewPageSite(t *testing.T, host string) *PageSite {
 	}
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if strings.HasSuffix(r.URL.Path, ".xhtml") {
+			w.Header().Set("Content-Type", "application/xhtml+xml")
+		}
 		mux.ServeHTTP(w, r)
 	})
 	srv := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second}

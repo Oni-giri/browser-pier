@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/Oni-giri/browser-pier/internal/api"
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/browsertest"
@@ -155,5 +157,26 @@ func TestAgentLogsInWithPageTools(t *testing.T) {
 	}
 	if site.Seen() != site.Issued() {
 		t.Fatalf("the site saw %q, issued %q", site.Seen(), site.Issued())
+	}
+
+	// page_content (PROJ-20): the signed-in page as Markdown and as its
+	// main text, fenced; a PDF as an embedded resource; a screenshot.
+	md := tool("page_content", map[string]any{"session_id": id, "format": "markdown"})
+	if !strings.HasPrefix(md, "<untrusted-content-") || !strings.Contains(md, "# Signed in as pier\n\nBrowserPier persistence test") {
+		t.Errorf("markdown:\n%s", md)
+	}
+	if out := tool("page_content", map[string]any{"session_id": id, "format": "readability"}); !strings.Contains(out, "Signed in as pier\n\nBrowserPier persistence test") {
+		t.Errorf("readability:\n%s", out)
+	}
+	res, out := call(t, cs, "page_content", map[string]any{"session_id": id, "format": "pdf"})
+	if res.IsError || len(res.Content) != 2 || !strings.Contains(out, "PDF of the active tab") {
+		t.Fatalf("pdf: %s", out)
+	}
+	if r, ok := res.Content[1].(*sdk.EmbeddedResource); !ok || r.Resource.MIMEType != "application/pdf" || !strings.HasPrefix(string(r.Resource.Blob), "%PDF-") {
+		t.Errorf("pdf: %T", res.Content[1])
+	}
+	res, out = call(t, cs, "page_content", map[string]any{"session_id": id, "format": "screenshot"})
+	if _, ok := res.Content[len(res.Content)-1].(*sdk.ImageContent); res.IsError || !ok {
+		t.Errorf("screenshot: %s", out)
 	}
 }

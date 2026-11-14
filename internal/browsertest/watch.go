@@ -54,6 +54,9 @@ func (h Hit) String() string { return h.Kind + "@" + h.Where + " " + h.Detail }
 // (input-screen-equals-client), a click with no mouse movement before it
 // (click-without-move), a key event without a code (key-without-code),
 // and text that arrives with no key pressed (input-without-key).
+//
+// And printing (print): beforeprint, or the print media query matching,
+// which Page.printToPDF causes as a person's ctrl+P does.
 type Watch struct {
 	URL string
 
@@ -153,6 +156,9 @@ const watchPage = `<!doctype html><title>Watch</title>
     if (!e.isTrusted) report('untrusted-event', 'main', 'keydown');
     if (e.code === '' && e.key.length === 1) report('key-without-code', 'main', '');
   }, true);
+  // Printing (Page.printToPDF prints as ctrl+P does).
+  addEventListener('beforeprint', () => report('print', 'main', 'beforeprint'));
+  matchMedia('print').addEventListener('change', e => { if (e.matches) report('print', 'main', 'print media'); });
   addEventListener('beforeinput', e => {
     if (e.inputType === 'insertText' && performance.now() - keyAt > 1000) report('input-without-key', 'main', e.inputType);
   }, true);

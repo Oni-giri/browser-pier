@@ -105,6 +105,7 @@ type rareInts struct {
 type domSnapshot struct {
 	Documents []struct {
 		DocumentURL int `json:"documentURL"`
+		BaseURL     int `json:"baseURL"`
 		Title       int `json:"title"`
 		FrameID     int `json:"frameId"`
 		Nodes       struct {
@@ -492,6 +493,25 @@ func (n *axNode) prop(name string) string {
 // readWait.
 var errBusy = &Error{Status: http.StatusServiceUnavailable, Msg: "BrowserPier is busy reading other large pages; try again in a few seconds"}
 
+// readSlot takes one of the whole-page read slots (maxReads), shared by
+// every session's snapshots, finds and content calls, waiting at most
+// readWait; release gives it back. Hold it for as long as the page's
+// answer is held in memory, rendering included.
+func (c *call) readSlot(ctx context.Context) (release func(), err error) {
+	wait := time.NewTimer(c.t.readWait)
+	defer wait.Stop()
+	select {
+	case c.t.reads <- struct{}{}:
+		return func() { <-c.t.reads }, nil
+	case <-wait.C:
+		// Other sessions' large pages have the slots: don't hold this
+		// session's lease (and keep a person from taking control) for long.
+		return nil, errBusy
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 // errTooLarge is snapshot's answer on a page past the size cap.
 var errTooLarge = &Error{Status: 422, Msg: "page too large to snapshot; use find"}
 
@@ -547,18 +567,11 @@ func (c *call) info(ctx context.Context) (pageInfo, error) {
 // read reads the active tab: the DOM snapshot first, then, unless the page
 // is past the size cap, the AX tree, joined on backend node IDs.
 func (c *call) read(ctx context.Context, needAX bool) (*page, error) {
-	wait := time.NewTimer(c.t.readWait)
-	defer wait.Stop()
-	select {
-	case c.t.reads <- struct{}{}:
-		defer func() { <-c.t.reads }()
-	case <-wait.C:
-		// Other sessions' large pages have the slots: don't hold this
-		// session's lease (and keep a person from taking control) for long.
-		return nil, errBusy
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	release, err := c.readSlot(ctx)
+	if err != nil {
+		return nil, err
 	}
+	defer release()
 	pi, err := c.info(ctx)
 	if err != nil {
 		return nil, err
