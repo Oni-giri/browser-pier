@@ -3,6 +3,7 @@ package pagetools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -76,7 +77,9 @@ func TestSharedLongStringsCostLittle(t *testing.T) {
 		}},
 		{"fields sharing a megabyte value and attributes", func() *fnode {
 			return manyNodes(n, func(i int) *fnode {
-				f := el("input", "textbox", "Field", box(0, 0, 10, 10)).attr("name", long).attr("autocomplete", long).attr("type", long)
+				// Each with its own id, as on a real page: per-field work must
+				// not read the shared attributes again.
+				f := el("input", "textbox", "Field", box(0, 0, 10, 10)).attr("name", long).attr("autocomplete", long).attr("type", long).attr("id", fmt.Sprintf("f%d", i))
 				f.value = &long
 				if i == 0 {
 					f.attrs = []string{"name", "password" + long}
@@ -238,10 +241,12 @@ func TestSecretKeywordsLateInLongAttributes(t *testing.T) {
 		// another type, is another verdict.
 		field("E", "SECRET-E", "type", "password", "name", "login", "placeholder", pad),
 		field("F", "shown-F", "type", "text", "name", "login", "placeholder", pad),
+		// A keyword split across two attributes: "one" + "time code".
+		field("G", "SECRET-G", "type", "text", "name", pad+"one", "id", "time code"),
 	)
 	f.fb.addTab("https://example.com/", doc, true)
 	out := f.mustSnapshot(nil)
-	if strings.Contains(out, "SECRET-") || strings.Count(out, "[filled]") != 5 || !strings.Contains(out, `"F" = "shown-F"`) {
+	if strings.Contains(out, "SECRET-") || strings.Count(out, "[filled]") != 6 || !strings.Contains(out, `"F" = "shown-F"`) {
 		t.Errorf("snapshot:\n%s", out)
 	}
 }

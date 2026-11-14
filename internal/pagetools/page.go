@@ -150,6 +150,9 @@ type dom struct {
 	// secrets caches fence.Secret's verdict by the string indices of the
 	// attributes it reads: fields that share them are judged once.
 	secrets map[[6]int]bool
+	// secretPart caches fence.Secret's verdict on one attribute string,
+	// by its kind (0 type, 1 autocomplete, 2 a name) and string index.
+	secretPart map[[2]int]bool
 	// cut is set once some text was cut short (collapsed).
 	cut bool
 }
@@ -223,7 +226,7 @@ func indexDOM(s *domSnapshot) *dom {
 	d := &dom{s: s, byBack: map[int64]int{}, layout: map[int]int{}, values: map[int]string{},
 		texts: map[int]string{}, check: map[int]bool{}, sel: map[int]bool{}, sub: map[int]int{},
 		valueIdx: map[int]int{}, text: map[int]string{}, blocks: make([]int32, len(doc.Nodes.ParentIndex)),
-		secrets: map[[6]int]bool{}}
+		secrets: map[[6]int]bool{}, secretPart: map[[2]int]bool{}}
 	for i, b := range doc.Nodes.BackendNodeID {
 		d.byBack[b] = i
 	}
@@ -366,10 +369,70 @@ func (d *dom) secret(i int) bool {
 	if v, ok := d.secrets[idx]; ok {
 		return v
 	}
-	get := func(k int) string { return cutBytes(d.str(idx[k]), maxAttr) }
-	v := fence.Secret(get(0), get(1), strings.Join([]string{get(2), get(3), get(4), get(5)}, " "))
+	v := d.secretParts(idx)
 	d.secrets[idx] = v
 	return v
+}
+
+// junction is how much of each side of two name parts' meeting point is
+// checked for a keyword split across them ("one" + "time code"); the
+// longest keyword is about 20 characters.
+const junction = 64
+
+// secretParts is fence.Secret over the attributes, worked out part by
+// part: each attribute string is judged once however many fields share it
+// (fields often share long attributes but each has its own id), and only
+// the short junctions between adjacent name parts are judged per field.
+// That is fence.Secret(type, autocomplete, the names joined by spaces),
+// since a name keyword either lies within one part or spans a junction.
+func (d *dom) secretParts(idx [6]int) bool {
+	part := func(kind, k int) bool {
+		key := [2]int{kind, idx[k]}
+		if v, ok := d.secretPart[key]; ok {
+			return v
+		}
+		str := cutBytes(d.str(idx[k]), maxAttr)
+		var v bool
+		switch kind {
+		case 0:
+			v = fence.Secret(str, "", "")
+		case 1:
+			v = fence.Secret("", str, "")
+		default:
+			v = fence.Secret("", "", str)
+		}
+		d.secretPart[key] = v
+		return v
+	}
+	if part(0, 0) || part(1, 1) {
+		return true
+	}
+	var names []string
+	for k := 2; k < 6; k++ {
+		if idx[k] < 0 || d.str(idx[k]) == "" {
+			continue
+		}
+		if part(2, k) {
+			return true
+		}
+		names = append(names, cutBytes(d.str(idx[k]), maxAttr))
+	}
+	for k := 0; k+1 < len(names); k++ {
+		a, b := names[k], names[k+1]
+		tail := a
+		if len(a) > junction {
+			// The last junction bytes, from a character boundary.
+			start := len(a) - junction
+			for start < len(a) && !utf8.RuneStart(a[start]) {
+				start++
+			}
+			tail = a[start:]
+		}
+		if fence.Secret("", "", tail+" "+cutBytes(b, junction)) {
+			return true
+		}
+	}
+	return false
 }
 
 // value is a field's current value from the DOM snapshot.

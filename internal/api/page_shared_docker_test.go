@@ -40,8 +40,12 @@ func TestSharedStringsOnARealPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if r.URL.Path == "/long" {
+			_, _ = io.WriteString(w, longPage)
+			return
+		}
 		_, _ = io.WriteString(w, sharedPage)
 	})}
 	go func() { _ = srv.Serve(ln) }()
@@ -82,6 +86,24 @@ func TestSharedStringsOnARealPage(t *testing.T) {
 			t.Errorf("find on shared text: %d %s", code, lastLine(found))
 		}
 	}
+	// Long text is searched whole.
+	a.mustTool(s.ID, "navigate", map[string]string{"url": base + "long"})
+	for _, m := range []string{"MARKERONE", "MARKERTWO", "MARKERTHREE"} {
+		if found := a.mustTool(s.ID, "find", map[string]any{"text": m}); !strings.Contains(found, "1 match.") {
+			t.Errorf("find %s in long text: %s", m, lastLine(found))
+		}
+	}
 }
+
+// longPage has long text with a marker at its end: a 30 KB <pre> and
+// <p>, and a <div> of 3,000 spans (about 96 KB).
+const longPage = `<!doctype html><title>Long</title><body><script>
+const filler = 'filler words '.repeat(2400);
+const pre = document.createElement('pre'); pre.textContent = filler + 'MARKERONE'; document.body.append(pre);
+const p = document.createElement('p'); p.textContent = filler + 'MARKERTWO'; document.body.append(p);
+const div = document.createElement('div');
+for (let i = 0; i < 3000; i++) { const s = document.createElement('span'); s.textContent = i < 2999 ? 'span text number xxxxxxxx ' : 'MARKERTHREE'; div.append(s); }
+document.body.append(div);
+</script>`
 
 func lastLine(s string) string { return s[strings.LastIndex(s, "\n")+1:] }
