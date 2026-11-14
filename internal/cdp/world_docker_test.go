@@ -4,6 +4,7 @@ package cdp_test
 
 import (
 	"errors"
+	"net"
 	"os/exec"
 	"strings"
 	"testing"
@@ -20,13 +21,11 @@ import (
 // not Eval, not ResolveNode, not a handle the bootstrap read by it.
 func TestAnOldWorldNumberThatNamesAPageWorldNeverRunsCode(t *testing.T) {
 	s := startBrowser(t)
-	// The same server under another site: its address instead of its name.
+	// The same server under another site: its address instead of its name,
+	// or, when the site is already an address, another of this machine's.
 	host := siteHost(t)
-	out, err := exec.Command("docker", "exec", "browserpier-"+s.name, "getent", "hosts", host).Output()
-	if err != nil || len(strings.Fields(string(out))) == 0 {
-		t.Fatalf("can't resolve %s in the container: %v %q", host, err, out)
-	}
-	ip := strings.Fields(string(out))[0]
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(s.site, "http://"))
+	ip := otherAddress(t, s.name, host, port)
 	other := strings.Replace(s.site, host, ip, 1)
 	if other == s.site {
 		t.Fatalf("no second site from %s", s.site)
@@ -72,4 +71,41 @@ func TestAnOldWorldNumberThatNamesAPageWorldNeverRunsCode(t *testing.T) {
 		_ = c.Close()
 	}
 	t.Logf("the old world's number named another context in %d of 3 trials", named)
+}
+
+// otherAddress is another name for the test site's host, as a different
+// site: what host resolves to in the browser's container when it's a name
+// (host.docker.internal under rootless Podman), or else, since an address
+// has no name to resolve (getent would fail on Docker's bridge gateway,
+// CI's default), another IPv4 address of this machine that the container
+// reaches the site at (the test site listens on every interface). Not
+// every one does: rootless Podman's network namespace holds a copy of the
+// host's LAN address, so the container can't reach the host there.
+func otherAddress(t *testing.T, container, host, port string) string {
+	t.Helper()
+	if net.ParseIP(host) == nil {
+		out, err := exec.Command("docker", "exec", "browserpier-"+container, "getent", "hosts", host).Output()
+		if err != nil || len(strings.Fields(string(out))) == 0 {
+			t.Fatalf("can't resolve %s in the container: %v %q", host, err, out)
+		}
+		return strings.Fields(string(out))[0]
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range addrs {
+		n, ok := a.(*net.IPNet)
+		if !ok || n.IP.To4() == nil || !n.IP.IsGlobalUnicast() || n.IP.Equal(net.ParseIP(host)) || n.Contains(net.ParseIP(host)) {
+			continue
+		}
+		probe := exec.Command("docker", "exec", "browserpier-"+container, "timeout", "3", "bash", "-c", "exec 3<>/dev/tcp/"+n.IP.String()+"/"+port)
+		if probe.Run() != nil {
+			t.Logf("the container can't reach %s; trying another address", n.IP)
+			continue
+		}
+		return n.IP.String()
+	}
+	t.Fatalf("no address of this machine but %s that the browser's container reaches; set BROWSERPIER_TEST_SITE_HOST to a name", host)
+	return ""
 }
