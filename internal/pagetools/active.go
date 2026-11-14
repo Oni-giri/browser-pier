@@ -80,9 +80,10 @@ func origin(raw string) string {
 
 // findActive finds the tab in front, which every tool acts on: the page
 // whose document.visibilityState is "visible" (read in the isolated
-// world). Without a window manager exactly one is (see the spike); if
-// several were, the one made or seen front most recently wins. The tab
-// the last call used is checked first, so a call usually costs one look.
+// world). Exactly one is, with or without a window manager (see the
+// spike); if several were, the one made or seen front most recently
+// wins. The tab the last call used is checked first, so a call usually
+// costs one look.
 func (c *call) findActive() error {
 	ctx := c.lease.Ctx
 	pages, err := c.listTabs(ctx)
