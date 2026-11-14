@@ -28,7 +28,7 @@ test-docker: image-chromium
 
 # The same against an image that's built already, named by BROWSERPIER_TEST_IMAGE.
 test-docker-only:
-	$(GO) test -race -tags docker -timeout 20m -v $(DOCKER_TEST_PKGS)
+	$(GO) test -race -count=1 -tags docker -timeout 20m -v $(DOCKER_TEST_PKGS)
 
 # The files a release of CHANGELOG.md's newest version would attach, in
 # dist/, checked as a compose file when Docker Compose is here.

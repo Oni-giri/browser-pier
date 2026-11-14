@@ -28,7 +28,8 @@ type FakeRuntime struct {
 	ExitOnStart *int // exit at once with this status
 	Unhealthy   bool // never answer on the socket
 	StopStatus  int
-	StopErr     error // Stop fails with this, leaving the container running
+	StopErr     error   // Stop fails with this, leaving the container running
+	StartErrs   []error // each Start fails with the next of these, while any are left
 	// AfterStop, if set, is called (without the lock) once Stop has made
 	// the container exit, and Stop returns what it returns: a runtime that
 	// reports an error after the container has stopped (PROJ-64).
@@ -76,6 +77,11 @@ func (f *FakeRuntime) Start(_ context.Context, id string) error {
 	c, ok := f.Containers[id]
 	if !ok {
 		return errors.New("no such container")
+	}
+	if len(f.StartErrs) > 0 {
+		err := f.StartErrs[0]
+		f.StartErrs = f.StartErrs[1:]
+		return err
 	}
 	c.State = "running"
 	if f.ExitOnStart != nil {
@@ -230,5 +236,6 @@ func (f *FakeRuntime) Count() int {
 	return len(f.Containers)
 }
 
-// Spec is the definition version Create labels containers with.
-func (f *FakeRuntime) Spec() string { return docker.Spec }
+// Outdated reports a container created under another definition than
+// docker.Spec, which Create labels containers with.
+func (f *FakeRuntime) Outdated(spec string) bool { return spec != docker.Spec }

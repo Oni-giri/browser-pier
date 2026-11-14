@@ -1,7 +1,11 @@
 package docker
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -145,32 +149,128 @@ func TestLastLine(t *testing.T) {
 	}
 }
 
-func TestAppArmorOpt(t *testing.T) {
+func TestPlanAppArmor(t *testing.T) {
 	aa := []string{"name=apparmor", "name=seccomp,profile=builtin", "name=cgroupns"}
+	check := []string{"apparmor=browserpier", "", "apparmor=unconfined"}
 	for _, c := range []struct {
 		daemon      []string
 		profile     string
 		restriction string
-		want        string
+		want        appArmorPlan
 	}{
-		// Debian 13 and umbrelOS: docker-default would refuse the sandbox.
-		{aa, "", "absent", "apparmor=unconfined"},
-		{[]string{"name=apparmor,profile=default", "name=seccomp,profile=builtin"}, "", "absent", "apparmor=unconfined"},
+		// Debian 13 and umbrelOS: docker-default may refuse the sandbox, so
+		// check; failing that, unconfined, as before the check.
+		{aa, "", "absent", appArmorPlan{try: check, fallback: "apparmor=unconfined"}},
+		{[]string{"name=apparmor,profile=default", "name=seccomp,profile=builtin"}, "", "absent", appArmorPlan{try: check, fallback: "apparmor=unconfined"}},
+		// A remote daemon's kernel can't be read: check; failing that,
+		// Docker's default.
+		{aa, "", "unknown", appArmorPlan{try: check}},
 		// A default profile the admin set for the daemon may allow userns.
-		{[]string{"name=seccomp,profile=builtin", "name=apparmor,profile=/etc/docker/apparmor.profile"}, "", "absent", ""},
+		{[]string{"name=seccomp,profile=builtin", "name=apparmor,profile=/etc/docker/apparmor.profile"}, "", "absent", appArmorPlan{}},
 		// Ubuntu: unconfined would lose the sandbox, docker-default works.
-		{aa, "", "present", ""},
+		{aa, "", "present", appArmorPlan{}},
+		// Rootless Podman says AppArmor but applies none.
+		{[]string{"name=apparmor", "name=seccomp,profile=default", "name=rootless"}, "", "unknown", appArmorPlan{}},
 		// No AppArmor on the daemon: leave the option out.
-		{[]string{"name=seccomp,profile=builtin", "name=selinux"}, "", "absent", ""},
-		{nil, "", "absent", ""},
-		// A profile named in BROWSERPIER_BROWSER_APPARMOR wins.
-		{aa, "browserpier", "absent", "apparmor=browserpier"},
-		{aa, "unconfined", "present", "apparmor=unconfined"},
-		{aa, "docker-default", "absent", "apparmor=docker-default"},
+		{[]string{"name=seccomp,profile=builtin", "name=selinux"}, "", "absent", appArmorPlan{}},
+		{nil, "", "absent", appArmorPlan{}},
+		// A profile named in BROWSERPIER_BROWSER_APPARMOR wins, unchecked.
+		{aa, "browserpier", "absent", appArmorPlan{fixed: "apparmor=browserpier"}},
+		{aa, "unconfined", "present", appArmorPlan{fixed: "apparmor=unconfined"}},
+		{aa, "docker-default", "unknown", appArmorPlan{fixed: "apparmor=docker-default"}},
 	} {
-		if got := appArmorOpt(c.daemon, c.profile, c.restriction); got != c.want {
-			t.Errorf("appArmorOpt(%v, %q, %q) = %q, want %q", c.daemon, c.profile, c.restriction, got, c.want)
+		if got := planAppArmor(c.daemon, c.profile, c.restriction); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("planAppArmor(%v, %q, %q) = %+v, want %+v", c.daemon, c.profile, c.restriction, got, c.want)
 		}
+	}
+}
+
+func TestChooseAppArmor(t *testing.T) {
+	plan := appArmorPlan{try: []string{"apparmor=browserpier", "", "apparmor=unconfined"}, fallback: "apparmor=unconfined"}
+	// verdicts maps options to the check's answer; the others fail.
+	choose := func(p appArmorPlan, verdicts map[string]verdict) (appArmorChoice, []string) {
+		var tried []string
+		ch := chooseAppArmor(p, func(opt string) (verdict, string) {
+			tried = append(tried, opt)
+			if v, ok := verdicts[opt]; ok {
+				return v, "daemon hiccup"
+			}
+			return fails, "sandbox-check: failed: permission denied"
+		})
+		return ch, tried
+	}
+
+	// Loaded: the first choice, checked once.
+	if ch, tried := choose(plan, map[string]verdict{"apparmor=browserpier": works, "": works}); ch.opt != "apparmor=browserpier" || !ch.settled || len(tried) != 1 || ch.note.Level != slog.LevelInfo {
+		t.Errorf("profile loaded: %+v after %q", ch, tried)
+	}
+	// AppArmor 3 (Debian 12): nothing to load, and Docker's profile works.
+	if ch, _ := choose(plan, map[string]verdict{"": works, "apparmor=unconfined": works}); ch.opt != "" || !ch.settled || ch.note.Level != slog.LevelInfo {
+		t.Errorf("Debian 12: %+v", ch)
+	}
+	// AppArmor 4 without the profile loaded: unconfined, settled, with a
+	// warning that says what to do and what failed.
+	ch, _ := choose(plan, map[string]verdict{"apparmor=unconfined": works})
+	if ch.opt != "apparmor=unconfined" || !ch.settled || ch.note.Level != slog.LevelWarn || !strings.Contains(ch.note.Msg, "deploy/README.md") || !strings.Contains(ch.note.Msg, "permission denied") {
+		t.Errorf("not loaded: %+v", ch)
+	}
+	// Nothing works: an error, and the fallback.
+	if ch, tried := choose(plan, nil); ch.opt != "apparmor=unconfined" || !ch.settled || ch.note.Level != slog.LevelError || len(tried) != 3 {
+		t.Errorf("nothing works: %+v after %q", ch, tried)
+	}
+	// A check that can't tell settles nothing, whatever came before, and
+	// stops there: the fallback for now, with a warning.
+	for _, verdicts := range []map[string]verdict{{"apparmor=browserpier": unknown}, {"": unknown}} {
+		ch, tried := choose(plan, verdicts)
+		if ch.opt != "apparmor=unconfined" || ch.settled || ch.note.Level != slog.LevelWarn || !strings.Contains(ch.note.Msg, "daemon hiccup") {
+			t.Errorf("%v: %+v after %q", verdicts, ch, tried)
+		}
+	}
+	// A remote daemon's fallback is Docker's default.
+	if ch, _ := choose(appArmorPlan{try: plan.try}, map[string]verdict{"apparmor=browserpier": unknown}); ch.opt != "" || ch.settled {
+		t.Errorf("remote, unknown: %+v", ch)
+	}
+	// Nothing to check.
+	if ch, tried := choose(appArmorPlan{fixed: "apparmor=custom"}, nil); ch.opt != "apparmor=custom" || !ch.settled || ch.note.Msg != "" || tried != nil {
+		t.Errorf("fixed: %+v after %q", ch, tried)
+	}
+}
+
+func TestAppArmorVerdict(t *testing.T) {
+	if appArmorVerdict(errors.New("unable to apply apparmor profile: apparmor failed to apply profile: write /proc/thread-self/attr/apparmor/exec: no such file or directory")) != fails {
+		t.Error("a profile the daemon can't apply must count as failing")
+	}
+	for _, err := range []error{errors.New("Cannot connect to the Docker daemon"), context.DeadlineExceeded} {
+		if appArmorVerdict(err) != unknown {
+			t.Errorf("%v must count as unknown", err)
+		}
+	}
+}
+
+func TestAppArmorStartError(t *testing.T) {
+	runc := errors.New("failed to create task for container: OCI runtime create failed: runc create failed: unable to start container process: error during container init: unable to apply apparmor profile: apparmor failed to apply profile: write /proc/thread-self/attr/apparmor/exec: no such file or directory")
+	for _, auto := range []bool{true, false} {
+		err := appArmorStartError(runc, "browserpier", auto)
+		if !errors.Is(err, runc) || !strings.Contains(err.Error(), `"browserpier"`) {
+			t.Errorf("auto %t: %v", auto, err)
+		}
+		// Only a profile BrowserPier chose is worth a second try: it chooses
+		// again. One set in BROWSERPIER_BROWSER_APPARMOR would fail again.
+		if errors.Is(err, ErrAppArmorNotLoaded) != auto || errors.Is(err, ErrAppArmorSetNotLoaded) == auto {
+			t.Errorf("auto %t: wrong sentinel: %v", auto, err)
+		}
+		if strings.Contains(err.Error(), "BROWSERPIER_BROWSER_APPARMOR") == auto {
+			t.Errorf("auto %t names the setting wrongly: %v", auto, err)
+		}
+	}
+	for _, profile := range []string{"", "unconfined"} {
+		if err := appArmorStartError(runc, profile, true); err != runc { //nolint:errorlint // must be the very error
+			t.Errorf("profile %q: %v", profile, err)
+		}
+	}
+	other := errors.New("no such image")
+	if err := appArmorStartError(other, "browserpier", true); err != other { //nolint:errorlint // must be the very error
+		t.Errorf("unrelated error reworded: %v", err)
 	}
 }
 
@@ -202,8 +302,8 @@ func TestRemoteDaemon(t *testing.T) {
 		if got := RemoteDaemon(); got != want {
 			t.Errorf("DOCKER_HOST=%q: remote %t", host, got)
 		}
-		if want && ubuntuUsernsRestriction() != "present" {
-			t.Errorf("DOCKER_HOST=%q: a remote kernel must count as restricted", host)
+		if want && ubuntuUsernsRestriction() != "unknown" {
+			t.Errorf("DOCKER_HOST=%q: a remote kernel can't be read", host)
 		}
 	}
 }
@@ -215,6 +315,31 @@ func TestClientSpecCarriesTheAppArmorChoice(t *testing.T) {
 	unconfined, named := (&Client{apparmorOpt: "apparmor=unconfined"}).Spec(), (&Client{apparmorOpt: "apparmor=browserpier"}).Spec()
 	if unconfined == Spec || named == Spec || unconfined == named {
 		t.Fatalf("specs %q and %q don't tell the AppArmor choices apart", unconfined, named)
+	}
+}
+
+func TestOutdated(t *testing.T) {
+	settled := &Client{apparmorOpt: "apparmor=browserpier", apparmorSettled: true}
+	unsettled := &Client{apparmorOpt: "apparmor=unconfined"}
+	for _, c := range []struct {
+		client *Client
+		spec   string
+		want   bool
+	}{
+		{settled, "2;apparmor=browserpier", false},
+		{settled, "2;apparmor=unconfined", true}, // another choice
+		{settled, "2", true},
+		{settled, "1;apparmor=browserpier", true}, // an older definition
+		{settled, "", true},
+		// Until the choice is known, a browser under any choice runs on;
+		// not an older definition, though.
+		{unsettled, "2;apparmor=browserpier", false},
+		{unsettled, "2", false},
+		{unsettled, "1", true},
+	} {
+		if got := c.client.Outdated(c.spec); got != c.want {
+			t.Errorf("settled %t, Outdated(%q) = %t", c.client.apparmorSettled, c.spec, got)
+		}
 	}
 }
 

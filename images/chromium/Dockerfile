@@ -35,6 +35,7 @@ RUN apt-get update \
       gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-ugly \
       fonts-liberation fonts-dejavu-core fonts-noto-color-emoji fonts-noto-cjk \
       ca-certificates tzdata \
+      apparmor \
  && rm -rf /var/lib/apt/lists/* /tmp/no-terminal.deb \
  && for t in x-terminal-emulator xterm urxvt rxvt gnome-terminal konsole; do \
       ! command -v "$t" >/dev/null || { echo "a terminal emulator was installed: $t"; exit 1; }; done
@@ -74,6 +75,14 @@ COPY images/chromium/jwmrc /etc/browserpier/jwmrc
 # Fail the build if JWM can't read it: jwm -p exits 0 whatever it finds,
 # so any warning counts.
 RUN out=$(jwm -p -f /etc/browserpier/jwmrc 2>&1) && test -z "$out" || { echo "jwmrc: $out"; exit 1; }
+# BrowserPier's AppArmor profile and its loader, which the compose file's
+# apparmor service runs as root (apparmor_parser comes from the apparmor
+# package above). Browsers never run it. See images/chromium/apparmor.
+COPY images/chromium/apparmor/ /usr/share/browserpier/apparmor/
+RUN apparmor_parser --skip-kernel-load --skip-cache /usr/share/browserpier/apparmor/browserpier
+# The entrypoint has the sandbox check (`sandbox-check`), with which the
+# orchestrator picks the AppArmor profile; older images don't.
+LABEL io.browserpier.sandbox-check="1"
 
 # Changing REBUILD forces a new image without reinstalling packages (used by the persistence test).
 ARG REBUILD=0

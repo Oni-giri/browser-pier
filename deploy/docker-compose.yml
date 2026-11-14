@@ -5,6 +5,9 @@
 #   docker compose up -d                   # behind your own HTTPS proxy, or Tailscale
 #   docker compose --profile https up -d   # with Caddy getting a certificate
 #
+# On Debian 13 or later, also add --profile apparmor (see "AppArmor" in
+# README.md), e.g. `docker compose --profile https --profile apparmor up -d`.
+#
 # Browser containers are started by BrowserPier itself, from its own
 # browser image; they aren't listed here.
 
@@ -12,6 +15,12 @@ services:
   browserpier:
     image: ghcr.io/oni-giri/browser-pier:${BROWSERPIER_VERSION:-latest}
     restart: unless-stopped
+    # Starts after the apparmor service when that's enabled, whether or not
+    # it loaded the profile; without it, BrowserPier says what it chose.
+    depends_on:
+      apparmor:
+        condition: service_completed_successfully
+        required: false
     # Your user, so the files in ./data are yours. Browsers run as it too.
     user: "${PUID:-1000}:${PGID:-1000}"
     # The Docker socket's group, so BrowserPier can start browsers:
@@ -49,6 +58,32 @@ services:
       # Live views (WebRTC): open to the people who'll watch or take over.
       - "7438:7438/udp"
       - "7438:7438/tcp"
+
+  # With --profile apparmor: runs once at `docker compose up` and exits. On
+  # AppArmor 4 hosts without Ubuntu's user namespace restriction (Debian
+  # 13), the AppArmor profile of Docker 29.1 and earlier refuses Chromium's
+  # sandbox, so this loads BrowserPier's own (docker-default plus user
+  # namespaces), whatever Docker's version, and
+  # installs it in the host's /etc/apparmor.d, which the host loads at
+  # boot. Anywhere else it says so and does nothing. It needs rootful
+  # Docker and a host with /etc/apparmor.d: not rootless Docker or Podman.
+  apparmor:
+    image: ghcr.io/oni-giri/browser-pier-chromium:${BROWSERPIER_VERSION:-latest}
+    profiles: [apparmor]
+    entrypoint: ["/usr/share/browserpier/apparmor/load", "--persist", "/host/etc/apparmor.d"]
+    restart: "no"
+    # Loading AppArmor policy takes root with CAP_MAC_ADMIN and the host's
+    # securityfs, which Docker's own AppArmor profile would hide. Nothing
+    # else: no network, a read-only root, every other capability dropped.
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [MAC_ADMIN]
+    security_opt: ["apparmor=unconfined", "no-new-privileges:true"]
+    network_mode: none
+    read_only: true
+    volumes:
+      - /sys/kernel/security:/sys/kernel/security
+      - /etc/apparmor.d:/host/etc/apparmor.d
 
   caddy:
     image: caddy:2

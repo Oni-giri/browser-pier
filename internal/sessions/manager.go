@@ -35,9 +35,9 @@ type Runtime interface {
 	RemoveStale(ctx context.Context, name, profile string) error
 	List(ctx context.Context) ([]docker.Container, error)
 	MemoryUsage(ctx context.Context, id string) (int64, error)
-	// Spec is the definition version new containers get; one running under
-	// another is stopped by Reconcile.
-	Spec() string
+	// Outdated reports whether a container labelled with this definition
+	// version (docker.Container.Spec) must not run on: Reconcile stops it.
+	Outdated(spec string) bool
 }
 
 // Layout is where profile folders live:
@@ -389,7 +389,7 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 		m.abort(l, "", err.Error())
 		return
 	}
-	cid, err := m.rt.Create(ctx, docker.BrowserSpec{
+	spec := docker.BrowserSpec{
 		Name:       containerName(p.Name),
 		Profile:    p.Name,
 		Session:    id,
@@ -408,17 +408,32 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 			"BROWSERPIER_LOCAL_NETWORK=" + strconv.FormatBool(p.LocalNetwork),
 			"BROWSERPIER_HOST_IPS=" + m.hostIPs,
 		},
-	})
-	if err != nil {
-		m.abort(l, "", fmt.Sprintf("creating the browser container: %v", err))
-		return
 	}
-	if err := m.update(l, func(s *Session) { s.ContainerID = cid }); err != nil {
-		// Unrecorded, the container would be stopped as a stray after a restart.
-		m.abort(l, cid, fmt.Sprintf("saving the session: %v", err))
-		return
-	}
-	if err := m.rt.Start(ctx, cid); err != nil {
+	var cid string
+	for retried := false; ; retried = true {
+		var err error
+		cid, err = m.rt.Create(ctx, spec)
+		if err != nil {
+			m.abort(l, "", fmt.Sprintf("creating the browser container: %v", err))
+			return
+		}
+		if err := m.update(l, func(s *Session) { s.ContainerID = cid }); err != nil {
+			// Unrecorded, the container would be stopped as a stray after a restart.
+			m.abort(l, cid, fmt.Sprintf("saving the session: %v", err))
+			return
+		}
+		err = m.rt.Start(ctx, cid)
+		if err == nil {
+			break
+		}
+		// The AppArmor profile BrowserPier chose was unloaded since, say with
+		// apparmor_parser -R: the runtime checks again at the next Create.
+		if !retried && errors.Is(err, docker.ErrAppArmorNotLoaded) {
+			m.log.Warn("the browser's AppArmor profile isn't loaded any more; choosing again", "profile", p.Name, "err", err)
+			if rmErr := m.rt.Remove(ctx, cid); rmErr == nil {
+				continue
+			}
+		}
 		m.abort(l, cid, fmt.Sprintf("starting the browser container: %v", err))
 		return
 	}

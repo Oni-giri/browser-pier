@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -40,6 +41,52 @@ func docker(t *testing.T, args ...string) string {
 		t.Fatalf("docker %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+var (
+	appArmorOnce sync.Once
+	appArmorArgs []string
+	appArmorErr  error
+)
+
+// appArmor is the AppArmor option the browser tests run under, as
+// `docker run` arguments: what BrowserPier would choose on this host
+// (internal/docker), found with the image's sandbox check in the same
+// order: BrowserPier's profile if it's loaded, the daemon's default (which
+// refuses the sandbox on Debian 13 with Docker 29.1 and earlier), then
+// unconfined. BROWSERPIER_TEST_APPARMOR sets it instead: a profile's name,
+// or "default" for the daemon's.
+func appArmor(t *testing.T, image, seccomp string) []string {
+	t.Helper()
+	appArmorOnce.Do(func() {
+		if set := os.Getenv("BROWSERPIER_TEST_APPARMOR"); set != "" {
+			if set != "default" {
+				appArmorArgs = []string{"--security-opt", "apparmor=" + set}
+			}
+			return
+		}
+		var tried []string
+		for _, opt := range []string{"apparmor=browserpier", "", "apparmor=unconfined"} {
+			args := []string{"run", "--rm", "--security-opt", "seccomp=" + seccomp}
+			if opt != "" {
+				args = append(args, "--security-opt", opt)
+			}
+			out, err := exec.Command("docker", append(args, image, "sandbox-check")...).CombinedOutput() //nolint:gosec // test arguments
+			if err == nil {
+				if opt != "" {
+					appArmorArgs = []string{"--security-opt", opt}
+				}
+				return
+			}
+			tried = append(tried, fmt.Sprintf("%q: %s", opt, strings.TrimSpace(string(out))))
+		}
+		appArmorErr = fmt.Errorf("chromium's sandbox works under no AppArmor choice here; tried %s", strings.Join(tried, "; "))
+	})
+	if appArmorErr != nil {
+		t.Fatal(appArmorErr)
+	}
+	t.Logf("AppArmor: %q (the daemon's default if empty)", appArmorArgs)
+	return appArmorArgs
 }
 
 func newVolume(t *testing.T) string {
@@ -69,15 +116,17 @@ func startBrowser(t *testing.T, image, volume string) *browser {
 		t.Fatal(err)
 	}
 	name := fmt.Sprintf("bp-test-%d", time.Now().UnixNano())
-	docker(t, "run", "-d", "--name", name,
-		"--security-opt", "seccomp="+seccomp,
+	run := append([]string{"run", "-d", "--name", name,
+		"--security-opt", "seccomp=" + seccomp},
+		appArmor(t, image, seccomp)...)
+	docker(t, append(run,
 		"--shm-size=1g",
 		"-e", "BROWSERPIER_SCREEN=1280x800",
 		// The test sites are on the Docker host: the local network.
 		"-e", "BROWSERPIER_LOCAL_NETWORK=true",
 		"-v", volume+":/profile",
 		"-v", sockDir+":/run/browserpier",
-		image)
+		image)...)
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
 
 	sock := filepath.Join(sockDir, "control.sock")
