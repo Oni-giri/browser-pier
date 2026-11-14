@@ -162,7 +162,7 @@ func chooseAppArmor(p appArmorPlan, check func(opt string) (verdict, string)) ap
 		case works:
 			return appArmorChoice{opt: opt, settled: true, note: appArmorNote(opt, failed)}
 		case fails:
-			failed = append(failed, describeAppArmor(opt)+": "+why)
+			failed = append(failed, appArmorName(opt)+": "+why)
 		default:
 			return appArmorChoice{opt: p.fallback, note: AppArmorNote{slog.LevelWarn, fmt.Sprintf(
 				"couldn't check whether Chromium's sandbox works %s (%s), so for now browser containers run %s; BrowserPier checks again before the next browser starts",
@@ -178,10 +178,26 @@ func appArmorNote(opt string, failed []string) AppArmorNote {
 	case optBrowserPier:
 		return AppArmorNote{slog.LevelInfo, "browser containers run under BrowserPier's AppArmor profile, browserpier"}
 	case "":
-		return AppArmorNote{slog.LevelInfo, "browser containers keep Docker's default AppArmor profile: Chromium's sandbox works under it here"}
+		msg := "browser containers keep Docker's default AppArmor profile: Chromium's sandbox works under it here"
+		if len(failed) > 0 {
+			// Why browserpier didn't do: not loaded, usually.
+			msg += " (" + strings.Join(failed, "; ") + ")"
+		}
+		return AppArmorNote{slog.LevelInfo, msg}
 	}
 	return AppArmorNote{slog.LevelWarn, "browser containers run without an AppArmor profile: Docker's default refuses Chromium's sandbox on this host (AppArmor 4 with Docker 29.1 or earlier, as on Debian 13), " +
 		`and BrowserPier's own profile isn't loaded. Load it to keep AppArmor: with the compose file, "docker compose --profile apparmor up -d"; see "AppArmor" in deploy/README.md. Tried ` + strings.Join(failed, "; ")}
+}
+
+// appArmorName names an option briefly, for the list of what failed.
+func appArmorName(opt string) string {
+	switch opt {
+	case "":
+		return "Docker's default"
+	case optUnconfined:
+		return "unconfined"
+	}
+	return strings.TrimPrefix(opt, "apparmor=")
 }
 
 func describeAppArmor(opt string) string {
