@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -39,7 +40,8 @@ func (h Hit) String() string { return h.Kind + "@" + h.Where + " " + h.Detail }
 //   - console-proxy: a Proxy logged to the console that is inspected;
 //   - console-slow: console.debug of a large object costing much more
 //     than it did when the page loaded, as when the inspector serialises
-//     it (timing; reported with the numbers);
+//     it (timing, so a busy machine trips it too; reported with the
+//     numbers, every time, where the other checks report once a page);
 //   - webdriver and automation globals (cdc_…, __playwright…,
 //     __puppeteer…), and bindings Playwright adds to the main world.
 //
@@ -59,6 +61,10 @@ func (h Hit) String() string { return h.Kind + "@" + h.Where + " " + h.Detail }
 // which Page.printToPDF causes as a person's ctrl+P does.
 type Watch struct {
 	URL string
+	// Attached lists what stays attached to the browser's pages. Quiet
+	// asks it before taking a batch's console-slow for a busy machine's:
+	// a client left attached slows the control batch as well.
+	Attached func() []string
 
 	mu    sync.Mutex
 	hits  []Hit
@@ -102,7 +108,9 @@ const watchPage = `<!doctype html><title>Watch</title>
       for (let i = 0; i < 50; i++) console.debug(big);
       const cost = performance.now() - t0;
       if (probe.base === undefined) probe.base = Math.max(cost, 0.5);
-      if (cost > probe.base * 5 && cost > 5) fire('console-slow', cost.toFixed(1) + ' ms vs ' + probe.base.toFixed(1) + ' ms at load');
+      // Every slow check is reported, not only the first: Watch.Quiet
+      // compares a batch's with a control batch's on the same page.
+      if (cost > probe.base * 5 && cost > 5) report('console-slow', where, cost.toFixed(1) + ' ms vs ' + probe.base.toFixed(1) + ' ms at load');
       if (typeof navigator !== 'undefined' && navigator.webdriver) fire('webdriver', '');
     }
   ` + "`" + `;
@@ -236,10 +244,12 @@ func (w *Watch) Hits() []Hit {
 }
 
 // Kinds returns the distinct hits, as "kind@where", sorted by first sight.
-func (w *Watch) Kinds() []string {
+func (w *Watch) Kinds() []string { return kinds(w.Hits()) }
+
+func kinds(hits []Hit) []string {
 	seen := map[string]bool{}
 	var out []string
-	for _, h := range w.Hits() {
+	for _, h := range hits {
 		k := h.Kind + "@" + h.Where
 		if h.Kind == "main-world-call" {
 			k += ":" + h.Detail
@@ -250,6 +260,167 @@ func (w *Watch) Kinds() []string {
 		}
 	}
 	return out
+}
+
+// Quiet runs a batch of n calls on the detector's page (call makes one,
+// through BrowserPier) and fails t if the detector saw anything but the
+// allowed kinds, given as "kind@where" (a PDF's "print@main"). It returns
+// the batch's hits and whether the batch passed.
+//
+// console-slow is timing alone, and on a loaded machine (a CI runner
+// whose few CPUs other test packages share) a check is slow with nothing
+// attached. So when a batch's only hits are console-slow, Quiet runs a
+// control batch at once on the same page: n sleeps as long as the batch's
+// calls took on average, with no call to BrowserPier or the browser.
+//   - If the control is slow too, on every thread the batch was, and
+//     nothing is left attached (w.Attached), the machine was busy: both
+//     are logged and the batch passes.
+//   - If not, the batch runs once more, with its own control: what the
+//     calls cause, they cause every time (an inspector serialises every
+//     console call while it is attached), where a busy machine's
+//     slowness comes and goes. Slow again with a quiet control, it fails.
+//
+// Any other hit fails the batch at once.
+func (w *Watch) Quiet(t testing.TB, name string, n int, call func(), allowed ...string) ([]Hit, bool) {
+	t.Helper()
+	var first string // the first batch's console-slow, when it is run again
+	for try := 1; ; try++ {
+		w.Reset()
+		start := time.Now()
+		for range n {
+			call()
+		}
+		took := time.Since(start)
+		w.Settle()
+		hits := w.Hits()
+		other, slow := sortHits(hits, allowed)
+		switch {
+		case len(other) > 0:
+			t.Errorf("%s: the detector saw %v", name, kinds(append(other, slow...)))
+			return hits, false
+		case len(slow) == 0 && first != "":
+			t.Logf("%s: run again, no console-slow (the detector saw %v): the first run's %s was the machine's", name, kinds(hits), first)
+			return hits, true
+		case len(slow) == 0 && len(hits) > 0:
+			t.Logf("%s: the detector saw %v, as allowed", name, kinds(hits))
+			return hits, true
+		case len(slow) == 0:
+			t.Logf("%s: nothing seen", name)
+			return hits, true
+		}
+		w.Reset()
+		for range n {
+			time.Sleep(took / time.Duration(n))
+		}
+		w.Settle()
+		ctrlOther, ctrlSlow := sortHits(w.Hits(), allowed)
+		if len(ctrlOther) > 0 {
+			t.Errorf("%s: the detector saw %s, then %v in a control batch with no calls", name, slowness(slow), kinds(ctrlOther))
+			return hits, false
+		}
+		if missing := slowNotIn(slow, ctrlSlow); len(missing) > 0 {
+			if try == 1 {
+				first = slowness(slow)
+				t.Logf("%s: %s with the calls, %s in a control batch of %d sleeps with none; running the batch again", name, first, slowness(ctrlSlow), n)
+				continue
+			}
+			t.Errorf("%s: console-slow on %v with the calls, twice (%s, then %s), not in a control batch of %d sleeps with none (%s)", name, missing, first, slowness(slow), n, slowness(ctrlSlow))
+			return hits, false
+		}
+		if w.Attached == nil {
+			t.Errorf("%s: %s, and the same in a control batch, but Watch.Attached isn't set to rule out a client left attached", name, slowness(slow))
+			return hits, false
+		}
+		if left := w.Attached(); len(left) > 0 {
+			t.Errorf("%s: %s, and the same in a control batch, with %v left attached", name, slowness(slow), left)
+			return hits, false
+		}
+		t.Logf("%s: %s, and in a control batch of %d sleeps with no calls %s: the machine was busy", name, slowness(slow), n, slowness(ctrlSlow))
+		return hits, true
+	}
+}
+
+// Calm checks the detector saw nothing since the last Reset while
+// nothing was done (after a page loads, say), failing t if it did. With
+// no calls to compare against, console-slow there is a busy machine's
+// unless a client stayed attached (w.Attached), so then only that fails.
+func (w *Watch) Calm(t testing.TB, name string) bool {
+	t.Helper()
+	w.Settle()
+	other, slow := sortHits(w.Hits(), nil)
+	switch {
+	case len(other) > 0:
+		t.Errorf("%s: the detector saw %v", name, kinds(append(other, slow...)))
+		return false
+	case len(slow) == 0:
+		return true
+	case w.Attached == nil:
+		t.Errorf("%s: %s, and Watch.Attached isn't set to rule out a client left attached", name, slowness(slow))
+		return false
+	}
+	if left := w.Attached(); len(left) > 0 {
+		t.Errorf("%s: %s, with %v left attached", name, slowness(slow), left)
+		return false
+	}
+	t.Logf("%s: %s, with nothing done or attached: the machine was busy", name, slowness(slow))
+	return true
+}
+
+// sortHits splits hits that aren't allowed into console-slow and others.
+func sortHits(hits []Hit, allowed []string) (other, slow []Hit) {
+	for _, h := range hits {
+		switch {
+		case slices.Contains(allowed, h.Kind+"@"+h.Where):
+		case h.Kind == "console-slow":
+			slow = append(slow, h)
+		default:
+			other = append(other, h)
+		}
+	}
+	return other, slow
+}
+
+// slowness sums up console-slow hits by thread: how many, and the worst.
+func slowness(hits []Hit) string {
+	if len(hits) == 0 {
+		return "no console-slow"
+	}
+	var parts []string
+	for _, where := range []string{"main", "worker"} {
+		n, worst := 0, ""
+		for _, h := range hits {
+			if h.Where == where {
+				n++
+				if worst == "" || leadingMS(h.Detail) > leadingMS(worst) {
+					worst = h.Detail
+				}
+			}
+		}
+		if n > 0 {
+			parts = append(parts, fmt.Sprintf("console-slow@%s %d× (worst %s)", where, n, worst))
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// leadingMS reads the cost at the start of a console-slow detail, "8.4 ms
+// vs 1.6 ms at load".
+func leadingMS(detail string) float64 {
+	var ms float64
+	_, _ = fmt.Sscanf(detail, "%g", &ms)
+	return ms
+}
+
+// slowNotIn returns the threads ("main", "worker") slow in batch but not
+// in control.
+func slowNotIn(batch, control []Hit) []string {
+	var missing []string
+	for _, h := range batch {
+		if !slices.Contains(missing, h.Where) && !slices.ContainsFunc(control, func(c Hit) bool { return c.Where == h.Where }) {
+			missing = append(missing, h.Where)
+		}
+	}
+	return missing
 }
 
 // Reset forgets the hits so far.

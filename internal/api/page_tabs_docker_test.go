@@ -4,6 +4,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -126,12 +127,12 @@ func TestPageToolsStayQuiet(t *testing.T) {
 	a := newRealAPI(t)
 	w := browsertest.NewWatch(t, browsertest.SiteHost(t))
 	s := a.startAPIBrowser(t, "q")
+	w.Attached = attachedPages(t, a.m.Layout().ControlSocket(s.Profile))
 	a.mustTool(s.ID, "navigate", map[string]string{"url": w.URL})
 	w.Ready(t)
 	time.Sleep(2 * time.Second)
-	w.Settle()
-	if k := w.Kinds(); len(k) > 0 {
-		t.Fatalf("the detector sees something with only the tools' navigate: %v", k)
+	if !w.Calm(t, "with only the tools' navigate") {
+		t.FailNow()
 	}
 	snap := a.mustTool(s.ID, "snapshot", nil)
 	email, pw, goBtn := refFor(t, snap, `textbox "Email"`), refFor(t, snap, `textbox "Password"`), refFor(t, snap, `button "Continue"`)
@@ -150,29 +151,18 @@ func TestPageToolsStayQuiet(t *testing.T) {
 		{"wait", map[string]any{"ref": goBtn}},
 		{"tabs", map[string]any{}},
 	}
+	// Each batch goes through w.Quiet, which tells a busy machine's
+	// console-slow from one the calls cause with a control batch.
 	quiet := true
 	for _, r := range runs {
-		w.Reset()
-		for range 20 {
-			a.mustTool(s.ID, r.tool, r.body)
-		}
-		w.Settle()
 		raw, _ := json.Marshal(r.body)
-		if k := w.Kinds(); len(k) > 0 {
+		if _, ok := w.Quiet(t, fmt.Sprintf("20 × %s %s", r.tool, raw), 20, func() { a.mustTool(s.ID, r.tool, r.body) }); !ok {
 			quiet = false
-			t.Errorf("20 × %s %s: the detector saw %v", r.tool, raw, k)
-		} else {
-			t.Logf("20 × %s %s: nothing seen", r.tool, raw)
 		}
 	}
 	// navigate reloads the detector itself, so it goes last.
-	w.Reset()
-	for range 20 {
-		a.mustTool(s.ID, "navigate", map[string]string{"action": "reload"})
-	}
-	w.Settle()
-	if k := w.Kinds(); len(k) > 0 {
-		t.Errorf("20 × navigate reload: the detector saw %v", k)
+	if _, ok := w.Quiet(t, "20 × navigate reload", 20, func() { a.mustTool(s.ID, "navigate", map[string]string{"action": "reload"}) }); !ok {
+		quiet = false
 	}
 	// The positive control: what Playwright does.
 	w.Reset()

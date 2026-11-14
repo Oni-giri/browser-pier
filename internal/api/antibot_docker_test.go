@@ -137,6 +137,20 @@ type target struct {
 	Attached  bool
 }
 
+// attachedPages is a browsertest.Watch's Attached for a session's
+// browser: the pages something is attached to.
+func attachedPages(t *testing.T, sock string) func() []string {
+	return func() []string {
+		var out []string
+		for _, tg := range targets(t, sock) {
+			if tg.Type == "page" && tg.Attached {
+				out = append(out, tg.URL)
+			}
+		}
+		return out
+	}
+}
+
 // targets lists the browser's targets over a browser-level CDP connection
 // on the control socket, which attaches to no page.
 func targets(t *testing.T, sock string) []target {
