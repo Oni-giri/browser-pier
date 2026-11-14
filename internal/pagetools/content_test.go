@@ -376,3 +376,72 @@ func TestPDFErrors(t *testing.T) {
 	}
 	f.closedAfter()
 }
+
+// TestSharedStringsInTheSnapshot: the DOM snapshot shares one string among
+// every node that has it, so thousands of nodes can carry the same long
+// class or text. Reading stays fast, and a handoff isn't held up.
+func TestSharedStringsInTheSnapshot(t *testing.T) {
+	f := newFixture(t)
+	vb := box(0, 0, 800, 20)
+	cls := strings.Repeat("abcdefg hijkl ", 10000) // 140 KB
+	ws := strings.Repeat(" ", 1<<20)
+	kids := []*fnode{el("p", "paragraph", "", vb, txt("SHARED-PAGE", vb))}
+	for range 5000 {
+		kids = append(kids, el("div", "", "", vb, txt("x", vb)).attr("class", cls))
+	}
+	for range 2000 {
+		kids = append(kids, el("span", "", "", vb, txt(ws, vb)))
+	}
+	f.fb.addTab("https://example.com/", el("#document", "RootWebArea", "", box(0, 0, 1280, 800), el("body", "", "", vb, kids...)), true)
+	for _, format := range []string{"markdown", "readability"} {
+		start := time.Now()
+		out, err := f.text(TextIn{Format: format})
+		if err != nil || !strings.Contains(out, "SHARED-PAGE") {
+			t.Errorf("%s: %v\n%.300s", format, err, out)
+		}
+		if d := time.Since(start); d > 5*time.Second {
+			t.Errorf("%s took %v", format, d)
+		}
+	}
+	// A handoff during a read ends it at once.
+	done := make(chan error, 1)
+	go func() { _, err := f.text(TextIn{Format: "readability"}); done <- err }()
+	time.Sleep(20 * time.Millisecond)
+	start := time.Now()
+	if _, err := f.m.SetNeedsHelp(f.sess.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		t.Logf("the read ended with %v", err)
+		if d := time.Since(start); d > 3*time.Second {
+			t.Errorf("the read ended %v after the handoff", d)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the read went on after the handoff")
+	}
+}
+
+// TestDisplayContentsKeepsItsRole: an element with no box of its own but
+// shown content (display:contents) keeps what it is.
+func TestDisplayContentsKeepsItsRole(t *testing.T) {
+	f := newFixture(t)
+	vb := box(0, 0, 800, 20)
+	f.fb.addTab("https://example.com/dir/", el("#document", "RootWebArea", "", box(0, 0, 1280, 800), el("body", "", "", vb,
+		el("h1", "heading", "", nil, txt("CONTENTS-HEADING", vb)),
+		el("a", "link", "", nil, txt("CONTENTS-LINK", vb)).attr("href", "/contents-link"),
+		el("div", "", "", nil, el("div", "", "", nil, el("p", "", "", nil, txt("NONE-HIDDEN", nil)))),
+	)), true)
+	out, err := f.text(TextIn{Format: "markdown"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"# CONTENTS-HEADING", "[CONTENTS-LINK](https://example.com/contents-link)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "NONE-HIDDEN") {
+		t.Errorf("hidden text in\n%s", out)
+	}
+}

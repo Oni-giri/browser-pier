@@ -54,6 +54,10 @@ const (
 	maxContentNodes = 200000
 	// MaxPDF caps a PDF's size: ask for fewer pages beyond it.
 	MaxPDF = 10 << 20
+	// renderTimeout bounds rendering, which is linear and takes well under
+	// a second on the largest pages; with the snapshot's own time, it
+	// bounds how long a content call holds a read slot.
+	renderTimeout = 10 * time.Second
 	// pdfTimeout is how long printing may take.
 	pdfTimeout = 60 * time.Second
 )
@@ -106,7 +110,7 @@ func (t *Tools) Text(ctx context.Context, s sessions.Session, who Caller, in Tex
 		}
 		// Rendering is linear, but a handoff, a stop or the caller going
 		// away still ends it, and it never runs long.
-		rctx, cancel := context.WithTimeout(c.lease.Ctx, c.t.slow)
+		rctx, cancel := context.WithTimeout(c.lease.Ctx, renderTimeout)
 		defer cancel()
 		var body, source, what string
 		var full bool
@@ -232,7 +236,8 @@ func (c *call) readTree(ctx context.Context) (*pagetext.Node, *url.URL, string, 
 		// The fence drops HTML comments: a "<!--" in a title would take
 		// the page's text with it.
 		header = strings.ReplaceAll(header, "<!--", `<\!--`)
-		return contentTree(d), base, header, nil
+		tree, err := contentTree(ctx, d)
+		return tree, base, header, err
 	}
 }
 
@@ -261,41 +266,100 @@ var contentAttrs = map[string]bool{"href": true, "src": true, "alt": true, "clas
 // in the order the page shows it (the snapshot walks the flat tree:
 // shadow roots and slots are already in place). Text that isn't laid out
 // or is hidden (display:none, visibility:hidden, zero-size) is left out,
-// as are images and iframes that aren't shown. Form fields' values are
-// never copied: pagetext leaves the fields out.
-func contentTree(d *dom) *pagetext.Node {
+// as are images and iframes that aren't shown. An element with no box of
+// its own but shown content (display:contents) stays, with its role (a
+// heading, a link, a table row), marked display:contents; one with nothing
+// shown under it (display:none, and a hidden chain of any length) goes.
+// Form fields' values are never copied: pagetext leaves the fields out.
+//
+// The snapshot's strings are shared among nodes, so each attribute is cut
+// to its cap and texts are read against one budget for the page
+// (pagetext.TextBudget): the work is linear in the nodes, however many
+// share one long string. It stops with ctx's error when ctx ends.
+func contentTree(ctx context.Context, d *dom) (*pagetext.Node, error) {
 	doc := d.s.Documents[0]
-	nodes := make([]*pagetext.Node, len(doc.Nodes.NodeType))
+	types := doc.Nodes.NodeType
+	// Which texts are shown, then, bottom-up (a parent comes before its
+	// children in the snapshot), which elements have shown content.
+	texts := make([]string, len(types))
+	shown := make([]bool, len(types))
+	budget, truncated := pagetext.TextBudget, false
+	for i, typ := range types {
+		if i%4096 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
+		switch typ {
+		case 1:
+			_, shown[i] = d.layout[i]
+		case 3:
+			if budget <= 0 {
+				truncated = truncated || !pagetext.Blank(cutBytes(d.str(doc.Nodes.NodeValue[i]), 64))
+				continue
+			}
+			t := cutBytes(d.str(doc.Nodes.NodeValue[i]), min(pagetext.MaxText, budget))
+			budget -= max(1, len(t))
+			if pagetext.Blank(t) {
+				// Whitespace between elements, shown or not.
+				if t != "" {
+					texts[i], shown[i] = " ", true
+					if p := d.parent(i); p >= 0 && preWhiteSpace(d, p) {
+						texts[i] = t
+					}
+				}
+				continue
+			}
+			if _, ok := d.shown(i); ok {
+				texts[i], shown[i] = t, true
+			}
+		}
+	}
+	keep := make([]bool, len(types))
+	for i := len(types) - 1; i >= 0; i-- {
+		if shown[i] && (types[i] == 1 || types[i] == 3 && !pagetext.Blank(texts[i])) {
+			keep[i] = true
+		}
+		if keep[i] {
+			if p := d.parent(i); p >= 0 && p < len(keep) {
+				keep[p] = true
+			}
+		}
+	}
+	nodes := make([]*pagetext.Node, len(types))
 	root := &pagetext.Node{Tag: "#document"}
-	for i, typ := range doc.Nodes.NodeType {
+	for i, typ := range types {
+		if i%4096 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		var n *pagetext.Node
 		switch typ {
 		case 9: // the document itself
 			nodes[i] = root
 			continue
 		case 1:
-			if _, laidOut := d.layout[i]; !laidOut {
-				// Not laid out: display:none and what is under it (its
-				// texts aren't shown either), or display:contents, whose
-				// children go to its parent. Either way the element
-				// itself adds nothing, and a hidden chain of thousands
-				// of elements costs nothing to render.
-				nodes[i] = parentOf(nodes, d.parent(i), root)
-				continue
+			if !keep[i] {
+				continue // nothing of it is shown
 			}
 			tag := strings.ToLower(d.name(i))
 			// XHTML can prefix names (h:input): the local name is the tag.
 			if k := strings.LastIndexByte(tag, ':'); k >= 0 {
 				tag = tag[k+1:]
 			}
-			n = &pagetext.Node{Tag: tag, Display: d.display(i), Pre: preWhiteSpace(d, i)}
+			display := d.display(i)
+			if !shown[i] {
+				display = "contents" // no box, but shown content
+			}
+			n = &pagetext.Node{Tag: tag, Display: display, Pre: preWhiteSpace(d, i)}
 			if attrs := doc.Nodes.Attributes; i < len(attrs) {
 				for k := 0; k+1 < len(attrs[i]); k += 2 {
 					if name := strings.ToLower(d.str(attrs[i][k])); contentAttrs[name] {
 						if n.Attrs == nil {
 							n.Attrs = map[string]string{}
 						}
-						n.Attrs[name] = d.str(attrs[i][k+1])
+						n.Attrs[name] = pagetext.CutAttr(name, d.str(attrs[i][k+1]))
 					}
 				}
 			}
@@ -304,18 +368,14 @@ func contentTree(d *dom) *pagetext.Node {
 				if _, ok := d.shown(i); !ok {
 					n = nil
 				} else if tag == "iframe" {
-					n.Attrs = map[string]string{"src": frameOrigin(d, i)}
+					n.Attrs = map[string]string{"src": pagetext.CutAttr("src", frameOrigin(d, i))}
 				}
 			}
 		case 3:
-			text := d.str(doc.Nodes.NodeValue[i])
-			if strings.TrimSpace(text) != "" {
-				if _, ok := d.shown(i); !ok {
-					break
-				}
+			if !shown[i] {
+				continue
 			}
-			p := d.parent(i)
-			n = &pagetext.Node{Text: text, Pre: p >= 0 && preWhiteSpace(d, p)}
+			n = &pagetext.Node{Text: texts[i], Pre: texts[i] != " " && d.parent(i) >= 0 && preWhiteSpace(d, d.parent(i))}
 		}
 		if n == nil {
 			continue
@@ -327,7 +387,21 @@ func contentTree(d *dom) *pagetext.Node {
 		nodes[i] = n
 		parent.Kids = append(parent.Kids, n)
 	}
-	return root
+	if truncated {
+		root.Kids = append(root.Kids, &pagetext.Node{Tag: "p", Kids: []*pagetext.Node{pagetext.Note(pagetext.TruncatedNote)}})
+	}
+	return root, nil
+}
+
+// cutBytes cuts s to at most n bytes, on a rune boundary.
+func cutBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 // parentOf is the tree node that snapshot node p's children go under:
