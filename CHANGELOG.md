@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.2.0
+
+**Before you update:** the compose file now needs **Docker Compose 2.20 or newer** (`docker compose version`). Browsers started by 0.1.x are closed gracefully on the first start, so logins are kept, and start again under the new definition when next used.
+
+**New**
+- **Page tools for agents in API mode,** over MCP and REST, so an agent that only speaks MCP can read and use a page without pulling in raw HTML or a screenshot:
+  - `snapshot`: the page's controls with short refs, and its text, within a budget.
+  - `find`: text on the page, with the nearest ref.
+  - `act`: 1–20 steps on refs, such as click, fill, type, press, select, check and hover.
+  - `wait_for`: wait for text, a ref, or a URL change.
+  - `navigate` and `tabs`.
+
+  A whole login is about 2,000 characters, about half of one screenshot. Everything they return is fenced as untrusted page content. A field that looks secret shows only `[filled]` or `[empty]`, never its value. They add nothing to the page and never switch on a CDP domain, so detection scripts don't see them. REST: `POST /api/sessions/{id}/snapshot`, `find`, `act`, `wait`, `navigate` and `tabs`.
+- **Page content:** `POST /api/sessions/{id}/content`, and `page_content` over MCP. It returns the active tab as Markdown, as reader-view text (the main article only), as a screenshot, or as a PDF. Long pages come in parts. Markdown and reader view are rendered by BrowserPier from what the browser lays out, so no script runs in the page, and hidden text and form values are left out. A PDF is a print, which the page can see.
+- **TURN for the live view and phone handoffs,** for viewers on networks that block UDP or direct connections, such as some corporate Wi-Fi and mobile carriers:
+  - Point BrowserPier at your own TURN server with `BROWSERPIER_TURN_URLS` and `BROWSERPIER_TURN_SECRET`. Each viewer then gets its own expiring login.
+  - Or start the bundled coturn with `--profile turn`. It relays only to BrowserPier, over UDP, and only port 3478 is published.
+  - See "TURN" in `deploy/README.md`.
+- **BrowserPier's own AppArmor profile,** `browserpier`. On Debian 13, umbrelOS 2 and other AppArmor 4 hosts, Docker's profile can break Chromium's sandbox, so since 0.1.2 browsers there ran without AppArmor. They now keep a profile: Docker's own, plus user namespaces.
+  - With compose, add `--profile apparmor` to `docker compose up` on Debian 13 or later. It loads the profile once as root and installs it so the host keeps it across reboots.
+  - On Umbrel it loads whenever the app starts.
+  - BrowserPier checks which profile works and picks the best one. If none of its own is loaded, it falls back as before and says so in its log.
+- **A desktop in the browser:** a small window manager with a taskbar. Pages now see a work area smaller than the screen, as on a real desktop, instead of the bare screen headless browsers report. Screenshots and the live view show the taskbar along the bottom.
+
+**Fixed**
+- Stopping a browser could answer "502" and mark the session as crashed when the host failed to tear down its network afterwards, as rootless Podman 5 does on Ubuntu. The browser had closed normally. A stop that leaves the container stopped now counts.
+- The bundled coturn no longer leaves an anonymous Docker volume behind each time it's recreated.
+
 ## 0.1.5
 
 **New**

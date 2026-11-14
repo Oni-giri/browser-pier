@@ -45,8 +45,9 @@ const (
 // Spec versions browserConfig. It goes up when a browser running under the
 // previous definition mustn't be picked up after an update, so the
 // orchestrator stops it instead: 2 sends every page connection through the
-// egress filter (PROJ-26).
-const Spec = "2"
+// egress filter (PROJ-26); 3 starts a window manager with a taskbar and
+// sizes Chromium's window above it (PROJ-29).
+const Spec = "3"
 
 const (
 	// StopTimeout is how long a browser container gets to stop before Docker

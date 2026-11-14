@@ -326,15 +326,15 @@ func TestOutdated(t *testing.T) {
 		spec   string
 		want   bool
 	}{
-		{settled, "2;apparmor=browserpier", false},
-		{settled, "2;apparmor=unconfined", true}, // another choice
-		{settled, "2", true},
+		{settled, Spec + ";apparmor=browserpier", false},
+		{settled, Spec + ";apparmor=unconfined", true}, // another choice
+		{settled, Spec, true},
 		{settled, "1;apparmor=browserpier", true}, // an older definition
 		{settled, "", true},
 		// Until the choice is known, a browser under any choice runs on;
 		// not an older definition, though.
-		{unsettled, "2;apparmor=browserpier", false},
-		{unsettled, "2", false},
+		{unsettled, Spec + ";apparmor=browserpier", false},
+		{unsettled, Spec, false},
 		{unsettled, "1", true},
 	} {
 		if got := c.client.Outdated(c.spec); got != c.want {
