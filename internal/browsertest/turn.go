@@ -29,7 +29,7 @@ func Coturn(t *testing.T, ip, peer, secret string) string {
 	name := fmt.Sprintf("bp-turn-test-%d", time.Now().UnixNano())
 	// The compose file's hardening, as docker run spells it.
 	out, err := docker("run", "-d", "--name", name, "--network", "host",
-		"--cap-drop", "ALL", "--cap-add", "NET_BIND_SERVICE", "--security-opt", "no-new-privileges:true", "--read-only", "--tmpfs", "/tmp",
+		"--cap-drop", "ALL", "--cap-add", "NET_BIND_SERVICE", "--security-opt", "no-new-privileges:true", "--read-only", "--tmpfs", "/tmp", "--tmpfs", "/var/lib/coturn",
 		"-e", "BROWSERPIER_TURN_SECRET="+secret, "-e", "TURN_IP="+ip, "-e", "BROWSERPIER_IP="+peer, "-e", fmt.Sprint("TURN_PORT=", port),
 		"--entrypoint", "/bin/sh", image, "-c", script).CombinedOutput()
 	if err != nil {
@@ -43,7 +43,7 @@ func Coturn(t *testing.T, ip, peer, secret string) string {
 		if t.Failed() {
 			t.Logf("coturn's log:\n%s", logs)
 		}
-		_ = docker("rm", "-f", name).Run()
+		_ = docker("rm", "-fv", name).Run()
 	})
 	addr := net.JoinHostPort(ip, fmt.Sprint(port))
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(200 * time.Millisecond) {
@@ -80,7 +80,7 @@ func composeTURN(t *testing.T) (image, script string) {
 		"    cap_add: [NET_BIND_SERVICE]":            false,
 		"    security_opt: [no-new-privileges:true]": false,
 		"    read_only: true":                        false,
-		"    tmpfs: [/tmp]":                          false,
+		"    tmpfs: [/tmp, /var/lib/coturn]":         false,
 	}
 	in, inCommand := false, false
 	for _, l := range strings.Split(string(b), "\n") {
