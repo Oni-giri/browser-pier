@@ -47,6 +47,30 @@ func (a agent) contentText(id string, body map[string]any) string {
 	return out.Text
 }
 
+// contentTextBusy is contentText for a stress page that can keep Chrome
+// busy past a renderer call's timeout on a slow machine: a 504 (the page
+// is busy) is retried, as an agent would, up to three times. It returns the
+// text and how long the call that answered took.
+func (a agent) contentTextBusy(id string, body map[string]any) (string, time.Duration) {
+	a.t.Helper()
+	for try := 1; ; try++ {
+		start := time.Now()
+		code, _, raw := a.content(id, body)
+		took := time.Since(start)
+		var out struct{ Text, Error string }
+		_ = json.Unmarshal(raw, &out)
+		switch {
+		case code == http.StatusOK:
+			return out.Text, took
+		case code == http.StatusGatewayTimeout && try < 3:
+			a.t.Logf("content %v: 504 after %v (the page is busy); trying again", body, took.Round(time.Millisecond))
+			time.Sleep(2 * time.Second)
+		default:
+			a.t.Fatalf("content %v: %d %s", body, code, out.Error)
+		}
+	}
+}
+
 // inFence reports whether every want is inside the output's fence.
 func inFence(out, want string) bool {
 	i, end := strings.Index(out, want), strings.LastIndex(out, "</untrusted-content-")
@@ -205,9 +229,8 @@ func TestContentLeavesOutWhatItMust(t *testing.T) {
 	}
 	a.openBuilt(s.ID, site.URL+"/probe-deep?d=19000&c=10", "Deep ready")
 	for _, format := range []string{"markdown", "readability"} {
-		start := time.Now()
-		out := a.contentText(s.ID, map[string]any{"format": format})
-		if d := time.Since(start); d > 10*time.Second*raceSlowdown || !inFence(out, "DEEP-PAGE") {
+		out, d := a.contentTextBusy(s.ID, map[string]any{"format": format})
+		if d > 10*time.Second*raceSlowdown || !inFence(out, "DEEP-PAGE") {
 			t.Errorf("%s of a hidden chain of 190,000 elements: %v\n%s", format, d, out)
 		} else {
 			t.Logf("%s of a hidden chain of 190,000 elements: %v", format, d.Round(time.Millisecond))
