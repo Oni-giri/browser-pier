@@ -49,6 +49,12 @@ func readFake(t testing.TB, doc *fnode) (*dom, []axNode) {
 
 var fullView = [4]float64{0, 0, 1280, 800}
 
+// timeLimit is what one read of a case may take. Every case reads in
+// about 0.1 s at most (several times that under the race detector, which
+// raceSlowdown allows for); before the fix the slowest took minutes, so
+// the limit still catches growth with the shared string's length.
+const timeLimit = 2 * time.Second * raceSlowdown
+
 func TestSharedLongStringsCostLittle(t *testing.T) {
 	spaces := strings.Repeat(" ", sharedLen) + "x"
 	long := strings.Repeat("a", sharedLen)
@@ -136,7 +142,7 @@ func TestSharedLongStringsCostLittle(t *testing.T) {
 			t.Fatal(err)
 		}
 		took := time.Since(start)
-		if took > 2*time.Second {
+		if took > timeLimit {
 			t.Errorf("%s: join took %s", c.name, took)
 		}
 		t.Logf("%s: join %s", c.name, took.Round(time.Millisecond))
@@ -149,7 +155,7 @@ func TestSharedLongStringsCostLittle(t *testing.T) {
 			t.Fatal(err)
 		}
 		took = time.Since(start)
-		if took > 2*time.Second {
+		if took > timeLimit {
 			t.Errorf("%s: textOnly took %s", c.name, took)
 		}
 		t.Logf("%s: textOnly %s", c.name, took.Round(time.Millisecond))

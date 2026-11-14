@@ -147,6 +147,9 @@ type dom struct {
 	valueIdx map[int]int
 	text     map[int]string
 	blocks   []int32
+	// secrets caches fence.Secret's verdict by the string indices of the
+	// attributes it reads: fields that share them are judged once.
+	secrets map[[6]int]bool
 }
 
 // The DOM snapshot keeps one copy of each string, so a page can give
@@ -210,7 +213,8 @@ func indexDOM(s *domSnapshot) *dom {
 	doc := &s.Documents[0]
 	d := &dom{s: s, byBack: map[int64]int{}, layout: map[int]int{}, values: map[int]string{},
 		texts: map[int]string{}, check: map[int]bool{}, sel: map[int]bool{}, sub: map[int]int{},
-		valueIdx: map[int]int{}, text: map[int]string{}, blocks: make([]int32, len(doc.Nodes.ParentIndex))}
+		valueIdx: map[int]int{}, text: map[int]string{}, blocks: make([]int32, len(doc.Nodes.ParentIndex)),
+		secrets: map[[6]int]bool{}}
 	for i, b := range doc.Nodes.BackendNodeID {
 		d.byBack[b] = i
 	}
@@ -242,17 +246,23 @@ func indexDOM(s *domSnapshot) *dom {
 func (d *dom) name(i int) string { return d.str(d.s.Documents[0].Nodes.NodeName[i]) }
 
 func (d *dom) attr(i int, key string) (string, bool) {
+	idx := d.attrIdx(i, key)
+	return d.str(idx), idx >= 0
+}
+
+// attrIdx is the string index of node i's attribute key, -1 if it has none.
+func (d *dom) attrIdx(i int, key string) int {
 	attrs := d.s.Documents[0].Nodes.Attributes
 	if i >= len(attrs) {
-		return "", false
+		return -1
 	}
 	a := attrs[i]
 	for k := 0; k+1 < len(a); k += 2 {
 		if strings.EqualFold(d.str(a[k]), key) {
-			return d.str(a[k+1]), true
+			return a[k+1]
 		}
 	}
-	return "", false
+	return -1
 }
 
 func (d *dom) parent(i int) int { return d.s.Documents[0].Nodes.ParentIndex[i] }
@@ -339,9 +349,18 @@ func (d *dom) blockOf(i int) int {
 // secret reports whether field i is a password or code, as fence.Secret
 // judges it from the DOM snapshot's attributes.
 func (d *dom) secret(i int) bool {
-	get := func(k string) string { v, _ := d.attr(i, k); return cutBytes(v, maxAttr) }
-	names := strings.Join([]string{get("name"), get("id"), get("aria-label"), get("placeholder")}, " ")
-	return fence.Secret(get("type"), get("autocomplete"), names)
+	keys := [6]string{"type", "autocomplete", "name", "id", "aria-label", "placeholder"}
+	var idx [6]int
+	for k, key := range keys {
+		idx[k] = d.attrIdx(i, key)
+	}
+	if v, ok := d.secrets[idx]; ok {
+		return v
+	}
+	get := func(k int) string { return cutBytes(d.str(idx[k]), maxAttr) }
+	v := fence.Secret(get(0), get(1), strings.Join([]string{get(2), get(3), get(4), get(5)}, " "))
+	d.secrets[idx] = v
+	return v
 }
 
 // value is a field's current value from the DOM snapshot.
