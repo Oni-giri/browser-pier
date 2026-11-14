@@ -81,9 +81,9 @@ type mark struct {
 	written bool
 }
 
-// String is the output, with every "<!--" defused: the untrusted-content
-// fence drops HTML comments, and a page's "<!--" would otherwise take
-// the rest of the text with it.
+// String is the output, with every "<!--" defused, so the Markdown can't
+// hide the text after one from whoever renders it. The untrusted-content
+// fence defuses them too (PROJ-95); this keeps the output safe on its own.
 func (w *writer) String() string {
 	return strings.ReplaceAll(strings.Join(w.out, "\n"), "<!--", `<\!--`)
 }
