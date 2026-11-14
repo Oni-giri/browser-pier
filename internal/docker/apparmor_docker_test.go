@@ -40,10 +40,22 @@ func TestCheckSandbox(t *testing.T) {
 	if ok, why := c.checkable(ctx, false); !ok {
 		t.Fatalf("the browser image isn't checkable: %q", why)
 	}
-	// Wherever the browser tests pass, the sandbox works under the
-	// daemon's default profile, as the browsers' user.
-	if v, why := c.checkSandbox(ctx, ""); v != works {
-		t.Fatalf("the sandbox check fails under the daemon's default: %v %s", v, why)
+	// Whether the sandbox works under each choice depends on the host: the
+	// daemon's default refuses it on Debian 13 with Docker 29.1 and
+	// earlier, unconfined on Ubuntu, and browserpier works only once
+	// loaded. What must hold everywhere: each check gives a real answer,
+	// and one of the choices BrowserPier tries works, as the browsers' user.
+	answers := map[string]verdict{}
+	for _, opt := range []string{optBrowserPier, "", optUnconfined} {
+		v, why := c.checkSandbox(ctx, opt)
+		t.Logf("%s: %v %s", describeAppArmor(opt), v, why)
+		if v == unknown {
+			t.Fatalf("the check couldn't tell %s: %s", describeAppArmor(opt), why)
+		}
+		answers[opt] = v
+	}
+	if answers[optBrowserPier] != works && answers[""] != works && answers[optUnconfined] != works {
+		t.Fatalf("the sandbox works under no AppArmor choice here: %v", answers)
 	}
 	name := "browserpier_check_" + c.instance
 	if _, err := c.api.ContainerInspect(ctx, name, client.ContainerInspectOptions{}); !cerrdefs.IsNotFound(err) {
