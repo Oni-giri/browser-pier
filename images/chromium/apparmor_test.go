@@ -159,10 +159,12 @@ if [ -n "${PARSER_FAILS:-}" ]; then echo "AppArmor parser error: line 1"; echo "
 		}
 	}
 
+	// Every outcome goes to stderr: umbreld's journal is known to keep a
+	// hook's stderr (0.2.0's missing-loader error showed up there).
 	stdout, stderr := run()
-	oneLine("loaded", stdout, "loaded the browserpier profile")
-	if stderr != "" {
-		t.Errorf("loaded: stderr %q", stderr)
+	oneLine("loaded", stderr, "loaded the browserpier profile")
+	if stdout != "" {
+		t.Errorf("loaded: stdout %q", stdout)
 	}
 	if !bytes.Equal(readFile(t, got), readFile(t, filepath.Join("apparmor", "browserpier"))) {
 		t.Error("the parser didn't get the profile")
@@ -177,8 +179,11 @@ if [ -n "${PARSER_FAILS:-}" ]; then echo "AppArmor parser error: line 1"; echo "
 		t.Errorf("parser fails: stdout %q", stdout)
 	}
 
-	stdout, _ = run("BROWSERPIER_APPARMOR_FS=" + filepath.Join(dir, "none"))
-	oneLine("no AppArmor", stdout, "browserpier profile not needed here: AppArmor isn't on")
+	stdout, stderr = run("BROWSERPIER_APPARMOR_FS=" + filepath.Join(dir, "none"))
+	oneLine("no AppArmor", stderr, "browserpier profile not needed here: AppArmor isn't on")
+	if stdout != "" {
+		t.Errorf("no AppArmor: stdout %q", stdout)
+	}
 
 	// No usable temporary directory: it still says so and exits 0.
 	_, stderr = run("TMPDIR=" + filepath.Join(dir, "missing"))

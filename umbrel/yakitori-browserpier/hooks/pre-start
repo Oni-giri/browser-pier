@@ -14,7 +14,8 @@
 # a test fails when the copies here drift.
 #
 # Umbrel ignores a hook's exit status, so this always exits 0 and says
-# what it did in one line, for umbreld's journal. If loading fails,
+# what it did in one line, on stderr, for umbreld's journal (0.2.0 showed
+# umbreld logs a hook's stderr). If loading fails,
 # BrowserPier finds the profile missing and runs browsers under Docker's
 # profile if the sandbox works there, otherwise without AppArmor, and its
 # log says which and why.
@@ -217,7 +218,7 @@ out="$(sh "${dir}/load" 2>&1)"
 status=$?
 out="$(printf '%s' "${out}" | tr '\n' ' ')"
 if [ "${status}" = 0 ]; then
-  echo "${out:-BrowserPier AppArmor: the loader said nothing}"
+  echo "${out:-BrowserPier AppArmor: the loader said nothing}" >&2
 else
   echo "${out:-BrowserPier AppArmor: couldn't load the browserpier profile: the loader exited ${status}}" >&2
 fi
