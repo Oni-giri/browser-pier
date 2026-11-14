@@ -219,6 +219,15 @@ d.appendChild(f); document.title = 'Shared ready';</script>`,
 <script>i1.value='TYPED-IN-CONTENTS-INPUT'; t1.value='TYPED-IN-CONTENTS-TA';
 let cur = document.getElementById('deep'); for (let i = 0; i < 300; i++) { const e = document.createElement('div'); cur.appendChild(e); cur = e; }
 cur.innerHTML = '<p>DEEP-VISIBLE <a href="/deep-link">DEEP-LINK</a><br>DEEP-SECOND <input value="DEEP-INPUT-VALUE"><img alt="DEEP-ALT" width=20 height=20 src=x></p>';</script>`,
+	// Megabytes of hidden text (display:none, or a JSON script) before an article (PROJ-20 review).
+	"/probe-budget": `<!doctype html><title>Budget</title><p>BEFORE-BIG</p><div id="h"></div><script>
+const q = new URLSearchParams(location.search); const mb = +q.get('mb'), kind = q.get('k');
+const big = 'var words = 1; '.repeat(mb * 69906);
+const h = document.getElementById('h');
+if (kind === 'script') { const s = document.createElement('script'); s.type = 'application/json'; s.textContent = big; h.appendChild(s); }
+else if (kind === 'none') { for (let i = 0; i < mb; i++) { const d = document.createElement('div'); d.style.display = 'none'; d.textContent = 'var words = 1; '.repeat(69906); h.appendChild(d); } }
+document.title = 'Budget ready';</script>
+<article><h1>AFTER-BIG-HEADING</h1><p>Article body, long enough, with commas, to be an article of its own, and then some more text, to be sure of it, and more, and more, and more, and more again, until it passes the two hundred characters that an article needs to count. AFTER-BIG-END</p></article>`,
 	// A page with a quarter of a million elements.
 	"/huge": `<!doctype html><title>Huge</title><div id="d"></div><script>
 const d = document.getElementById('d'); const f = document.createDocumentFragment();

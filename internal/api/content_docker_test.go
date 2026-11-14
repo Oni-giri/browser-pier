@@ -287,6 +287,28 @@ func TestContentDisplayContents(t *testing.T) {
 	}
 }
 
+// TestContentHiddenTextSpendsNoBudget: 9 MB of display:none text, or of
+// a JSON script, before an article doesn't push it out of either format,
+// and isn't reported as a cut.
+func TestContentHiddenTextSpendsNoBudget(t *testing.T) {
+	a := newRealAPI(t)
+	site := browsertest.NewPageSite(t, siteHost(t))
+	s := a.startAPIBrowser(t, "cb")
+	for _, q := range []string{"k=none&mb=9", "k=script&mb=9"} {
+		a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/probe-budget?" + q})
+		if out := a.mustTool(s.ID, "wait", map[string]any{"text": "AFTER-BIG-HEADING"}); out != "ok" {
+			t.Fatalf("%s: %s", q, out)
+		}
+		for _, format := range []string{"markdown", "readability"} {
+			out := a.contentText(s.ID, map[string]any{"format": format})
+			trailer := out[strings.LastIndex(out, "</untrusted-content-"):]
+			if !inFence(out, "AFTER-BIG-HEADING") || !inFence(out, "AFTER-BIG-END") || strings.Contains(trailer, "more than") {
+				t.Errorf("%s %s:\n%.600s\n…%s", q, format, out, trailer)
+			}
+		}
+	}
+}
+
 // TestContentInVisualMode: what needs CDP answers 409 and attaches
 // nothing; a screenshot works.
 func TestContentInVisualMode(t *testing.T) {
