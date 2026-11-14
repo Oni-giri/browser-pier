@@ -13,9 +13,13 @@
 #
 # Run as root with CAP_MAC_ADMIN and the host's /sys/kernel/security: on
 # the host (Umbrel's hooks/pre-start), or in the browser image's loader
-# service (deploy/docker-compose.yml, --profile apparmor). It exits
-# non-zero when it can't load the profile, but nothing waits on that:
-# BrowserPier then runs browsers without AppArmor, and its log says so.
+# service (deploy/docker-compose.yml, --profile apparmor). It says what it
+# did in one line ("loaded the browserpier profile", "browserpier profile
+# not needed here: …" or "couldn't load the browserpier profile: …"), plus
+# one about installing it with --persist. It exits non-zero when it can't
+# load the profile, but nothing waits on that: BrowserPier then runs
+# browsers under Docker's profile if Chromium's sandbox works there,
+# otherwise without AppArmor, and its log says which.
 #
 # BROWSERPIER_APPARMOR_FS and BROWSERPIER_APPARMOR_RESTRICT stand in for
 # the kernel's paths in tests.
@@ -32,40 +36,40 @@ while [ $# -gt 0 ]; do
 done
 
 say() { echo "BrowserPier AppArmor: $*"; }
+skip() {
+  say "browserpier profile not needed here: $*"
+  exit 0
+}
 fail() {
-  say "$* Browsers will run without AppArmor; see \"AppArmor\" in BrowserPier's deploy/README.md to load the profile by hand." >&2
+  say "couldn't load the browserpier profile: $*. BrowserPier falls back to Docker's profile, or to none, and its log says which; see \"AppArmor\" in BrowserPier's deploy/README.md to load the profile by hand." >&2
   exit 1
 }
 
 aa="${BROWSERPIER_APPARMOR_FS:-/sys/kernel/security/apparmor}"
 restrict="${BROWSERPIER_APPARMOR_RESTRICT:-/proc/sys/kernel/apparmor_restrict_unprivileged_userns}"
 if [ ! -d "${aa}" ]; then
-  say "AppArmor isn't on (no ${aa}); nothing to load"
-  exit 0
+  skip "AppArmor isn't on (no ${aa})"
 fi
 # Ubuntu's kernels list it as a file, Debian's (6.12) as a word in mask.
 if [ ! -e "${aa}/features/namespaces/userns_create" ] &&
   ! grep -qw userns_create "${aa}/features/namespaces/mask" 2>/dev/null; then
-  say "this kernel doesn't mediate user namespaces, so Docker's profile works; nothing to load"
-  exit 0
+  skip "this kernel doesn't mediate user namespaces, so Docker's profile works"
 fi
 if [ -e "${restrict}" ]; then
-  say "Ubuntu's user namespace restriction is here, and Docker's profile works under it; nothing to load"
-  exit 0
+  skip "Ubuntu's user namespace restriction is here, and Docker's profile works under it"
 fi
 # Docker's profile is compiled by the host's parser. Before AppArmor 4 it
 # doesn't know user namespaces, so it doesn't mediate them and Docker's
 # profile works. The host's parser must also read ours at boot.
 abi="${persist:-/etc/apparmor.d}/abi/4.0"
 if [ ! -e "${abi}" ]; then
-  say "the host's AppArmor is older than 4.0 (no ${abi}), so Docker's profile works; nothing to load"
-  exit 0
+  skip "the host's AppArmor is older than 4.0 (no ${abi}), so Docker's profile works"
 fi
 
 # Loading policy takes root in the host's own user namespace: not a
 # rootless Docker or Podman, nor a daemon with userns-remap.
 if [ "$(id -u)" != 0 ] || [ "$(awk 'NR == 1 { print $1, $2, $3 } END { print NR }' /proc/self/uid_map | tr '\n' ' ')" != "0 0 4294967295 1 " ]; then
-  fail "can't load the profile: this isn't root on the host (a rootless or userns-remapped container runtime, say)."
+  fail "this isn't root on the host (a rootless or userns-remapped container runtime, say)"
 fi
 
 if [ -n "${persist}" ] && ! cmp -s "${profile}" "${persist}/browserpier"; then
@@ -88,9 +92,10 @@ for p in /usr/sbin/apparmor_parser /sbin/apparmor_parser; do
   fi
 done
 if [ -z "${parser}" ]; then
-  fail "can't load the profile: no apparmor_parser here."
+  fail "no apparmor_parser here"
 fi
-if ! "${parser}" --replace --skip-cache "${profile}"; then
-  fail "loading the profile failed."
+# Its complaints joined into the one line, so a log shows why.
+if ! out="$("${parser}" --replace --skip-cache "${profile}" 2>&1)"; then
+  fail "${parser} failed: $(printf '%s' "${out:-no output}" | tr '\n' ' ')"
 fi
 say "loaded the browserpier profile"
