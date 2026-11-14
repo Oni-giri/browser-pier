@@ -31,6 +31,12 @@ If the Atlassian MCP is connected:
 
 - Branches are named `PROJ-<n>-<slug>`. Commits are small and start with the ticket key, e.g. `PROJ-48: every colour is a light-dark token`.
 - Write tests alongside the code. Tests that need Docker go behind the `docker` build tag, so `make test` stays fast.
+- Docker tests are heavy, so watch the RAM. Each test browser takes about 300 MB, `-race` multiplies the test binary's memory several times, and running out can make the kernel kill the whole machine's session, agents included.
+  - Check free memory (`free -m`) before a Docker run. On a small machine, run one package at a time, not the full `make test-docker`.
+  - Several agents sharing a machine run Docker tests one after another, never in parallel. Share a lock for it, e.g. `flock /tmp/docker-tests.lock <command>`.
+  - Run big test commands under a memory cap, so a runaway test is killed alone. For example, `systemd-run --user --scope -p MemoryMax=6G -- go test …`.
+  - Keep stress probes bounded. Start small and scale up, and don't run the largest shapes under `-race`.
+  - A killed test run leaves its browser containers running. Afterwards, check `docker ps -a` for leftover `browserpier-*` and `bp-test-*` containers and remove them before the next run.
 - Before calling a task done, run it for real: start a browser, sign in to a test site, stop it, start it again and check the login survived.
 - Prefer the standard library and a few well-known dependencies.
 - Configuration is through `BROWSERPIER_*` environment variables, documented in `deploy/README.md`.
