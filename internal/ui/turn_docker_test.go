@@ -111,7 +111,16 @@ func TestHandoffLiveViewThroughTURN(t *testing.T) {
 		stats.forEach((r) => {
 			if (r.type !== "transport" || !r.selectedCandidatePairId) return;
 			const local = stats.get(stats.get(r.selectedCandidatePairId).localCandidateId);
-			out = local.candidateType + " over " + local.relayProtocol;
+			// A relay candidate, or a peer-reflexive one learned through
+			// it (it keeps the relay's relayProtocol and TURN URL): when
+			// coturn and the relay share an address on Docker's bridge,
+			// as with CI's gateway, Docker masquerades coturn's packets to
+			// the relay (they leave on lo with a bridge source), so the
+			// relay answers checks with another address than coturn's.
+			// The page's policy is relay either way; a candidate that
+			// didn't come through TURN has no relayProtocol.
+			const viaTURN = local.candidateType === "relay" || (local.candidateType === "prflx" && local.relayProtocol && (local.url || "").startsWith("turn:"));
+			out = (viaTURN ? "relay" : local.candidateType) + " over " + local.relayProtocol + (local.candidateType === "prflx" ? " (seen from " + local.address + ")" : "");
 		});
 		return out;
 	})()`))
