@@ -19,13 +19,21 @@ const maxURL = 512
 // what fits), and says so with full; it stops with ctx's error when ctx
 // ends. Rendering takes time and memory linear in the tree and the limit.
 func Markdown(ctx context.Context, root *Node, base *url.URL, limit int) (string, bool, error) {
-	return render(ctx, bound(root), base, false, limit)
+	b, err := bound(ctx, root)
+	if err != nil {
+		return "", false, err
+	}
+	return render(ctx, b, base, false, limit)
 }
 
 // Plain renders a page as plain text: paragraphs, headings and list
 // items on their own lines, no links, images or markup.
 func Plain(ctx context.Context, root *Node, limit int) (string, bool, error) {
-	return render(ctx, bound(root), nil, true, limit)
+	b, err := bound(ctx, root)
+	if err != nil {
+		return "", false, err
+	}
+	return render(ctx, b, nil, true, limit)
 }
 
 func render(ctx context.Context, root *Node, base *url.URL, plain bool, limit int) (string, bool, error) {
@@ -266,6 +274,8 @@ func (w *writer) node(n *Node) {
 		return
 	}
 	switch n.Tag {
+	case noteTag:
+		w.put(n.Text)
 	case "br":
 		w.buf = append(w.buf, '\n')
 	case "hr":

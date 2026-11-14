@@ -4,6 +4,7 @@ import (
 	"context"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // Readable renders a page's main text as plain text, as a reader view
@@ -11,11 +12,36 @@ import (
 // and dialogs, and only the part of the page that reads as its article.
 // Like Markdown, it takes time and memory linear in the tree and limit.
 func Readable(ctx context.Context, root *Node, limit int) (string, bool, error) {
-	a := article(bound(root))
-	if err := ctx.Err(); err != nil {
+	b, err := bound(ctx, root)
+	if err != nil {
 		return "", false, err
 	}
-	return render(ctx, bound(a), nil, true, limit)
+	chk := &checker{ctx: ctx}
+	a := article(b, chk)
+	if chk.err != nil {
+		return "", false, chk.err
+	}
+	if b, err = bound(ctx, a); err != nil {
+		return "", false, err
+	}
+	return render(ctx, b, nil, true, limit)
+}
+
+// checker looks at a context every few thousand nodes.
+type checker struct {
+	ctx context.Context
+	n   int
+	err error
+}
+
+func (c *checker) stop() bool {
+	if c == nil || c.ctx == nil {
+		return false
+	}
+	if c.n++; c.err == nil && c.n%4096 == 0 {
+		c.err = c.ctx.Err()
+	}
+	return c.err != nil
 }
 
 // minArticle is how much text a page's article, main landmark or best
@@ -27,8 +53,10 @@ const minArticle = 200
 //
 //  1. Leave out what is never the article: navigation, headers and
 //     footers outside an article, sidebars, forms, dialogs, buttons, and
-//     blocks whose class or id names a banner, cookies, comments, sharing…
-//     (as whole words, and never a block holding an article or main).
+//     blocks whose class or id names a banner, cookies, comments, a
+//     footer… (as words: "cookie_notice", "siteFooter" and
+//     "has-sidebar" all count), but never a block holding an article or
+//     main that isn't itself such a block.
 //  2. A page with exactly one <article> (or role=article) of some length
 //     has its main content there; else one <main> (or role=main).
 //  3. Otherwise score blocks: each paragraph of 25 characters or more
@@ -40,32 +68,72 @@ const minArticle = 200
 //
 // What is left out of the winner (lists of links, say) is pruned the
 // same way. A page where nothing stands out comes back whole, cleaned.
-// When what is found keeps less than a third of the page's text, or
-// less than minArticle, it is found again without the class names (as
-// Readability retries with its flags off), and the longer one wins.
-func article(root *Node) *Node {
+//
+// One retry, for a wrapper whose class misled step 1 (a page wrapped in
+// <div id="community-page">): when the page has no article or main, what
+// was found is under minArticle, and a single block left out by its class
+// held more than half the page's text, the article is found again with
+// that block kept, and taken only if it keeps everything found first.
+func article(root *Node, chk *checker) *Node {
 	body := find(root, func(n *Node) bool { return n.Tag == "body" })
 	if body == nil {
 		body = root
 	}
-	first := articleOf(body, true)
-	got := textSize(first)
-	if got >= minArticle && got*3 >= textSize(prune(body, false, false)) {
+	var dropped []*Node
+	first := articleOf(body, chk, nil, &dropped)
+	if body.hasMain || textSize(first) >= minArticle || chk.err != nil {
 		return first
 	}
-	if second := articleOf(body, false); textSize(second) > got {
+	page := textSize(prune(body, false, false, chk, nil, nil))
+	var wrapper *Node
+	for _, d := range dropped {
+		if d.tlen*2 > page && (wrapper == nil || d.tlen > wrapper.tlen) {
+			wrapper = d
+		}
+	}
+	if wrapper == nil {
+		return first
+	}
+	second := articleOf(body, chk, wrapper, nil)
+	if textSize(second) > textSize(first) && keepsAll(second, first) {
 		return second
 	}
 	return first
 }
 
-// articleOf is steps 1 to 3, with or without the class names.
-func articleOf(body *Node, classes bool) *Node {
-	clean := prune(body, false, classes)
+// keepsAll reports whether every text of b is in a (pruning keeps texts'
+// identity).
+func keepsAll(a, b *Node) bool {
+	in := map[*Node]bool{}
+	stack := []*Node{a}
+	for len(stack) > 0 {
+		c := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if c.Tag == "" {
+			in[c] = true
+		}
+		stack = append(stack, c.Kids...)
+	}
+	stack = []*Node{b}
+	for len(stack) > 0 {
+		c := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if c.Tag == "" && strings.TrimSpace(c.Text) != "" && !in[c] {
+			return false
+		}
+		stack = append(stack, c.Kids...)
+	}
+	return true
+}
+
+// articleOf is steps 1 to 3. keep is a block left in despite its class;
+// dropped, if not nil, collects the blocks left out by their class.
+func articleOf(body *Node, chk *checker, keep *Node, dropped *[]*Node) *Node {
+	clean := prune(body, false, true, chk, keep, dropped)
 	if clean == nil {
 		return &Node{Tag: "div"}
 	}
-	m := measure(clean)
+	m := measure(clean, chk)
 	pick := func(match func(*Node) bool) *Node {
 		var found []*Node
 		walk(clean, func(n *Node) bool {
@@ -112,13 +180,46 @@ func textSize(n *Node) int {
 
 var (
 	// unlikely class or id words: blocks that are never the article.
-	unlikely = regexp.MustCompile(`(?i)\b(?:ad-break|adverts?|advertisement|agegate|banners?|breadcrumbs?|comments?|community|consent|cookies?|disqus|footer|gdpr|masthead|menus?|modal|newsletter|pager|pagination|popup|promos?|related|remarks?|replies|share|sharing|shoutbox|sidebar|skip|social|sponsors?|sponsored|subscribe|toolbar|widgets?)\b`)
+	unlikely = regexp.MustCompile(` (?:ad break|adverts?|advertisement|agegate|banners?|breadcrumbs?|comments?|community|consent|cookies?|disqus|footer|gdpr|masthead|menus?|modal|newsletter|pager|pagination|popup|promos?|related|remarks?|replies|share|sharing|shoutbox|sidebar|skip|social|sponsors?|sponsored|subscribe|toolbar|widgets?) `)
 	// likely class or id words, which keep a block an unlikely word would drop.
-	likely = regexp.MustCompile(`(?i)article|body|column|content|entry|main|post|story|text`)
+	likely = regexp.MustCompile(`article|body|column|content|entry|main|post|story|text`)
 	// positive and negative class or id words, for scoring.
-	positive = regexp.MustCompile(`(?i)article|blog|body|content|entry|h-entry|hentry|main|page|post|story|text`)
-	negative = regexp.MustCompile(`(?i)\b(?:banners?|byline|comments?|contact|cookies?|foot|footer|footnotes?|hidden|masthead|media|menus?|meta|nav|promos?|related|share|sidebar|social|sponsors?|tags|tools?|widgets?)\b`)
+	positive = regexp.MustCompile(`article|blog|body|content|entry|h ?entry|main|page|post|story|text`)
+	negative = regexp.MustCompile(` (?:banners?|byline|comments?|contact|cookies?|foot|footer|footnotes?|hidden|masthead|media|menus?|meta|nav|promos?|related|share|sidebar|social|sponsors?|tags|tools?|widgets?) `)
 )
+
+// classWords is an element's class and id as spaced lowercase words, split
+// at separators, camelCase and digits: "siteFooter cookie_notice" reads
+// " site footer cookie notice ". Both are cut to MaxName first.
+func classWords(n *Node) string {
+	s := cut(n.Attr("class"), MaxName) + " " + cut(n.Attr("id"), MaxName)
+	var b strings.Builder
+	b.WriteByte(' ')
+	prev := ' '
+	for _, r := range s {
+		switch {
+		case unicode.IsUpper(r) && unicode.IsLower(prev),
+			unicode.IsDigit(r) && unicode.IsLetter(prev), unicode.IsLetter(r) && unicode.IsDigit(prev):
+			b.WriteByte(' ')
+		case !unicode.IsLetter(r) && !unicode.IsDigit(r):
+			r = ' '
+		}
+		b.WriteRune(unicode.ToLower(r))
+		prev = r
+	}
+	b.WriteByte(' ')
+	return b.String()
+}
+
+// unlikelyClass reports whether an element's class or id says it is never
+// the article.
+func unlikelyClass(n *Node) bool {
+	if n.Attrs == nil {
+		return false
+	}
+	w := classWords(n)
+	return unlikely.MatchString(w) && !likely.MatchString(w)
+}
 
 // boilerRoles are ARIA roles of what is never the article.
 var boilerRoles = map[string]bool{
@@ -128,12 +229,13 @@ var boilerRoles = map[string]bool{
 
 // prune copies a tree without its boilerplate. inArticle keeps headers
 // and footers inside an article or main, which hold its title and notes;
-// classes leaves out blocks by their class or id too.
-func prune(n *Node, inArticle, classes bool) *Node {
+// classes leaves out blocks by their class or id too, except keep, and
+// adds what it leaves out so to dropped.
+func prune(n *Node, inArticle, classes bool, chk *checker, keep *Node, dropped *[]*Node) *Node {
 	if n.Tag == "" {
 		return n
 	}
-	if skipped[n.Tag] {
+	if skipped[n.Tag] || chk.stop() {
 		return nil
 	}
 	role := n.Attr("role")
@@ -144,16 +246,17 @@ func prune(n *Node, inArticle, classes bool) *Node {
 		return nil
 	case !inArticle && (n.Tag == "header" || n.Tag == "footer" || role == "banner" || role == "contentinfo"):
 		return nil
-	case classes && !n.hasMain && n.Tag != "body":
-		if ci := n.Attr("class") + " " + n.Attr("id"); unlikely.MatchString(ci) && !likely.MatchString(ci) {
-			return nil
+	case classes && n != keep && !n.hasMain && n.Tag != "body" && unlikelyClass(n):
+		if dropped != nil {
+			*dropped = append(*dropped, n)
 		}
+		return nil
 	}
 	inArticle = inArticle || n.Tag == "article" || n.Tag == "main" || role == "article" || role == "main"
 	c := *n
 	c.Kids = nil
 	for _, k := range n.Kids {
-		if p := prune(k, inArticle, classes); p != nil {
+		if p := prune(k, inArticle, classes, chk, keep, dropped); p != nil {
 			c.Kids = append(c.Kids, p)
 		}
 	}
@@ -167,7 +270,7 @@ type measures struct {
 	parent              map[*Node]*Node
 }
 
-func measure(root *Node) *measures {
+func measure(root *Node, chk *checker) *measures {
 	m := &measures{text: map[*Node]int{}, links: map[*Node]int{}, commas: map[*Node]int{}, parent: map[*Node]*Node{}}
 	var walk func(n *Node, inLink bool) (int, int, int)
 	walk = func(n *Node, inLink bool) (int, int, int) {
@@ -181,6 +284,9 @@ func measure(root *Node) *measures {
 		}
 		inLink = inLink || n.Tag == "a"
 		t, ln, cm := 0, 0, 0
+		if chk.stop() {
+			return 0, 0, 0
+		}
 		for _, k := range n.Kids {
 			m.parent[k] = n
 			kt, kl, kc := walk(k, inLink)
@@ -232,7 +338,7 @@ func baseScore(n *Node) float64 {
 	case "h1", "h2", "h3", "h4", "h5", "h6", "th":
 		s = -5
 	}
-	ci := n.Attr("class") + " " + n.Attr("id")
+	ci := classWords(n)
 	if positive.MatchString(ci) {
 		s += 25
 	}

@@ -192,5 +192,138 @@ func TestDeepTreesKeepTheirTextInOrder(t *testing.T) {
 	if i, j, k := strings.Index(out, "top"), strings.Index(out, "bottom"), strings.Index(out, "after"); i < 0 || j < i || k < j {
 		t.Errorf("order: %q", out)
 	}
-	_ = fmt.Sprint()
+	// Where structure was dropped, a marker says so.
+	if !strings.Contains(out, strings.TrimSpace(DeepNote)) {
+		t.Errorf("no marker where the tree was flattened: %q", out)
+	}
+	if out, _, _ := Markdown(context.Background(), chain("div", 100, el("p", tx("shallow"))), nil, 0); strings.Contains(out, "BrowserPier") {
+		t.Errorf("a marker on a shallow tree: %q", out)
+	}
+}
+
+// timed renders root both ways and fails if either takes over limit
+// (scaled under the race detector) or allocates over maxMB (without it).
+func timed(t *testing.T, name string, root *Node, limit time.Duration, maxMB uint64) {
+	t.Helper()
+	if raceEnabled {
+		limit *= 5
+	}
+	base, _ := url.Parse("https://x.example/")
+	var m0, m1 runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&m0)
+	start := time.Now()
+	_, _, err := Markdown(context.Background(), root, base, 2<<20)
+	md := time.Since(start)
+	start = time.Now()
+	_, _, err2 := Readable(context.Background(), root, 2<<20)
+	rd := time.Since(start)
+	runtime.ReadMemStats(&m1)
+	if err != nil || err2 != nil {
+		t.Errorf("%s: %v %v", name, err, err2)
+	}
+	if md > limit || rd > limit {
+		t.Errorf("%s: markdown %v, readability %v", name, md, rd)
+	}
+	if mb := (m1.TotalAlloc - m0.TotalAlloc) >> 20; !raceEnabled && mb > maxMB {
+		t.Errorf("%s: %d MB allocated", name, mb)
+	}
+}
+
+// TestSharedStringsStayCheap: the DOM snapshot shares one string among
+// every node that has it, so 20,000 nodes can carry the same megabyte of
+// text, class names or alt text. The work stays linear in the nodes.
+func TestSharedStringsStayCheap(t *testing.T) {
+	ws := strings.Repeat(" ", 1<<20)
+	cls := strings.Repeat("abcdefg hijkl ", 10000) // 140 KB
+	var texts, divs, imgs, pres []*Node
+	for range 20000 {
+		texts = append(texts, el("span", tx(ws)))
+		divs = append(divs, at("div", map[string]string{"class": cls}, tx("x")))
+		imgs = append(imgs, at("img", map[string]string{"alt": ws, "src": "/i"}))
+		pres = append(pres, at("pre", map[string]string{"class": cls}, tx("x")))
+	}
+	timed(t, "20,000 spans sharing 1 MB of spaces", el("html", el("body", texts...)), time.Second, 200)
+	timed(t, "20,000 divs sharing a 140 KB class", el("html", el("body", divs...)), time.Second, 200)
+	timed(t, "20,000 images sharing a 1 MB blank alt", el("html", el("body", imgs...)), time.Second, 200)
+	timed(t, "20,000 pre sharing a 140 KB class", el("html", el("body", pres...)), time.Second, 200)
+	timed(t, "one image with a 30 MB alt", el("html", el("body", at("img", map[string]string{"alt": strings.Repeat("a ", 15<<20), "src": "/i"}))), time.Second, 40)
+	// Text past the budget ends with a note saying so.
+	var big []*Node
+	for range 20 {
+		big = append(big, el("p", tx(strings.Repeat("word ", 1<<20))))
+	}
+	out, _, _ := Plain(context.Background(), el("body", big...), 0)
+	if !strings.HasSuffix(out, TruncatedNote) {
+		t.Errorf("no note at the end of a page past the budget: %q", out[max(0, len(out)-200):])
+	}
+}
+
+// TestRenderingShapesFromTheReview: wide, deep and mixed shapes.
+func TestRenderingShapesFromTheReview(t *testing.T) {
+	var subs []*Node
+	for range 400 {
+		cur := tx("leaf, text")
+		for d := range 250 {
+			tag := []string{"em", "blockquote", "ul", "li", "a", "table", "tr", "td", "strong", "div"}[d%10]
+			cur = el(tag, cur, tx("x"))
+		}
+		subs = append(subs, cur)
+	}
+	timed(t, "400 × 250-deep mixed", el("html", el("body", subs...)), time.Second, 400)
+	var ps, ts, ls []*Node
+	for range 100000 {
+		ps = append(ps, el("p", tx("w")))
+		ts = append(ts, el("span", tx(" ")), tx(" "))
+		ls = append(ls, at("a", map[string]string{"href": "/x?" + strings.Repeat("q", 300)}, tx("l")))
+	}
+	timed(t, "250 quotes around 100,000 paragraphs", el("html", el("body", chain("blockquote", 250, el("div", ps...)))), time.Second, 400)
+	timed(t, "250 em around 200,000 blank texts", el("html", el("body", chain("em", 250, el("span", ts...)))), time.Second, 400)
+	timed(t, "100,000 links", el("html", el("body", el("p", ls...))), time.Second, 400)
+	var wide []*Node
+	for range 100000 {
+		wide = append(wide, el("td"))
+	}
+	var rows []*Node
+	for range 20000 {
+		rows = append(rows, el("tr", el("td")))
+	}
+	timed(t, "a 100,000-cell row and 20,000 short ones", el("html", el("body", el("table", append([]*Node{el("tr", wide...)}, rows...)...))), time.Second, 400)
+}
+
+// TestReadableLeavesOutCommentsAndFooters: the article, never the comments,
+// footers, menus or banners around it, however their classes are written.
+func TestReadableLeavesOutCommentsAndFooters(t *testing.T) {
+	long := strings.Repeat("The committee met on Tuesday, and agreed on the budget, the hours and the plan. ", 6)
+	c := func(cls string, kids ...*Node) *Node { return at("div", map[string]string{"class": cls}, kids...) }
+	var comments, wpComments, navl []*Node
+	for i := range 60 {
+		comments = append(comments, c("comment", el("p", tx(fmt.Sprintf("COMMENT-%d I disagree, frankly, with all of this, and so on and on.", i)))))
+		wpComments = append(wpComments, at("article", map[string]string{"class": "comment-body"}, el("p", tx(fmt.Sprintf("COMMENT-%d I disagree, frankly, with all of this, and so on and on.", i)))))
+	}
+	for i := range 80 {
+		navl = append(navl, el("li", at("a", map[string]string{"href": "/s"}, tx(fmt.Sprintf("NAV-LINK section number %d", i)))))
+	}
+	post := c("post", el("h1", tx("POST-TITLE")), el("p", tx(long)), el("p", tx(long)))
+	for _, tc := range []struct {
+		name string
+		n    *Node
+	}{
+		{"a post and its comments", el("body", post, at("div", map[string]string{"id": "comments"}, comments...))},
+		{"an article and WordPress comment articles", el("body", el("article", el("h1", tx("POST-TITLE")), el("p", tx(long)), el("p", tx(long))), at("section", map[string]string{"id": "comments", "class": "comments-area"}, wpComments...))},
+		{"a short article and comments", el("body", el("article", el("h1", tx("POST-TITLE")), el("p", tx("A short post, of one line."))), at("div", map[string]string{"id": "comments"}, comments...))},
+		{"a mega menu and a site footer", el("body", c("mega-menu", el("ul", navl...)), post, c("site-footer", el("p", tx("FOOTER-TEXT "+long+long+long+long+long))))},
+		{"a short page and a cookie banner", el("body", el("main", el("h1", tx("POST-TITLE")), el("p", tx("Short product page, one line."))), c("cookie-banner", el("p", tx("COOKIE-TEXT "+long))))},
+		{"underscores and camelCase", el("body", post, c("cookie_notice", el("p", tx("COOKIE-TEXT "+long))), at("div", map[string]string{"id": "disqus_thread"}, comments[:5]...), c("siteFooter", el("p", tx("FOOTER-TEXT "+long))))},
+	} {
+		out, _, _ := Readable(context.Background(), el("html", tc.n), 0)
+		if !strings.Contains(out, "POST-TITLE") {
+			t.Errorf("%s: no title:\n%.300s", tc.name, out)
+		}
+		for _, bad := range []string{"COMMENT-3 ", "NAV-LINK", "FOOTER-TEXT", "COOKIE-TEXT"} {
+			if strings.Contains(out, bad) {
+				t.Errorf("%s: %s is in:\n%.300s", tc.name, bad, out)
+			}
+		}
+	}
 }

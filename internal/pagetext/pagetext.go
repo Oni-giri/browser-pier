@@ -18,6 +18,7 @@
 package pagetext
 
 import (
+	"context"
 	"strings"
 )
 
@@ -48,15 +49,70 @@ type Node struct {
 }
 
 // maxDepth caps how deep a tree is rendered. Past it, an element's
-// descendants are its text alone: real pages are a few dozen levels deep,
-// and a page nesting 200,000 elements gets no more than this.
+// descendants are its text alone, after a marker saying so: real pages
+// are a few dozen levels deep, and a page nesting 200,000 elements gets
+// no more than this.
 const maxDepth = 256
 
-// bound copies a tree, at most maxDepth deep, and works out each element's
-// facts (see Node). It runs without recursion, so any depth is safe.
-func bound(root *Node) *Node {
+// The DOM snapshot's string table shares one string among every node that
+// has it, so a page can give thousands of nodes the same megabyte of class
+// names or text for the price of one. Work is kept linear in the nodes,
+// not nodes × string length, by cutting what is read of each:
+const (
+	// MaxName caps a class or id, MaxAttr an alt, role or other short
+	// attribute, and MaxAddr an href or src (longer addresses aren't kept
+	// anyway).
+	MaxName = 256
+	MaxAttr = 1024
+	MaxAddr = 2048
+	// TextBudget is how many bytes of text are read from a whole page, and
+	// MaxText of one text node: no more than the 2 MB of output could use.
+	TextBudget = 8 << 20
+	MaxText    = 2 << 20
+)
+
+// Notes BrowserPier adds to the text, outside the page's words.
+const (
+	// DeepNote marks where structure past maxDepth was flattened.
+	DeepNote = "[BrowserPier: nested too deep; text only from here] "
+	// TruncatedNote ends a page whose text went past TextBudget.
+	TruncatedNote = "[BrowserPier: the page has more text than it reads]"
+)
+
+// noteTag marks BrowserPier's own words in a tree: written as they are.
+const noteTag = "#note"
+
+// Note is BrowserPier's own words for a tree, written as they are.
+func Note(text string) *Node { return &Node{Tag: noteTag, Text: text} }
+
+// CutAttr cuts an attribute's value to its cap.
+func CutAttr(name, value string) string {
+	switch name {
+	case "class", "id":
+		return cut(value, MaxName)
+	case "href", "src":
+		return cut(value, MaxAddr)
+	}
+	return cut(value, MaxAttr)
+}
+
+// Blank reports whether s is only whitespace.
+func Blank(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if !isSpace(rune(s[i])) {
+			return false
+		}
+	}
+	return true
+}
+
+// bound copies a tree, at most maxDepth deep, with attributes cut to their
+// caps and at most TextBudget of text (a blank text is one space), and
+// works out each element's facts (see Node). It runs without recursion,
+// so any depth is safe, and stops with ctx's error when ctx ends.
+func bound(ctx context.Context, root *Node) (*Node, error) {
 	if root == nil {
-		return &Node{Tag: "#document"}
+		return &Node{Tag: "#document"}, nil
 	}
 	type frame struct {
 		src, dst *Node
@@ -65,26 +121,54 @@ func bound(root *Node) *Node {
 	top := copyNode(root)
 	var order []*Node // elements in pre-order, for the bottom-up pass
 	stack := []frame{{root, top, 0}}
-	for len(stack) > 0 {
+	budget := TextBudget
+	truncated := false
+	for seen := 0; len(stack) > 0; seen++ {
+		if seen%4096 == 0 && ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		f := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
+		if f.src.Tag == "" {
+			// Texts are read in document order, against one budget.
+			if budget <= 0 {
+				truncated = truncated || !Blank(cut(f.src.Text, 64))
+				f.dst.Text = ""
+				continue
+			}
+			t := cut(f.src.Text, min(MaxText, budget))
+			budget -= max(1, len(t))
+			if !f.src.Pre && Blank(t) && t != "" {
+				t = " "
+			}
+			f.dst.Text = t
+			continue
+		}
 		order = append(order, f.dst)
 		if f.depth >= maxDepth {
-			f.dst.Kids = flatText(f.src)
+			f.dst.Kids = append([]*Node{{Tag: noteTag, Text: DeepNote}}, flatText(f.src)...)
 			continue
 		}
 		f.dst.Kids = make([]*Node, len(f.src.Kids))
 		for i, k := range f.src.Kids {
-			c := copyNode(k)
-			f.dst.Kids[i] = c
-			if k.Tag != "" {
-				stack = append(stack, frame{k, c, f.depth + 1})
-			}
+			f.dst.Kids[i] = copyNode(k)
 		}
+		for i := len(f.src.Kids) - 1; i >= 0; i-- {
+			stack = append(stack, frame{f.src.Kids[i], f.dst.Kids[i], f.depth + 1})
+		}
+	}
+	if truncated {
+		top.Kids = append(top.Kids, &Node{Tag: "p", Kids: []*Node{{Tag: noteTag, Text: TruncatedNote}}})
+		order = append(order, top.Kids[len(top.Kids)-1])
 	}
 	for i := len(order) - 1; i >= 0; i-- {
 		n := order[i]
-		n.hasMain = n.Tag == "article" || n.Tag == "main" || n.Attr("role") == "article" || n.Attr("role") == "main"
+		n.hasBlock, n.hasTableBlock, n.tlen = false, false, 0
+		// A landmark counts unless its class says it is boilerplate (a
+		// comment's <article class="comment-body">).
+		n.hasMain = (n.Tag == "article" || n.Tag == "main" || n.Attr("role") == "article" || n.Attr("role") == "main") && (n.Attrs == nil || !unlikely.MatchString(classWords(n)))
 		if skipped[n.Tag] {
 			continue
 		}
@@ -106,22 +190,40 @@ func bound(root *Node) *Node {
 			n.hasTableBlock = n.hasTableBlock || k.hasTableBlock
 		}
 	}
-	return top
+	return top, nil
 }
 
 func copyNode(n *Node) *Node {
-	return &Node{Tag: n.Tag, Text: n.Text, Attrs: n.Attrs, Display: n.Display, Pre: n.Pre}
+	c := &Node{Tag: n.Tag, Text: n.Text, Display: n.Display, Pre: n.Pre} // a text is cut by bound, in document order
+	if n.Tag == "" {
+		return c
+	}
+	c.Attrs = n.Attrs
+	for k, v := range n.Attrs {
+		if cv := CutAttr(k, v); len(cv) != len(v) {
+			c.Attrs = make(map[string]string, len(n.Attrs))
+			for k, v := range n.Attrs {
+				c.Attrs[k] = CutAttr(k, v)
+			}
+			break
+		}
+	}
+	return c
 }
 
-// flatText is a subtree's texts, in order, without its elements.
+// flatText is a subtree's texts, in order, without its elements, each cut
+// to MaxAttr: past maxDepth, a page gets only its words.
 func flatText(n *Node) []*Node {
 	var out []*Node
 	stack := []*Node{n}
-	for len(stack) > 0 {
+	total := 0
+	for len(stack) > 0 && total < MaxText {
 		c := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		if c.Tag == "" {
-			out = append(out, &Node{Text: c.Text + " ", Pre: c.Pre})
+			t := cut(c.Text, MaxAttr)
+			total += len(t)
+			out = append(out, &Node{Text: t + " ", Pre: c.Pre})
 			continue
 		}
 		if skipped[c.Tag] {
