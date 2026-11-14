@@ -11,14 +11,33 @@ COPY images/chromium/entrypoint ./images/chromium/entrypoint
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w" -o /out/entrypoint ./images/chromium/entrypoint
 
+# jwm, the window manager and taskbar (jwmrc), depends on a terminal
+# emulator, which the desktop never starts. This empty package stands in for
+# one, so the image has no terminal for anything to open.
+FROM --platform=$BUILDPLATFORM debian:trixie-slim AS no-terminal
+RUN mkdir -p /pkg/DEBIAN \
+ && printf '%s\n' \
+      'Package: browserpier-no-terminal' 'Version: 1' 'Architecture: all' \
+      'Maintainer: BrowserPier <https://github.com/Oni-giri/browser-pier>' \
+      'Provides: x-terminal-emulator' \
+      'Description: stands in for a terminal emulator for jwm' \
+      ' The browser container has no terminal; its desktop never starts one.' \
+      > /pkg/DEBIAN/control \
+ && dpkg-deb --root-owner-group --build /pkg /no-terminal.deb
+
 FROM debian:trixie-slim
+COPY --from=no-terminal /no-terminal.deb /tmp/
+# The stand-in goes first, so apt doesn't pick a terminal for jwm.
 RUN apt-get update \
+ && apt-get install -y --no-install-recommends /tmp/no-terminal.deb \
  && apt-get install -y --no-install-recommends \
-      chromium chromium-l10n xvfb xdotool \
+      chromium chromium-l10n xvfb xdotool jwm \
       gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-ugly \
       fonts-liberation fonts-dejavu-core fonts-noto-color-emoji fonts-noto-cjk \
       ca-certificates tzdata \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* /tmp/no-terminal.deb \
+ && for t in x-terminal-emulator xterm urxvt rxvt gnome-terminal konsole; do \
+      ! command -v "$t" >/dev/null || { echo "a terminal emulator was installed: $t"; exit 1; }; done
 
 # Fail the build, not the first session, if a plugin or a switch the entrypoint
 # relies on is missing. Chromium ignores unknown switches silently, so each
@@ -51,6 +70,10 @@ COPY LICENSE NOTICE /usr/share/doc/browserpier/
 # to /files/downloads without asking, in both modes and without CDP, and
 # turns off DNS-over-HTTPS, which would go around a profile's proxy.
 COPY images/chromium/policies.json /etc/chromium/policies/managed/browserpier.json
+COPY images/chromium/jwmrc /etc/browserpier/jwmrc
+# Fail the build if JWM can't read it: jwm -p exits 0 whatever it finds,
+# so any warning counts.
+RUN out=$(jwm -p -f /etc/browserpier/jwmrc 2>&1) && test -z "$out" || { echo "jwmrc: $out"; exit 1; }
 
 # Changing REBUILD forces a new image without reinstalling packages (used by the persistence test).
 ARG REBUILD=0

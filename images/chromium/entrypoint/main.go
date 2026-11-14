@@ -1,7 +1,8 @@
-// Command entrypoint is PID 1 of the browser container. It starts Xvfb and
-// Chromium, serves the control socket for the orchestrator, reaps every
-// orphaned process, and on SIGTERM closes Chromium gracefully so recent
-// cookie writes reach the profile before the container stops.
+// Command entrypoint is PID 1 of the browser container. It starts Xvfb, a
+// window manager and Chromium, serves the control socket for the
+// orchestrator, reaps every orphaned process, and on SIGTERM closes
+// Chromium gracefully so recent cookie writes reach the profile before the
+// container stops.
 //
 // Graceful means CDP's Browser.close: Chromium's SIGTERM handler exits
 // before the cookie store is flushed, which loses a login made in the
@@ -102,6 +103,16 @@ func run(log *slog.Logger) error {
 	}); err != nil {
 		return fmt.Errorf("xvfb: %w", err)
 	}
+	desktop, err := startDesktop(ctx, windowManager(where.env()), desktopReady, 10*time.Second)
+	if err != nil {
+		return err
+	}
+	desktopStopping := make(chan struct{})
+	watchDesktop(log, desktop, desktopStopping)
+	defer func() {
+		close(desktopStopping)
+		desktop.stop(syscall.SIGTERM, 5*time.Second)
+	}()
 	// Chromium starts once the network has stopped changing, so its first
 	// page loads aren't cut off as the network "changes".
 	if err := settleNetwork(ctx, log, xvfb, 5*time.Second, ipv6Settled); err != nil {

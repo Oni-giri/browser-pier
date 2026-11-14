@@ -27,7 +27,7 @@ func (s *Server) addTools(srv *sdk.Server) {
 	sdk.AddTool(srv, &sdk.Tool{Name: "list_profiles", Description: "List the browser profiles this token can use, with whether each is running."}, s.listProfiles)
 	sdk.AddTool(srv, &sdk.Tool{Name: "start_browser", Description: "Start a profile's browser, or attach to it if it's already running. Returns the session_id the other tools take."}, s.startBrowser)
 	sdk.AddTool(srv, &sdk.Tool{Name: "stop_browser", Description: "Stop a browser to free its memory. Cookies and logins are kept for next time."}, s.stopBrowser)
-	sdk.AddTool(srv, &sdk.Tool{Name: "screenshot", Description: "See the browser's screen (Visual mode). Other tools take coordinates in this screenshot's pixels."}, s.screenshot)
+	sdk.AddTool(srv, &sdk.Tool{Name: "screenshot", Description: "See the browser's screen (Visual mode); the strip along the bottom is the desktop's taskbar, not the page. Other tools take coordinates in this screenshot's pixels."}, s.screenshot)
 	sdk.AddTool(srv, &sdk.Tool{Name: "click", Description: "Click at a point of the last screenshot (Visual mode)."}, s.click)
 	sdk.AddTool(srv, &sdk.Tool{Name: "type_text", Description: "Type text into whatever has focus, as a keyboard would (Visual mode)."}, s.typeText)
 	sdk.AddTool(srv, &sdk.Tool{Name: "press_keys", Description: "Press keys or combinations, such as Return, Tab, ctrl+a or ctrl+shift+t (Visual mode)."}, s.pressKeys)

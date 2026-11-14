@@ -56,8 +56,9 @@ func TestVisualModeLooksLikeAPerson(t *testing.T) {
 	if !vis.HasFocus {
 		t.Error("in Visual mode the page isn't focused")
 	}
-	// Known and not asserted: in about a third of loads, in both modes, the
-	// page's first script sees a 0x0 window (Xvfb with no window manager).
+	// Known and not asserted: often, in both modes, the page's first script
+	// sees a 0x0 window. A window manager didn't change that (PROJ-29); its
+	// cause is being checked in PROJ-65. See images/chromium/ANTI-BOT.md.
 	t.Logf("Visual mode: window %dx%d as the page's first script ran", vis.OuterWidth, vis.OuterHeight)
 	looksLikeChrome(t, vis)
 	// And from the browser's side: no client is attached to the page.
@@ -110,6 +111,14 @@ func looksLikeChrome(t *testing.T, s browsertest.Signals) {
 	}
 	if s.OuterWidthAfterLoad == 0 || s.OuterHeightAfterLoad == 0 {
 		t.Errorf("window %dx%d once loaded, as headless has", s.OuterWidthAfterLoad, s.OuterHeightAfterLoad)
+	}
+	// A taskbar takes its strip of the screen, as on a person's desktop,
+	// and the window fills the rest.
+	if s.AvailHeight >= s.ScreenHeight {
+		t.Errorf("screen %dx%d, available %dx%d: no taskbar, as headless has", s.ScreenWidth, s.ScreenHeight, s.AvailWidth, s.AvailHeight)
+	}
+	if s.OuterWidthAfterLoad != s.AvailWidth || s.OuterHeightAfterLoad != s.AvailHeight {
+		t.Errorf("window %dx%d once loaded, want the available %dx%d", s.OuterWidthAfterLoad, s.OuterHeightAfterLoad, s.AvailWidth, s.AvailHeight)
 	}
 	if s.NotificationPermission == "denied" && s.PermissionQuery == "prompt" {
 		t.Error("notification permissions disagree, as in headless Chrome")
