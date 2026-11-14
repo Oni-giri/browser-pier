@@ -105,6 +105,10 @@
     }
     if (!ok) throw new Error("copy refused");
   }
+  // A read-only value you can copy is selected whole when focused or clicked.
+  ["focusin", "click"].forEach((type) => document.addEventListener(type, (e) => {
+    if (e.target.matches && e.target.matches(".copy-row input[readonly]")) e.target.select();
+  }));
   function closeMenus() { $$("details.menu[open]").forEach((d) => { d.open = false; }); }
   // A dialog htmx put in #modal goes away when closed.
   document.addEventListener("close", (e) => { if (e.target.parentElement && e.target.parentElement.id === "modal") e.target.remove(); }, true);
