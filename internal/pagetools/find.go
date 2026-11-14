@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
@@ -54,17 +55,26 @@ func (t *Tools) Find(ctx context.Context, s sessions.Session, who Caller, in Fin
 		}
 		c.st.refs.dropStale(c.tgt.ID, c.loader)
 		needle := fold(query)
+		nlen := utf8.RuneCountInString(needle)
 		var out []string
 		total, size := 0, 0
-		for _, it := range p.items {
+		for k, it := range p.items {
+			if k%checkEvery == 0 {
+				if err := c.lease.Ctx.Err(); err != nil {
+					return "", err
+				}
+			}
 			hay := it.text
 			if it.control || it.iframe {
 				hay = searchable(it)
 			}
+			// fold maps rune to rune, so h's characters line up with
+			// hay's; byte offsets in h become character offsets as found.
 			h := fold(hay)
-			r := []rune(hay)
-			for at := 0; at+len(needle) <= len(h); {
-				i := index(h[at:], needle)
+			var r []rune // hay's characters, made for the first match shown
+			runeAt, byteAt := 0, 0
+			for at := 0; ; {
+				i := strings.Index(h[at:], needle)
 				if i < 0 {
 					break
 				}
@@ -74,7 +84,12 @@ func (t *Tools) Find(ctx context.Context, s sessions.Session, who Caller, in Fin
 				if len(out) >= limit || size > maxFindOutput {
 					continue
 				}
-				from, to := max(0, i-findContext), min(len(r), i+len(needle)+findContext)
+				runeAt += utf8.RuneCountInString(h[byteAt:i])
+				byteAt = i
+				if r == nil {
+					r = []rune(hay)
+				}
+				from, to := max(0, runeAt-findContext), min(len(r), runeAt+nlen+findContext)
 				ctxText := string(r[from:to])
 				if from > 0 {
 					ctxText = "…" + ctxText
@@ -101,6 +116,9 @@ func (t *Tools) Find(ctx context.Context, s sessions.Session, who Caller, in Fin
 		if !p.axRead {
 			trailer += " The page is too large to read its controls: refs are the text's elements."
 		}
+		if p.textCut {
+			trailer += " The page has more text than BrowserPier reads: only its first 4 MB were searched."
+		}
 		return c.result("find results", strings.Join(out, "\n"), trailer), nil
 	})
 }
@@ -121,24 +139,6 @@ func searchable(it item) string {
 	return s
 }
 
-// fold lowercases rune by rune, so its runes line up with s's.
-func fold(s string) []rune {
-	r := []rune(s)
-	for i, c := range r {
-		r[i] = unicode.ToLower(c)
-	}
-	return r
-}
-
-func index(h, n []rune) int {
-outer:
-	for i := 0; i+len(n) <= len(h); i++ {
-		for j := range n {
-			if h[i+j] != n[j] {
-				continue outer
-			}
-		}
-		return i
-	}
-	return -1
-}
+// fold lowercases rune by rune, so its runes line up with s's (an
+// invalid byte stays one character, as []rune makes it).
+func fold(s string) string { return strings.Map(unicode.ToLower, s) }

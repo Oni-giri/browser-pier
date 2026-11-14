@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/Oni-giri/browser-pier/internal/cdp"
 	"github.com/Oni-giri/browser-pier/internal/fence"
@@ -68,6 +69,8 @@ type page struct {
 	loader     string
 	items      []item
 	groups     map[int]*group
+	// textCut is set when the page had more text than maxPageText.
+	textCut bool
 	// axRead is false when the page was too large for the AX tree: items
 	// are text only, from the DOM snapshot.
 	axRead bool
@@ -138,6 +141,62 @@ type dom struct {
 	check  map[int]bool
 	sel    map[int]bool
 	sub    map[int]int // node index → content document index
+	// valueIdx is a field's value as a string index (values holds it as
+	// a string); text caches collapse by string index; blocks memoises
+	// blockOf (0: not known yet, else the block's index + 1).
+	valueIdx map[int]int
+	text     map[int]string
+	blocks   []int32
+}
+
+// The DOM snapshot keeps one copy of each string, so a page can give
+// thousands of nodes the same long string (a megabyte of spaces as text,
+// a megabyte name attribute) in a small answer. So no per-node work may
+// be proportional to a string's length: strings are cut to what the
+// output can use first, text is collapsed once per distinct string, and
+// the text gathered has a byte budget.
+const (
+	// maxAttr is how much of an attribute fence.Secret reads.
+	maxAttr = 256
+	// maxURL is how much of an iframe's src is parsed.
+	maxURL = 2048
+	// maxName is how much of an AX name a control or group keeps.
+	maxName = 1024
+	// maxNodeText is how much of one text node (or AX text) is kept,
+	// once its whitespace is collapsed.
+	maxNodeText = 8 << 10
+	// maxRunText caps one item of text (a block's), maxPageText all of
+	// a page's together.
+	maxRunText  = 64 << 10
+	maxPageText = 4 << 20
+	// checkEvery is how many nodes a loop handles between looks at its
+	// context, so a handoff or stop isn't kept waiting.
+	checkEvery = 1024
+)
+
+// cutBytes keeps at most n bytes of s, at a character boundary.
+func cutBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
+
+// collapse joins s's words with single spaces.
+func collapse(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// collapsed is string i collapsed and cut to maxNodeText, worked out once
+// per distinct string however many nodes share it.
+func (d *dom) collapsed(i int) string {
+	if t, ok := d.text[i]; ok {
+		return t
+	}
+	t := cutBytes(collapse(d.str(i)), maxNodeText)
+	d.text[i] = t
+	return t
 }
 
 func (d *dom) str(i int) string {
@@ -150,7 +209,8 @@ func (d *dom) str(i int) string {
 func indexDOM(s *domSnapshot) *dom {
 	doc := &s.Documents[0]
 	d := &dom{s: s, byBack: map[int64]int{}, layout: map[int]int{}, values: map[int]string{},
-		texts: map[int]string{}, check: map[int]bool{}, sel: map[int]bool{}, sub: map[int]int{}}
+		texts: map[int]string{}, check: map[int]bool{}, sel: map[int]bool{}, sub: map[int]int{},
+		valueIdx: map[int]int{}, text: map[int]string{}, blocks: make([]int32, len(doc.Nodes.ParentIndex))}
 	for i, b := range doc.Nodes.BackendNodeID {
 		d.byBack[b] = i
 	}
@@ -159,9 +219,13 @@ func indexDOM(s *domSnapshot) *dom {
 	}
 	for k, ni := range doc.Nodes.InputValue.Index {
 		d.values[ni] = d.str(doc.Nodes.InputValue.Value[k])
+		d.valueIdx[ni] = doc.Nodes.InputValue.Value[k]
 	}
 	for k, ni := range doc.Nodes.TextValue.Index {
 		d.texts[ni] = d.str(doc.Nodes.TextValue.Value[k])
+		if _, ok := d.valueIdx[ni]; !ok {
+			d.valueIdx[ni] = doc.Nodes.TextValue.Value[k]
+		}
 	}
 	for _, ni := range doc.Nodes.InputChecked.Index {
 		d.check[ni] = true
@@ -237,21 +301,45 @@ func (d *dom) display(i int) string {
 // block is the nearest ancestor element of node i that isn't inline,
 // which text is grouped by.
 func (d *dom) block(i int) int {
-	for p := d.parent(i); p >= 0; p = d.parent(p) {
-		if d.s.Documents[0].Nodes.NodeType[p] != 1 {
-			continue
-		}
-		if disp := d.display(p); disp != "" && disp != "inline" && disp != "contents" {
-			return p
-		}
+	if p := d.parent(i); p >= 0 {
+		return d.blockOf(p)
 	}
 	return 0
+}
+
+// blockOf is node i if it is a block element, else its nearest ancestor
+// that is; 0 if none. Memoised, so a deep tree costs one walk in all.
+func (d *dom) blockOf(i int) int {
+	var path []int
+	found := 0
+	for p := i; p >= 0; p = d.parent(p) {
+		if p < len(d.blocks) && d.blocks[p] != 0 {
+			found = int(d.blocks[p]) - 1
+			break
+		}
+		if d.s.Documents[0].Nodes.NodeType[p] == 1 {
+			if disp := d.display(p); disp != "" && disp != "inline" && disp != "contents" {
+				found = p
+				break
+			}
+		}
+		path = append(path, p)
+	}
+	for _, p := range path {
+		if p < len(d.blocks) {
+			d.blocks[p] = int32(found) + 1
+		}
+	}
+	if found < len(d.blocks) && found > 0 && d.blocks[found] == 0 {
+		d.blocks[found] = int32(found) + 1
+	}
+	return found
 }
 
 // secret reports whether field i is a password or code, as fence.Secret
 // judges it from the DOM snapshot's attributes.
 func (d *dom) secret(i int) bool {
-	get := func(k string) string { v, _ := d.attr(i, k); return v }
+	get := func(k string) string { v, _ := d.attr(i, k); return cutBytes(v, maxAttr) }
 	names := strings.Join([]string{get("name"), get("id"), get("aria-label"), get("placeholder")}, " ")
 	return fence.Secret(get("type"), get("autocomplete"), names)
 }
@@ -394,20 +482,20 @@ func (c *call) read(ctx context.Context, needAX bool) (*page, error) {
 		if needAX {
 			return nil, errTooLarge
 		}
-		p.items = textOnly(d, view)
-		return p, nil
+		p.items, p.textCut, err = textOnly(ctx, d, view)
+		return p, err
 	}
 	nodes, err := c.readAX(ctx)
 	if errors.Is(err, errTooLarge) && !needAX {
-		p.items = textOnly(d, view)
-		return p, nil
+		p.items, p.textCut, err = textOnly(ctx, d, view)
+		return p, err
 	}
 	if err != nil {
 		return nil, err
 	}
 	p.axRead = true
-	p.items, p.groups = join(nodes, d, view)
-	return p, nil
+	p.items, p.groups, p.textCut, err = join(ctx, nodes, d, view)
+	return p, err
 }
 
 func intersects(box, view [4]float64) bool {
@@ -423,25 +511,30 @@ func intersects(box, view [4]float64) bool {
 // and names from aria-label, aria-labelledby (even to a hidden node), alt,
 // title and placeholder. That kept text is contained, not filtered: it is
 // fenced and capped like the rest.
-func join(nodes []axNode, d *dom, view [4]float64) ([]item, map[int]*group) {
+func join(ctx context.Context, nodes []axNode, d *dom, view [4]float64) ([]item, map[int]*group, bool, error) {
 	byID := make(map[string]*axNode, len(nodes))
 	for i := range nodes {
 		byID[nodes[i].NodeID] = &nodes[i]
 	}
 	var out []item
-	// blocks gathers text by block element, in order of first sight.
-	type run struct {
-		at   int // index in out
-		text []string
-	}
 	runs := map[int]*run{}
+	var all []*run
+	budget := textBudget{left: maxPageText}
 	groups := map[int]*group{}
+	visited := 0
+	var stop error
 	var walk func(n *axNode, tier int, inMain, inControl bool, grp int, label int64)
 	walk = func(n *axNode, tier int, inMain, inControl bool, grp int, label int64) {
+		if visited++; visited%checkEvery == 0 && stop == nil {
+			stop = ctx.Err()
+		}
+		if stop != nil {
+			return
+		}
 		role := n.Role.String()
 		if !n.Ignored && (role == "navigation" || role == "menubar" || role == "menu") && grp == 0 {
 			grp = len(groups) + 1
-			groups[grp] = &group{role: role, name: n.Name.String()}
+			groups[grp] = &group{role: role, name: cutBytes(n.Name.String(), maxName)}
 		}
 		ni, hasDOM := d.byBack[n.Backend]
 		if !n.Ignored && role == "LabelText" && hasDOM {
@@ -489,8 +582,12 @@ func join(nodes []axNode, d *dom, view [4]float64) ([]item, map[int]*group) {
 			inControl = true
 		case role == "StaticText" && !inControl:
 			box, ok := d.shown(ni)
-			text := strings.Join(strings.Fields(n.Name.String()), " ")
-			if !ok || text == "" {
+			if !ok || budget.left <= 0 {
+				budget.cut = budget.cut || ok
+				break
+			}
+			text := cutBytes(collapse(cutBytes(n.Name.String(), 4*maxNodeText)), maxNodeText)
+			if text == "" {
 				break
 			}
 			key, ref := d.block(ni), int64(0)
@@ -503,10 +600,10 @@ func join(nodes []axNode, d *dom, view [4]float64) ([]item, map[int]*group) {
 			if r == nil || out[r.at].tier != tierOf(box) {
 				r = &run{at: len(out)}
 				runs[key] = r
+				all = append(all, r)
 				out = append(out, item{backend: ref, tier: tierOf(box), label: label != 0})
 			}
-			r.text = append(r.text, text)
-			out[r.at].text = strings.Join(r.text, " ")
+			budget.add(r, text)
 		}
 		for _, id := range n.ChildIDs {
 			if c := byID[id]; c != nil {
@@ -519,7 +616,42 @@ func join(nodes []axNode, d *dom, view [4]float64) ([]item, map[int]*group) {
 			walk(&nodes[i], tierRest, false, false, 0, 0)
 		}
 	}
-	return dropLabelEchoes(out), groups
+	if stop != nil {
+		return nil, nil, false, stop
+	}
+	for _, r := range all {
+		out[r.at].text = r.String()
+	}
+	out = slices.DeleteFunc(out, func(it item) bool { return !it.control && !it.iframe && it.text == "" })
+	return dropLabelEchoes(out), groups, budget.cut, nil
+}
+
+// run gathers a block's text, joined once at the end (joining as it grew
+// would cost the square of its length).
+type run struct {
+	at int // index in the items
+	b  strings.Builder
+}
+
+func (r *run) String() string { return r.b.String() }
+
+// textBudget is what text a page read may still gather (maxPageText),
+// each run at most maxRunText.
+type textBudget struct {
+	left int
+	cut  bool // some text was left out
+}
+
+func (tb *textBudget) add(r *run, text string) {
+	if r.b.Len() > 0 {
+		text = " " + text
+	}
+	room := min(tb.left, maxRunText-r.b.Len())
+	if len(text) > room {
+		text, tb.cut = cutBytes(text, max(room, 0)), true
+	}
+	r.b.WriteString(text)
+	tb.left -= len(text)
 }
 
 // dropLabelEchoes drops label text that a shown control already has as
@@ -540,12 +672,16 @@ func dropLabelEchoes(items []item) []item {
 
 // control makes a control's line from its AX node and DOM node.
 func control(n *axNode, role string, d *dom, ni int, tier int) item {
-	it := item{control: true, backend: n.Backend, role: role, name: n.Name.String(), tier: tier}
+	it := item{control: true, backend: n.Backend, role: role, name: cutBytes(n.Name.String(), maxName), tier: tier}
 	switch role {
 	case "textbox", "searchbox", "combobox", "spinbutton", "slider":
 		v, ok := d.value(ni)
-		if !ok {
+		shown := ""
+		if idx, has := d.valueIdx[ni]; has {
+			shown = d.collapsed(idx) // once per distinct value
+		} else if !ok {
 			v = n.Value.String()
+			shown = collapse(cutBytes(v, 4*maxNodeText))
 		}
 		if d.secret(ni) {
 			if v == "" {
@@ -554,7 +690,7 @@ func control(n *axNode, role string, d *dom, ni int, tier int) item {
 				it.value = "[filled]"
 			}
 		} else if v != "" || ok {
-			it.value = `"` + capText(strings.Join(strings.Fields(v), " "), maxField) + `"`
+			it.value = `"` + capText(shown, maxField) + `"`
 		}
 	}
 	switch n.prop("checked") {
@@ -590,6 +726,7 @@ func frameOrigin(d *dom, ni int) string {
 	if raw == "" {
 		raw, _ = d.attr(ni, "src")
 	}
+	raw = cutBytes(raw, maxURL)
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
 		return capText(raw, maxField)
@@ -601,11 +738,18 @@ func frameOrigin(d *dom, ni int) string {
 // large for the AX tree: text nodes that are laid out, not hidden and not
 // zero-size, grouped by block. Without the AX tree there are no controls
 // or ARIA names, and aria-hidden text isn't known.
-func textOnly(d *dom, view [4]float64) []item {
+func textOnly(ctx context.Context, d *dom, view [4]float64) ([]item, bool, error) {
 	doc := d.s.Documents[0]
 	var out []item
-	runs := map[int]int{}
+	runs := map[int]*run{}
+	var all []*run
+	budget := textBudget{left: maxPageText}
 	for i, typ := range doc.Nodes.NodeType {
+		if i%checkEvery == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, false, err
+			}
+		}
 		if typ != 3 {
 			continue
 		}
@@ -613,7 +757,11 @@ func textOnly(d *dom, view [4]float64) []item {
 		if !ok {
 			continue
 		}
-		text := strings.Join(strings.Fields(d.str(doc.Nodes.NodeValue[i])), " ")
+		if budget.left <= 0 {
+			budget.cut = true
+			break
+		}
+		text := d.collapsed(doc.Nodes.NodeValue[i])
 		if text == "" {
 			continue
 		}
@@ -622,24 +770,40 @@ func textOnly(d *dom, view [4]float64) []item {
 			tier = tierViewport
 		}
 		b := d.block(i)
-		if at, ok := runs[b]; ok && out[at].tier == tier {
-			out[at].text += " " + text
-			continue
+		r := runs[b]
+		if r == nil || out[r.at].tier != tier {
+			r = &run{at: len(out)}
+			runs[b] = r
+			all = append(all, r)
+			out = append(out, item{backend: doc.Nodes.BackendNodeID[b], tier: tier})
 		}
-		runs[b] = len(out)
-		out = append(out, item{backend: doc.Nodes.BackendNodeID[b], text: text, tier: tier})
+		budget.add(r, text)
 	}
-	return out
+	for _, r := range all {
+		out[r.at].text = r.String()
+	}
+	out = slices.DeleteFunc(out, func(it item) bool { return it.text == "" })
+	return out, budget.cut, nil
 }
 
 // maxField caps names and values in a line.
 const maxField = 80
 
-// capText cuts s to n characters, marking the cut with "…".
+// capText cuts s to n characters, marking the cut with "…". It looks at
+// no more than n+1 of them, however long s is.
 func capText(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
+	if len(s) <= n {
+		return s // n bytes are at most n characters
 	}
-	return strings.TrimRightFunc(string(r[:n-1]), unicode.IsSpace) + "…"
+	count, cut := 0, 0
+	for i := range s {
+		if count == n-1 {
+			cut = i
+		}
+		if count == n {
+			return strings.TrimRightFunc(s[:cut], unicode.IsSpace) + "…"
+		}
+		count++
+	}
+	return s
 }
