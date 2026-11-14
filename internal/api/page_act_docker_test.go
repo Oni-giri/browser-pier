@@ -191,7 +191,7 @@ func TestPageToolsAct(t *testing.T) {
 	// again.
 	snap = open("/alert")
 	code, msg = a.tool(s.ID, "act", steps(map[string]any{"action": "click", "ref": refFor(t, snap, `button "Show an alert"`)}))
-	const stuck = "the page isn't responding; a dialog may be open. Request a handoff."
+	const stuck = "the page is busy or has a dialog open; if it stays that way, request a handoff."
 	if code != http.StatusGatewayTimeout || !strings.Contains(msg, stuck) {
 		t.Errorf("click that opens an alert: %d %s", code, msg)
 	}

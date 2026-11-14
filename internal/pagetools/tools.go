@@ -78,7 +78,7 @@ func (e *Error) Error() string { return e.Msg }
 // errUnresponsive: a call into the page timed out while the browser
 // itself still answers. Without Page.enable a dialog can't be seen or
 // closed (see the spike), so a person has to.
-var errUnresponsive = &Error{Status: http.StatusGatewayTimeout, Msg: "the page isn't responding; a dialog may be open. Request a handoff."}
+var errUnresponsive = &Error{Status: http.StatusGatewayTimeout, Msg: "the page is busy or has a dialog open; if it stays that way, request a handoff."}
 
 // Caller is the agent making a call.
 type Caller struct {
