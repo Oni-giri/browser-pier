@@ -38,33 +38,43 @@ func TestRenderingIsLinear(t *testing.T) {
 	if raceEnabled {
 		limit = 5 * time.Second // the race detector slows everything ~5×
 	}
-	shapes := map[string]*Node{}
+	// Each shape is built only when it is rendered, so one big tree is in
+	// memory at a time (the machine running the tests is shared).
+	shapes := map[string]func() *Node{}
 	for _, tag := range []string{"em", "a", "code", "blockquote", "span", "div", "ul", "li", "td", "strong"} {
-		shapes[tag+" × 200,000 deep"] = chain(tag, 200000, tx("leaf text"))
+		shapes[tag+" × 200,000 deep"] = func() *Node { return chain(tag, 200000, tx("leaf text")) }
 	}
-	var chains []*Node
-	for range 10 {
-		chains = append(chains, chain("em", 19990, tx(" ")))
+	shapes["10 em chains × 19,990"] = func() *Node {
+		var chains []*Node
+		for range 10 {
+			chains = append(chains, chain("em", 19990, tx(" ")))
+		}
+		return el("div", chains...)
 	}
-	shapes["10 em chains × 19,990"] = el("div", chains...)
-	cur := el("p", tx("x"))
-	for range 40000 {
-		cur = el("table", el("tbody", el("tr", el("td", cur), el("td", tx("y")))))
+	shapes["40,000 nested tables"] = func() *Node {
+		cur := el("p", tx("x"))
+		for range 40000 {
+			cur = el("table", el("tbody", el("tr", el("td", cur), el("td", tx("y")))))
+		}
+		return cur
 	}
-	shapes["40,000 nested tables"] = cur
-	var ps []*Node
-	for range 100000 {
-		ps = append(ps, el("p", tx("word, word, word")))
+	shapes["100,000 paragraphs"] = func() *Node {
+		var ps []*Node
+		for range 100000 {
+			ps = append(ps, el("p", tx("word, word, word")))
+		}
+		return el("div", ps...)
 	}
-	shapes["100,000 paragraphs"] = el("div", ps...)
-	var rows []*Node
-	for range 50000 {
-		rows = append(rows, el("tr", el("td", tx("a|b")), el("td", tx("c"))))
+	shapes["50,000 table rows"] = func() *Node {
+		var rows []*Node
+		for range 50000 {
+			rows = append(rows, el("tr", el("td", tx("a|b")), el("td", tx("c"))))
+		}
+		return el("table", rows...)
 	}
-	shapes["50,000 table rows"] = el("table", rows...)
 	base, _ := url.Parse("https://x.example/")
-	for name, body := range shapes {
-		root := el("html", el("body", body))
+	for name, build := range shapes {
+		root := el("html", el("body", build()))
 		start := time.Now()
 		md, _, err := Markdown(context.Background(), root, base, 2<<20)
 		mdTime := time.Since(start)
@@ -80,6 +90,7 @@ func TestRenderingIsLinear(t *testing.T) {
 		if strings.Contains(name, "deep") && !strings.Contains(md, "leaf text") {
 			t.Errorf("%s: the text at the bottom is lost:\n%.200s", name, md)
 		}
+		runtime.GC()
 	}
 }
 
@@ -261,34 +272,32 @@ func TestSharedStringsStayCheap(t *testing.T) {
 
 // TestRenderingShapesFromTheReview: wide, deep and mixed shapes.
 func TestRenderingShapesFromTheReview(t *testing.T) {
-	var subs []*Node
-	for range 400 {
-		cur := tx("leaf, text")
-		for d := range 250 {
-			tag := []string{"em", "blockquote", "ul", "li", "a", "table", "tr", "td", "strong", "div"}[d%10]
-			cur = el(tag, cur, tx("x"))
+	timed(t, "400 × 250-deep mixed", func() *Node {
+		var subs []*Node
+		for range 400 {
+			cur := tx("leaf, text")
+			for d := range 250 {
+				tag := []string{"em", "blockquote", "ul", "li", "a", "table", "tr", "td", "strong", "div"}[d%10]
+				cur = el(tag, cur, tx("x"))
+			}
+			subs = append(subs, cur)
 		}
-		subs = append(subs, cur)
+		return el("html", el("body", subs...))
+	}(), time.Second, 400)
+	many := func(n int, f func() []*Node) []*Node {
+		var out []*Node
+		for range n {
+			out = append(out, f()...)
+		}
+		return out
 	}
-	timed(t, "400 × 250-deep mixed", el("html", el("body", subs...)), time.Second, 400)
-	var ps, ts, ls []*Node
-	for range 100000 {
-		ps = append(ps, el("p", tx("w")))
-		ts = append(ts, el("span", tx(" ")), tx(" "))
-		ls = append(ls, at("a", map[string]string{"href": "/x?" + strings.Repeat("q", 300)}, tx("l")))
-	}
-	timed(t, "250 quotes around 100,000 paragraphs", el("html", el("body", chain("blockquote", 250, el("div", ps...)))), time.Second, 400)
-	timed(t, "250 em around 200,000 blank texts", el("html", el("body", chain("em", 250, el("span", ts...)))), time.Second, 400)
-	timed(t, "100,000 links", el("html", el("body", el("p", ls...))), time.Second, 400)
-	var wide []*Node
-	for range 100000 {
-		wide = append(wide, el("td"))
-	}
-	var rows []*Node
-	for range 20000 {
-		rows = append(rows, el("tr", el("td")))
-	}
-	timed(t, "a 100,000-cell row and 20,000 short ones", el("html", el("body", el("table", append([]*Node{el("tr", wide...)}, rows...)...))), time.Second, 400)
+	timed(t, "250 quotes around 100,000 paragraphs", el("html", el("body", chain("blockquote", 250, el("div", many(100000, func() []*Node { return []*Node{el("p", tx("w"))} })...)))), time.Second, 400)
+	timed(t, "250 em around 200,000 blank texts", el("html", el("body", chain("em", 250, el("span", many(100000, func() []*Node { return []*Node{el("span", tx(" ")), tx(" ")} })...)))), time.Second, 400)
+	timed(t, "100,000 links", el("html", el("body", el("p", many(100000, func() []*Node {
+		return []*Node{at("a", map[string]string{"href": "/x?" + strings.Repeat("q", 300)}, tx("l"))}
+	})...))), time.Second, 400)
+	timed(t, "a 100,000-cell row and 20,000 short ones", el("html", el("body", el("table", append([]*Node{el("tr", many(100000, func() []*Node { return []*Node{el("td")} })...)},
+		many(20000, func() []*Node { return []*Node{el("tr", el("td"))} })...)...))), time.Second, 400)
 }
 
 // TestReadableLeavesOutCommentsAndFooters: the article, never the comments,
