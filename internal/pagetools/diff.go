@@ -166,8 +166,8 @@ func diffItems(old, new []item) itemDiff {
 	}
 	d := itemDiff{lines: []diffLine{}}
 	shownOld, shownNew := map[int]bool{}, map[int]bool{}
-	// context adds the unchanged items enclosing list[at], outermost first.
-	context := func(list []item, at int, isOld bool) {
+	// enclose adds the unchanged items enclosing list[at], outermost first.
+	enclose := func(list []item, at int, isOld bool) {
 		var up []int
 		for p, n := list[at].parent, 0; p > 0 && p <= len(list) && n < maxIndent; p, n = list[p-1].parent, n+1 {
 			up = append(up, p-1)
@@ -208,7 +208,7 @@ func diffItems(old, new []item) itemDiff {
 		}
 	}
 	removed := func(i int) {
-		context(old, i, true)
+		enclose(old, i, true)
 		d.lines = append(d.lines, diffLine{sign: '-', depth: depthOf(old, i), it: old[i], old: true})
 	}
 	unpaired := func(is []int) {
@@ -224,7 +224,7 @@ func diffItems(old, new []item) itemDiff {
 			if i := pairOf[j]; i >= 0 {
 				removed(i)
 			}
-			context(new, j, false)
+			enclose(new, j, false)
 			d.lines = append(d.lines, diffLine{sign: '+', depth: depthOf(new, j), it: new[j]})
 		}
 		unpaired(removedAfter[j])
