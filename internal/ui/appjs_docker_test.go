@@ -311,6 +311,19 @@ func TestAppJS(t *testing.T) {
 		is(t, b, `!!document.querySelector("details.menu[open]")`, false)
 	})
 
+	t.Run("a read-only value is selected whole when focused, not on every click", func(t *testing.T) {
+		b.Navigate(base + "/profiles/mail")
+		field := `document.querySelector(".copy-row input[readonly]")`
+		selected := `(() => { const f = ` + field + `; return document.activeElement === f ? f.selectionEnd - f.selectionStart : -1 })()`
+		// A click that focuses it selects it whole, once the caret is down.
+		click(t, b, ".copy-row input[readonly]")
+		b.Eval(`new Promise((r) => setTimeout(r, 50))`)
+		until(t, b, "a click didn't select it whole", selected+` === `+field+`.value.length`)
+		// Focused already, a click (as after dragging over part of it)
+		// leaves the selection be.
+		is(t, b, `(() => { const f = `+field+`; f.setSelectionRange(2, 5); f.dispatchEvent(new MouseEvent("click", { bubbles: true })); return f.selectionEnd - f.selectionStart })()`, 3.0)
+	})
+
 	t.Run("dialogs fill from the button that opens them, and say they're busy", func(t *testing.T) {
 		t.Cleanup(g.settle)
 		b.Navigate(base + "/profiles")

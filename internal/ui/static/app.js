@@ -105,10 +105,21 @@
     }
     if (!ok) throw new Error("copy refused");
   }
-  // A read-only value you can copy is selected whole when focused or clicked.
-  ["focusin", "click"].forEach((type) => document.addEventListener(type, (e) => {
-    if (e.target.matches && e.target.matches(".copy-row input[readonly]")) e.target.select();
-  }));
+  // A read-only value you can copy is selected whole when it gets the
+  // focus. Focused by a press, it is selected once the click is done, and
+  // only if the press didn't drag over part of it; a click on it when it
+  // has the focus already puts the caret down, so a drag can select part.
+  const copyField = (el) => el.matches && el.matches(".copy-row input[readonly]");
+  let pressed = null;
+  document.addEventListener("pointerdown", (e) => {
+    pressed = copyField(e.target) && document.activeElement !== e.target ? e.target : null;
+  }, true);
+  document.addEventListener("focusin", (e) => { if (copyField(e.target) && e.target !== pressed) e.target.select(); });
+  document.addEventListener("click", (e) => {
+    const f = pressed;
+    pressed = null;
+    if (f && f === e.target && f.selectionStart === f.selectionEnd) f.select();
+  });
   function closeMenus() { $$("details.menu[open]").forEach((d) => { d.open = false; }); }
   // A dialog htmx put in #modal goes away when closed.
   document.addEventListener("close", (e) => { if (e.target.parentElement && e.target.parentElement.id === "modal") e.target.remove(); }, true);
