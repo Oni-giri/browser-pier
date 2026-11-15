@@ -222,8 +222,8 @@ func TestAgentUploadsWithPageTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(content)
-	out := tool("upload_file", map[string]any{"session_id": id, "name": "invoice.pdf", "content_base64": base64.StdEncoding.EncodeToString(content)})
-	if !strings.Contains(out, "name: invoice.pdf") {
+	out := tool("upload_file", map[string]any{"session_id": id, "name": "invoice..v2.pdf", "content_base64": base64.StdEncoding.EncodeToString(content)})
+	if !strings.Contains(out, "name: invoice..v2.pdf") {
 		t.Fatalf("upload_file: %s", out)
 	}
 	tool("navigate", map[string]any{"session_id": id, "url": site.URL + "/upload"})
@@ -237,7 +237,7 @@ func TestAgentUploadsWithPageTools(t *testing.T) {
 		return m[1]
 	}
 	out = tool("act", map[string]any{"session_id": id, "steps": []any{
-		map[string]any{"action": "upload", "ref": ref(`button "Document"`), "files": []string{"invoice.pdf"}},
+		map[string]any{"action": "upload", "ref": ref(`button "Document"`), "files": []string{"invoice..v2.pdf"}},
 		map[string]any{"action": "click", "ref": ref(`button "Send"`)},
 	}})
 	if !strings.Contains(out, "uploaded 1 file to") {
@@ -247,14 +247,14 @@ func TestAgentUploadsWithPageTools(t *testing.T) {
 		t.Fatalf("wait_for: %s", out)
 	}
 	got := site.Uploads()
-	if len(got) != 1 || got[0].Field != "doc" || got[0].Name != "invoice.pdf" || got[0].Size != int64(len(content)) || got[0].SHA256 != hex.EncodeToString(sum[:]) {
-		t.Errorf("the site got %+v, want invoice.pdf, %d bytes, sha256 %x", got, len(content), sum)
+	if len(got) != 1 || got[0].Field != "doc" || got[0].Name != "invoice..v2.pdf" || got[0].Size != int64(len(content)) || got[0].SHA256 != hex.EncodeToString(sum[:]) {
+		t.Errorf("the site got %+v, want invoice..v2.pdf, %d bytes, sha256 %x", got, len(content), sum)
 	}
 	// A button that opens a chooser itself is refused, saying what to do.
 	tool("navigate", map[string]any{"session_id": id, "url": site.URL + "/upload"})
 	snap = tool("snapshot", map[string]any{"session_id": id})
 	res, msg := call(t, env.cs, "act", map[string]any{"session_id": id, "steps": []any{
-		map[string]any{"action": "upload", "ref": ref(`button "Choose a file"`), "files": []string{"invoice.pdf"}},
+		map[string]any{"action": "upload", "ref": ref(`button "Choose a file"`), "files": []string{"invoice..v2.pdf"}},
 	}})
 	if !res.IsError || !strings.Contains(msg, "file_upload handoff") {
 		t.Errorf("a chooser button: %s", msg)

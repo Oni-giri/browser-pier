@@ -176,14 +176,16 @@ const actions = "click, fill, type, press, select, check, uncheck, hover or uplo
 
 // checkUploadName says what's wrong with a file name an upload step
 // names: only a bare name of a file in the uploads folder will do, never
-// a path (files.ValidName, and no "..", to keep well clear of one).
+// a path. It takes what files.ValidName takes, the REST upload's own
+// check, so a name like report..v2.pdf that upload_file returned works
+// here too: with no separator, ".." inside a name is just two dots.
 func checkUploadName(name string) error {
 	switch {
 	case name == "":
 		return errors.New("an empty name")
 	case len(name) > 255:
 		return errors.New("a name is at most 255 bytes")
-	case strings.ContainsAny(name, `/\`) || strings.Contains(name, ".."):
+	case strings.ContainsAny(name, `/\`) || name == "." || name == "..":
 		return errors.New("give the file's bare name, as upload_file returned it, without folders or \"..\"")
 	case strings.ContainsRune(name, 0):
 		return errors.New("a name can't hold a NUL")

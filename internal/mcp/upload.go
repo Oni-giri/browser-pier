@@ -34,8 +34,8 @@ type uploadArgs struct {
 // REST endpoint's own code: its scopes, the profile's files cap and
 // eviction, and its activity log entry.
 func (s *Server) uploadFile(ctx context.Context, req *sdk.CallToolRequest, in uploadArgs) (*sdk.CallToolResult, any, error) {
-	if !files.ValidName(in.Name) || strings.Contains(in.Name, "..") {
-		return nil, nil, toolError("name: use a plain file name, like report.pdf: no folders, no .., not starting with a dot")
+	if !files.ValidName(in.Name) {
+		return nil, nil, toolError("name: use a plain file name, like report.pdf: no folders, not starting with a dot")
 	}
 	max := s.maxUpload
 	if int64(base64.StdEncoding.DecodedLen(len(in.ContentBase64))) > max+2 {

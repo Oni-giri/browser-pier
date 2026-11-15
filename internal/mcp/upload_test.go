@@ -34,6 +34,11 @@ func TestUploadFile(t *testing.T) {
 	if got, _ := os.ReadFile(filepath.Join(dir, "report (2).pdf")); string(got) != "v2" {
 		t.Errorf("the second file holds %q", got)
 	}
+	// Two dots inside a name are just dots, as for the REST upload and
+	// act's upload step.
+	if res, out = call(t, cs, "upload_file", map[string]any{"session_id": s.ID, "name": "report..v2.pdf", "content_base64": base64.StdEncoding.EncodeToString([]byte("v2"))}); res.IsError || !strings.Contains(out, "name: report..v2.pdf") {
+		t.Fatalf("upload_file report..v2.pdf: %s", out)
+	}
 	// The REST endpoint's activity entry.
 	logged := false
 	for _, a := range f.m.Activity(s.ID) {
@@ -60,7 +65,7 @@ func TestUploadFileRefusals(t *testing.T) {
 		{"over the cap", map[string]any{"session_id": s.ID, "name": "a.txt", "content_base64": b64(1001)}, "over 1000 bytes"},
 		{"far over the cap", map[string]any{"session_id": s.ID, "name": "a.txt", "content_base64": b64(5000)}, "over 1000 bytes"},
 		{"a path", map[string]any{"session_id": s.ID, "name": "../a.txt", "content_base64": b64(1)}, "plain file name"},
-		{"dot dot", map[string]any{"session_id": s.ID, "name": "a..txt", "content_base64": b64(1)}, "plain file name"},
+		{"dot dot", map[string]any{"session_id": s.ID, "name": "..", "content_base64": b64(1)}, "plain file name"},
 		{"hidden", map[string]any{"session_id": s.ID, "name": ".bashrc", "content_base64": b64(1)}, "plain file name"},
 		{"no session", map[string]any{"session_id": "nope", "name": "a.txt", "content_base64": b64(1)}, "no such session"},
 	} {

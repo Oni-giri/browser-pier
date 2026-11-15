@@ -16,6 +16,7 @@ import (
 func TestCheckStepUpload(t *testing.T) {
 	ok := func(names ...string) Step { return Step{Action: "upload", Ref: "a7e1", Files: names} }
 	for _, st := range []Step{ok("report.pdf"), ok("a b (2).zip", "Ünïcødé ✓.txt"), ok(strings.Repeat("a", 255)),
+		ok("report..v2.pdf", "a..b"),
 		ok("1", "2", "3", "4", "5", "6", "7", "8", "9", "10")} {
 		if err := checkStep(st); err != nil {
 			t.Errorf("%v: %v", st.Files, err)
@@ -24,7 +25,7 @@ func TestCheckStepUpload(t *testing.T) {
 	for _, st := range []Step{
 		ok(), {Action: "upload", Ref: "a7e1"},
 		ok("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"),
-		ok("a/b"), ok("../etc/passwd"), ok(`a\b`), ok(".."), ok("a..b"), ok("nul\x00.pdf"), ok(""), ok(".hidden"),
+		ok("a/b"), ok("../etc/passwd"), ok(`a\b`), ok(".."), ok("."), ok("nul\x00.pdf"), ok(""), ok(".hidden"),
 		ok("tab\tname"), ok(strings.Repeat("a", 256)), ok("fine.pdf", "/etc/passwd"),
 		{Action: "upload", Files: []string{"report.pdf"}}, // no ref
 	} {
@@ -102,7 +103,7 @@ func setFiles(t *testing.T, fb *fakeBrowser) [][]string {
 		}
 		for _, f := range p.Files {
 			// Only ever a bare name under /files/uploads.
-			if name, ok := strings.CutPrefix(f, "/files/uploads/"); !ok || !files.ValidName(name) || strings.Contains(name, "..") {
+			if name, ok := strings.CutPrefix(f, "/files/uploads/"); !ok || !files.ValidName(name) {
 				t.Errorf("setFileInputFiles got %q", f)
 			}
 		}

@@ -322,7 +322,9 @@ func TestPageToolsUpload(t *testing.T) {
 	}
 	photo := []byte("\x89PNG\r\n\x1a\n not really a photo")
 	hash := func(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
-	reportName, photoName := upload("report.bin", report), upload("photo.png", photo)
+	// Two dots inside a name are just dots: the REST upload takes the name,
+	// and so does act's upload step (PROJ-117 review).
+	reportName, photoName := upload("report..v2.bin", report), upload("photo.png", photo)
 
 	a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/upload"})
 	snap := a.mustTool(s.ID, "snapshot", nil)
