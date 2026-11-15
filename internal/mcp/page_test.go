@@ -94,8 +94,29 @@ func TestActStepsMatchREST(t *testing.T) {
 	if m, r := names(stepArgs{}), names(pagetools.Step{}); !slices.Equal(m, r) {
 		t.Errorf("MCP step fields %v, REST step fields %v", m, r)
 	}
+	// So do act's and snapshot's own options (PROJ-114), but session_id.
+	without := func(v any) []string {
+		return slices.DeleteFunc(names(v), func(n string) bool { return n == "session_id" })
+	}
+	if m, r := without(actArgs{}), names(pagetools.ActIn{}); !slices.Equal(m, r) {
+		t.Errorf("MCP act fields %v, REST act fields %v", m, r)
+	}
+	if m, r := without(snapshotArgs{}), names(pagetools.SnapshotIn{}); !slices.Equal(m, r) {
+		t.Errorf("MCP snapshot fields %v, REST snapshot fields %v", m, r)
+	}
+	// changes: false gets through, unlike an unset one.
+	no := false
+	raw, _ := json.Marshal(map[string]any{"steps": nil, "changes": actArgs{Changes: &no}.Changes})
+	var in pagetools.ActIn
+	if err := json.Unmarshal(raw, &in); err != nil || in.Changes == nil || *in.Changes {
+		t.Errorf("changes false became %s", raw)
+	}
+	raw, _ = json.Marshal(map[string]any{"steps": nil, "changes": actArgs{}.Changes})
+	if in = (pagetools.ActIn{}); json.Unmarshal(raw, &in) != nil || in.Changes != nil {
+		t.Errorf("unset changes became %s", raw)
+	}
 	zero := 0
-	raw, _ := json.Marshal(stepArgs{Action: "click", Ref: "a1e2", CoverWaitMS: &zero})
+	raw, _ = json.Marshal(stepArgs{Action: "click", Ref: "a1e2", CoverWaitMS: &zero})
 	var st pagetools.Step
 	if err := json.Unmarshal(raw, &st); err != nil || st.CoverWaitMS == nil || *st.CoverWaitMS != 0 {
 		t.Errorf("cover_wait_ms 0 became %s", raw)
