@@ -10,16 +10,24 @@ import (
 // person can take control: within it, the agent counts as driving.
 const agentQuiet = 5 * time.Second
 
+// takeOverAfter is how long an agent's input action must have run before
+// the person in the live view can take control by breaking it off: a
+// click is over well within it, a long human-paced type isn't.
+const takeOverAfter = 3 * time.Second
+
 // AgentInput records an agent's click or keystroke. It fails while a
-// person has control.
+// person has control, and with ErrInputBusy while another is under way:
+// one at a time per session, so an agent can't queue up minutes of input.
 //
 // It is a lease: call done once the browser has answered. A handoff
 // (Needs help) or a stop cancels the context it returns, so an action
 // that takes a while (typing at human pace, PROJ-113) breaks off at once,
 // and waits for leases to end before the person gets the browser; it
-// refuses new ones, so no agent input lands under them. A person can't
-// take control from the live view while one is under way, nor for
-// agentQuiet after it ends.
+// refuses new ones. The browser lets go of what the action held as it
+// answers, so the person gets it at most tens of milliseconds after the
+// break. A person can take control from the live view once one has run
+// for takeOverAfter, which breaks it off the same way; not before, nor
+// for agentQuiet after it ends.
 func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, func(), error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -30,10 +38,13 @@ func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, f
 	if l.human || l.sess.State == NeedsHelp {
 		return nil, nil, ErrHumanDriving
 	}
+	if len(l.inputs) > 0 {
+		return nil, nil, ErrInputBusy
+	}
 	now := m.now()
 	l.lastActivity, l.lastAgentInput = now, now
 	cctx, cancel := context.WithCancelCause(ctx)
-	in := &lease{cancel: cancel}
+	in := &lease{cancel: cancel, started: now}
 	if l.inputs == nil {
 		l.inputs = map[*lease]struct{}{}
 	}
@@ -53,10 +64,13 @@ func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, f
 
 // TakeControl gives a person in the live view the mouse and keyboard.
 // It is refused while an agent is driving: connected over CDP, having
-// clicked or typed in the last few seconds, or with a page call (PageLease)
-// under way or just ended. Meanwhile agents can only
-// watch: their input and new CDP connections are refused. During a
-// handoff (Needs help) the agent is paused, so it always succeeds.
+// clicked or typed in the last few seconds, with a page call (PageLease)
+// under way or just ended, or with an input action under way for less
+// than takeOverAfter. One that has run longer (a long human-paced type)
+// is broken off, as a handoff breaks it off, and TakeControl waits for it
+// to end. Meanwhile agents can only watch: their input and new CDP
+// connections are refused. During a handoff (Needs help) the agent is
+// paused, so it always succeeds.
 func (m *Manager) TakeControl(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -64,15 +78,44 @@ func (m *Manager) TakeControl(id string) error {
 	if l == nil || (l.sess.State != Running && l.sess.State != NeedsHelp) {
 		return ErrNotRunning
 	}
-	if l.sess.State == Running && (len(l.conns) > 0 || len(l.leases) > 0 || len(l.inputs) > 0 || m.now().Sub(l.lastAgentInput) < agentQuiet) {
-		return ErrAgentDriving
+	now := m.now()
+	breakOff := false
+	if l.sess.State == Running {
+		if len(l.conns) > 0 || len(l.leases) > 0 {
+			return ErrAgentDriving
+		}
+		for in := range l.inputs {
+			if now.Sub(in.started) < takeOverAfter {
+				return ErrAgentDriving
+			}
+			breakOff = true
+		}
+		if !breakOff && now.Sub(l.lastAgentInput) < agentQuiet {
+			return ErrAgentDriving
+		}
 	}
 	if l.human {
 		return ErrHumanDriving // one person at a time
 	}
 	l.human = true
 	l.generation++
-	l.lastActivity = m.now()
+	l.lastActivity = now
+	if breakOff {
+		// New agent input is refused from now on (l.human); the one
+		// under way breaks off.
+		for in := range l.inputs {
+			in.cancel(ErrTookControl)
+		}
+	}
+	// What is still under way (that one, or during a handoff what the
+	// handoff cancelled and is itself waiting for) ends before the person
+	// gets the browser.
+	if len(l.inputs) > 0 || len(l.leases) > 0 {
+		m.waitLeasesLocked(l)
+		if m.findLocked(id) != l || !l.sess.State.Live() {
+			return ErrNotRunning // stopped meanwhile
+		}
+	}
 	return nil
 }
 

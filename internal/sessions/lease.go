@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 )
 
 // Errors a page lease's context ends with (see context.Cause), saying why
@@ -13,6 +14,9 @@ var (
 	ErrHandedOver = errors.New("a person has taken over this browser for a handoff; wait for it to finish")
 	// ErrStopping: the browser is stopping.
 	ErrStopping = errors.New("the browser is stopping")
+	// ErrTookControl: the person in the live view took control (an agent
+	// input that had run for takeOverAfter or more).
+	ErrTookControl = errors.New("a person took control of this browser in the live view; wait until they hand it back")
 	// ErrRevoked: the caller's token was revoked.
 	ErrRevoked = errors.New("the agent token was revoked")
 	// ErrSessionHeld: something holds the session (HoldSession) and
@@ -24,6 +28,8 @@ var (
 type lease struct {
 	tokenID string
 	cancel  context.CancelCauseFunc
+	// started is when an agent input action began (AgentInput).
+	started time.Time
 }
 
 // Lease is a call into a session's page, held from PageLease until

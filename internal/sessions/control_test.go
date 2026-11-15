@@ -103,9 +103,9 @@ func TestHandoffWaitsForInputInFlight(t *testing.T) {
 	}
 }
 
-// A long input action (typing at human pace) keeps a person from taking
-// control from the live view while it lasts and for agentQuiet after its
-// end, not its start.
+// An input action keeps a person from taking control from the live view
+// for its first takeOverAfter, and for agentQuiet after its end, not its
+// start.
 func TestLongInputKeepsTheAgentDriving(t *testing.T) {
 	f := newFixture(t)
 	advance := f.clock()
@@ -114,7 +114,7 @@ func TestLongInputKeepsTheAgentDriving(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	advance(2 * time.Minute)
+	advance(takeOverAfter - time.Second)
 	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrAgentDriving) {
 		t.Fatalf("take while the agent types = %v", err)
 	}
@@ -126,6 +126,103 @@ func TestLongInputKeepsTheAgentDriving(t *testing.T) {
 	advance(2 * time.Second)
 	if err := f.m.TakeControl(s.ID); err != nil {
 		t.Fatalf("take after the quiet = %v", err)
+	}
+}
+
+// One agent input runs at a time in a session: a second while one is
+// under way is refused, and allowed once it ends.
+func TestOneAgentInputAtATime(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	_, done, err := f.m.AgentInput(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.m.AgentInput(context.Background(), s.ID); !errors.Is(err, ErrInputBusy) {
+		t.Fatalf("a second input while one runs = %v, want ErrInputBusy", err)
+	}
+	done()
+	_, done, err = f.m.AgentInput(context.Background(), s.ID)
+	if err != nil {
+		t.Fatalf("an input after the first ended = %v", err)
+	}
+	done()
+}
+
+// The person in the live view can take control from an input that has
+// run for takeOverAfter (a long human-paced type): it breaks off, as for
+// a handoff, and they get the browser once it has ended.
+func TestTakeControlBreaksOffALongInput(t *testing.T) {
+	f := newFixture(t)
+	advance := f.clock()
+	s := f.start(f.m)
+	ctx, done, err := f.m.AgentInput(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	advance(takeOverAfter)
+	took := make(chan error, 1)
+	go func() { took <- f.m.TakeControl(s.ID) }()
+	select {
+	case <-ctx.Done():
+		if !errors.Is(context.Cause(ctx), ErrTookControl) {
+			t.Fatalf("input cancelled for %v", context.Cause(ctx))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Take control didn't break off the input")
+	}
+	// The person gets the browser only once the input has let go.
+	select {
+	case err := <-took:
+		t.Fatalf("Take control returned (%v) while the input was still under way", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if _, _, err := f.m.AgentInput(context.Background(), s.ID); !errors.Is(err, ErrHumanDriving) && !errors.Is(err, ErrInputBusy) {
+		t.Fatalf("new input while Take control waits = %v", err)
+	}
+	done()
+	select {
+	case err := <-took:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Take control never returned after the input ended")
+	}
+	if got, _ := f.m.Live("google"); !got.HumanControl {
+		t.Fatal("HumanControl not shown")
+	}
+	if _, _, err := f.m.AgentInput(context.Background(), s.ID); !errors.Is(err, ErrHumanDriving) {
+		t.Fatalf("agent input after Take control = %v", err)
+	}
+}
+
+// During a handoff's first moments, while the input it cancelled is still
+// letting go, the person taking control waits for it too.
+func TestTakeControlInAHandoffWaitsForInput(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	ctx, done, err := f.m.AgentInput(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _, _ = f.m.SetNeedsHelp(s.ID, true) }()
+	<-ctx.Done()
+	took := make(chan error, 1)
+	go func() { took <- f.m.TakeControl(s.ID) }()
+	select {
+	case err := <-took:
+		t.Fatalf("Take control returned (%v) while the input was still under way", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	done()
+	select {
+	case err := <-took:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Take control never returned after the input ended")
 	}
 }
 

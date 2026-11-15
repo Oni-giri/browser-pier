@@ -247,7 +247,7 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 			v.control = true
 			say(map[string]any{"type": "control", "on": true})
 		case errors.Is(err, sessions.ErrAgentDriving):
-			say(map[string]any{"type": "error", "msg": "The agent is driving. You can take control when it pauses or asks for help."})
+			say(map[string]any{"type": "error", "msg": "The agent is driving. Try again in a few seconds, or when it asks for help."})
 		default:
 			say(map[string]any{"type": "error", "msg": "The browser isn't running."})
 		}

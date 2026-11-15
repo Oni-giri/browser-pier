@@ -237,6 +237,38 @@ func TestHandoffInterruptsALongAction(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	// The log says it was cut short.
+	if got := strings.Join(f.whats(s.ID), "\n"); !strings.HasSuffix(got, "claude: Typing interrupted") {
+		t.Fatalf("activity:\n%s", got)
+	}
+}
+
+// One input at a time: a second while a long one is under way is refused.
+func TestComputerOneInputAtATime(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.all, "google", "visual")
+	got := make(chan int, 1)
+	go func() {
+		code, _, _ := f.computer(s.ID, `{"action": "type", "text": "typed slowly"}`)
+		got <- code
+	}()
+	for deadline := time.Now().Add(5 * time.Second); f.lastInput() == ""; {
+		if time.Now().After(deadline) {
+			t.Fatal("the type never reached the browser")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	code, _, raw := f.computer(s.ID, `{"action": "key", "keys": "Return"}`)
+	if code != http.StatusConflict || !strings.Contains(string(raw), "another input is still running") {
+		t.Fatalf("a key during the type: %d %s", code, raw)
+	}
+	if strings.Contains(f.lastInput(), "Return") {
+		t.Fatalf("the key reached the browser: %q", f.lastInput())
+	}
+	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	<-got
 }
 
 func TestComputerWhileAPersonDrives(t *testing.T) {

@@ -45,6 +45,9 @@ var (
 	ErrAgentDriving = errors.New("an agent is driving this browser")
 	// ErrHumanDriving: an agent can't act while a person has control.
 	ErrHumanDriving = errors.New("a person is driving this browser")
+	// ErrInputBusy: an agent's input action is still under way in this
+	// browser; one runs at a time.
+	ErrInputBusy = errors.New("another input is still running in this browser; wait for it to finish")
 )
 
 // Session is one run of a profile's browser.
