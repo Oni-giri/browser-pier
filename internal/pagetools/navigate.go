@@ -211,24 +211,63 @@ func sameAddress(requested, final string) bool {
 	if errA != nil || errB != nil {
 		return requested == final
 	}
-	// A name typed in Unicode comes back as punycode, which the standard
-	// library can't convert: taken as the same name.
-	punycode := nonASCII(hostOf(a)) && strings.Contains(hostOf(b), "xn--")
-	if hostOf(a) != hostOf(b) && !punycode {
+	if hostOf(a) != hostOf(b) && !samePunycode(a, b) {
 		return false
 	}
 	return addressRest(a) == addressRest(b)
 }
 
+// samePunycode reports whether a host typed in Unicode may be the one
+// that came back as punycode, which the standard library can't convert:
+// the same port and labels, each label equal or a Unicode one against an
+// xn-- one with the same ASCII letters in the same order (punycode keeps
+// those, before its last "-"). Two Unicode names with the same ASCII
+// letters (bücher, bächer) still pass; the URL line shows the real one.
+func samePunycode(a, b *url.URL) bool {
+	la, lb := strings.Split(strings.ToLower(a.Hostname()), "."), strings.Split(strings.ToLower(b.Hostname()), ".")
+	if portOf(a) != portOf(b) || len(la) != len(lb) {
+		return false
+	}
+	for i, x := range la {
+		if x == lb[i] {
+			continue
+		}
+		y, puny := strings.CutPrefix(lb[i], "xn--")
+		basic := ""
+		if j := strings.LastIndexByte(y, '-'); j >= 0 {
+			basic = y[:j]
+		}
+		if !puny || !nonASCII(x) || strings.Map(asciiOnly, x) != basic {
+			return false
+		}
+	}
+	return true
+}
+
+func asciiOnly(r rune) rune {
+	if r >= 0x80 {
+		return -1
+	}
+	return r
+}
+
 // hostOf is a URL's host in lower case, with its port unless it is the
 // scheme's default.
 func hostOf(u *url.URL) string {
-	scheme, host, p := strings.ToLower(u.Scheme), strings.ToLower(u.Hostname()), u.Port()
-	defaultPort := (scheme == "http" && p == "80") || (scheme == "https" && p == "443")
-	if p != "" && !defaultPort {
+	host := strings.ToLower(u.Hostname())
+	if p := portOf(u); p != "" {
 		return net.JoinHostPort(host, p)
 	}
 	return host
+}
+
+// portOf is a URL's port, "" if none or the scheme's default.
+func portOf(u *url.URL) string {
+	scheme, p := strings.ToLower(u.Scheme), u.Port()
+	if (scheme == "http" && p == "80") || (scheme == "https" && p == "443") {
+		return ""
+	}
+	return p
 }
 
 func nonASCII(s string) bool {

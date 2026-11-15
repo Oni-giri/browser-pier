@@ -244,9 +244,6 @@ func (c *call) readTree(ctx context.Context) (*pagetext.Node, bool, *url.URL, st
 			base, _ = url.Parse(pageURL)
 		}
 		header := "URL: " + capText(pageURL, maxHeader) + "\nTitle: " + capText(strings.Join(strings.Fields(d.str(doc.Title)), " "), maxHeader)
-		// The fence drops HTML comments: a "<!--" in a title would take
-		// the page's text with it.
-		header = strings.ReplaceAll(header, "<!--", `<\!--`)
 		tree, cut, err := contentTree(ctx, d)
 		return tree, cut, base, header, err
 	}

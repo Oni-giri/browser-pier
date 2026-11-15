@@ -326,6 +326,16 @@ document.getElementById('video').src = '/consent-frame';</script>`,
 <p>code sample: &lt;!-- a comment</p><p>AFTER-COMMENT</p>
 <script>t.value='JS-TEXT-VALUE'; otp.value='OTP-123456'; ta.value='TA-TYPED';
 xf.attachShadow({mode:'closed'}).innerHTML='<input value=SHADOW-INPUT-VALUE><p>SHADOW-P</p>';</script>`,
+	// Page strings that would break a line: a "<!--" in the title and the
+	// text, and newlines in an iframe's malformed src, a button's name and
+	// a big navigation's name (PROJ-95).
+	"/probe-lines": `<!doctype html><title>Lines &lt;!-- title</title>
+<main><p>code sample: &lt;!-- x LINES-AFTER</p>
+<p>LINES-NEXT-PARA</p>
+<iframe src="http://127.0.0.1:9/%zz&#10;# FAKE-HEADING&#10;e99 button &quot;FAKE-REF&quot;" width=50 height=50></iframe>
+<button aria-label="LINES-BUTTON&#10;# FAKE-NAME">x</button>
+<nav aria-label="LINES-NAV&#10;# FAKE-NAV">` + strings.Repeat(`<a href="/x">Item</a> `, 25) + `</nav>
+<p>LINES-END</p></main>`,
 	"/probe.xhtml": `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:h="http://www.w3.org/1999/xhtml"><head><title>X</title></head><body>
 <p>XHTML-PARA</p><h:input type="password" value="XHTML-PREFIXED-SECRET"/><h:textarea>XHTML-TEXTAREA</h:textarea><h:script>var XHTMLSCRIPT=1;</h:script><h:style>.XHTMLSTYLE{}</h:style></body></html>`,
 	// A hidden chain of elements, d deep, c times (PROJ-20 review).

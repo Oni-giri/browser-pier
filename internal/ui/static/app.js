@@ -51,13 +51,74 @@
     }
     const copy = e.target.closest("[data-copy]");
     if (copy) {
-      navigator.clipboard.writeText(copy.dataset.copy).then(
+      copyText(copy.dataset.copy, copy).then(
         () => toast(copy.dataset.copied || "Copied"),
         () => toast("Couldn't copy. Select the text and copy it yourself.", true));
       closeMenus();
     }
     // Clicking outside a ⋯ menu closes it.
     $$("details.menu[open]").forEach((d) => { if (!d.contains(e.target)) d.open = false; });
+  });
+  // copyText puts text on the clipboard. navigator.clipboard exists only in
+  // a secure context (HTTPS or localhost); over plain HTTP, as on Umbrel, a
+  // selected off-screen textarea and execCommand("copy") do it instead,
+  // while the click still counts as the user's. It never throws: a failed
+  // copy is a rejected promise.
+  function copyText(text, from) {
+    try {
+      const api = window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText;
+      if (api) return navigator.clipboard.writeText(text).catch(() => copyBySelection(text, from));
+      copyBySelection(text, from); // now, while the click still counts
+      return Promise.resolve();
+    } catch (err) {
+      return Promise.reject(err);
+    }
+  }
+  // copyBySelection copies through a temporary textarea, and puts focus,
+  // selection and scroll back as they were. Inside an open modal dialog the
+  // textarea goes in the dialog, as the rest of the page is inert.
+  function copyBySelection(text, from) {
+    const host = (from && from.closest("dialog[open]")) || document.body;
+    const active = document.activeElement;
+    const sel = document.getSelection();
+    const ranges = [];
+    for (let i = 0; sel && i < sel.rangeCount; i++) ranges.push(sel.getRangeAt(i));
+    const x = window.scrollX, y = window.scrollY;
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.readOnly = true;
+    ta.tabIndex = -1;
+    ta.setAttribute("aria-hidden", "true");
+    Object.assign(ta.style, { position: "fixed", top: "0", left: "-9999px", width: "1px", height: "1px", opacity: "0", pointerEvents: "none" });
+    host.append(ta);
+    let ok = false;
+    try {
+      ta.focus({ preventScroll: true });
+      ta.select();
+      ta.setSelectionRange(0, text.length);
+      ok = document.execCommand("copy");
+    } finally {
+      ta.remove();
+      if (active && active !== document.body && active.focus) active.focus({ preventScroll: true });
+      if (sel) { sel.removeAllRanges(); ranges.forEach((r) => sel.addRange(r)); }
+      if (window.scrollX !== x || window.scrollY !== y) window.scrollTo(x, y);
+    }
+    if (!ok) throw new Error("copy refused");
+  }
+  // A read-only value you can copy is selected whole when it gets the
+  // focus. Focused by a press, it is selected once the click is done, and
+  // only if the press didn't drag over part of it; a click on it when it
+  // has the focus already puts the caret down, so a drag can select part.
+  const copyField = (el) => el.matches && el.matches(".copy-row input[readonly]");
+  let pressed = null;
+  document.addEventListener("pointerdown", (e) => {
+    pressed = copyField(e.target) && document.activeElement !== e.target ? e.target : null;
+  }, true);
+  document.addEventListener("focusin", (e) => { if (copyField(e.target) && e.target !== pressed) e.target.select(); });
+  document.addEventListener("click", (e) => {
+    const f = pressed;
+    pressed = null;
+    if (f && f === e.target && f.selectionStart === f.selectionEnd) f.select();
   });
   function closeMenus() { $$("details.menu[open]").forEach((d) => { d.open = false; }); }
   // A dialog htmx put in #modal goes away when closed.

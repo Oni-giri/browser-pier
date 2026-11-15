@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/cdp"
@@ -48,7 +49,7 @@ func (c *call) listTabs(ctx context.Context) ([]targetInfo, error) {
 		c.st.tabs[ti.TargetID] = tb
 		c.st.order = append(c.st.order, ti.TargetID)
 		if c.st.listed {
-			c.notices = append(c.notices, "a new tab opened: "+tb.id+" ("+tabAddress(ti.URL)+")")
+			c.notices = append(c.notices, "a new tab opened: "+tb.id+" ("+quoteOdd(tabAddress(ti.URL))+")")
 		}
 	}
 	for id := range c.st.tabs {
@@ -74,9 +75,21 @@ func (c *call) forgetTab(id string) {
 func origin(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
-		return capText(raw, maxField)
+		// Collapsed, so a newline in it (an iframe's src of
+		// "%zz&#10;# heading") can't start a line of its own (PROJ-95).
+		return collapse(capText(raw, maxField))
 	}
 	return u.Scheme + "://" + u.Host
+}
+
+// quoteOdd quotes an origin that is an address with a space or a quote in
+// it, so a line shows where the page's string ends; a plain one shows as
+// it is.
+func quoteOdd(s string) string {
+	if strings.ContainsAny(s, ` "`) {
+		return quote(s)
+	}
+	return s
 }
 
 // findActive finds the tab in front, which every tool acts on: the page

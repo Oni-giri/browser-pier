@@ -104,7 +104,7 @@ func (c *call) line(p *page, it item) string {
 	}
 	ref := c.ref(p, it.backend)
 	if it.iframe {
-		return ref + " iframe " + it.name + " (not read)"
+		return ref + " iframe " + quoteOdd(it.name) + " (not read)"
 	}
 	var b strings.Builder
 	b.WriteString(ref + " " + it.role + " " + quote(capText(strings.Join(strings.Fields(it.name), " "), maxField)))
@@ -224,7 +224,7 @@ func (c *call) summary(p *page, id int, g *group) string {
 	}
 	label := g.role
 	if g.name != "" {
-		label += " " + quote(capText(g.name, maxField))
+		label += " " + quote(capText(collapse(g.name), maxField))
 	}
 	return fmt.Sprintf("%s with %d controls: %s… (use find for them)", label, g.controls, strings.Join(names, ", "))
 }

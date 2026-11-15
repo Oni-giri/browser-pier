@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -449,13 +450,17 @@ func (c *call) describe(ctx context.Context, obj string) string {
 
 // describeFrame is describe, also saying whether the element is an
 // iframe (or a frame): a document of its own, which the tools don't read
-// or act in. An iframe's origin, from its src, is added in the fence.
+// or act in. An iframe's origin, from the document it shows, is added in
+// the fence.
 func (c *call) describeFrame(ctx context.Context, obj string) (what string, frame bool) {
 	var d struct {
 		Node struct {
-			BackendNodeID int64    `json:"backendNodeId"`
-			NodeName      string   `json:"nodeName"`
-			Attributes    []string `json:"attributes"`
+			BackendNodeID   int64  `json:"backendNodeId"`
+			NodeName        string `json:"nodeName"`
+			FrameID         string `json:"frameId"`
+			ContentDocument *struct {
+				DocumentURL string `json:"documentURL"`
+			} `json:"contentDocument"`
 		} `json:"node"`
 	}
 	what = "something"
@@ -469,24 +474,70 @@ func (c *call) describeFrame(ctx context.Context, obj string) (what string, fram
 		}
 		what = role + " " + quote(capText(collapse(name), maxField))
 		if frame {
-			for i := 0; i+1 < len(d.Node.Attributes); i += 2 {
-				if strings.EqualFold(d.Node.Attributes[i], "src") && d.Node.Attributes[i+1] != "" {
-					what += " from " + collapse(origin(cutBytes(d.Node.Attributes[i+1], maxURL)))
-					break
-				}
+			raw := ""
+			if cd := d.Node.ContentDocument; cd != nil {
+				raw = cd.DocumentURL
+			}
+			if raw == "" {
+				raw = c.frameURL(ctx, d.Node.FrameID)
+			}
+			if o := frameAddress(raw); o != "" {
+				what += " from " + quoteOdd(o)
+			} else {
+				what += " from an unknown origin"
 			}
 		}
 	}
 	return fence.Wrap("page element", what), frame
 }
 
-// coveredByFrame is the advice when what covers a ref is an iframe: a
-// consent or sign-in banner from another site, most often. Its content
-// is out of the tools' reach (they read and act in the top frame only),
-// so a person, or a click on the screen in Visual mode, has to do it.
-const coveredByFrame = ", an embedded frame (often a cookie or consent banner from another site). The page tools can't read or click inside frames. " +
-	"Ask a person to click it with request_handoff (POST /api/sessions/{id}/handoff), or restart the browser in Visual mode " +
-	"(stop_browser, then start_browser with mode visual) and click it on a screenshot."
+// frameURL is the address of the document an out-of-process frame (one
+// from another site) shows: its target's, which has the frame's ID. Not
+// its src: the page sets that, and can send the frame elsewhere after.
+func (c *call) frameURL(ctx context.Context, frameID string) string {
+	if frameID == "" {
+		return ""
+	}
+	var r struct {
+		TargetInfos []targetInfo `json:"targetInfos"`
+	}
+	if c.browser(ctx, "Target.getTargets", nil, &r) != nil {
+		return ""
+	}
+	for _, ti := range r.TargetInfos {
+		if ti.TargetID == frameID && ti.Type == "iframe" {
+			return ti.URL
+		}
+	}
+	return ""
+}
+
+// frameAddress is the origin of a frame's document address: scheme and
+// host, an about: address without its query, else only the scheme (a
+// data: or blob: address), so no path or query shows. "" if unknown.
+func frameAddress(raw string) string {
+	u, err := url.Parse(cutBytes(raw, maxURL))
+	switch {
+	case err != nil || u.Scheme == "":
+		return ""
+	case u.Host != "":
+		return collapse(capText(u.Scheme+"://"+u.Host, maxField))
+	case u.Scheme == "about":
+		return collapse(capText("about:"+u.Opaque, maxField))
+	}
+	return collapse(capText(u.Scheme+":", maxField))
+}
+
+// coveredByFrame is the advice when what covers a ref is an iframe. It
+// is BrowserPier's own voice, after the fence, so it says only what is
+// known: the page decides what the frame is and says, so the advice
+// doesn't guess (a consent banner, say) or tell the agent what to click.
+// The frame is out of the tools' reach (they read and act in the top
+// frame only), so a person, or Visual mode, has to deal with it.
+const coveredByFrame = ", an iframe in the way. The page tools can't read or click inside frames, so they can't tell what it holds: " +
+	"check what it is first (snapshot lists it, with its origin). To get past it, ask a person with request_handoff " +
+	"(POST /api/sessions/{id}/handoff), or restart the browser in Visual mode (stop_browser, then start_browser with mode visual) " +
+	"and work on it on a screenshot."
 
 // callOn calls a function on an isolated-world object, returning its
 // value as JSON into out.

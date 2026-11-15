@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -458,4 +459,74 @@ func TestCloudflareChallengeNote(t *testing.T) {
 			t.Errorf("a Turnstile in a form has the note:\n%s", out)
 		}
 	}
+}
+
+// TestPageToolsKeepEachItemOnItsLine is PROJ-95 on a real browser: a
+// "<!--" in a page's title and text doesn't hide what follows it, and a
+// newline in an iframe's malformed src or in a name can't start a line of
+// its own, in snapshot, find and page_content alike.
+func TestPageToolsKeepEachItemOnItsLine(t *testing.T) {
+	a := newRealAPI(t)
+	site := browsertest.NewPageSite(t, browsertest.SiteHost(t))
+	s := a.startAPIBrowser(t, "ln")
+	a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/probe-lines"})
+	ref := regexp.MustCompile(`^[a-z][a-z0-9]e[0-9]+ `)
+	// forged reports the lines page text started: a heading, a line that
+	// reads as a ref of its own, or a FAKE that isn't on its item's line.
+	forged := func(what, out string, items ...string) {
+		t.Helper()
+		for _, l := range strings.Split(out, "\n") {
+			bad := strings.HasPrefix(l, "#") || strings.HasPrefix(l, "e99 ")
+			if strings.Contains(l, "FAKE") && !slices.ContainsFunc(items, func(it string) bool { return strings.Contains(l, it) }) {
+				bad = true
+			}
+			if bad {
+				t.Errorf("%s: page text made a line of its own: %q\n%s", what, l, out)
+			}
+		}
+	}
+	full := func(what, out string, extra ...string) {
+		t.Helper()
+		if strings.Contains(out, "<!--") {
+			t.Errorf("%s: a comment opener survived:\n%s", what, out)
+		}
+		for _, want := range append([]string{`code sample: <\!-- x LINES-AFTER`, "LINES-NEXT-PARA", "LINES-END"}, extra...) {
+			if !inFence(out, want) {
+				t.Errorf("%s: %q isn't in the fence:\n%s", what, want, out)
+			}
+		}
+	}
+
+	snap := a.mustTool(s.ID, "snapshot", nil)
+	full("snapshot", snap, `Title: Lines <\!-- title`, `button "LINES-BUTTON`, `navigation "LINES-NAV`, " iframe ")
+	forged("snapshot", snap, " iframe ", `button "LINES-BUTTON`, `navigation "LINES-NAV`)
+	if l := lineWith(snap, " iframe "); !ref.MatchString(l) || !strings.HasSuffix(l, " (not read)") {
+		t.Errorf("snapshot: the iframe's line is %q\n%s", l, snap)
+	}
+
+	found := a.mustTool(s.ID, "find", map[string]any{"text": "lines-", "limit": 50})
+	full("find", found)
+	found = a.mustTool(s.ID, "find", map[string]any{"text": "fake"})
+	forged("find", found, " iframe ", `button "LINES-BUTTON`)
+	for _, l := range strings.Split(found, "\n") {
+		if strings.Contains(l, "FAKE") && !ref.MatchString(l) {
+			t.Errorf("find: a match's line has no ref: %q\n%s", l, found)
+		}
+	}
+
+	for _, format := range []string{"markdown", "readability"} {
+		out := a.contentText(s.ID, map[string]any{"format": format})
+		full(format, out, `Title: Lines <\!-- title`)
+		forged(format, out, "[iframe: ")
+	}
+}
+
+// lineWith is the first line of s that has what.
+func lineWith(s, what string) string {
+	for _, l := range strings.Split(s, "\n") {
+		if strings.Contains(l, what) {
+			return l
+		}
+	}
+	return ""
 }

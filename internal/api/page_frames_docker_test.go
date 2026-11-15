@@ -51,7 +51,7 @@ func TestPageToolsConsentFrame(t *testing.T) {
 	if code != http.StatusConflict {
 		t.Fatalf("covered button: %d %s", code, msg)
 	}
-	for _, want := range []string{"is covered by <untrusted-content-", `iframe "SP Consent Message" from ` + other, "an embedded frame", "request_handoff", "mode visual"} {
+	for _, want := range []string{"is covered by <untrusted-content-", `iframe "SP Consent Message" from ` + other, "an iframe in the way", "request_handoff", "mode visual"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("missing %q in\n%s", want, msg)
 		}

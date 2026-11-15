@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.1
+
+**Fixed**
+- **AppArmor on Umbrel:** BrowserPier's own AppArmor profile now loads. Umbrel's app update copied the start hook but not the files it loaded, so on Umbrel browsers kept Docker's profile instead. That still confines them where Chromium's sandbox works under it, as on umbrelOS today. The hook now carries the profile itself and says in one line what it did. When BrowserPier falls back to Docker's profile or none, its log now says why its own was skipped.
+- **Copy buttons over plain HTTP,** as on Umbrel: they used to do nothing, the token's Copy button included. They now copy, or say they couldn't. One click on the token selects it whole.
+- **`<!--` in page text no longer hides the rest of the answer.** Page text containing `<!--` (a code sample, a forum post) used to drop everything after it from `snapshot`, `find` and the other page reads. It is now kept, written `<\!--`.
+- **Odd iframe addresses and navigation names stay on their own line** in `snapshot` and `find`, so a page can't make them look like separate lines.
+
+**Changed for agents**
+- **A control under an iframe:** when `act` can't click one because an iframe covers it, often a cookie or consent banner from another site, the error names the frame's real origin. It also points to the ways past: `request_handoff` for a person, or Visual mode. `snapshot` and `find` mark such controls `[under an iframe]`.
+- **Redirects:** `navigate` says `Redirected from: …` when the page ended up at another address.
+- **New tabs:** the new-tab notice shows the tab's path, not just its site. The query is left out; `tabs` shows the full address.
+
 ## 0.2.0
 
 **Before you update:** the compose file now needs **Docker Compose 2.20 or newer** (`docker compose version`). Browsers started by 0.1.x are closed gracefully on the first start, so logins are kept, and start again under the new definition when next used.

@@ -205,13 +205,23 @@ func TestChooseAppArmor(t *testing.T) {
 		t.Errorf("profile loaded: %+v after %q", ch, tried)
 	}
 	// AppArmor 3 (Debian 12): nothing to load, and Docker's profile works.
-	if ch, _ := choose(plan, map[string]verdict{"": works, "apparmor=unconfined": works}); ch.opt != "" || !ch.settled || ch.note.Level != slog.LevelInfo {
+	// The note says why browserpier didn't do (umbrelOS, where the hook
+	// couldn't load it), and only that.
+	if ch, _ := choose(plan, map[string]verdict{"": works, "apparmor=unconfined": works}); ch.opt != "" || !ch.settled || ch.note.Level != slog.LevelInfo ||
+		!strings.HasSuffix(ch.note.Msg, "works under it here (browserpier: sandbox-check: failed: permission denied)") {
 		t.Errorf("Debian 12: %+v", ch)
+	}
+	// Docker's default checked first (a plan without browserpier): nothing
+	// failed, so nothing to add.
+	if ch, _ := choose(appArmorPlan{try: []string{"", "apparmor=unconfined"}}, map[string]verdict{"": works}); ch.opt != "" ||
+		ch.note.Msg != "browser containers keep Docker's default AppArmor profile: Chromium's sandbox works under it here" {
+		t.Errorf("Docker's default first: %+v", ch)
 	}
 	// AppArmor 4 without the profile loaded: unconfined, settled, with a
 	// warning that says what to do and what failed.
 	ch, _ := choose(plan, map[string]verdict{"apparmor=unconfined": works})
-	if ch.opt != "apparmor=unconfined" || !ch.settled || ch.note.Level != slog.LevelWarn || !strings.Contains(ch.note.Msg, "deploy/README.md") || !strings.Contains(ch.note.Msg, "permission denied") {
+	if ch.opt != "apparmor=unconfined" || !ch.settled || ch.note.Level != slog.LevelWarn || !strings.Contains(ch.note.Msg, "deploy/README.md") || !strings.Contains(ch.note.Msg, "permission denied") ||
+		!strings.Contains(ch.note.Msg, "Tried browserpier: sandbox-check: failed: permission denied; Docker's default: sandbox-check") {
 		t.Errorf("not loaded: %+v", ch)
 	}
 	// Nothing works: an error, and the fallback.

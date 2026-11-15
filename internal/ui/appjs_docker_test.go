@@ -7,10 +7,12 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -212,6 +214,116 @@ func TestAppJS(t *testing.T) {
 		is(t, b, `document.querySelector("input[name=auto_stop][value='30']").checked`, false)
 	})
 
+	// Copying, over plain HTTP from a LAN address as on Umbrel, where the
+	// page isn't a secure context and has no navigator.clipboard. paste
+	// reads the real clipboard, through a keyboard paste.
+	copies := `JSON.stringify(window.copies)`
+	clearToasts := `document.querySelector("#toasts").replaceChildren()`
+	watchCopies := `window.copies = []; document.addEventListener("copy", () => {
+		const a = document.activeElement;
+		copies.push(a.tagName === "TEXTAREA" ? a.value.slice(a.selectionStart, a.selectionEnd) + (a.closest("dialog[open]") ? " in dialog" : "") : "selection");
+	})`
+	t.Run("a copy button in a dialog copies over plain HTTP", func(t *testing.T) {
+		b.Navigate(base + "/agents")
+		is(t, b, `window.isSecureContext`, false)
+		is(t, b, `navigator.clipboard === undefined`, true)
+		click(t, b, `[data-dialog=token-dialog]`)
+		is(t, b, `document.querySelector("#token-dialog").open`, true)
+		b.Eval(`document.querySelector("#token-dialog input[name=name]").value = "copier"; document.querySelector("#token-dialog form").requestSubmit()`)
+		until(t, b, "the token wasn't shown", `!!document.querySelector("#token-dialog .secret code")`)
+		secret, _ := b.Eval(`document.querySelector("#token-dialog .secret code").textContent`).(string)
+		// The token can be selected whole by hand, too.
+		is(t, b, `getComputedStyle(document.querySelector("#token-dialog .secret code")).userSelect`, "all")
+		b.Eval(watchCopies + `; window.scrolls = 0; addEventListener("scroll", () => scrolls++, true)`)
+		setClipboard(b, "something else")
+		b.Eval(`copies.length = 0`)
+		textareas := `document.querySelectorAll("textarea").length`
+		before := b.Eval(textareas)
+
+		click(t, b, `#token-dialog [data-copy]`)
+		until(t, b, "no toast after copying", toast("Token copied"))
+		is(t, b, copies, mustJSON([]string{secret + " in dialog"}))
+		// The textarea it copied from is gone, and focus and scroll are as
+		// they were.
+		is(t, b, textareas, before)
+		is(t, b, `document.activeElement === document.querySelector("#token-dialog [data-copy]")`, true)
+		is(t, b, `scrolls === 0 && scrollY === 0`, true)
+		is(t, b, `document.querySelector("#token-dialog").open`, true)
+		pasted(t, b, secret)
+	})
+
+	t.Run("a copy that fails says so", func(t *testing.T) {
+		// On from the token dialog above.
+		is(t, b, `!!document.querySelector("#token-dialog[open] [data-copy]")`, true)
+		b.Eval(`window.realExec = document.execCommand`)
+		for name, stub := range map[string]string{
+			"execCommand refuses":                   `document.execCommand = () => false`,
+			"execCommand throws":                    `document.execCommand = () => { throw new Error("no") }`,
+			"the API rejects and execCommand fails": `secure({ writeText: () => Promise.reject(new DOMException("no", "NotAllowedError")) }); document.execCommand = () => false`,
+			"the API throws and execCommand fails":  `secure({ writeText: () => { throw new TypeError("no") } }); document.execCommand = () => false`,
+		} {
+			b.Eval(clearToasts + `; window.secure = (clip) => { Object.defineProperty(window, "isSecureContext", { value: true, configurable: true }); Object.defineProperty(navigator, "clipboard", { value: clip, configurable: true }) }; ` + stub)
+			click(t, b, `#token-dialog [data-copy]`)
+			until(t, b, name+": no toast for a failed copy", toast("Couldn't copy. Select the text and copy it yourself."))
+			if b.Eval(toast("Token copied")) == true {
+				t.Fatalf("%s: a failed copy said it copied", name)
+			}
+		}
+	})
+
+	t.Run("in a secure context the clipboard API copies, and the textarea backs it up", func(t *testing.T) {
+		b.Navigate(base + "/agents")
+		click(t, b, `[data-dialog=token-dialog]`)
+		b.Eval(`document.querySelector("#token-dialog input[name=name]").value = "copier2"; document.querySelector("#token-dialog form").requestSubmit()`)
+		until(t, b, "the token wasn't shown", `!!document.querySelector("#token-dialog .secret code")`)
+		secret, _ := b.Eval(`document.querySelector("#token-dialog .secret code").textContent`).(string)
+		b.Eval(watchCopies + `; Object.defineProperty(window, "isSecureContext", { value: true, configurable: true });
+			window.written = []; window.reject = false;
+			Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: (t) => { written.push(t); return reject ? Promise.reject(new DOMException("no", "NotAllowedError")) : Promise.resolve() } } })`)
+
+		click(t, b, `#token-dialog [data-copy]`)
+		until(t, b, "no toast after copying", toast("Token copied"))
+		is(t, b, `JSON.stringify(written)`, mustJSON([]string{secret}))
+		is(t, b, copies, "[]") // no fallback
+
+		// When the API refuses, as when the document isn't focused, the
+		// textarea copies.
+		setClipboard(b, "something else")
+		b.Eval(clearToasts + `; copies.length = 0; written.length = 0; reject = true`)
+		click(t, b, `#token-dialog [data-copy]`)
+		until(t, b, "no toast after copying", toast("Token copied"))
+		is(t, b, `JSON.stringify(written)`, mustJSON([]string{secret}))
+		is(t, b, copies, mustJSON([]string{secret + " in dialog"}))
+		pasted(t, b, secret)
+	})
+
+	t.Run("a copy button outside a dialog copies over plain HTTP", func(t *testing.T) {
+		b.Navigate(base + "/profiles")
+		b.Eval(watchCopies)
+		setClipboard(b, "something else")
+		b.Eval(`copies.length = 0`)
+		click(t, b, `details.menu summary[aria-label="More for mail"]`)
+		want, _ := b.Eval(`document.querySelector("details.menu[open] [data-copy]").dataset.copy`).(string)
+		click(t, b, `details.menu[open] [data-copy]`)
+		until(t, b, "no toast after copying", toast("Copied CDP URL for mail"))
+		is(t, b, copies, mustJSON([]string{want}))
+		pasted(t, b, want)
+		is(t, b, `!!document.querySelector("details.menu[open]")`, false)
+	})
+
+	t.Run("a read-only value is selected whole when focused, not on every click", func(t *testing.T) {
+		b.Navigate(base + "/profiles/mail")
+		field := `document.querySelector(".copy-row input[readonly]")`
+		selected := `(() => { const f = ` + field + `; return document.activeElement === f ? f.selectionEnd - f.selectionStart : -1 })()`
+		// A click that focuses it selects it whole, once the caret is down.
+		click(t, b, ".copy-row input[readonly]")
+		b.Eval(`new Promise((r) => setTimeout(r, 50))`)
+		until(t, b, "a click didn't select it whole", selected+` === `+field+`.value.length`)
+		// Focused already, a click (as after dragging over part of it)
+		// leaves the selection be.
+		is(t, b, `(() => { const f = `+field+`; f.setSelectionRange(2, 5); f.dispatchEvent(new MouseEvent("click", { bubbles: true })); return f.selectionEnd - f.selectionStart })()`, 3.0)
+	})
+
 	t.Run("dialogs fill from the button that opens them, and say they're busy", func(t *testing.T) {
 		t.Cleanup(g.settle)
 		b.Navigate(base + "/profiles")
@@ -248,6 +360,74 @@ func TestAppJS(t *testing.T) {
 		// The chip polls every 5 s.
 		untilFor(t, b, 15*time.Second, "the page didn't light up for a request", `document.body.classList.contains("has-help") && !!document.querySelector("#chip .chip-help")`)
 	})
+}
+
+// click clicks the middle of the element sel matches with the mouse, so
+// the page sees a person's click, which copying needs.
+func click(t *testing.T, b *browsertest.CDP, sel string) {
+	t.Helper()
+	at, ok := b.Eval(fmt.Sprintf(`(() => {
+		const el = document.querySelector(%q);
+		if (!el) return null;
+		const r = el.getBoundingClientRect();
+		return [r.x + r.width / 2, r.y + r.height / 2];
+	})()`, sel)).([]any)
+	if !ok {
+		t.Fatalf("nothing matches %s", sel)
+	}
+	// Chrome drops input to a page that hasn't painted yet.
+	b.Eval(`new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))`)
+	for _, typ := range []string{"mousePressed", "mouseReleased"} {
+		b.Call("Input.dispatchMouseEvent", map[string]any{"type": typ, "x": at[0], "y": at[1], "button": "left", "clickCount": 1})
+	}
+}
+
+// keyCommand presses Ctrl and key, running the editing command it stands for.
+func keyCommand(b *browsertest.CDP, key, command string) {
+	ev := map[string]any{"key": key, "code": "Key" + strings.ToUpper(key), "modifiers": 2, "windowsVirtualKeyCode": int(strings.ToUpper(key)[0])}
+	ev["type"], ev["commands"] = "keyDown", []string{command}
+	b.Call("Input.dispatchKeyEvent", ev)
+	delete(ev, "commands")
+	ev["type"] = "keyUp"
+	b.Call("Input.dispatchKeyEvent", ev)
+}
+
+// scratch adds a textarea holding text to the open dialog, or else the
+// page, and focuses it.
+func scratch(b *browsertest.CDP, text string) {
+	b.Eval(fmt.Sprintf(`(() => {
+		const ta = document.createElement("textarea");
+		ta.id = "scratch";
+		ta.value = %q;
+		(document.querySelector("dialog[open]") || document.body).append(ta);
+		ta.focus();
+		ta.select();
+	})()`, text))
+}
+
+// setClipboard puts text on the real clipboard, with Ctrl+C.
+func setClipboard(b *browsertest.CDP, text string) {
+	scratch(b, text)
+	keyCommand(b, "c", "copy")
+	b.Eval(`document.querySelector("#scratch").remove()`)
+}
+
+// pasted checks that the real clipboard holds want, pasting it with Ctrl+V.
+func pasted(t *testing.T, b *browsertest.CDP, want string) {
+	t.Helper()
+	scratch(b, "")
+	keyCommand(b, "v", "paste")
+	if got := b.Eval(`(() => { const ta = document.querySelector("#scratch"); const v = ta.value; ta.remove(); return v })()`); got != want {
+		t.Fatalf("the clipboard holds %q, want %q", got, want)
+	}
+}
+
+func mustJSON(v any) string {
+	j, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return string(j)
 }
 
 // is checks that expr is want, giving the page a moment to catch up.
