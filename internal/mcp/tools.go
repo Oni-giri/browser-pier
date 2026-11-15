@@ -92,6 +92,8 @@ type sessionOut struct {
 	LiveViewURL string   `json:"live_view_url"`
 	InUseBy     []string `json:"in_use_by"`
 	BlockAds    bool     `json:"block_ads"`
+	// AdListMissing: the profile blocks, but no list was there yet.
+	AdListMissing bool `json:"ad_list_missing"`
 }
 
 func (s *Server) startBrowser(ctx context.Context, req *sdk.CallToolRequest, in startArgs) (*sdk.CallToolResult, any, error) {
@@ -117,8 +119,11 @@ func (s *Server) startBrowser(ctx context.Context, req *sdk.CallToolRequest, in 
 	if len(out.InUseBy) > 0 {
 		fmt.Fprintf(&b, "Also in use by: %s.\n", strings.Join(out.InUseBy, ", "))
 	}
-	if out.BlockAds {
+	switch {
+	case out.BlockAds:
 		b.WriteString("Ads and trackers are blocked; if a page misses something it needs, start_browser again with allow_ads.\n")
+	case out.AdListMissing:
+		b.WriteString("Ad and tracker blocking is on for this profile, but no list has been downloaded yet, so nothing is blocked this session.\n")
 	}
 	fmt.Fprintf(&b, "A person can watch at %s.", out.LiveViewURL)
 	return text("%s", b.String()), nil, nil

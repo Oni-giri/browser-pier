@@ -28,6 +28,8 @@ type profilePageData struct {
 // session's count, or the profile's setting.
 func (d profilePageData) AdsLabel() string {
 	switch {
+	case d.Live() && d.Session.AdListMissing:
+		return "No list yet"
 	case d.Live() && !d.Session.BlockAds && d.BlockAds:
 		return "Off this session"
 	case d.Live() && d.Session.BlockAds && d.BlockedRead:

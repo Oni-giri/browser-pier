@@ -63,8 +63,14 @@ type Session struct {
 	Error string
 	// BlockAds is whether the browser blocks ad and tracker domains: the
 	// profile's setting when it started, unless an agent turned it off for
-	// this session (StartOptions.AllowAds).
+	// this session (StartOptions.AllowAds), or no list had been downloaded
+	// yet when it started (AdListMissing).
 	BlockAds bool
+	// AdListMissing is set when the session was to block ads and trackers
+	// but started without a list (none downloaded yet), so it blocks
+	// nothing. In memory only: a session picked up after an orchestrator
+	// restart has BlockAds false without it.
+	AdListMissing bool
 	// HadFills is set once BrowserPier has typed a secret into the page
 	// (RegisterSecret), and never cleared. Stored on its own (markHadFills),
 	// never by updateSession, so an older copy can't clear it.

@@ -680,6 +680,18 @@ func TestStartWhileHeldIsAConflict(t *testing.T) {
 // session; the profile keeps it.
 func TestSessionWithoutAdBlocking(t *testing.T) {
 	f := newFixture(t)
+	var list []byte // none downloaded yet
+	f.m.SetBlocklist(func() []byte { return list })
+	// Without a list, a profile that blocks starts a session that blocks
+	// nothing, and says why.
+	var nl sessionJSON
+	if code := f.call(f.all, http.MethodPost, "/api/sessions", `{"profile": "github"}`, &nl); code != http.StatusCreated || nl.BlockAds || !nl.AdListMissing {
+		t.Fatalf("a start without a list: %d %+v", code, nl)
+	}
+	if code := f.call(f.all, http.MethodDelete, "/api/sessions/"+nl.ID, "", nil); code != http.StatusOK {
+		t.Fatalf("stop: %d", code)
+	}
+	list = []byte("# browserpier domain set 1\nads.example.com\n")
 	var s sessionJSON
 	if code := f.call(f.all, http.MethodPost, "/api/sessions", `{"profile": "google", "block_ads": false}`, &s); code != http.StatusCreated || s.BlockAds {
 		t.Fatalf("start without blocking: %d %+v", code, s)
@@ -692,7 +704,7 @@ func TestSessionWithoutAdBlocking(t *testing.T) {
 		t.Fatalf("block_ads true turned blocking back on: %d %+v", code, again)
 	}
 	var gh sessionJSON
-	if code := f.call(f.all, http.MethodPost, "/api/sessions", `{"profile": "github"}`, &gh); code != http.StatusCreated || !gh.BlockAds {
+	if code := f.call(f.all, http.MethodPost, "/api/sessions", `{"profile": "github"}`, &gh); code != http.StatusCreated || !gh.BlockAds || gh.AdListMissing {
 		t.Fatalf("a plain start doesn't block: %d %+v", code, gh)
 	}
 }

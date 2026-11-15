@@ -71,11 +71,14 @@ func TestBlockListHandover(t *testing.T) {
 		}
 	}
 
-	// No list downloaded yet: the session blocks, as the profile says, but
-	// the browser starts without a list.
+	// No list downloaded yet: the browser starts without one, and the
+	// session says it blocks nothing, and why (PROJ-119 review).
 	s := f.start(f.m)
-	if !s.BlockAds || !strings.Contains(env(s), "BROWSERPIER_BLOCK_ADS=false") {
-		t.Fatalf("without a list: block_ads %v, env %s", s.BlockAds, env(s))
+	if s.BlockAds || !s.AdListMissing || !strings.Contains(env(s), "BROWSERPIER_BLOCK_ADS=false") {
+		t.Fatalf("without a list: block_ads %v, list missing %v, env %s", s.BlockAds, s.AdListMissing, env(s))
+	}
+	if f.stored(s.ID).BlockAds {
+		t.Fatal("stored as blocking without a list")
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("a list file without a list")
@@ -85,7 +88,7 @@ func TestBlockListHandover(t *testing.T) {
 	// With one: the file waits in the control folder, read-only, and stays.
 	have = list
 	s = f.start(f.m)
-	if !s.BlockAds || !strings.Contains(env(s), "BROWSERPIER_BLOCK_ADS=true") {
+	if !s.BlockAds || s.AdListMissing || !strings.Contains(env(s), "BROWSERPIER_BLOCK_ADS=true") {
 		t.Fatalf("block_ads %v, env %s", s.BlockAds, env(s))
 	}
 	st, err := os.Stat(path)

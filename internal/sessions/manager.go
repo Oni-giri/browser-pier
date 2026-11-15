@@ -439,10 +439,19 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 		m.abort(l, "", fmt.Sprintf("handing over the proxy: %v", err))
 		return
 	}
-	blocking, err := m.writeBlockFile(p.Name, m.snapshot(l).BlockAds)
+	wantBlocking := m.snapshot(l).BlockAds
+	blocking, err := m.writeBlockFile(p.Name, wantBlocking)
 	if err != nil {
 		m.abort(l, "", fmt.Sprintf("handing over the ad and tracker list: %v", err))
 		return
+	}
+	if wantBlocking && !blocking {
+		// No list yet: the session says what the browser does, which is
+		// block nothing, and why.
+		if err := m.update(l, func(s *Session) { s.BlockAds, s.AdListMissing = false, true }); err != nil {
+			m.abort(l, "", fmt.Sprintf("saving the session: %v", err))
+			return
+		}
 	}
 	// A container left behind by a crash would hold the name.
 	if err := m.rt.RemoveStale(ctx, containerName(p.Name), p.Name); err != nil {

@@ -73,6 +73,8 @@ func newFixture(t *testing.T) *fixture {
 	}
 	t.Cleanup(m.Close)
 	m.SetMemoryLimit(8<<30, 1<<30)
+	// A list downloaded, so sessions of blocking profiles block.
+	m.SetBlocklist(func() []byte { return []byte("# browserpier domain set 1\nads.example.com\n") })
 	admin, err := auth.NewAdmin(ctx, d, "the-admin-password", log)
 	if err != nil {
 		t.Fatal(err)

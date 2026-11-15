@@ -281,18 +281,21 @@ func (a *API) createProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 type sessionJSON struct {
-	ID          string    `json:"id"`
-	Profile     string    `json:"profile"`
-	Mode        string    `json:"mode"`
-	State       string    `json:"state"`
-	Attached    bool      `json:"attached"`
-	CDPURL      string    `json:"cdp_url,omitempty"`
-	LiveViewURL string    `json:"live_view_url"`
-	InUseBy     []string  `json:"in_use_by,omitempty"`
-	Error       string    `json:"error,omitempty"`
-	LastLog     string    `json:"last_log,omitempty"`
-	BlockAds    bool      `json:"block_ads"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID          string   `json:"id"`
+	Profile     string   `json:"profile"`
+	Mode        string   `json:"mode"`
+	State       string   `json:"state"`
+	Attached    bool     `json:"attached"`
+	CDPURL      string   `json:"cdp_url,omitempty"`
+	LiveViewURL string   `json:"live_view_url"`
+	InUseBy     []string `json:"in_use_by,omitempty"`
+	Error       string   `json:"error,omitempty"`
+	LastLog     string   `json:"last_log,omitempty"`
+	BlockAds    bool     `json:"block_ads"`
+	// AdListMissing: the session was to block, but no list had been
+	// downloaded yet when it started, so block_ads is false.
+	AdListMissing bool      `json:"ad_list_missing,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 func (a *API) sessionOut(r *http.Request, s sessions.Session, attached bool) sessionJSON {
@@ -300,7 +303,7 @@ func (a *API) sessionOut(r *http.Request, s sessions.Session, attached bool) ses
 	out := sessionJSON{
 		ID: s.ID, Profile: s.Profile, Mode: string(s.Mode), State: string(s.State), Attached: attached,
 		LiveViewURL: base + "/profiles/" + url.PathEscape(s.Profile),
-		InUseBy:     s.InUseBy, Error: s.Error, CreatedAt: s.CreatedAt, BlockAds: s.BlockAds,
+		InUseBy:     s.InUseBy, Error: s.Error, CreatedAt: s.CreatedAt, BlockAds: s.BlockAds, AdListMissing: s.AdListMissing,
 	}
 	// The browser container's words, which a compromised page could have
 	// written: fenced like page text.

@@ -496,3 +496,23 @@ func TestHandoffUntilURLOverMCP(t *testing.T) {
 		t.Fatalf("browser not given back: %s", live.State)
 	}
 }
+
+// start_browser says whether ads and trackers are blocked: not when the
+// profile blocks but no list has been downloaded yet, which it says.
+func TestStartBrowserSaysWhetherAdsAreBlocked(t *testing.T) {
+	f := newFixture(t)
+	var list []byte
+	f.m.SetBlocklist(func() []byte { return list })
+	cs := f.connect(f.all, versions[0], nil)
+	_, out := call(t, cs, "start_browser", map[string]any{"profile": "google"})
+	if strings.Contains(out, "Ads and trackers are blocked") || !strings.Contains(out, "no list has been downloaded yet, so nothing is blocked") {
+		t.Errorf("start_browser without a list: %s", out)
+	}
+	s, _ := f.m.Live("google")
+	call(t, cs, "stop_browser", map[string]any{"session_id": s.ID})
+	list = []byte("# browserpier domain set 1\nads.example.com\n")
+	_, out = call(t, cs, "start_browser", map[string]any{"profile": "google"})
+	if !strings.Contains(out, "Ads and trackers are blocked") || strings.Contains(out, "no list") {
+		t.Errorf("start_browser with a list: %s", out)
+	}
+}
