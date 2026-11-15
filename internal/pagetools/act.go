@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/cdp"
 	"github.com/Oni-giri/browser-pier/internal/fence"
+	"github.com/Oni-giri/browser-pier/internal/motion"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
@@ -37,7 +39,23 @@ type Step struct {
 	Keys string `json:"keys,omitempty"`
 	// Option is what select chooses, by value or visible text.
 	Option string `json:"option,omitempty"`
+	// Pace is human (the default: the pointer glides to a point scattered
+	// around the element's middle, buttons and keys are held, and type
+	// keys at a typist's rhythm) or instant (PROJ-113). It applies to
+	// click, hover, check, uncheck, type and press.
+	Pace string `json:"pace,omitempty"`
 }
+
+// instant reports whether a step runs at instant pace.
+func (s Step) instant() bool { return s.Pace == paceInstant }
+
+const (
+	paceHuman   = "human"
+	paceInstant = "instant"
+	// maxHumanType caps what one act call types at human pace, about a
+	// quarter of a second a character: 500 characters is two minutes.
+	maxHumanType = 500
+)
 
 // ActIn is act's input.
 type ActIn struct {
@@ -48,6 +66,11 @@ type ActIn struct {
 
 // checkStep says what's wrong with a step, before any runs.
 func checkStep(s Step) error {
+	switch s.Pace {
+	case "", paceHuman, paceInstant:
+	default:
+		return fmt.Errorf("pace %q: want human or instant", s.Pace)
+	}
 	needRef := func() error {
 		if s.Ref == "" {
 			return fmt.Errorf("%s: want a ref from snapshot or find", s.Action)
@@ -105,10 +128,17 @@ func (t *Tools) Act(ctx context.Context, s sessions.Session, who Caller, in ActI
 	if len(in.Steps) == 0 || len(in.Steps) > MaxSteps {
 		return "", &Error{Status: 400, Msg: fmt.Sprintf("steps: want 1 to %d", MaxSteps)}
 	}
+	human := 0
 	for i, st := range in.Steps {
 		if err := checkStep(st); err != nil {
 			return "", &Error{Status: 400, Msg: fmt.Sprintf("step %d: %v", i+1, err)}
 		}
+		if st.Action == "type" && !st.instant() {
+			human += utf8.RuneCountInString(*st.Text)
+		}
+	}
+	if human > maxHumanType {
+		return "", &Error{Status: 400, Msg: fmt.Sprintf("type steps: %d characters at human pace, at most %d per call (about two minutes); split them across calls, use fill, or set pace instant", human, maxHumanType)}
 	}
 	return t.run(ctx, s, who, func(c *call) (string, error) {
 		ctx := c.lease.Ctx
@@ -121,6 +151,7 @@ func (t *Tools) Act(ctx context.Context, s sessions.Session, who Caller, in ActI
 				case <-time.After(c.t.settle):
 				}
 			}
+			c.instant = st.instant()
 			line, err := c.step(ctx, st)
 			if err != nil {
 				return "", c.stepFailed(done, i, len(in.Steps), st, err)
@@ -378,7 +409,7 @@ func (c *call) step(ctx context.Context, st Step) (string, error) {
 		if button == "" {
 			button = "left"
 		}
-		if err := c.click(ctx, x, y, button, st.Double); err != nil {
+		if err := c.click(ctx, n, x, y, button, st.Double); err != nil {
 			return "", err
 		}
 		what := map[string]string{"left": "Clicked", "right": "Right-clicked", "middle": "Middle-clicked"}[button]
@@ -392,7 +423,7 @@ func (c *call) step(ctx context.Context, st Step) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if err := c.mouse(ctx, "mouseMoved", x, y, "", 0); err != nil {
+		if _, _, err := c.glide(ctx, n, x, y); err != nil {
 			return "", err
 		}
 		c.note("Hovered over " + n.ref)
@@ -503,23 +534,46 @@ func (c *call) mouse(ctx context.Context, typ string, x, y float64, button strin
 	return c.renderer(ctx, c.t.quick, "Input.dispatchMouseEvent", p, nil)
 }
 
-// click moves the mouse to (x, y) and clicks. A press is always followed
-// by its release, even if the call is cancelled in between.
-func (c *call) click(ctx context.Context, x, y float64, button string, double bool) error {
-	if err := c.mouse(ctx, "mouseMoved", x, y, "", 0); err != nil {
+// click moves the mouse to n's point (x, y), which aim checked, and
+// clicks. At human pace the pointer glides to a point scattered around
+// it (glide), pauses, and holds the button down for a moment. A press is
+// always followed by its release, even if the call is cancelled in
+// between.
+func (c *call) click(ctx context.Context, n *node, x, y float64, button string, double bool) error {
+	x, y, err := c.glide(ctx, n, x, y)
+	if err != nil {
 		return err
+	}
+	if !c.instant {
+		if err := c.t.pause(ctx, c.st.mot.Dwell()); err != nil {
+			return err
+		}
+		// The pointer took a while to get there: check nothing has
+		// moved over the point meanwhile.
+		if err := c.stillThere(ctx, n, x, y); err != nil {
+			return err
+		}
 	}
 	clicks := 1
 	if double {
 		clicks = 2
 	}
 	for i := 1; i <= clicks; i++ {
+		if i > 1 && !c.instant {
+			if err := c.t.pause(ctx, c.st.mot.JitterDuration(0.09, 0.02)); err != nil {
+				return err
+			}
+		}
 		// Once a press is sent it may have landed, even if its answer
 		// never came (a cancel, a timeout): the release goes out anyway.
 		// One that was never sent needs none.
 		err := c.mouse(ctx, "mousePressed", x, y, button, i)
 		if errors.Is(err, cdp.ErrNotSent) {
 			return err
+		}
+		if err == nil && !c.instant {
+			// A cancel cuts the hold short; the release still goes out.
+			_ = c.t.pause(ctx, c.st.mot.KeyHold())
 		}
 		rctx, cancel := c.letGo(ctx)
 		rerr := c.mouse(rctx, "mouseReleased", x, y, button, i)
@@ -534,6 +588,101 @@ func (c *call) click(ctx context.Context, x, y float64, button string, double bo
 		}
 	}
 	return nil
+}
+
+// glide moves the pointer to n's point (x, y). At instant pace that is
+// one move to it. At human pace, the pointer travels a hand's path
+// (internal/motion) from where it last stopped, or in from an edge of
+// the viewport, to a point scattered around (x, y) within n's box; it
+// returns the point it reached.
+func (c *call) glide(ctx context.Context, n *node, x, y float64) (float64, float64, error) {
+	if c.instant {
+		c.st.pointer = &motion.Point{X: x, Y: y}
+		return x, y, c.mouse(ctx, "mouseMoved", x, y, "", 0)
+	}
+	to, size, err := c.scatter(ctx, n, x, y)
+	if err != nil {
+		return 0, 0, err
+	}
+	from := c.st.pointer
+	if from == nil {
+		vw, vh := 1280.0, 800.0
+		if pi, err := c.info(ctx); err == nil && pi.W > 0 && pi.H > 0 {
+			vw, vh = pi.W, pi.H
+		}
+		p := c.st.mot.Entry(motion.Size{W: vw, H: vh})
+		from = &p
+	}
+	// The moves keep to the path's clock: a slow answer from the page
+	// eats into the next pause rather than stretching the glide.
+	start, due := time.Now(), time.Duration(0)
+	for _, s := range c.st.mot.Path(*from, to, size) {
+		if err := c.mouse(ctx, "mouseMoved", s.X, s.Y, "", 0); err != nil {
+			return 0, 0, err
+		}
+		c.st.pointer = &motion.Point{X: s.X, Y: s.Y}
+		due += s.Pause
+		if err := c.t.pause(ctx, due-time.Since(start)); err != nil {
+			return 0, 0, err
+		}
+	}
+	return to.X, to.Y, nil
+}
+
+// scatter is where a hand aiming at n's point (x, y) lands: normally
+// scattered around it within the box aim took it from (motion.Aim), if
+// nothing covers n there; else (x, y) itself, which aim checked. size is
+// the box's smaller side, for Fitts's law.
+func (c *call) scatter(ctx context.Context, n *node, x, y float64) (motion.Point, float64, error) {
+	at := motion.Point{X: x, Y: y}
+	var q struct {
+		Quads [][]float64 `json:"quads"`
+	}
+	if err := c.renderer(ctx, c.t.quick, "DOM.getContentQuads", map[string]any{"backendNodeId": n.backend}, &q); err != nil {
+		var ce *cdp.Error
+		if errors.As(err, &ce) {
+			return at, 0, nil
+		}
+		return at, 0, err
+	}
+	for _, quad := range q.Quads {
+		if len(quad) != 8 {
+			continue
+		}
+		cx, cy := (quad[0]+quad[2]+quad[4]+quad[6])/4, (quad[1]+quad[3]+quad[5]+quad[7])/4
+		if math.Abs(cx-x) > 0.5 || math.Abs(cy-y) > 0.5 {
+			continue
+		}
+		lox, hix := min(quad[0], quad[2], quad[4], quad[6]), max(quad[0], quad[2], quad[4], quad[6])
+		loy, hiy := min(quad[1], quad[3], quad[5], quad[7]), max(quad[1], quad[3], quad[5], quad[7])
+		w, h := hix-lox, hiy-loy
+		p := c.st.mot.Aim(at, motion.Size{W: w, H: h})
+		r, err := c.callOnObject(ctx, n.obj, jsHitTest, []any{p.X, p.Y}, false)
+		if err != nil {
+			return at, 0, err
+		}
+		if r.Type != "boolean" || string(r.Value) != "true" {
+			return at, min(w, h), nil // a rounded corner, a cut-out: keep to the middle
+		}
+		return p, min(w, h), nil
+	}
+	return at, 0, nil
+}
+
+// stillThere checks nothing covers n at (x, y) (jsHitTest), as aim does
+// before a pointer step.
+func (c *call) stillThere(ctx context.Context, n *node, x, y float64) error {
+	r, err := c.callOnObject(ctx, n.obj, jsHitTest, []any{x, y}, false)
+	if err != nil {
+		return err
+	}
+	switch {
+	case r.Type == "boolean" && string(r.Value) == "true":
+		return nil
+	case r.Type == "object" && r.ObjectID != "":
+		return &Error{Status: http.StatusConflict, Msg: n.ref + " is covered by " + c.describe(ctx, r.ObjectID)}
+	}
+	return &Error{Status: http.StatusConflict, Msg: n.ref + " moved while the pointer went to it; take a new snapshot"}
 }
 
 // key dispatches one key event.
@@ -551,10 +700,26 @@ func (c *call) key(ctx context.Context, typ string, k keyDef, mods int, commands
 // pressCombo presses a key with its modifiers, as a keyboard sends it:
 // raw key-downs, a char if it types one, then the key-ups. Whatever was
 // pressed is released, even if the call is cancelled.
+//
+// At human pace, the key waits for the gap since the last one (keyDue,
+// a pause between combinations unless typeInto set a typist's) and is
+// held for a moment before the key-ups.
 func (c *call) pressCombo(ctx context.Context, cb combo, commands ...string) error {
 	var down []keyDef
 	mods := 0
+	if !c.instant {
+		if !c.keyAt.IsZero() {
+			if err := c.t.pause(ctx, c.keyDue-time.Since(c.keyAt)); err != nil {
+				return err
+			}
+		}
+		c.keyAt, c.keyDue = time.Now(), c.st.mot.JitterDuration(0.18, 0.06)
+	}
 	defer func() {
+		if !c.instant && len(down) > 0 {
+			// A cancel cuts the hold short; the key-ups still go out.
+			_ = c.t.pause(ctx, c.st.mot.KeyHold())
+		}
 		rctx, cancel := c.letGo(ctx)
 		defer cancel()
 		for i := len(down) - 1; i >= 0; i-- {
@@ -686,13 +851,30 @@ func (c *call) typeInto(ctx context.Context, n *node, st Step) (string, error) {
 		return fmt.Sprintf("filled %s (typed %s)", n.echo(), characters(count)), nil
 	}
 	typed := 0
-	for _, r := range text {
+	runes := []rune(text)
+	for i, r := range runes {
 		if k, ok := usKeys[r]; ok {
 			if err := c.pressCombo(ctx, combo{key: k}); err != nil {
 				return "", err
 			}
-		} else if err := c.renderer(ctx, c.t.quick, "Input.insertText", map[string]any{"text": string(r)}, nil); err != nil {
-			return "", err
+		} else {
+			if !c.instant && !c.keyAt.IsZero() {
+				if err := c.t.pause(ctx, c.keyDue-time.Since(c.keyAt)); err != nil {
+					return "", err
+				}
+			}
+			c.keyAt = time.Now()
+			if err := c.renderer(ctx, c.t.quick, "Input.insertText", map[string]any{"text": string(r)}, nil); err != nil {
+				return "", err
+			}
+		}
+		if !c.instant {
+			// A typist's gap before the next key (Dhakal et al. 2018).
+			next := rune(0)
+			if i+1 < len(runes) {
+				next = runes[i+1]
+			}
+			c.keyDue = c.st.mot.KeyDelay(r, next)
 		}
 		typed++
 		if err := c.stillFocused(ctx, n, typed); err != nil {
@@ -782,7 +964,7 @@ func (c *call) check(ctx context.Context, n *node, want bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := c.click(ctx, x, y, "left", false); err != nil {
+	if err := c.click(ctx, n, x, y, "left", false); err != nil {
 		return "", err
 	}
 	if after, _, err := state(); err != nil {

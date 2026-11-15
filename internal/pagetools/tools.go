@@ -28,6 +28,7 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/cdp"
 	"github.com/Oni-giri/browser-pier/internal/fence"
+	"github.com/Oni-giri/browser-pier/internal/motion"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
@@ -104,11 +105,32 @@ type Tools struct {
 	// readWait is how long a call waits for one before answering busy.
 	reads    chan struct{}
 	readWait time.Duration
+	// newMotion makes a session's source of human pacing (PROJ-113), and
+	// pause waits out one of its pauses; tests fix the one and skip the
+	// other.
+	newMotion func() *motion.Motion
+	pause     func(ctx context.Context, d time.Duration) error
 }
 
 func New(m *sessions.Manager, log *slog.Logger) *Tools {
 	return &Tools{m: m, log: log, pages: map[string]*state{}, quick: quickTimeout, slow: slowTimeout,
-		settle: 100 * time.Millisecond, poll: 250 * time.Millisecond, reads: make(chan struct{}, maxReads), readWait: 10 * time.Second}
+		settle: 100 * time.Millisecond, poll: 250 * time.Millisecond, reads: make(chan struct{}, maxReads), readWait: 10 * time.Second,
+		newMotion: motion.NewRandom, pause: sleep}
+}
+
+// sleep waits for d, or until ctx ends.
+func sleep(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return ctx.Err()
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 // state is what the tools remember about one session between calls.
@@ -123,6 +145,12 @@ type state struct {
 	// active is the target the last call found in front.
 	active string
 	listed bool // tabs have been listed once: new ones are news
+	// mot paces act like a hand: one source per session, never shared.
+	// pointer is where act's pointer last stopped, in the viewport's
+	// CSS pixels; nil before its first move, or once a person has had
+	// the browser.
+	mot     *motion.Motion
+	pointer *motion.Point
 }
 
 type tabState struct {
@@ -149,7 +177,7 @@ func (t *Tools) state(sessionID string, gen uint64) *state {
 				}
 			}
 		}
-		st = &state{refs: newRefs(), gen: gen, tabs: map[string]*tabState{}}
+		st = &state{refs: newRefs(), gen: gen, tabs: map[string]*tabState{}, mot: t.newMotion()}
 		t.pages[sessionID] = st
 	}
 	if st.gen != gen {
@@ -157,6 +185,7 @@ func (t *Tools) state(sessionID string, gen uint64) *state {
 		// have changed under them.
 		st.refs.dropAll()
 		st.gen = gen
+		st.pointer = nil
 	}
 	return st
 }
@@ -179,6 +208,12 @@ type call struct {
 	url     string // the frame's URL, without its fragment
 	world   int64
 	notices []string
+	// instant: the step under way is at instant pace, not a hand's.
+	// keyAt is when act last pressed a key at human pace, and keyDue how
+	// long after it the next key goes down.
+	instant bool
+	keyAt   time.Time
+	keyDue  time.Duration
 }
 
 // begin starts a call on a session the caller may use, sending only

@@ -15,6 +15,7 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/cdp/cdptest"
 	"github.com/Oni-giri/browser-pier/internal/db"
+	"github.com/Oni-giri/browser-pier/internal/motion"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/sessions/sessionstest"
@@ -477,6 +478,9 @@ type fixture struct {
 	fb    *fakeBrowser
 	sess  sessions.Session
 	who   Caller
+	// pauses are act's human-pace pauses, which the fixture skips.
+	pauseMu sync.Mutex
+	pauses  []time.Duration
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -516,7 +520,16 @@ func newFixture(t *testing.T) *fixture {
 	}
 	tools := New(m, log)
 	tools.quick, tools.slow, tools.poll, tools.settle = 1500*time.Millisecond, 1500*time.Millisecond, 10*time.Millisecond, 0
-	return &fixture{t: t, m: m, tools: tools, fb: fb, sess: s, who: Caller{TokenID: "tok", Agent: "claude"}}
+	f := &fixture{t: t, m: m, tools: tools, fb: fb, sess: s, who: Caller{TokenID: "tok", Agent: "claude"}}
+	// Human pace with a fixed seed, its pauses noted and skipped.
+	tools.newMotion = func() *motion.Motion { return motion.New(1) }
+	tools.pause = func(ctx context.Context, d time.Duration) error {
+		f.pauseMu.Lock()
+		f.pauses = append(f.pauses, d)
+		f.pauseMu.Unlock()
+		return ctx.Err()
+	}
+	return f
 }
 
 // session is the current state of the fixture's session.

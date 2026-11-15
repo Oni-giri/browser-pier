@@ -27,6 +27,12 @@ type fakeInput struct {
 	selected bool // everything in the focused field is selected
 	aimed    *fnode
 	events   []string
+	mouse    []mouseEvent // the mouse events, with where they were
+}
+
+type mouseEvent struct {
+	typ  string
+	x, y float64
 }
 
 func (fb *fakeBrowser) node(tb *ftab, backend int64) *fnode {
@@ -136,6 +142,9 @@ func (fb *fakeBrowser) dom(tb *ftab, m cdptest.Message, p map[string]any) (any, 
 			at = in.aimed.name
 		}
 		in.events = append(in.events, typ+" "+at)
+		x, _ := p["x"].(float64)
+		y, _ := p["y"].(float64)
+		in.mouse = append(in.mouse, mouseEvent{typ, x, y})
 		if fb.onInput != nil {
 			fb.onInput(typ)
 		}
