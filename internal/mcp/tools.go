@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -29,7 +30,7 @@ func (s *Server) addTools(srv *sdk.Server) {
 	sdk.AddTool(srv, &sdk.Tool{Name: "stop_browser", Description: "Stop a browser to free its memory. Cookies and logins are kept for next time."}, s.stopBrowser)
 	sdk.AddTool(srv, &sdk.Tool{Name: "screenshot", Description: "See the browser's screen (Visual mode); the strip along the bottom is the desktop's taskbar, not the page. Other tools take coordinates in this screenshot's pixels."}, s.screenshot)
 	sdk.AddTool(srv, &sdk.Tool{Name: "click", Description: "Click at a point of the last screenshot (Visual mode; in API mode too, at a point a page tool gives, such as a Cloudflare checkbox's). At human pace (the default) the pointer glides there, as a hand would, and lands within about 3 screen pixels of the point, so aim at the target's middle. If the click started a download, the answer says so: downloaded name (size), or download in progress when it isn't finished within download_wait_ms (3 s by default)."}, s.click)
-	sdk.AddTool(srv, &sdk.Tool{Name: "type_text", Description: "Type text into whatever has focus, as a keyboard would (Visual mode)."}, s.typeText)
+	sdk.AddTool(srv, &sdk.Tool{Name: "type_text", Description: "Type text into whatever has focus, as a keyboard would (Visual mode). At human pace (the default) that takes about 0.25 s a character, so at most 150 characters per call; split longer text, or use pace instant."}, s.typeText)
 	sdk.AddTool(srv, &sdk.Tool{Name: "press_keys", Description: "Press keys or combinations, such as Return, Tab, ctrl+a or ctrl+shift+t (Visual mode). If they started a download, the answer says so, as click's does."}, s.pressKeys)
 	sdk.AddTool(srv, &sdk.Tool{Name: "scroll", Description: "Scroll at a point by whole notches: positive down or right, negative up or left (Visual mode)."}, s.scroll)
 	sdk.AddTool(srv, &sdk.Tool{Name: "drag", Description: "Drag from one point to another with the mouse button held (Visual mode)."}, s.drag)
@@ -308,12 +309,40 @@ func (s *Server) click(ctx context.Context, req *sdk.CallToolRequest, in clickAr
 
 type typeArgs struct {
 	SessionID  string `json:"session_id" jsonschema:"from start_browser"`
-	Text       string `json:"text" jsonschema:"what to type; use press_keys for Return, Tab and shortcuts. At most 500 characters at human pace, 2000 at instant"`
+	Text       string `json:"text" jsonschema:"what to type; use press_keys for Return, Tab and shortcuts. At most 150 characters at human pace (about 0.25 s a character), 2000 at instant"`
 	Screenshot bool   `json:"screenshot,omitempty" jsonschema:"return a screenshot after"`
 	Pace       string `json:"pace,omitempty" jsonschema:"human (default): moves, aims and types like a hand, so it takes longer; instant: at once"`
 }
 
+// maxHumanType caps what one MCP call types at human pace. At about a
+// quarter of a second a character, 150 characters take about 40 s, which
+// ends before an MCP client's request timeout (60 s by default in the
+// TypeScript SDK): a client that gave up mid-type would retry, and the
+// text would be typed twice. The REST API, whose clients set their own
+// timeouts, takes 500.
+const maxHumanType = 150
+
+// humanPace reports whether a call's pace is human, the default.
+func humanPace(pace string) bool { return pace == "" || pace == "human" }
+
+// tooLongToType refuses human-paced text over maxHumanType characters.
+func tooLongToType(what string, n int, fill bool) error {
+	if n <= maxHumanType {
+		return nil
+	}
+	alt := "split it across calls, or set pace instant"
+	if fill {
+		alt = "split them across calls, use fill, or set pace instant"
+	}
+	return toolError(fmt.Sprintf("%s: %d characters at human pace, at most %d per call (about 0.25 s a character, so the call ends before your client's timeout); %s", what, n, maxHumanType, alt))
+}
+
 func (s *Server) typeText(ctx context.Context, req *sdk.CallToolRequest, in typeArgs) (*sdk.CallToolResult, any, error) {
+	if humanPace(in.Pace) {
+		if err := tooLongToType("text", utf8.RuneCountInString(in.Text), false); err != nil {
+			return nil, nil, err
+		}
+	}
 	var sc screen
 	if in.Screenshot { // the size only matters for the screenshot after
 		var err error

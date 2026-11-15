@@ -44,6 +44,7 @@ type fixture struct {
 
 	mu     sync.Mutex
 	clicks []string // what the fake browser was asked to click
+	types  []string // and to type
 	// onClick, if set, runs as the fake browser clicks: a download, say.
 	onClick func()
 	// pageURL is the one tab's address, as /json/list answers it (a
@@ -140,6 +141,13 @@ func (f *fixture) browser() http.Handler {
 		w.Header().Set("X-Screen-Width", "1440")
 		w.Header().Set("X-Screen-Height", "900")
 		_, _ = w.Write(b.Bytes())
+	})
+	mux.HandleFunc("POST /input/type", func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		f.mu.Lock()
+		f.types = append(f.types, string(b))
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("POST /input/click", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
@@ -381,6 +389,55 @@ func TestClickIsScaledToTheScreen(t *testing.T) {
 	defer f.mu.Unlock()
 	if len(f.clicks) != 1 || !strings.Contains(f.clicks[0], `"x":720`) || !strings.Contains(f.clicks[0], `"y":450`) || !strings.Contains(f.clicks[0], `"double":true`) {
 		t.Fatalf("the browser was asked to click %v", f.clicks)
+	}
+}
+
+// Human-paced typing through MCP stops at 150 characters a call, so the
+// call ends (about 40 s) before a client's request timeout; instant pace,
+// and act's instant type steps, aren't held to it.
+func TestHumanTypingThroughMCPIsCapped(t *testing.T) {
+	f := newFixture(t)
+	cs := f.connect(f.all, versions[0], nil)
+	s, _, _ := f.m.Start(context.Background(), "google", "")
+	try := func(name string, args map[string]any) (bool, string) {
+		t.Helper()
+		args["session_id"] = s.ID
+		res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: name, Arguments: args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.IsError, res.Content[0].(*sdk.TextContent).Text
+	}
+	long, most := strings.Repeat("é", 151), strings.Repeat("a", 150)
+	if isErr, out := try("type_text", map[string]any{"text": long}); !isErr || !strings.Contains(out, "151 characters at human pace, at most 150") || !strings.Contains(out, "pace instant") {
+		t.Errorf("151 characters at human pace: %v %s", isErr, out)
+	}
+	if isErr, out := try("type_text", map[string]any{"text": long, "pace": "human"}); !isErr || !strings.Contains(out, "at most 150") {
+		t.Errorf("151 characters at pace human: %v %s", isErr, out)
+	}
+	if isErr, out := try("type_text", map[string]any{"text": most}); isErr {
+		t.Errorf("150 characters: %s", out)
+	}
+	if isErr, out := try("type_text", map[string]any{"text": long, "pace": "instant"}); isErr {
+		t.Errorf("151 characters at instant pace: %s", out)
+	}
+	f.mu.Lock()
+	if len(f.types) != 2 {
+		t.Errorf("the browser was asked to type %d times, want 2", len(f.types))
+	}
+	f.mu.Unlock()
+
+	step := func(text, pace string) map[string]any {
+		return map[string]any{"action": "type", "ref": "e1", "text": text, "pace": pace}
+	}
+	isErr, out := try("act", map[string]any{"steps": []any{step(strings.Repeat("a", 100), ""), step(strings.Repeat("b", 60), "human")}})
+	if !isErr || !strings.Contains(out, "type steps: 160 characters at human pace, at most 150") || !strings.Contains(out, "use fill") {
+		t.Errorf("act, 160 characters at human pace: %v %s", isErr, out)
+	}
+	// With one step instant, the call passes the cap (and this fixture's
+	// Visual-mode browser refuses it for what it is).
+	if _, out := try("act", map[string]any{"steps": []any{step(strings.Repeat("a", 100), ""), step(strings.Repeat("b", 60), "instant")}}); strings.Contains(out, "at most 150") {
+		t.Errorf("act, 100 characters at human pace: %s", out)
 	}
 }
 

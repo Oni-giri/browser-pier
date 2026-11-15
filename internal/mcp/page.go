@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"unicode/utf8"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -136,7 +137,7 @@ type stepArgs struct {
 	Files  []string `json:"files,omitempty" jsonschema:"for upload: 1 to 10 names upload_file returned (several only if the input takes multiple)"`
 	Button string   `json:"button,omitempty" jsonschema:"for click: left (default), right or middle"`
 	Double bool     `json:"double,omitempty" jsonschema:"for click: double-click"`
-	Pace   string   `json:"pace,omitempty" jsonschema:"for click, hover, check, uncheck, type and press: human (default) moves, aims and types like a hand, so it takes longer (type: at most 500 characters per call); instant: at once"`
+	Pace   string   `json:"pace,omitempty" jsonschema:"for click, hover, check, uncheck, type and press: human (default) moves, aims and types like a hand, so it takes longer (type: about 0.25 s a character, at most 150 characters per call together); instant: at once"`
 	// CoverWaitMS is a pointer, so 0 (don't wait) differs from unset.
 	CoverWaitMS *int `json:"cover_wait_ms,omitempty" jsonschema:"for click, hover, check and uncheck: how long to wait for something covering the element (an overlay fading out) to go, in ms; default 1000, 0 not to wait, at most 10000"`
 }
@@ -152,6 +153,15 @@ type actArgs struct {
 }
 
 func (s *Server) actOnPage(ctx context.Context, req *sdk.CallToolRequest, in actArgs) (*sdk.CallToolResult, any, error) {
+	human := 0
+	for _, st := range in.Steps {
+		if st.Action == "type" && st.Text != nil && humanPace(st.Pace) {
+			human += utf8.RuneCountInString(*st.Text)
+		}
+	}
+	if err := tooLongToType("type steps", human, true); err != nil {
+		return nil, nil, err
+	}
 	return s.pageCall(ctx, req, in.SessionID, "act", map[string]any{"steps": in.Steps, "snapshot": in.Snapshot, "changes": in.Changes, "download_wait_ms": in.DownloadWaitMS})
 }
 
