@@ -118,6 +118,9 @@ type waitCheck struct {
 	gone bool
 	// note qualifies a met condition, in BrowserPier's words.
 	note string
+	// fail, if set, is the wait's error should it time out now: a target
+	// that matches several elements (PROJ-123).
+	fail func() error
 }
 
 // waiter is one wait's state between looks.
@@ -130,10 +133,9 @@ type waiter struct {
 	// too, as the entries' times can't tell it.
 	count     int
 	quietFrom time.Time
-	// tgt is the target awaited; deadline is when the wait ends, and
-	// ambiguous since when the target has matched several elements.
+	// tgt is the target awaited, and ambiguous since when it has matched
+	// several elements.
 	tgt       target
-	deadline  time.Time
 	ambiguous time.Time
 }
 
@@ -204,7 +206,6 @@ func (t *Tools) WaitFor(ctx context.Context, s sessions.Session, who Caller, in 
 		is, awaited := waitCond(in)
 		start := time.Now()
 		deadline := start.Add(timeout)
-		w.deadline = deadline
 		for first := true; ; first = false {
 			ck, err := c.check1(ctx, w, first)
 			if err != nil {
@@ -222,6 +223,9 @@ func (t *Tools) WaitFor(ctx context.Context, s sessions.Session, who Caller, in 
 				took := seconds(time.Since(start), false)
 				c.note(what + ": gone after " + took)
 				return c.result("page", "", "gave up after "+took+" waiting for "+awaited+"; now: "+ck.now), nil
+			case time.Now().After(deadline) && ck.fail != nil:
+				c.note(what + ": several matches")
+				return "", ck.fail()
 			case time.Now().After(deadline):
 				c.note(what + ": timed out")
 				out := "timed out after " + seconds(timeout, true) + " waiting for " + awaited
@@ -388,11 +392,11 @@ func (c *call) checkTarget(ctx context.Context, w *waiter) (waitCheck, error) {
 		if w.ambiguous.IsZero() {
 			w.ambiguous = time.Now()
 		}
-		if time.Since(w.ambiguous) >= c.t.ambiguousFor || !time.Now().Before(w.deadline) {
+		if time.Since(w.ambiguous) >= c.t.ambiguousFor {
 			return waitCheck{}, c.ambiguous(t, r)
 		}
-	} else {
-		w.ambiguous = time.Time{}
+		return waitCheck{now: now, fail: func() error { return c.ambiguous(t, r) }}, nil
 	}
+	w.ambiguous = time.Time{}
 	return waitCheck{now: now}, nil
 }
