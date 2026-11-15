@@ -213,6 +213,16 @@ document.getElementById('video').src = '/consent-frame';</script>`,
 <button onmouseover="report('hovered')">Hover me</button>
 <label>Upload <input type="file"></label>`,
 	"/signed-in": `<!doctype html><title>Account</title><h1>Signed in</h1>`,
+	// A sign-in bounce by script (PROJ-121): a session check, a callback,
+	// then the page; a page that never stops redirecting; one that sends
+	// itself to an address the browser can't reach (link-local: the
+	// egress filter always refuses it).
+	"/hop1":     `<!doctype html><title>Checking your session</title><p>One moment.</p><script>setTimeout(() => location.replace('/hop2'), 200)</script>`,
+	"/hop2":     `<!doctype html><title>Signing you in</title><p>Almost there.</p><script>setTimeout(() => location.replace('/landed'), 200)</script>`,
+	"/landed":   `<!doctype html><title>Landed</title><h1>Welcome back</h1><p>LANDED-PAGE</p>`,
+	"/loop":     `<!doctype html><title>Loop</title><p>Redirecting.</p><script>setTimeout(() => location.replace('/loop?n=' + (Number(new URLSearchParams(location.search).get('n')) + 1)), 100)</script>`,
+	"/hop-fail": `<!doctype html><title>Checking your session</title><script>setTimeout(() => location.replace('http://169.254.169.254/sso'), 200)</script>`,
+	"/sections": `<!doctype html><title>Sections</title><h1>Contents</h1><a href="#section">To the section</a><div style="height:3000px"></div><h2 id="section">The section</h2><p>SECTION-TEXT</p>`,
 	// A form that posts files (PROJ-117): a plain file input, a multiple
 	// one, inputs styled out of sight under their labels (transparent,
 	// which the snapshot still lists; transparent and aria-hidden, and
@@ -407,6 +417,9 @@ func NewPageSite(t *testing.T, host string) *PageSite {
 	})
 	mux.HandleFunc("GET /redirect", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusFound)
+	})
+	mux.HandleFunc("GET /redirect-fail", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://169.254.169.254/sso", http.StatusFound)
 	})
 	mux.HandleFunc("GET /event", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
