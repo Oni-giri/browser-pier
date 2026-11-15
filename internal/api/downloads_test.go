@@ -153,3 +153,38 @@ func TestDownloadsHeaderCapsAndEscapes(t *testing.T) {
 		t.Fatalf("header %q: %+v %v", h, n, err)
 	}
 }
+
+// A download that finishes after a click has answered is told with the
+// session's next click, once; a new session starts afresh.
+func TestComputerTellsALateDownloadNextTime(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.all, "google", "visual")
+	if code, h, _ := f.computer(s.ID, `{"action": "click", "x": 1, "y": 2}`); code != http.StatusNoContent || h.Get(DownloadsHeader) != "" {
+		t.Fatalf("first click: %d %q", code, h.Get(DownloadsHeader))
+	}
+	dir := filepath.Join(f.m.Layout().FilesDir("google"), files.Downloads)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "late.csv"), []byte("late"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, h, _ := f.computer(s.ID, `{"action": "key", "keys": "Tab"}`)
+	if n := notice(t, h); len(n.Files) != 1 || n.Files[0] != (files.Download{Name: "late.csv", Size: 4, State: files.Downloaded, Earlier: true}) {
+		t.Fatalf("notice %+v", n)
+	}
+	if _, h, _ := f.computer(s.ID, `{"action": "key", "keys": "Tab"}`); h.Get(DownloadsHeader) != "" {
+		t.Fatalf("told twice: %q", h.Get(DownloadsHeader))
+	}
+	// The session ends: what was kept about it goes.
+	if code := f.call(f.all, http.MethodDelete, "/api/sessions/"+s.ID, "", nil); code != http.StatusOK {
+		t.Fatalf("stop: %d", code)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "between.csv"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s = f.start(f.all, "google", "visual")
+	if _, h, _ := f.computer(s.ID, `{"action": "click", "x": 1, "y": 2}`); h.Get(DownloadsHeader) != "" {
+		t.Fatalf("a new session's first click: %q", h.Get(DownloadsHeader))
+	}
+}
