@@ -3,7 +3,12 @@
 package api
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -283,5 +288,107 @@ func TestActInputLooksHuman(t *testing.T) {
 		if tg.Attached {
 			t.Errorf("%s is still attached", tg.URL)
 		}
+	}
+}
+
+// TestPageToolsUpload is PROJ-117 on a real browser: files put in the
+// session with the REST upload, set on the page's file inputs with act's
+// upload step (directly, through a styled label, several at once), then
+// posted by clicking the form's button: the site gets the same bytes.
+func TestPageToolsUpload(t *testing.T) {
+	a := newRealAPI(t)
+	site := browsertest.NewPageSite(t, browsertest.SiteHost(t))
+	s := a.startAPIBrowser(t, "u")
+	waitEvent := func(e string) bool {
+		deadline := time.Now().Add(5 * time.Second)
+		for !site.HasEvent(e) && time.Now().Before(deadline) {
+			time.Sleep(50 * time.Millisecond)
+		}
+		return site.HasEvent(e)
+	}
+	upload := func(name string, content []byte) string {
+		t.Helper()
+		var up struct{ Name, Path string }
+		if code := a.do(http.MethodPost, "/api/sessions/"+s.ID+"/files?name="+url.QueryEscape(name), string(content), &up); code != http.StatusCreated || up.Path != "/files/uploads/"+up.Name {
+			t.Fatalf("upload %s: %d %+v", name, code, up)
+		}
+		return up.Name
+	}
+	report := make([]byte, 300<<10)
+	if _, err := rand.Read(report); err != nil {
+		t.Fatal(err)
+	}
+	photo := []byte("\x89PNG\r\n\x1a\n not really a photo")
+	hash := func(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
+	reportName, photoName := upload("report.bin", report), upload("photo.png", photo)
+
+	a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/upload"})
+	snap := a.mustTool(s.ID, "snapshot", nil)
+	t.Logf("snapshot of /upload:\n%s", snap)
+	doc, more, send := refFor(t, snap, `"Document"`), refFor(t, snap, `"Attachments"`), refFor(t, snap, `button "Send"`)
+	out := a.mustTool(s.ID, "act", steps(map[string]any{"action": "upload", "ref": doc, "files": []string{reportName}}))
+	if !strings.Contains(out, "uploaded 1 file to "+doc) || !waitEvent("doc 1") {
+		t.Errorf("upload to the input: %s %v", out, site.Events())
+	}
+	// The photo input is transparent over its label: the snapshot lists
+	// it, named by the label, and its own ref sets it.
+	out = a.mustTool(s.ID, "act", steps(map[string]any{"action": "upload", "ref": refFor(t, snap, `button "Attach a photo"`), "files": []string{photoName}}))
+	if !strings.Contains(out, "uploaded 1 file to") || !waitEvent("photo 1") {
+		t.Errorf("upload to the transparent input: %s %v", out, site.Events())
+	}
+	// The avatar's is transparent and aria-hidden, the CV's display:none:
+	// the snapshot doesn't list them, and their labels' refs (find gives
+	// them, for the labels' text) set them.
+	for _, c := range []struct{ text, event string }{{"attach an avatar", "avatar 1"}, {"attach a cv", "cv 1"}} {
+		found := a.mustTool(s.ID, "find", map[string]any{"text": c.text})
+		label := refFor(t, found, "Attach a")
+		if strings.Contains(snap, label+" ") {
+			t.Errorf("%s: the snapshot lists %s:\n%s", c.text, label, snap)
+		}
+		out = a.mustTool(s.ID, "act", steps(map[string]any{"action": "upload", "ref": label, "files": []string{photoName}}))
+		if !strings.Contains(out, "uploaded 1 file to "+label) || !waitEvent(c.event) {
+			t.Errorf("upload through the label (%s): %s %v", c.text, out, site.Events())
+		}
+	}
+	out = a.mustTool(s.ID, "act", steps(map[string]any{"action": "upload", "ref": more, "files": []string{reportName, photoName}}))
+	if !strings.Contains(out, "uploaded 2 files to "+more) || !waitEvent("more 2") {
+		t.Errorf("upload two: %s %v", out, site.Events())
+	}
+	// Refused: two files to a single input, a page's own chooser button,
+	// a file that isn't there.
+	if code, msg := a.tool(s.ID, "act", steps(map[string]any{"action": "upload", "ref": doc, "files": []string{reportName, photoName}})); code != http.StatusUnprocessableEntity || !strings.Contains(msg, "takes one file") {
+		t.Errorf("two files to a single input: %d %s", code, msg)
+	}
+	if code, msg := a.tool(s.ID, "act", steps(map[string]any{"action": "upload", "ref": refFor(t, snap, `button "Choose a file"`), "files": []string{reportName}})); code != http.StatusUnprocessableEntity || !strings.Contains(msg, "file_upload handoff") {
+		t.Errorf("a chooser button: %d %s", code, msg)
+	}
+	if code, msg := a.tool(s.ID, "act", steps(map[string]any{"action": "upload", "ref": doc, "files": []string{"nothing.pdf"}})); code != http.StatusUnprocessableEntity || !strings.Contains(msg, `no uploaded file named "nothing.pdf"; upload it first with upload_file`) {
+		t.Errorf("a missing file: %d %s", code, msg)
+	}
+
+	a.mustTool(s.ID, "act", steps(map[string]any{"action": "click", "ref": send}))
+	deadline := time.Now().Add(10 * time.Second)
+	for len(site.Uploads()) < 6 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	got := map[string][]browsertest.Upload{}
+	for _, u := range site.Uploads() {
+		got[u.Field] = append(got[u.Field], u)
+	}
+	want := map[string][]browsertest.Upload{
+		"doc":    {{Field: "doc", Name: "report.bin", Size: int64(len(report)), SHA256: hash(report)}},
+		"photo":  {{Field: "photo", Name: "photo.png", Size: int64(len(photo)), SHA256: hash(photo)}},
+		"avatar": {{Field: "avatar", Name: "photo.png", Size: int64(len(photo)), SHA256: hash(photo)}},
+		"cv":     {{Field: "cv", Name: "photo.png", Size: int64(len(photo)), SHA256: hash(photo)}},
+		"more": {{Field: "more", Name: "report.bin", Size: int64(len(report)), SHA256: hash(report)},
+			{Field: "more", Name: "photo.png", Size: int64(len(photo)), SHA256: hash(photo)}},
+	}
+	for field, w := range want {
+		if fmt.Sprint(got[field]) != fmt.Sprint(w) {
+			t.Errorf("the site got %v for %s, want %v", got[field], field, w)
+		}
+	}
+	if snap := a.mustTool(s.ID, "snapshot", nil); !strings.Contains(snap, "sha256 "+hash(report)) {
+		t.Errorf("the echo page:\n%s", snap)
 	}
 }

@@ -136,27 +136,37 @@ func TestPageToolsStayQuiet(t *testing.T) {
 	}
 	snap := a.mustTool(s.ID, "snapshot", nil)
 	email, pw, goBtn := refFor(t, snap, `textbox "Email"`), refFor(t, snap, `textbox "Password"`), refFor(t, snap, `button "Continue"`)
+	doc := refFor(t, snap, `"Document"`)
+	var up struct{ Name string }
+	if code := a.do(http.MethodPost, "/api/sessions/"+s.ID+"/files?name=quiet.txt", "a file to upload", &up); code != http.StatusCreated {
+		t.Fatalf("upload: %d", code)
+	}
 	runs := []struct {
 		tool string
 		body any
+		// allowed are hits the batch may cause, with a decision in
+		// images/chromium/ANTI-BOT.md.
+		allowed []string
 	}{
-		{"snapshot", nil},
-		{"find", map[string]any{"text": "account"}},
-		{"act", steps(map[string]any{"action": "click", "ref": goBtn})},
-		{"act", steps(map[string]any{"action": "fill", "ref": email, "text": "ana@example.com"})},
-		{"act", steps(map[string]any{"action": "type", "ref": pw, "text": "pw"})},
-		{"act", steps(map[string]any{"action": "press", "keys": "Tab"})},
-		{"act", steps(map[string]any{"action": "hover", "ref": goBtn})},
-		{"wait", map[string]any{"text": "Account"}},
-		{"wait", map[string]any{"ref": goBtn}},
-		{"tabs", map[string]any{}},
+		{"snapshot", nil, nil},
+		{"find", map[string]any{"text": "account"}, nil},
+		{"act", steps(map[string]any{"action": "click", "ref": goBtn}), nil},
+		{"act", steps(map[string]any{"action": "fill", "ref": email, "text": "ana@example.com"}), nil},
+		{"act", steps(map[string]any{"action": "type", "ref": pw, "text": "pw"}), nil},
+		{"act", steps(map[string]any{"action": "press", "keys": "Tab"}), nil},
+		{"act", steps(map[string]any{"action": "hover", "ref": goBtn}), nil},
+		// Files set without a click to open the chooser (PROJ-117).
+		{"act", steps(map[string]any{"action": "upload", "ref": doc, "files": []string{up.Name}}), []string{"file-without-click@main"}},
+		{"wait", map[string]any{"text": "Account"}, nil},
+		{"wait", map[string]any{"ref": goBtn}, nil},
+		{"tabs", map[string]any{}, nil},
 	}
 	// Each batch goes through w.Quiet, which tells a busy machine's
 	// console-slow from one the calls cause with a control batch.
 	quiet := true
 	for _, r := range runs {
 		raw, _ := json.Marshal(r.body)
-		if _, ok := w.Quiet(t, fmt.Sprintf("20 × %s %s", r.tool, raw), 20, func() { a.mustTool(s.ID, r.tool, r.body) }); !ok {
+		if _, ok := w.Quiet(t, fmt.Sprintf("20 × %s %s", r.tool, raw), 20, func() { a.mustTool(s.ID, r.tool, r.body) }, r.allowed...); !ok {
 			quiet = false
 		}
 	}

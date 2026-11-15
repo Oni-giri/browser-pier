@@ -1,7 +1,10 @@
 package browsertest
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"html"
 	"io"
 	"net"
 	"net/http"
@@ -17,9 +20,24 @@ import (
 type PageSite struct {
 	URL string
 
-	mu     sync.Mutex
-	events []string
-	logins []string // user:password of each login posted
+	mu      sync.Mutex
+	events  []string
+	logins  []string // user:password of each login posted
+	uploads []Upload // each file posted to /upload
+}
+
+// Upload is a file a page's form posted to /upload (PROJ-117).
+type Upload struct {
+	Field, Name string
+	Size        int64
+	SHA256      string // hex
+}
+
+// Uploads lists the files posted to /upload, oldest first.
+func (s *PageSite) Uploads() []Upload {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Upload(nil), s.uploads...)
 }
 
 // Events lists what the pages reported, oldest first.
@@ -129,6 +147,25 @@ var pageSitePages = map[string]string{ //nolint:gosec // test pages, not credent
 <button onmouseover="report('hovered')">Hover me</button>
 <label>Upload <input type="file"></label>`,
 	"/signed-in": `<!doctype html><title>Account</title><h1>Signed in</h1>`,
+	// A form that posts files (PROJ-117): a plain file input, a multiple
+	// one, inputs styled out of sight under their labels (transparent,
+	// which the snapshot still lists; transparent and aria-hidden, and
+	// display:none, which it doesn't, so only their labels have refs),
+	// and a button that opens a chooser with a script, which act can't
+	// answer. /upload echoes each file's name, size and SHA-256.
+	"/upload": `<!doctype html><title>Upload</title>` + report + `
+<style>.pick{position:relative;display:inline-block;padding:10px 20px;border:2px solid #333;border-radius:6px;cursor:pointer}
+.pick input{position:absolute;inset:0;opacity:0;cursor:pointer}</style>
+<main><h1>Send documents</h1>
+<form method="post" action="/upload" enctype="multipart/form-data">
+<p><label for="doc">Document</label> <input id="doc" name="doc" type="file" onchange="report('doc ' + this.files.length)"></p>
+<p><label for="more">Attachments</label> <input id="more" name="more" type="file" multiple onchange="report('more ' + this.files.length)"></p>
+<p><label class="pick">Attach a photo<input name="photo" type="file" accept="image/*" onchange="report('photo ' + this.files.length)"></label></p>
+<p><label class="pick">Attach an avatar<input name="avatar" type="file" aria-hidden="true" tabindex="-1" onchange="report('avatar ' + this.files.length)"></label></p>
+<p><label class="pick">Attach a CV<input name="cv" type="file" hidden onchange="report('cv ' + this.files.length)"></label></p>
+<p><input id="hidden-pick" name="script" type="file" style="display:none"><button type="button" onclick="document.getElementById('hidden-pick').click()">Choose a file</button></p>
+<button>Send</button>
+</form></main>`,
 	// An article among a site's furniture, for the content endpoints
 	// (PROJ-20): a nav, a cookie banner, a sidebar, hidden and transparent
 	// text, a page-filled password, a closed shadow root and an iframe.
@@ -274,6 +311,33 @@ func NewPageSite(t *testing.T, host string) *PageSite {
 		s.logins = append(s.logins, r.FormValue("email")+":"+r.FormValue("password"))
 		s.mu.Unlock()
 		http.Redirect(w, r, "/signed-in", http.StatusSeeOther)
+	})
+	mux.HandleFunc("POST /upload", func(w http.ResponseWriter, r *http.Request) {
+		mr, err := r.MultipartReader()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var b strings.Builder
+		b.WriteString(`<!doctype html><title>Uploaded</title><h1>Uploaded</h1><ul>`)
+		for {
+			part, err := mr.NextPart()
+			if err != nil {
+				break
+			}
+			if part.FileName() == "" {
+				continue
+			}
+			h := sha256.New()
+			n, _ := io.Copy(h, part)
+			u := Upload{Field: part.FormName(), Name: part.FileName(), Size: n, SHA256: hex.EncodeToString(h.Sum(nil))}
+			s.mu.Lock()
+			s.uploads = append(s.uploads, u)
+			s.mu.Unlock()
+			fmt.Fprintf(&b, "<li>%s: %s, %d bytes, sha256 %s</li>", html.EscapeString(u.Field), html.EscapeString(u.Name), u.Size, u.SHA256)
+		}
+		b.WriteString("</ul>")
+		_, _ = io.WriteString(w, b.String())
 	})
 	mux.HandleFunc("GET /redirect", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusFound)
