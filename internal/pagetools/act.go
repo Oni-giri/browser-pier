@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/Oni-giri/browser-pier/internal/cdp"
 	"github.com/Oni-giri/browser-pier/internal/fence"
+	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/motion"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
@@ -25,7 +27,8 @@ const maxText = 10000
 
 // Step is one action of an act call.
 type Step struct {
-	// Action is click, fill, type, press, select, check, uncheck or hover.
+	// Action is click, fill, type, press, select, check, uncheck, hover
+	// or upload.
 	Action string `json:"action"`
 	Ref    string `json:"ref,omitempty"`
 	// Button is left (the default), right or middle; Double double-clicks.
@@ -39,6 +42,10 @@ type Step struct {
 	Keys string `json:"keys,omitempty"`
 	// Option is what select chooses, by value or visible text.
 	Option string `json:"option,omitempty"`
+	// Files is what upload sets on a file input: the names of files in
+	// the session's uploads (upload_file, POST /api/sessions/{id}/files),
+	// bare names only (PROJ-117).
+	Files []string `json:"files,omitempty"`
 	// Pace is human (the default: the pointer glides to a point scattered
 	// around the element's middle, buttons and keys are held, and type
 	// keys at a typist's rhythm) or instant (PROJ-113). It applies to
@@ -55,6 +62,8 @@ const (
 	// maxHumanType caps what one act call types at human pace, about a
 	// quarter of a second a character: 500 characters is two minutes.
 	maxHumanType = 500
+	// maxUploadFiles caps one upload step.
+	maxUploadFiles = 10
 )
 
 // ActIn is act's input.
@@ -106,10 +115,41 @@ func checkStep(s Step) error {
 	case "press":
 		_, err := parseKeys(s.Keys)
 		return err
+	case "upload":
+		if len(s.Files) == 0 || len(s.Files) > maxUploadFiles {
+			return fmt.Errorf("upload: want 1 to %d file names, from upload_file", maxUploadFiles)
+		}
+		for i, name := range s.Files {
+			if err := checkUploadName(name); err != nil {
+				return fmt.Errorf("upload: file %d: %v", i+1, err)
+			}
+		}
+		return needRef()
 	case "":
-		return errors.New("each step needs an action: click, fill, type, press, select, check, uncheck or hover")
+		return errors.New("each step needs an action: " + actions)
 	}
-	return fmt.Errorf("action %q: want click, fill, type, press, select, check, uncheck or hover", s.Action)
+	return fmt.Errorf("action %q: want %s", s.Action, actions)
+}
+
+const actions = "click, fill, type, press, select, check, uncheck, hover or upload"
+
+// checkUploadName says what's wrong with a file name an upload step
+// names: only a bare name of a file in the uploads folder will do, never
+// a path (files.ValidName, and no "..", to keep well clear of one).
+func checkUploadName(name string) error {
+	switch {
+	case name == "":
+		return errors.New("an empty name")
+	case len(name) > 255:
+		return errors.New("a name is at most 255 bytes")
+	case strings.ContainsAny(name, `/\`) || strings.Contains(name, ".."):
+		return errors.New("give the file's bare name, as upload_file returned it, without folders or ..")
+	case strings.ContainsRune(name, 0):
+		return errors.New("a name can't hold a NUL")
+	case !files.ValidName(name):
+		return errors.New("not a valid file name: it is hidden (starts with a dot) or has an unprintable character")
+	}
+	return nil
 }
 
 // Act runs up to 20 steps on the active tab, in order, stopping at the
@@ -356,6 +396,18 @@ const (
     aria: this.getAttribute('aria-checked'), role: this.getAttribute('role'),
     file: (this.localName === 'input' && this.type === 'file') || !!(this.control && this.control.type === 'file')};
 }`
+	// jsFileInput is the file input an upload step sets: the element, if
+	// it is one, or the control of a label, if that is one; else null.
+	jsFileInput = `/*bp:fileinput*/ function() {
+  const file = e => !!e && e.localName === 'input' && e.type === 'file';
+  if (file(this)) return this;
+  if (this.localName === 'label' && file(this.control)) return this.control;
+  return null;
+}`
+	// jsFileInfo says what a file input takes and holds.
+	jsFileInfo = `/*bp:fileinfo*/ function() {
+  return {multiple: !!this.multiple, disabled: !!this.disabled, count: this.files ? this.files.length : 0};
+}`
 	// jsSelect chooses a <select>'s option by value, else by its text, as
 	// Playwright does: it sets the option and dispatches input and change.
 	jsSelect = `/*bp:select*/ function(want) {
@@ -399,7 +451,7 @@ func (c *call) step(ctx context.Context, st Step) (string, error) {
 			return "", err
 		}
 		if f.File {
-			return "", &Error{Status: 422, Msg: n.ref + " opens a file chooser, which act doesn't click; upload the file with POST /api/sessions/{id}/files and set it with your own CDP client (DOM.setFileInputFiles)"}
+			return "", &Error{Status: 422, Msg: n.ref + " opens a file chooser, which act doesn't click; put the file in the session with upload_file (or POST /api/sessions/{id}/files), then use an upload step on " + n.ref}
 		}
 		x, y, err := c.aim(ctx, n)
 		if err != nil {
@@ -456,6 +508,8 @@ func (c *call) step(ctx context.Context, st Step) (string, error) {
 		return "selected " + quote(capText(r.Text, maxField)) + " in " + n.echo(), nil
 	case "check", "uncheck":
 		return c.check(ctx, n, st.Action == "check")
+	case "upload":
+		return c.upload(ctx, n, st.Files)
 	}
 	return "", &Error{Status: 400, Msg: "unknown action " + st.Action}
 }
@@ -819,7 +873,7 @@ func (c *call) typeInto(ctx context.Context, n *node, st Step) (string, error) {
 		what := unsupportedTypes[f.Type]
 		msg := fmt.Sprintf("act doesn't type into %s input (%s)", what, n.ref)
 		if f.Type == "file" {
-			msg += "; upload the file with POST /api/sessions/{id}/files and set it with your own CDP client"
+			msg += "; put the file in the session with upload_file, then use an upload step"
 		}
 		return "", &Error{Status: 422, Msg: msg}
 	case f.Tag != "input" && f.Tag != "textarea" && !f.Editable:
@@ -883,6 +937,85 @@ func (c *call) typeInto(ctx context.Context, n *node, st Step) (string, error) {
 	}
 	c.note(fmt.Sprintf("Typed %s into %s", characters(count), n.ref))
 	return fmt.Sprintf("typed %s into %s", characters(count), n.echo()), nil
+}
+
+// upload sets files from the session's uploads folder on a file input,
+// or on the file input a label controls, with DOM.setFileInputFiles
+// (PROJ-117). Chromium then fires input and change, as when a person
+// picks the files in the chooser; no chooser opens. Each name must be a
+// regular file in uploads (files.Store.Uploaded, through os.Root), and
+// only the /files/uploads/<name> paths it gives reach the browser.
+func (c *call) upload(ctx context.Context, n *node, names []string) (string, error) {
+	if c.t.files == nil {
+		return "", &Error{Status: 422, Msg: "uploads aren't available on this server"}
+	}
+	paths := make([]string, 0, len(names))
+	for _, name := range names {
+		_, p, err := c.t.files.Uploaded(c.sess.Profile, name)
+		switch {
+		case errors.Is(err, files.ErrNotFound), errors.Is(err, files.ErrBadName):
+			return "", &Error{Status: 422, Msg: "no uploaded file named " + strconv.Quote(name) + "; upload it first with upload_file"}
+		case err != nil:
+			return "", err
+		}
+		if !strings.HasPrefix(p, files.MountPoint+"/"+files.Uploads+"/") {
+			return "", fmt.Errorf("upload path %q isn't in the uploads folder", p) // can't happen
+		}
+		paths = append(paths, p)
+	}
+	r, err := c.callOnObject(ctx, n.obj, jsFileInput, nil, false)
+	if err != nil {
+		return "", err
+	}
+	if r.ObjectID == "" {
+		return "", &Error{Status: 422, Msg: n.ref + " isn't a file input (<input type=file>) or a label for one. A page's own button that opens a file chooser can't be handled: the chooser waits for a person. " +
+			"Target the <input type=file> itself, which is often styled out of sight; if the snapshot doesn't list it, target the <label> that controls it (find its text); otherwise request a file_upload handoff."}
+	}
+	var in struct {
+		Multiple bool `json:"multiple"`
+		Disabled bool `json:"disabled"`
+		Count    int  `json:"count"`
+	}
+	if err := c.callOn(ctx, r.ObjectID, jsFileInfo, nil, &in); err != nil {
+		return "", err
+	}
+	switch {
+	case in.Disabled:
+		return "", &Error{Status: 422, Msg: n.ref + "'s file input is disabled"}
+	case len(paths) > 1 && !in.Multiple:
+		return "", &Error{Status: 422, Msg: fmt.Sprintf("%s takes one file (its input has no multiple attribute), not %d", n.ref, len(paths))}
+	}
+	var d struct {
+		Node struct {
+			BackendNodeID int64 `json:"backendNodeId"`
+		} `json:"node"`
+	}
+	if err := c.renderer(ctx, c.t.quick, "DOM.describeNode", map[string]any{"objectId": r.ObjectID}, &d); err != nil {
+		return "", err
+	}
+	if d.Node.BackendNodeID == 0 {
+		return "", errStale(n.ref)
+	}
+	if err := c.renderer(ctx, c.t.quick, "DOM.setFileInputFiles", map[string]any{"files": paths, "backendNodeId": d.Node.BackendNodeID}, nil); err != nil {
+		return "", err
+	}
+	if err := c.callOn(ctx, r.ObjectID, jsFileInfo, nil, &in); err != nil {
+		return "", err
+	}
+	if in.Count != len(paths) {
+		return "", &Error{Status: http.StatusConflict, Msg: fmt.Sprintf("set %s on %s, but its input holds %d", fileCount(len(paths)), n.ref, in.Count)}
+	}
+	// The names are the agent's own, not the page's; the UI escapes them.
+	c.note("Uploaded " + strings.Join(names, ", ") + " to " + n.ref)
+	return "uploaded " + fileCount(len(paths)) + " to " + n.echo(), nil
+}
+
+// fileCount counts files.
+func fileCount(n int) string {
+	if n == 1 {
+		return "1 file"
+	}
+	return fmt.Sprintf("%d files", n)
 }
 
 func characters(n int) string {

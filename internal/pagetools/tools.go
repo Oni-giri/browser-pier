@@ -28,6 +28,7 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/cdp"
 	"github.com/Oni-giri/browser-pier/internal/fence"
+	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/motion"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
@@ -36,13 +37,15 @@ import (
 // toolsAllowList is every CDP method the page tools send, and no more
 // (PROJ-21 §1). It is unexported: no other caller of internal/cdp, such
 // as PROJ-57's checker, can borrow a list that allows input and DOM
-// writes. Accessibility.getPartialAXTree is the one addition to the
-// design's list: it echoes what a step hit without reading the whole tree.
+// writes. Accessibility.getPartialAXTree is an addition to the design's
+// list: it echoes what a step hit without reading the whole tree; so is
+// DOM.setFileInputFiles, act's upload step (PROJ-117), which only ever
+// gets /files/uploads/<name> paths. SPEC §8 lists the same methods.
 var toolsAllowList = cdp.NewAllowList("page tools",
 	"Target.getTargets", "Target.attachToTarget", "Target.detachFromTarget", "Target.activateTarget", "Target.createTarget", "Target.closeTarget",
 	"Page.getFrameTree", "Page.createIsolatedWorld", "Page.navigate", "Page.navigateToHistoryEntry", "Page.getNavigationHistory", "Page.reload",
 	"Runtime.evaluate", "Runtime.callFunctionOn", "Runtime.releaseObject",
-	"DOM.resolveNode", "DOM.describeNode", "DOM.getContentQuads", "DOM.scrollIntoViewIfNeeded", "DOM.focus",
+	"DOM.resolveNode", "DOM.describeNode", "DOM.getContentQuads", "DOM.scrollIntoViewIfNeeded", "DOM.focus", "DOM.setFileInputFiles",
 	"Accessibility.getFullAXTree", "Accessibility.getPartialAXTree",
 	"DOMSnapshot.captureSnapshot",
 	"Input.dispatchMouseEvent", "Input.dispatchKeyEvent", "Input.insertText",
@@ -91,6 +94,9 @@ type Caller struct {
 type Tools struct {
 	m   *sessions.Manager
 	log *slog.Logger
+	// files is the profiles' files folders, where act's upload step
+	// finds what it sets on a file input; nil: no uploads.
+	files *files.Store
 
 	mu    sync.Mutex
 	pages map[string]*state // by session ID
@@ -117,6 +123,9 @@ func New(m *sessions.Manager, log *slog.Logger) *Tools {
 		settle: 100 * time.Millisecond, poll: 250 * time.Millisecond, reads: make(chan struct{}, maxReads), readWait: 10 * time.Second,
 		newMotion: motion.NewRandom, pause: sleep}
 }
+
+// SetFiles gives act's upload step the profiles' files folders.
+func (t *Tools) SetFiles(fs *files.Store) { t.files = fs }
 
 // sleep waits for d, or until ctx ends.
 func sleep(ctx context.Context, d time.Duration) error {

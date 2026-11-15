@@ -41,7 +41,9 @@ type API struct {
 }
 
 func New(m *sessions.Manager, web *auth.Web, fs *files.Store, log *slog.Logger, publicURL string) *API {
-	return &API{m: m, web: web, files: fs, log: log, public: strings.TrimRight(publicURL, "/"), tools: pagetools.New(m, log)}
+	tools := pagetools.New(m, log)
+	tools.SetFiles(fs)
+	return &API{m: m, web: web, files: fs, log: log, public: strings.TrimRight(publicURL, "/"), tools: tools}
 }
 
 // SetSettings makes profiles created through the API start from the

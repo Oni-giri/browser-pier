@@ -18,6 +18,11 @@ type behaviour struct {
 	onClick   func()
 	stealsTo  *fnode // focus moves here after the first character
 	unfocused bool   // refuses the focus
+	// A file input's multiple and disabled, and the files set on it;
+	// control is the input a <label> controls.
+	multiple, disabled bool
+	files              []string
+	control            *fnode
 }
 
 // tabState of the fake: what has the focus, what was aimed at, and the
@@ -175,6 +180,22 @@ func (fb *fakeBrowser) dom(tb *ftab, m cdptest.Message, p map[string]any) (any, 
 		in.events = append(in.events, "insertText")
 		fb.typeText(tb, p["text"].(string))
 		return nil, true, nil
+	case "DOM.setFileInputFiles":
+		n := backend()
+		if n == nil {
+			return nil, true, gone
+		}
+		bh := fb.behave[n]
+		if bh == nil || bh.field != "file" {
+			return nil, true, cdptest.Error{Message: "Node is not a file input element"}
+		}
+		bh.files = nil
+		fs, _ := p["files"].([]any)
+		for _, f := range fs {
+			bh.files = append(bh.files, f.(string))
+		}
+		in.events = append(in.events, "setFileInputFiles "+n.name)
+		return nil, true, nil
 	}
 	return nil, false, nil
 }
@@ -270,6 +291,16 @@ func (fb *fakeBrowser) function(tb *ftab, n *fnode, p map[string]any) (any, bool
 			}
 		}
 		return value(map[string]any{"error": "no option", "options": bh.options}), true, nil
+	case "fileinput":
+		if bh.field == "file" {
+			return nodeObj(n), true, nil
+		}
+		if c := bh.control; n.tag == "label" && c != nil && fb.behave[c] != nil && fb.behave[c].field == "file" {
+			return nodeObj(c), true, nil
+		}
+		return map[string]any{"result": map[string]any{"type": "object", "subtype": "null", "value": nil}}, true, nil
+	case "fileinfo":
+		return value(map[string]any{"multiple": bh.multiple, "disabled": bh.disabled, "count": len(bh.files)}), true, nil
 	case "visible":
 		return value(!fb.removed[n] && n.box != nil && (*n.box)[2] > 0), true, nil
 	}

@@ -191,7 +191,7 @@ func TestActRefusesUnsupportedInputs(t *testing.T) {
 	p := newActPage(f.fb)
 	f.fb.addTab("https://example.com/", p.doc, true)
 	r := f.refs()
-	for name, want := range map[string]string{"Birthday": "a date input", "Upload": "files"} {
+	for name, want := range map[string]string{"Birthday": "a date input", "Upload": "upload step"} {
 		if _, err := f.act(Step{Action: "fill", Ref: r[name], Text: text("x")}); !isStatus(err, 422) || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v", name, err)
 		}
