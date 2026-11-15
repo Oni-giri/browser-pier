@@ -27,6 +27,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/db"
 	"github.com/Oni-giri/browser-pier/internal/docker"
 	"github.com/Oni-giri/browser-pier/internal/files"
+	"github.com/Oni-giri/browser-pier/internal/handoff"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
@@ -107,7 +108,11 @@ func newRealAPI(t *testing.T) agent {
 	}
 	web := auth.NewWeb(admin, tokens, log, auth.WebOptions{CookieSecure: "auto"})
 	mux := http.NewServeMux()
-	New(m, web, files.New(m.Layout().FilesDir, 0, os.Getuid(), os.Getgid()), log, "").Register(mux)
+	a := New(m, web, files.New(m.Layout().FilesDir, 0, os.Getuid(), os.Getgid()), log, "")
+	handoffs := handoff.New(d, m, log)
+	t.Cleanup(handoffs.Close)
+	a.SetHandoffs(handoffs)
+	a.Register(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return agent{t: t, base: srv.URL, token: secret, m: m}
