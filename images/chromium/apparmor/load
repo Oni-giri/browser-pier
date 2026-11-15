@@ -94,8 +94,13 @@ done
 if [ -z "${parser}" ]; then
   fail "no apparmor_parser here"
 fi
-# Its complaints joined into the one line, so a log shows why.
+# Its complaints joined into the one line, so a log shows why; and its
+# warnings when it loads all the same.
 if ! out="$("${parser}" --replace --skip-cache "${profile}" 2>&1)"; then
   fail "${parser} failed: $(printf '%s' "${out:-no output}" | tr '\n' ' ')"
 fi
-say "loaded the browserpier profile"
+if [ -n "${out}" ]; then
+  say "loaded the browserpier profile (${parser} said: $(printf '%s' "${out}" | tr '\n' ' '))"
+else
+  say "loaded the browserpier profile"
+fi

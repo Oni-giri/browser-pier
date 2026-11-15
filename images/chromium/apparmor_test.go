@@ -127,12 +127,14 @@ func TestUmbrelHook(t *testing.T) {
 	write(filepath.Join(ns, "mask"), "userns_create\n", 0o644)
 	write(filepath.Join(bin, "id"), "#!/bin/sh\necho 0\n", 0o755)
 	got := filepath.Join(dir, "parsed")
-	// $PARSER_FAILS makes it fail, as a parser refusing the profile does.
+	// $PARSER_FAILS makes it fail, as a parser refusing the profile does;
+	// $PARSER_WARNS makes it warn and load all the same.
 	write(filepath.Join(bin, "apparmor_parser"), `#!/bin/sh
 for a; do last="$a"; done
 echo "$*" >"`+got+`.args"
 cp "$last" "`+got+`"
 if [ -n "${PARSER_FAILS:-}" ]; then echo "AppArmor parser error: line 1"; echo "second line" >&2; exit 1; fi
+if [ -n "${PARSER_WARNS:-}" ]; then echo "Warning: cache dir"; echo "second warning" >&2; fi
 `, 0o755)
 
 	run := func(env ...string) (string, string) {
@@ -171,6 +173,12 @@ if [ -n "${PARSER_FAILS:-}" ]; then echo "AppArmor parser error: line 1"; echo "
 	}
 	if args := string(readFile(t, got+".args")); !strings.HasPrefix(args, "--replace --skip-cache ") {
 		t.Errorf("parser args %q", args)
+	}
+
+	stdout, stderr = run("PARSER_WARNS=1")
+	oneLine("loaded with warnings", stderr, "loaded the browserpier profile ("+filepath.Join(bin, "apparmor_parser")+" said: Warning: cache dir second warning)")
+	if stdout != "" {
+		t.Errorf("loaded with warnings: stdout %q", stdout)
 	}
 
 	stdout, stderr = run("PARSER_FAILS=1")
