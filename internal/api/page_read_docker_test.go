@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -277,6 +278,81 @@ func TestWaitForAnswers(t *testing.T) {
 	for _, act := range a.m.Activity(s.ID) {
 		if strings.Contains(act.What, "Hello") || strings.Contains(act.What, "Done") {
 			t.Errorf("the activity log has the text: %q", act.What)
+		}
+	}
+}
+
+// TestPageToolsClickableDivs is PROJ-124 on a real browser: a control
+// built from a div or a span, which only its pointer cursor or tabindex
+// gives away, is a generic line with a ref, once (a span Chromium leaves
+// out of the AX tree too); what is inside it isn't listed again; a
+// decorative pointer div, a link's children and a pointer div holding a
+// real button aren't generics; act clicks the refs, and text and
+// role=generic targets find the same elements.
+func TestPageToolsClickableDivs(t *testing.T) {
+	a := newRealAPI(t)
+	site := browsertest.NewPageSite(t, browsertest.SiteHost(t))
+	s := a.startAPIBrowser(t, "g")
+	a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/divs"})
+	snap := a.mustTool(s.ID, "snapshot", nil)
+	t.Logf("snapshot:\n%s", snap)
+	lines := strings.Split(snap, "\n")
+	count := func(match func(l string) bool) int {
+		n := 0
+		for _, l := range lines {
+			if match(l) {
+				n++
+			}
+		}
+		return n
+	}
+	ref := regexp.MustCompile(`^[a-z][a-z0-9]e[0-9]+ `)
+	for _, want := range []string{`generic "Archive (3)"`, `generic "Mark read"`, `generic "Star it"`, `link "More options"`, `button "Save"`} {
+		if n := count(func(l string) bool { return ref.MatchString(l) && strings.HasSuffix(l, " "+want) }); n != 1 {
+			t.Errorf("%d lines with a ref end in %s", n, want)
+		}
+	}
+	// The inner spans, the text again, the link's children, the button's
+	// div, the empty div: none of them is a line of its own.
+	for _, what := range []string{"Archive", "(3)", "Mark read", "Star it", "More", "options", "Save"} {
+		if n := count(func(l string) bool { return strings.Contains(l, what) }); n != 1 {
+			t.Errorf("%q is on %d lines", what, n)
+		}
+	}
+	if n := count(func(l string) bool { return strings.Contains(l, " generic ") }); n != 3 {
+		t.Errorf("%d generic lines, want 3", n)
+	}
+	if count(func(l string) bool { return l == "Liked by 2 people." }) != 1 {
+		t.Errorf("the text around the span is lost")
+	}
+	waitEvent := func(e string) bool {
+		deadline := time.Now().Add(5 * time.Second)
+		for !site.HasEvent(e) && time.Now().Before(deadline) {
+			time.Sleep(50 * time.Millisecond)
+		}
+		return site.HasEvent(e)
+	}
+	for _, c := range []struct{ line, event string }{{`generic "Archive (3)"`, "a"}, {`generic "Mark read"`, "b"}, {`generic "Star it"`, "c"}} {
+		out := a.mustTool(s.ID, "act", map[string]any{"steps": []map[string]any{{"action": "click", "ref": refFor(t, snap, c.line)}}, "changes": false})
+		if !waitEvent(c.event) {
+			t.Errorf("clicking %s: %s; events %v", c.line, out, site.Events())
+		}
+	}
+	// Targets name the generics as the snapshot does: text inside one is
+	// the generic, and role=generic goes by the text it shows.
+	for _, c := range []struct{ target, line string }{
+		{"text=Archive", `generic "Archive (3)"`},
+		{`role=generic[name="Mark read"]`, `generic "Mark read"`},
+		{"text=Star it", `generic "Star it"`},
+	} {
+		out := a.mustTool(s.ID, "act", map[string]any{"steps": []map[string]any{{"action": "click", "target": c.target}}, "changes": false})
+		if !strings.Contains(out, "clicked "+refFor(t, snap, c.line)+" ") {
+			t.Errorf("%s: %s", c.target, out)
+		}
+	}
+	for _, e := range []string{"decor", "card", "save", "link"} {
+		if site.HasEvent(e) {
+			t.Errorf("%s was clicked: %v", e, site.Events())
 		}
 	}
 }

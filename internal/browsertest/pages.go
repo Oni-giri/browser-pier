@@ -380,6 +380,22 @@ document.title = 'Budget ready';</script>
 const d = document.getElementById('d'); const f = document.createDocumentFragment();
 for (let i = 0; i < 250000; i++) { const s = document.createElement('i'); f.appendChild(s); }
 d.appendChild(f);</script>`,
+	// PROJ-124: controls built from a div or a span, which only a pointer
+	// cursor or a tabindex give away; a decorative pointer div with no
+	// text; a link whose children inherit its pointer; a pointer div
+	// holding a real button; and a span whose click a listener on the
+	// document handles, as frameworks do, which leaves it out of
+	// Chromium's accessibility tree.
+	"/divs": `<!doctype html><title>Clickable divs</title>` + report + `
+<main><h1>Inbox</h1>
+<div style="cursor:pointer" onclick="report('a')"><span>Archive</span> <span>(3)</span></div>
+<p><span tabindex="0" onclick="report('b')">Mark read</span></p>
+<p>Liked by 2 people. <span class="star" style="cursor:pointer">Star it</span></p>
+<div style="cursor:pointer;width:40px;height:20px;background:#ccc" onclick="report('decor')"></div>
+<p><a href="#more" onclick="report('link')"><span>More</span> <b>options</b></a></p>
+<div style="cursor:pointer;padding:4px" onclick="report('card')"><button onclick="report('save')">Save</button></div>
+</main>
+<script>document.addEventListener('click', e => { if (e.target.closest('.star')) report('c'); });</script>`,
 	// Buttons inside a closed shadow root: one free, one under a cover.
 	"/shadow": `<!doctype html><title>Shadow</title>` + report + `
 <div id="host"></div>
