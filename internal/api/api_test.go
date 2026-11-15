@@ -314,6 +314,17 @@ func TestProfiles(t *testing.T) {
 	if code := f.call(f.all, http.MethodPost, "/api/profiles", `{"name": "y", "local_network": false}`, &p); code != http.StatusCreated || p.LocalNetwork {
 		t.Fatalf("local network off through the API: %d %+v", code, p)
 	}
+	// Ad and tracker blocking: on for new profiles; an agent may ask for
+	// it, never turn it off for good.
+	if !p.BlockAds {
+		t.Fatalf("a new profile doesn't block ads: %+v", p)
+	}
+	if code := f.call(f.all, http.MethodPost, "/api/profiles", `{"name": "z", "block_ads": false}`, nil); code != http.StatusBadRequest {
+		t.Fatalf("block_ads off through the API: %d", code)
+	}
+	if code := f.call(f.all, http.MethodPost, "/api/profiles", `{"name": "z", "block_ads": true}`, &p); code != http.StatusCreated || !p.BlockAds {
+		t.Fatalf("block_ads on through the API: %d %+v", code, p)
+	}
 	if code := f.call(f.all, http.MethodPost, "/api/profiles", `{"name": "Bad Name"}`, nil); code != http.StatusBadRequest {
 		t.Fatalf("bad name: %d", code)
 	}
@@ -658,5 +669,26 @@ func TestStartWhileHeldIsAConflict(t *testing.T) {
 	var e struct{ Error string }
 	if code := f.call(f.all, http.MethodPost, "/api/sessions", `{"profile": "google"}`, &e); code != http.StatusConflict || !strings.Contains(e.Error, "exported") {
 		t.Fatalf("start while held: %d %s", code, e.Error)
+	}
+}
+
+// TestSessionWithoutAdBlocking: an agent turns blocking off for one
+// session; the profile keeps it.
+func TestSessionWithoutAdBlocking(t *testing.T) {
+	f := newFixture(t)
+	var s sessionJSON
+	if code := f.call(f.all, http.MethodPost, "/api/sessions", `{"profile": "google", "block_ads": false}`, &s); code != http.StatusCreated || s.BlockAds {
+		t.Fatalf("start without blocking: %d %+v", code, s)
+	}
+	if p, _ := f.m.Profiles().Get(context.Background(), "google"); !p.BlockAds {
+		t.Fatal("the profile's setting changed")
+	}
+	var again sessionJSON
+	if code := f.call(f.all, http.MethodPost, "/api/sessions", `{"profile": "google", "block_ads": true}`, &again); code != http.StatusOK || again.BlockAds {
+		t.Fatalf("block_ads true turned blocking back on: %d %+v", code, again)
+	}
+	var gh sessionJSON
+	if code := f.call(f.all, http.MethodPost, "/api/sessions", `{"profile": "github"}`, &gh); code != http.StatusCreated || !gh.BlockAds {
+		t.Fatalf("a plain start doesn't block: %d %+v", code, gh)
 	}
 }

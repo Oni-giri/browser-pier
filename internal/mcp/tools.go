@@ -77,6 +77,8 @@ func (s *Server) listProfiles(ctx context.Context, req *sdk.CallToolRequest, _ n
 type startArgs struct {
 	Profile string `json:"profile" jsonschema:"the profile's name"`
 	Mode    string `json:"mode,omitempty" jsonschema:"visual (screenshots and clicks) or api (CDP); default: the profile's own"`
+	// AllowAds is block_ads: false on the API.
+	AllowAds bool `json:"allow_ads,omitempty" jsonschema:"true turns the profile's ad and tracker blocking off for this session, a running one included, when a page needs what it blocks; it can't be turned back on until the browser restarts"`
 }
 
 type sessionOut struct {
@@ -88,11 +90,16 @@ type sessionOut struct {
 	CDPURL      string   `json:"cdp_url"`
 	LiveViewURL string   `json:"live_view_url"`
 	InUseBy     []string `json:"in_use_by"`
+	BlockAds    bool     `json:"block_ads"`
 }
 
 func (s *Server) startBrowser(ctx context.Context, req *sdk.CallToolRequest, in startArgs) (*sdk.CallToolResult, any, error) {
 	var out sessionOut
-	if err := s.callJSON(ctx, req.Extra, "POST", "/api/sessions", map[string]string{"profile": in.Profile, "mode": in.Mode}, &out); err != nil {
+	body := map[string]any{"profile": in.Profile, "mode": in.Mode}
+	if in.AllowAds {
+		body["block_ads"] = false
+	}
+	if err := s.callJSON(ctx, req.Extra, "POST", "/api/sessions", body, &out); err != nil {
 		return nil, nil, err
 	}
 	var b strings.Builder
@@ -108,6 +115,9 @@ func (s *Server) startBrowser(ctx context.Context, req *sdk.CallToolRequest, in 
 	}
 	if len(out.InUseBy) > 0 {
 		fmt.Fprintf(&b, "Also in use by: %s.\n", strings.Join(out.InUseBy, ", "))
+	}
+	if out.BlockAds {
+		b.WriteString("Ads and trackers are blocked; if a page misses something it needs, start_browser again with allow_ads.\n")
 	}
 	fmt.Fprintf(&b, "A person can watch at %s.", out.LiveViewURL)
 	return text("%s", b.String()), nil, nil

@@ -12,6 +12,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/cdp"
 	"github.com/Oni-giri/browser-pier/internal/fence"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
+	"golang.org/x/net/idna"
 )
 
 // navigateTimeout is how long navigate waits for the page to load,
@@ -93,6 +94,7 @@ func (t *Tools) Navigate(ctx context.Context, s sessions.Session, who Caller, in
 				LoaderID  string `json:"loaderId"`
 				ErrorText string `json:"errorText"`
 			}
+			t.openingDirectly(ctx, s, target)
 			if err := c.renderer(ctx, c.t.slow, "Page.navigate", map[string]any{"url": target}, &r); err != nil {
 				return "", err
 			}
@@ -172,6 +174,29 @@ func (t *Tools) Navigate(ctx context.Context, s sessions.Session, who Caller, in
 		}
 		return c.result("page", body, trailer), nil
 	})
+}
+
+// openingDirectly lets the page an agent opens by its address load even
+// when its host is on the ad and tracker list: the session's forwarder
+// lets that host and its subdomains through from now on (PROJ-119, SPEC
+// §3 Egress). What the page then loads from other listed hosts is still
+// blocked. Failing to tell the browser isn't fatal: the page may be
+// blocked, as it would be without this.
+func (t *Tools) openingDirectly(ctx context.Context, s sessions.Session, raw string) {
+	if !s.BlockAds {
+		return
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return
+	}
+	host := u.Hostname()
+	if a, err := idna.Lookup.ToASCII(host); err == nil {
+		host = a
+	}
+	if err := t.m.ExemptHost(ctx, s.ID, host); err != nil {
+		t.log.Debug("couldn't exempt a host from the ad and tracker list", "session", s.ID, "err", err)
+	}
 }
 
 // sameAddress reports whether the page landed where it was sent: the same

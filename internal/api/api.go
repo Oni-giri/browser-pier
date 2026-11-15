@@ -95,6 +95,7 @@ type profileJSON struct {
 	TimeZone        string     `json:"time_zone,omitempty"` // set by hand
 	Locale          string     `json:"locale,omitempty"`    // set by hand
 	LocalNetwork    bool       `json:"local_network"`       // pages may reach private addresses
+	BlockAds        bool       `json:"block_ads"`           // the browser blocks ad and tracker domains
 	// Site is the main site as set, whose favicon is the profile's icon in
 	// the web UI. The one BrowserPier infers from the history isn't shown:
 	// it is read from pages.
@@ -131,6 +132,7 @@ func (a *API) profileOut(p profiles.Profile) profileJSON {
 		TimeZone:        p.TimeZone,
 		Locale:          p.Locale,
 		LocalNetwork:    p.LocalNetwork,
+		BlockAds:        p.BlockAds,
 		Site:            p.Site,
 		IconGlyph:       p.IconGlyph,
 		IconColor:       p.IconColor,
@@ -180,6 +182,7 @@ type createProfileJSON struct {
 	HandoffPolicy   *string     `json:"handoff_policy"`
 	Proxy           *string     `json:"proxy"`
 	LocalNetwork    *bool       `json:"local_network"`
+	BlockAds        *bool       `json:"block_ads"`
 	Site            *string     `json:"site"`
 	IconGlyph       *string     `json:"icon_glyph"`
 	IconColor       *string     `json:"icon_color"`
@@ -241,6 +244,16 @@ func (a *API) createProfile(w http.ResponseWriter, r *http.Request) {
 			p.HandoffPolicy = asked
 		}
 	}
+	if in.BlockAds != nil {
+		// Like the handoff policy: an agent can ask for more blocking,
+		// never less. Turning it off is for one session (POST
+		// /api/sessions with "block_ads": false), or the admin's call.
+		if !*in.BlockAds {
+			writeError(w, http.StatusBadRequest, `block_ads: an agent can't turn a profile's ad and tracker blocking off; start the session with "block_ads": false instead, or ask the admin`)
+			return
+		}
+		p.BlockAds = true
+	}
 	if in.Site != nil {
 		p.Site = profiles.NormalizeSite(*in.Site)
 	}
@@ -278,6 +291,7 @@ type sessionJSON struct {
 	InUseBy     []string  `json:"in_use_by,omitempty"`
 	Error       string    `json:"error,omitempty"`
 	LastLog     string    `json:"last_log,omitempty"`
+	BlockAds    bool      `json:"block_ads"`
 	CreatedAt   time.Time `json:"created_at"`
 }
 
@@ -286,7 +300,7 @@ func (a *API) sessionOut(r *http.Request, s sessions.Session, attached bool) ses
 	out := sessionJSON{
 		ID: s.ID, Profile: s.Profile, Mode: string(s.Mode), State: string(s.State), Attached: attached,
 		LiveViewURL: base + "/profiles/" + url.PathEscape(s.Profile),
-		InUseBy:     s.InUseBy, Error: s.Error, CreatedAt: s.CreatedAt,
+		InUseBy:     s.InUseBy, Error: s.Error, CreatedAt: s.CreatedAt, BlockAds: s.BlockAds,
 	}
 	// The browser container's words, which a compromised page could have
 	// written: fenced like page text.
@@ -318,6 +332,10 @@ func (a *API) baseURL(r *http.Request) string {
 type startJSON struct {
 	Profile string `json:"profile"`
 	Mode    string `json:"mode"`
+	// BlockAds false turns the profile's ad and tracker blocking off for
+	// this session, a running one included; true or nothing leaves it as
+	// it is. It can't turn blocking on.
+	BlockAds *bool `json:"block_ads"`
 }
 
 func (a *API) startSession(w http.ResponseWriter, r *http.Request) {
@@ -336,7 +354,9 @@ func (a *API) startSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "mode: want api or visual")
 		return
 	}
-	s, attached, err := a.m.Start(r.Context(), in.Profile, profiles.Mode(in.Mode))
+	allowAds := in.BlockAds != nil && !*in.BlockAds
+	before, wasLive := a.m.Live(in.Profile)
+	s, attached, err := a.m.StartWith(r.Context(), in.Profile, sessions.StartOptions{Mode: profiles.Mode(in.Mode), AllowAds: allowAds})
 	switch {
 	case errors.Is(err, profiles.ErrNotFound):
 		writeError(w, http.StatusNotFound, "no profile named "+strconv.Quote(in.Profile))
@@ -360,13 +380,20 @@ func (a *API) startSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.m.Touch(s.ID)
+	if allowAds && wasLive && before.ID == s.ID && before.BlockAds && !s.BlockAds {
+		a.m.Note(s.ID, tok.Name, "Turned ad and tracker blocking off for this session")
+	}
 	status := http.StatusCreated
 	if attached {
 		status = http.StatusOK
 		a.m.Note(s.ID, tok.Name, "Attached")
 	} else {
-		a.m.Note(s.ID, tok.Name, "Started the browser")
-		a.log.Info("session started", "session", s.ID, "profile", s.Profile, "mode", s.Mode, "token", tok.Name)
+		what := "Started the browser"
+		if allowAds {
+			what += ", without ad and tracker blocking"
+		}
+		a.m.Note(s.ID, tok.Name, what)
+		a.log.Info("session started", "session", s.ID, "profile", s.Profile, "mode", s.Mode, "block_ads", s.BlockAds, "token", tok.Name)
 	}
 	writeJSON(w, status, a.sessionOut(r, s, attached))
 }
