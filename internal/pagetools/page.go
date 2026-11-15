@@ -751,7 +751,8 @@ const (
 )
 
 // markCovered marks the controls whose centre an iframe covers (a consent
-// banner from another site, most often), which act can't click, from what
+// banner from another site, most often), which act probably can't click
+// (it hit-tests before clicking), from what
 // the DOM snapshot already holds: boxes and paint order. Nothing more is
 // asked of the page.
 //
@@ -761,9 +762,11 @@ const (
 // parent's content, still comes after it: an iframe with a negative
 // z-index on it or an ancestor (a video behind a hero banner) is left
 // out, as is one with pointer-events: none, which clicks go through, as
-// act's hit test does. What this can't see (a covering iframe clipped by
-// its parent's overflow, a control out of view that a fixed banner will
-// cover once scrolled to) act still finds when it hit-tests.
+// act's hit test does. The boxes aren't clipped, so an iframe cut short
+// by an ancestor's overflow marks controls in the part that's cut away:
+// a false mark, which act's hit test then clicks through. What this
+// can't see (a control out of view that a fixed banner will cover once
+// scrolled to) act still finds when it hit-tests.
 func markCovered(items []item, d *dom) {
 	l := d.s.Documents[0].Layout
 	if len(l.PaintOrders) == 0 {
