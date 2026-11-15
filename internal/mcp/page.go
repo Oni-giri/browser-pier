@@ -130,6 +130,7 @@ type stepArgs struct {
 	Option string  `json:"option,omitempty" jsonschema:"for select: the option's value or visible text"`
 	Button string  `json:"button,omitempty" jsonschema:"for click: left (default), right or middle"`
 	Double bool    `json:"double,omitempty" jsonschema:"for click: double-click"`
+	Pace   string  `json:"pace,omitempty" jsonschema:"for click, hover, check, uncheck, type and press: human (default) moves, aims and types like a hand, so it takes longer (type: at most 500 characters per call); instant: at once"`
 }
 
 type actArgs struct {

@@ -14,7 +14,7 @@ func TestTakeAndReleaseControl(t *testing.T) {
 	s := f.start(f.m)
 
 	// An agent clicking just now is driving.
-	done, err := f.m.AgentInput(s.ID)
+	_, done, err := f.m.AgentInput(context.Background(), s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestTakeAndReleaseControl(t *testing.T) {
 		t.Fatal(err)
 	}
 	// While a person drives, agents can only watch.
-	if _, err := f.m.AgentInput(s.ID); !errors.Is(err, ErrHumanDriving) {
+	if _, _, err := f.m.AgentInput(context.Background(), s.ID); !errors.Is(err, ErrHumanDriving) {
 		t.Fatalf("agent input while a person drives = %v", err)
 	}
 	if _, _, err := f.m.Attach(ctx, s.ID, "t", "claude"); !errors.Is(err, ErrHumanDriving) {
@@ -56,7 +56,7 @@ func TestTakeAndReleaseControl(t *testing.T) {
 	if err := f.m.HumanInput(s.ID); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("human input after release = %v", err)
 	}
-	if done, err := f.m.AgentInput(s.ID); err != nil {
+	if _, done, err := f.m.AgentInput(context.Background(), s.ID); err != nil {
 		t.Fatalf("agent input after hand-back = %v", err)
 	} else {
 		done()
@@ -68,7 +68,7 @@ func TestTakeAndReleaseControl(t *testing.T) {
 func TestHandoffWaitsForInputInFlight(t *testing.T) {
 	f := newFixture(t)
 	s := f.start(f.m)
-	done, err := f.m.AgentInput(s.ID)
+	ctx, done, err := f.m.AgentInput(context.Background(), s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,12 +77,22 @@ func TestHandoffWaitsForInputInFlight(t *testing.T) {
 		_, _ = f.m.SetNeedsHelp(s.ID, true)
 		close(helped)
 	}()
+	// The input breaks off at once (a long human-paced type, say)...
+	select {
+	case <-ctx.Done():
+		if !errors.Is(context.Cause(ctx), ErrHandedOver) {
+			t.Fatalf("input cancelled for %v", context.Cause(ctx))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the handoff didn't cancel the input in flight")
+	}
+	// ...and the handoff waits for it to end.
 	select {
 	case <-helped:
 		t.Fatal("the handoff began while an agent's click was in flight")
 	case <-time.After(200 * time.Millisecond):
 	}
-	if _, err := f.m.AgentInput(s.ID); !errors.Is(err, ErrHumanDriving) {
+	if _, _, err := f.m.AgentInput(context.Background(), s.ID); !errors.Is(err, ErrHumanDriving) {
 		t.Fatalf("new input while a handoff waits = %v", err)
 	}
 	done()
@@ -90,6 +100,49 @@ func TestHandoffWaitsForInputInFlight(t *testing.T) {
 	case <-helped:
 	case <-time.After(2 * time.Second):
 		t.Fatal("the handoff never began after the click ended")
+	}
+}
+
+// A long input action (typing at human pace) keeps a person from taking
+// control from the live view while it lasts and for agentQuiet after its
+// end, not its start.
+func TestLongInputKeepsTheAgentDriving(t *testing.T) {
+	f := newFixture(t)
+	advance := f.clock()
+	s := f.start(f.m)
+	_, done, err := f.m.AgentInput(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	advance(2 * time.Minute)
+	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrAgentDriving) {
+		t.Fatalf("take while the agent types = %v", err)
+	}
+	done()
+	advance(agentQuiet - time.Second)
+	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrAgentDriving) {
+		t.Fatalf("take %v after the typing ended = %v", agentQuiet-time.Second, err)
+	}
+	advance(2 * time.Second)
+	if err := f.m.TakeControl(s.ID); err != nil {
+		t.Fatalf("take after the quiet = %v", err)
+	}
+}
+
+// Stopping a browser cancels input under way.
+func TestStopCancelsInput(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	ctx, done, err := f.m.AgentInput(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer done()
+	go func() { _, _ = f.m.Stop(context.Background(), s.ID) }()
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("a stop didn't cancel the input under way")
 	}
 }
 

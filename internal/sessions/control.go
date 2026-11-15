@@ -1,6 +1,7 @@
 package sessions
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -13,24 +14,38 @@ const agentQuiet = 5 * time.Second
 // person has control.
 //
 // It is a lease: call done once the browser has answered. A handoff
-// (Needs help) waits for leases to end before the person gets the
-// browser, and refuses new ones, so no agent input lands under them.
-func (m *Manager) AgentInput(id string) (done func(), err error) {
+// (Needs help) or a stop cancels the context it returns, so an action
+// that takes a while (typing at human pace, PROJ-113) breaks off at once,
+// and waits for leases to end before the person gets the browser; it
+// refuses new ones, so no agent input lands under them. A person can't
+// take control from the live view while one is under way, nor for
+// agentQuiet after it ends.
+func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, func(), error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.findLocked(id)
 	if l == nil || (l.sess.State != Running && l.sess.State != NeedsHelp) {
-		return nil, ErrNotRunning
+		return nil, nil, ErrNotRunning
 	}
 	if l.human || l.sess.State == NeedsHelp {
-		return nil, ErrHumanDriving
+		return nil, nil, ErrHumanDriving
 	}
 	now := m.now()
 	l.lastActivity, l.lastAgentInput = now, now
-	l.inputs++
-	return sync.OnceFunc(func() {
+	cctx, cancel := context.WithCancelCause(ctx)
+	in := &lease{cancel: cancel}
+	if l.inputs == nil {
+		l.inputs = map[*lease]struct{}{}
+	}
+	l.inputs[in] = struct{}{}
+	return cctx, sync.OnceFunc(func() {
+		cancel(context.Canceled)
 		m.mu.Lock()
-		l.inputs--
+		delete(l.inputs, in)
+		// The agent counts as driving for agentQuiet after its last
+		// event, not after the action began.
+		now := m.now()
+		l.lastActivity, l.lastAgentInput = now, now
 		m.inputsDone.Broadcast()
 		m.mu.Unlock()
 	}), nil
@@ -49,7 +64,7 @@ func (m *Manager) TakeControl(id string) error {
 	if l == nil || (l.sess.State != Running && l.sess.State != NeedsHelp) {
 		return ErrNotRunning
 	}
-	if l.sess.State == Running && (len(l.conns) > 0 || len(l.leases) > 0 || m.now().Sub(l.lastAgentInput) < agentQuiet) {
+	if l.sess.State == Running && (len(l.conns) > 0 || len(l.leases) > 0 || len(l.inputs) > 0 || m.now().Sub(l.lastAgentInput) < agentQuiet) {
 		return ErrAgentDriving
 	}
 	if l.human {

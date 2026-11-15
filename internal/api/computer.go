@@ -45,6 +45,9 @@ type computerRequest struct {
 	// Screenshot returns the screen after the action, Width wide if set.
 	Screenshot bool `json:"screenshot"`
 	Width      int  `json:"width"`
+	// Pace is human (the default: the pointer glides, aims and holds, and
+	// keys come at a typist's rhythm) or instant (PROJ-113).
+	Pace string `json:"pace"`
 }
 
 // inputBody is what the control socket takes for an input action, or an
@@ -56,6 +59,11 @@ func (c computerRequest) inputBody() (path string, body any, err error) {
 		}
 		return nil
 	}
+	switch c.Pace {
+	case "", "human", "instant":
+	default:
+		return "", nil, fmt.Errorf("pace %q: want human or instant", c.Pace)
+	}
 	switch c.Action {
 	case "click":
 		type click struct {
@@ -63,43 +71,48 @@ func (c computerRequest) inputBody() (path string, body any, err error) {
 			Y      int    `json:"y"`
 			Button string `json:"button,omitempty"`
 			Double bool   `json:"double,omitempty"`
+			Pace   string `json:"pace,omitempty"`
 		}
 		if err := at(); err != nil {
 			return "", nil, err
 		}
-		return "/input/click", click{*c.X, *c.Y, c.Button, c.Double}, nil
+		return "/input/click", click{*c.X, *c.Y, c.Button, c.Double, c.Pace}, nil
 	case "type":
 		return "/input/type", struct {
 			Text string `json:"text"`
-		}{c.Text}, nil
+			Pace string `json:"pace,omitempty"`
+		}{c.Text, c.Pace}, nil
 	case "scroll":
 		type scroll struct {
-			X  int `json:"x"`
-			Y  int `json:"y"`
-			DX int `json:"dx"`
-			DY int `json:"dy"`
+			X    int    `json:"x"`
+			Y    int    `json:"y"`
+			DX   int    `json:"dx"`
+			DY   int    `json:"dy"`
+			Pace string `json:"pace,omitempty"`
 		}
 		if err := at(); err != nil {
 			return "", nil, err
 		}
-		return "/input/scroll", scroll{*c.X, *c.Y, c.DX, c.DY}, nil
+		return "/input/scroll", scroll{*c.X, *c.Y, c.DX, c.DY, c.Pace}, nil
 	case "key":
 		if len(c.Keys) == 0 {
 			return "", nil, fmt.Errorf("key: want keys, like \"ctrl+l\" or [\"Tab\", \"Return\"]")
 		}
 		return "/input/key", struct {
 			Keys json.RawMessage `json:"keys"`
-		}{c.Keys}, nil
+			Pace string          `json:"pace,omitempty"`
+		}{c.Keys, c.Pace}, nil
 	case "drag":
 		type drag struct {
 			From   pointJSON `json:"from"`
 			To     pointJSON `json:"to"`
 			Button string    `json:"button,omitempty"`
+			Pace   string    `json:"pace,omitempty"`
 		}
 		if c.From == nil || c.To == nil {
 			return "", nil, fmt.Errorf("drag: want from and to, each {x, y}")
 		}
-		return "/input/drag", drag{*c.From, *c.To, c.Button}, nil
+		return "/input/drag", drag{*c.From, *c.To, c.Button, c.Pace}, nil
 	}
 	return "", nil, fmt.Errorf("action %q: want click, type, scroll, key, drag, wait or zoom", c.Action)
 }

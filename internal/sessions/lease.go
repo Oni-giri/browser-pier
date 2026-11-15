@@ -127,10 +127,19 @@ func (l *live) cancelLeasesLocked(why error) {
 	}
 }
 
+// cancelAllLocked cancels every page call and agent input action under
+// way, for why: the agent loses the browser (a handoff or a stop).
+func (l *live) cancelAllLocked(why error) {
+	l.cancelLeasesLocked(why)
+	for in := range l.inputs {
+		in.cancel(why)
+	}
+}
+
 // waitLeasesLocked waits, with m.mu held (Wait lets go of it meanwhile),
 // until no page call or agent input is under way.
 func (m *Manager) waitLeasesLocked(l *live) {
-	for l.inputs > 0 || len(l.leases) > 0 {
+	for len(l.inputs) > 0 || len(l.leases) > 0 {
 		m.inputsDone.Wait()
 	}
 }

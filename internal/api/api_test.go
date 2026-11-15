@@ -87,6 +87,16 @@ func (b *browser) handler() http.Handler {
 			http.Error(w, "(99999, 1) is outside the 1440x900 screen", http.StatusBadRequest)
 			return
 		}
+		if strings.Contains(string(body), "slowly") {
+			// A long human-paced action: it lasts until it's cut short.
+			select {
+			case <-r.Context().Done():
+				b.mu.Lock()
+				b.inputs = append(b.inputs, "cut short")
+				b.mu.Unlock()
+			case <-time.After(30 * time.Second):
+			}
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}
 	for _, p := range []string{"click", "type", "scroll", "key", "drag"} {

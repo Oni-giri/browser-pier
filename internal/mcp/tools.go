@@ -28,7 +28,7 @@ func (s *Server) addTools(srv *sdk.Server) {
 	sdk.AddTool(srv, &sdk.Tool{Name: "start_browser", Description: "Start a profile's browser, or attach to it if it's already running. Returns the session_id the other tools take."}, s.startBrowser)
 	sdk.AddTool(srv, &sdk.Tool{Name: "stop_browser", Description: "Stop a browser to free its memory. Cookies and logins are kept for next time."}, s.stopBrowser)
 	sdk.AddTool(srv, &sdk.Tool{Name: "screenshot", Description: "See the browser's screen (Visual mode); the strip along the bottom is the desktop's taskbar, not the page. Other tools take coordinates in this screenshot's pixels."}, s.screenshot)
-	sdk.AddTool(srv, &sdk.Tool{Name: "click", Description: "Click at a point of the last screenshot (Visual mode)."}, s.click)
+	sdk.AddTool(srv, &sdk.Tool{Name: "click", Description: "Click at a point of the last screenshot (Visual mode). At human pace (the default) the pointer glides there and lands within about 18 screen pixels of the point, as a hand would; for a target smaller than that, use pace instant."}, s.click)
 	sdk.AddTool(srv, &sdk.Tool{Name: "type_text", Description: "Type text into whatever has focus, as a keyboard would (Visual mode)."}, s.typeText)
 	sdk.AddTool(srv, &sdk.Tool{Name: "press_keys", Description: "Press keys or combinations, such as Return, Tab, ctrl+a or ctrl+shift+t (Visual mode)."}, s.pressKeys)
 	sdk.AddTool(srv, &sdk.Tool{Name: "scroll", Description: "Scroll at a point by whole notches: positive down or right, negative up or left (Visual mode)."}, s.scroll)
@@ -236,6 +236,9 @@ func (s *Server) screenshot(ctx context.Context, req *sdk.CallToolRequest, in se
 // act runs a Visual-mode action through the API's /computer, in screen
 // pixels, returning a screenshot after it if asked.
 func (s *Server) act(ctx context.Context, extra *sdk.RequestExtra, id string, sc screen, action map[string]any, shot bool, done string) (*sdk.CallToolResult, any, error) {
+	if p, _ := action["pace"].(string); p == "" {
+		delete(action, "pace")
+	}
 	if shot {
 		sw, _ := sc.shot()
 		action["screenshot"] = true
@@ -263,6 +266,7 @@ type pointArgs struct {
 	X          int    `json:"x" jsonschema:"in the last screenshot's pixels"`
 	Y          int    `json:"y" jsonschema:"in the last screenshot's pixels"`
 	Screenshot bool   `json:"screenshot,omitempty" jsonschema:"return a screenshot after"`
+	Pace       string `json:"pace,omitempty" jsonschema:"human (default): moves, aims and types like a hand, so it takes longer; instant: at once"`
 }
 
 type clickArgs struct {
@@ -277,13 +281,14 @@ func (s *Server) click(ctx context.Context, req *sdk.CallToolRequest, in clickAr
 		return nil, nil, err
 	}
 	x, y := sc.toScreen(in.X, in.Y)
-	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "click", "x": x, "y": y, "button": in.Button, "double": in.Double}, in.Screenshot, "Clicked.")
+	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "click", "x": x, "y": y, "button": in.Button, "double": in.Double, "pace": in.Pace}, in.Screenshot, "Clicked.")
 }
 
 type typeArgs struct {
 	SessionID  string `json:"session_id" jsonschema:"from start_browser"`
-	Text       string `json:"text" jsonschema:"what to type; use press_keys for Return, Tab and shortcuts"`
+	Text       string `json:"text" jsonschema:"what to type; use press_keys for Return, Tab and shortcuts. At most 500 characters at human pace, 2000 at instant"`
 	Screenshot bool   `json:"screenshot,omitempty" jsonschema:"return a screenshot after"`
+	Pace       string `json:"pace,omitempty" jsonschema:"human (default): moves, aims and types like a hand, so it takes longer; instant: at once"`
 }
 
 func (s *Server) typeText(ctx context.Context, req *sdk.CallToolRequest, in typeArgs) (*sdk.CallToolResult, any, error) {
@@ -294,13 +299,14 @@ func (s *Server) typeText(ctx context.Context, req *sdk.CallToolRequest, in type
 			return nil, nil, err
 		}
 	}
-	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "type", "text": in.Text}, in.Screenshot, "Typed.")
+	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "type", "text": in.Text, "pace": in.Pace}, in.Screenshot, "Typed.")
 }
 
 type keysArgs struct {
 	SessionID  string `json:"session_id" jsonschema:"from start_browser"`
 	Keys       string `json:"keys" jsonschema:"a key or combination, or several separated by spaces: Return, Tab, Escape, ctrl+a, ctrl+shift+t"`
 	Screenshot bool   `json:"screenshot,omitempty" jsonschema:"return a screenshot after"`
+	Pace       string `json:"pace,omitempty" jsonschema:"human (default): moves, aims and types like a hand, so it takes longer; instant: at once"`
 }
 
 func (s *Server) pressKeys(ctx context.Context, req *sdk.CallToolRequest, in keysArgs) (*sdk.CallToolResult, any, error) {
@@ -311,7 +317,7 @@ func (s *Server) pressKeys(ctx context.Context, req *sdk.CallToolRequest, in key
 			return nil, nil, err
 		}
 	}
-	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "key", "keys": strings.Fields(in.Keys)}, in.Screenshot, "Pressed "+in.Keys+".")
+	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "key", "keys": strings.Fields(in.Keys), "pace": in.Pace}, in.Screenshot, "Pressed "+in.Keys+".")
 }
 
 type scrollArgs struct {
@@ -326,7 +332,7 @@ func (s *Server) scroll(ctx context.Context, req *sdk.CallToolRequest, in scroll
 		return nil, nil, err
 	}
 	x, y := sc.toScreen(in.X, in.Y)
-	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "scroll", "x": x, "y": y, "dx": in.Right, "dy": in.Down}, in.Screenshot, "Scrolled.")
+	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "scroll", "x": x, "y": y, "dx": in.Right, "dy": in.Down, "pace": in.Pace}, in.Screenshot, "Scrolled.")
 }
 
 type dragArgs struct {
@@ -336,6 +342,7 @@ type dragArgs struct {
 	ToX        int    `json:"to_x"`
 	ToY        int    `json:"to_y"`
 	Screenshot bool   `json:"screenshot,omitempty" jsonschema:"return a screenshot after"`
+	Pace       string `json:"pace,omitempty" jsonschema:"human (default): moves, aims and types like a hand, so it takes longer; instant: at once"`
 }
 
 func (s *Server) drag(ctx context.Context, req *sdk.CallToolRequest, in dragArgs) (*sdk.CallToolResult, any, error) {
@@ -346,7 +353,7 @@ func (s *Server) drag(ctx context.Context, req *sdk.CallToolRequest, in dragArgs
 	fx, fy := sc.toScreen(in.FromX, in.FromY)
 	tx, ty := sc.toScreen(in.ToX, in.ToY)
 	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "drag",
-		"from": map[string]int{"x": fx, "y": fy}, "to": map[string]int{"x": tx, "y": ty}}, in.Screenshot, "Dragged.")
+		"from": map[string]int{"x": fx, "y": fy}, "to": map[string]int{"x": tx, "y": ty}, "pace": in.Pace}, in.Screenshot, "Dragged.")
 }
 
 type waitArgs struct {

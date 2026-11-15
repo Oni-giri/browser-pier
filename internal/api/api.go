@@ -519,14 +519,21 @@ func (a *API) input(path string) http.HandlerFunc {
 // act runs one input action through the control socket and logs it, or
 // writes why it didn't run.
 func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, path string, body []byte) bool {
-	done, err := a.m.AgentInput(s.ID)
+	ctx, done, err := a.m.AgentInput(r.Context(), s.ID)
 	if err != nil {
 		writeError(w, http.StatusConflict, "a person has this browser (live view or a handoff); wait until they hand it back")
 		return false
 	}
-	defer done() // until the browser has answered: a handoff waits for it
-	resp, err := a.control(r.Context(), s.Profile, http.MethodPost, path, body)
+	// Until the browser has answered: a handoff or a stop cancels ctx,
+	// which breaks the action off (the browser lets go of any key or
+	// button it held), and waits for this.
+	defer done()
+	resp, err := a.control(ctx, s.Profile, http.MethodPost, path, body)
 	if err != nil {
+		if ctx.Err() != nil && r.Context().Err() == nil {
+			writeError(w, http.StatusConflict, "input broke off: "+context.Cause(ctx).Error())
+			return false
+		}
 		writeError(w, http.StatusBadGateway, "input failed: "+err.Error())
 		return false
 	}

@@ -68,6 +68,12 @@ func TestComputerForwardsInput(t *testing.T) {
 		`{"action": "key", "keys": ["ctrl+l", "Return"]}`:                        `/input/key {"keys":["ctrl+l","Return"]}`,
 		`{"action": "key", "keys": "ctrl+shift+t"}`:                              `/input/key {"keys":"ctrl+shift+t"}`,
 		`{"action": "drag", "from": {"x": 1, "y": 2}, "to": {"x": 3, "y": 4}}`:   `/input/drag {"from":{"x":1,"y":2},"to":{"x":3,"y":4}}`,
+		// The pace goes along when it's given.
+		`{"action": "click", "x": 1, "y": 2, "pace": "instant"}`:                                  `/input/click {"x":1,"y":2,"pace":"instant"}`,
+		`{"action": "type", "text": "a", "pace": "human"}`:                                        `/input/type {"text":"a","pace":"human"}`,
+		`{"action": "scroll", "x": 5, "y": 6, "dy": 3, "pace": "instant"}`:                        `/input/scroll {"x":5,"y":6,"dx":0,"dy":3,"pace":"instant"}`,
+		`{"action": "key", "keys": "Tab", "pace": "instant"}`:                                     `/input/key {"keys":"Tab","pace":"instant"}`,
+		`{"action": "drag", "from": {"x": 1, "y": 2}, "to": {"x": 3, "y": 4}, "pace": "instant"}`: `/input/drag {"from":{"x":1,"y":2},"to":{"x":3,"y":4},"pace":"instant"}`,
 	} {
 		if code, _, raw := f.computer(s.ID, body); code != http.StatusNoContent {
 			t.Fatalf("%s: %d %s", body, code, raw)
@@ -84,6 +90,7 @@ func TestComputerForwardsInput(t *testing.T) {
 		`{"action": "jump"}`, `{}`, `{"action": "click", "x": 1}`, `{"action": "scroll", "dy": 1}`,
 		`{"action": "key"}`, `{"action": "drag", "from": {"x": 1, "y": 2}}`, `{"action": "click", "x": 1, "y": 1, "extra": 1}`,
 		`{"action": "click", "x": 1, "y": 1, "screenshot": true, "width": 8}`, `not json`,
+		`{"action": "click", "x": 1, "y": 1, "pace": "slow"}`, `{"action": "type", "text": "a", "pace": 1}`,
 	} {
 		if code, _, raw := f.computer(s.ID, body); code != http.StatusBadRequest {
 			t.Errorf("%s: %d %s", body, code, raw)
@@ -190,6 +197,45 @@ func TestComputerDuringAHandoff(t *testing.T) {
 	}
 	if code, _, _ := f.computer(s.ID, `{"action": "zoom", "x": 1, "y": 1, "w": 5, "h": 5}`); code != http.StatusOK {
 		t.Fatalf("zoom during a handoff: %d", code)
+	}
+}
+
+// A handoff doesn't wait for a long human-paced action to finish: it
+// breaks it off at once.
+func TestHandoffInterruptsALongAction(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.all, "google", "visual")
+	type answer struct {
+		code int
+		raw  []byte
+	}
+	got := make(chan answer, 1)
+	go func() {
+		code, _, raw := f.computer(s.ID, `{"action": "type", "text": "typed slowly"}`)
+		got <- answer{code, raw}
+	}()
+	for deadline := time.Now().Add(5 * time.Second); f.lastInput() == ""; {
+		if time.Now().After(deadline) {
+			t.Fatal("the type never reached the browser")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	start := time.Now()
+	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("the handoff waited %v for the type", d)
+	}
+	a := <-got
+	if a.code != http.StatusConflict || !strings.Contains(string(a.raw), "handoff") {
+		t.Fatalf("the type cut short answered %d %s", a.code, a.raw)
+	}
+	for deadline := time.Now().Add(5 * time.Second); f.lastInput() != "cut short"; {
+		if time.Now().After(deadline) {
+			t.Fatalf("the browser never saw the type cut short: %q", f.lastInput())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

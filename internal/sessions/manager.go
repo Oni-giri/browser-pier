@@ -150,8 +150,8 @@ type live struct {
 	lastActivity time.Time
 	// lastAgentInput is when an agent last clicked or typed.
 	lastAgentInput time.Time
-	// inputs counts agent input actions under way (AgentInput leases).
-	inputs int
+	// inputs are agent input actions under way (AgentInput leases).
+	inputs map[*lease]struct{}
 	// leases are BrowserPier's own calls into the page under way
 	// (PageLease); turn lets one run at a time.
 	leases map[*lease]struct{}
@@ -818,7 +818,7 @@ func (m *Manager) end(l *live, lastLog string, final func(*Session)) {
 		delete(m.live, s.Profile)
 	}
 	l.disconnectLocked()
-	l.cancelLeasesLocked(ErrStopping)
+	l.cancelAllLocked(ErrStopping)
 	m.mu.Unlock()
 	if s.State == Failed {
 		m.log.Warn("session failed", "session", s.ID, "profile", s.Profile, "err", s.Error, "last_log", s.LastLog)
@@ -1007,7 +1007,7 @@ func (m *Manager) stopIf(ctx context.Context, id string, cond func(*live) bool) 
 		l.stop = attempt
 		// Page calls under way stop first (an act lets go of what it
 		// pressed), then the browser closes.
-		l.cancelLeasesLocked(ErrStopping)
+		l.cancelAllLocked(ErrStopping)
 		for len(l.leases) > 0 {
 			m.inputsDone.Wait()
 		}
@@ -1107,10 +1107,11 @@ func (m *Manager) SetNeedsHelp(id string, needsHelp bool) (Session, error) {
 			// connections close, and new ones are refused until hand-back.
 			l.disconnectLocked()
 			l.generation++
-			// Page calls under way are cancelled; they and input already
-			// on its way finish before the person gets the browser. New
-			// ones are refused from now on.
-			l.cancelLeasesLocked(ErrHandedOver)
+			// Page calls and agent input under way are cancelled (a long
+			// human-paced type breaks off at once); they finish before
+			// the person gets the browser. New ones are refused from now
+			// on.
+			l.cancelAllLocked(ErrHandedOver)
 			m.waitLeasesLocked(l)
 		}
 		if to == Running {
