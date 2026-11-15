@@ -20,9 +20,12 @@ import (
 // controls, Unicode tags). It also defuses HTML comments, writing "<!--"
 // as "<\!--": the text it fences is page text, file names, logs and
 // errors, never HTML, so a "<!--" in it is text a person sees, and
-// dropping it would hide the rest (PROJ-95). Defused, it can't hide text
-// from a person reading a transcript that renders HTML or Markdown either.
-// A caller that ever fences raw HTML must drop its comments itself, by
+// dropping it would hide the rest (PROJ-95). Defused, a "<!--" can't
+// hide text from a person reading a transcript that renders HTML or
+// Markdown either. That holds for "<!--" only: other markup a renderer
+// may hide, such as "<!x …>", "<?…?>" and "<![CDATA[…]]>", is left as it
+// is, a follow-up tracked as "Fence: defuse other markup that can hide
+// text in a rendered transcript". A caller that ever fences raw HTML must drop its comments itself, by
 // parsing it.
 func Clean(s string) string {
 	s = strings.Map(func(r rune) rune {
