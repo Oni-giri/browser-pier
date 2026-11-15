@@ -67,12 +67,19 @@ const (
 	// did. Resource Timing records a request when it ends, so this only
 	// reads what the browser keeps anyway; nothing is hooked or observed.
 	// A load not yet ended (readyState is complete just before the load
-	// event's handlers run) is no quiet at all.
+	// event's handlers run) is no quiet at all. stopped is a complete
+	// document whose load event hasn't run, which, when it lasts, is a
+	// page that stopped its own load (window.stop()): quiet is then how
+	// long ago its last request, or its own response, ended.
 	jsLoad = `/*bp:load*/ (() => {
   const p = performance, rs = p.getEntriesByType('resource'), nav = p.getEntriesByType('navigation')[0];
-  let last = nav ? nav.loadEventEnd : 0;
-  for (const e of rs) if (e.responseEnd > last) last = e.responseEnd;
-  return {ready: document.readyState, count: rs.length, idle: nav && !nav.loadEventEnd ? 0 : p.now() - last};
+  let last = nav ? nav.loadEventEnd : 0, res = nav ? nav.responseEnd : 0;
+  for (const e of rs) {
+    if (e.responseEnd > last) last = e.responseEnd;
+    if (e.responseEnd > res) res = e.responseEnd;
+  }
+  const stopped = !!nav && !nav.loadEventEnd && document.readyState === 'complete';
+  return {ready: document.readyState, count: rs.length, idle: nav && !nav.loadEventEnd ? 0 : p.now() - last, stopped, quiet: p.now() - res};
 })()`
 )
 
@@ -136,6 +143,9 @@ type waiter struct {
 	// too, as the entries' times can't tell it.
 	count     int
 	quietFrom time.Time
+	// unloaded is since when the document has been complete without its
+	// load event, if it has.
+	unloaded time.Time
 	// tgt is the target awaited, and ambiguous since when it has matched
 	// several elements. seen is what its last look that read the page
 	// found, for an answer when the looks after it couldn't read.
@@ -328,9 +338,11 @@ func (c *call) check1(ctx context.Context, w *waiter, first bool) (waitCheck, er
 // the wait, and one slower than loadQuiet isn't waited for.
 func (c *call) checkLoad(ctx context.Context, w *waiter) (waitCheck, error) {
 	var st struct {
-		Ready string  `json:"ready"`
-		Count int     `json:"count"`
-		Idle  float64 `json:"idle"`
+		Ready   string  `json:"ready"`
+		Count   int     `json:"count"`
+		Idle    float64 `json:"idle"`
+		Stopped bool    `json:"stopped"`
+		Quiet   float64 `json:"quiet"`
 	}
 	err := c.eval(ctx, jsLoad, &st)
 	if errors.Is(err, cdp.ErrWorldGone) {
@@ -352,15 +364,37 @@ func (c *call) checkLoad(ctx context.Context, w *waiter) (waitCheck, error) {
 		return waitCheck{now: "the document is still loading (readyState " + ready + ")"}, nil
 	}
 	idle := max(time.Duration(st.Idle*float64(time.Millisecond)), 0)
+	// Complete without its load event: just before the event runs, or,
+	// for longer than loadQuiet, a page that stopped its own load, whose
+	// event never comes. The quiet counts from its last request then.
+	stopped := false
+	switch {
+	case !st.Stopped:
+		w.unloaded = time.Time{}
+	case w.unloaded.IsZero():
+		w.unloaded = time.Now()
+	case time.Since(w.unloaded) >= loadQuiet:
+		stopped = true
+		idle = max(time.Duration(st.Quiet*float64(time.Millisecond)), 0)
+	}
 	if !w.quietFrom.IsZero() {
 		idle = min(idle, time.Since(w.quietFrom))
 	}
+	if st.Stopped && !stopped {
+		return waitCheck{now: "the document is complete, but its load event hasn't run"}, nil
+	}
 	if idle >= loadQuiet {
 		ck := waitCheck{ok: true}
+		if stopped {
+			ck.note = " (its load event never ran, as when a page stops its own load: the quiet counts from its last request)"
+		}
 		if st.Count == resourceBuffer {
-			ck.note = fmt.Sprintf(" (but the page's list of finished requests is full at %d, so later ones can't be seen)", resourceBuffer)
+			ck.note += fmt.Sprintf(" (but the page's list of finished requests is full at %d, so later ones can't be seen)", resourceBuffer)
 		}
 		return ck, nil
+	}
+	if stopped {
+		return waitCheck{now: "the document is complete without its load event (the page stopped its load), but requests keep ending (the last " + seconds(idle, false) + " ago)"}, nil
 	}
 	return waitCheck{now: "the document is complete, but requests keep ending (the last " + seconds(idle, false) + " ago)"}, nil
 }

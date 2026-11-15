@@ -160,6 +160,27 @@ func TestWaitForLoad(t *testing.T) {
 	if err != nil || !strings.HasPrefix(out, "waited ") || time.Since(start) < loadQuiet {
 		t.Errorf("after a clear: %v %q after %s", err, out, time.Since(start))
 	}
+	// A page that stopped its own load (window.stop()): complete, and its
+	// load event never comes. Not long enough to tell from the moment
+	// before the event: said so.
+	stopped := func(quiet float64) map[string]any {
+		return map[string]any{"ready": "complete", "count": 3, "idle": 0, "stopped": true, "quiet": quiet}
+	}
+	set(stopped(5000))
+	if out, err := f.waitIn(WaitIn{Load: true, TimeoutMS: 60}); err != nil || out != "timed out after 0.06 s waiting for the page to load and the network to go quiet; now: the document is complete, but its load event hasn't run" {
+		t.Errorf("stopped, briefly: %v %q", err, out)
+	}
+	// Once it has lasted loadQuiet, the quiet counts from its last
+	// request (PROJ-122).
+	start = time.Now()
+	out, err = f.waitIn(WaitIn{Load: true, TimeoutMS: 3000})
+	if err != nil || !strings.HasPrefix(out, "waited ") || !strings.HasSuffix(out, "(its load event never ran, as when a page stops its own load: the quiet counts from its last request)") || time.Since(start) < loadQuiet {
+		t.Errorf("stopped: %v %q after %s", err, out, time.Since(start))
+	}
+	set(stopped(100))
+	if out, err := f.waitIn(WaitIn{Load: true, TimeoutMS: 700}); err != nil || out != "timed out after 0.7 s waiting for the page to load and the network to go quiet; now: the document is complete without its load event (the page stopped its load), but requests keep ending (the last 0.1 s ago)" {
+		t.Errorf("stopped, busy: %v %q", err, out)
+	}
 	checkSent(t, f.fb)
 }
 
