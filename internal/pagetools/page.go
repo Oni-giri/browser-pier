@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -834,12 +833,7 @@ func frameOrigin(d *dom, ni int) string {
 	if raw == "" {
 		raw, _ = d.attr(ni, "src")
 	}
-	raw = cutBytes(raw, maxURL)
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return capText(raw, maxField)
-	}
-	return u.Scheme + "://" + u.Host
+	return origin(cutBytes(raw, maxURL))
 }
 
 // textOnly reads a page's text from the DOM snapshot alone, for pages too

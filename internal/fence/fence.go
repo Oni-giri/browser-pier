@@ -16,19 +16,25 @@ import (
 )
 
 // Clean removes what a person reading the page wouldn't see but a model
-// would: HTML comments and invisible characters (zero-width and format
-// characters, bidi controls, Unicode tags).
+// would: invisible characters (zero-width and format characters, bidi
+// controls, Unicode tags). It also defuses HTML comments, writing "<!--"
+// as "<\!--": the text it fences is page text, file names, logs and
+// errors, never HTML, so a "<!--" in it is text a person sees, and
+// dropping it would hide the rest (PROJ-95). Defused, it can't hide text
+// from a person reading a transcript that renders HTML or Markdown either.
+// A caller that ever fences raw HTML must drop its comments itself, by
+// parsing it.
 func Clean(s string) string {
-	s = comments.ReplaceAllString(s, "")
-	return strings.Map(func(r rune) rune {
+	s = strings.Map(func(r rune) rune {
 		if invisible(r) {
 			return -1
 		}
 		return r
 	}, s)
+	// After the invisible characters are gone, so "<!\u200b--" can't
+	// become a comment again.
+	return strings.ReplaceAll(s, "<!--", `<\!--`)
 }
-
-var comments = regexp.MustCompile(`(?s)<!--.*?(-->|$)`)
 
 func invisible(r rune) bool {
 	switch {
