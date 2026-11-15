@@ -86,6 +86,10 @@ type ActIn struct {
 	Steps []Step `json:"steps"`
 	// Snapshot appends a snapshot of the page after the steps.
 	Snapshot bool `json:"snapshot,omitempty"`
+	// Changes appends what changed on the page since the agent's last
+	// snapshot of its document (PROJ-114). Unset, it is on when there is
+	// such a snapshot and Snapshot isn't set.
+	Changes *bool `json:"changes,omitempty"`
 }
 
 // checkStep says what's wrong with a step, before any runs.
@@ -200,8 +204,21 @@ func (t *Tools) Act(ctx context.Context, s sessions.Session, who Caller, in ActI
 	if human > maxHumanType {
 		return "", &Error{Status: 400, Msg: fmt.Sprintf("type steps: %d characters at human pace, at most %d per call (about two minutes); split them across calls, use fill, or set pace instant", human, maxHumanType)}
 	}
+	if in.Snapshot && in.Changes != nil && *in.Changes {
+		return "", &Error{Status: 400, Msg: "snapshot and changes: ask for one; a snapshot already shows the whole page"}
+	}
 	return t.run(ctx, s, who, func(c *call) (string, error) {
 		ctx := c.lease.Ctx
+		changes := in.Changes != nil && *in.Changes
+		if in.Changes == nil && !in.Snapshot {
+			// On by default once the agent has a snapshot of this document.
+			if b := c.t.baseline(c.sess.ID, c.tgt.ID); b != nil {
+				if err := c.refresh(ctx); err != nil {
+					return "", err
+				}
+				changes = b.loader == c.loader && b.frame == c.frame
+			}
+		}
 		var done []string
 		for i, st := range in.Steps {
 			if i > 0 && c.t.settle > 0 {
@@ -221,14 +238,38 @@ func (t *Tools) Act(ctx context.Context, s sessions.Session, who Caller, in ActI
 		// A step may have opened a tab.
 		_, _ = c.listTabs(ctx)
 		out := c.result("page actions", strings.Join(done, "\n"), "")
-		if in.Snapshot {
-			p, err := c.read(ctx, true)
+		switch {
+		case in.Snapshot:
+			p, moved, err := c.readDoc(ctx)
 			if err != nil {
 				return out + "\nThe snapshot after it failed: " + c.fail(err).Error(), nil
+			}
+			c.st.refs.dropStale(c.tgt.ID, p.loader)
+			if moved {
+				c.t.dropBaseline(c.sess.ID, c.tgt.ID)
+			} else {
+				c.t.setBaseline(c.sess.ID, c.tgt.ID, p.frame, p.loader, p.items)
 			}
 			c.notices = nil
 			body, marker := c.render(p, DefaultMaxChars)
 			out += "\n" + c.result("page snapshot", body, marker)
+		case changes:
+			// The steps ran: whatever happens to the read, their result
+			// stands.
+			out += "\n### Changes\n"
+			if c.t.settle > 0 {
+				// Let the page react to the last step, as between steps.
+				select {
+				case <-ctx.Done():
+				case <-time.After(c.t.settle):
+				}
+			}
+			_, r, err := c.changes(ctx, false)
+			if err != nil {
+				return out + "The changes couldn't be read: " + c.fail(err).Error(), nil
+			}
+			c.notices = nil // given with the steps
+			out += c.result("page changes", r.body, r.trailer)
 		}
 		return out, nil
 	})

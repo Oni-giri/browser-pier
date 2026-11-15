@@ -100,6 +100,14 @@ type Tools struct {
 
 	mu    sync.Mutex
 	pages map[string]*state // by session ID
+	// bases are the item lists diffs compare against (PROJ-114), by
+	// session and tab, in memory only; baseBytes is about what they take
+	// together (at most maxBaselines), baseSeq orders them by when they
+	// were stored. Guarded by mu, since dropping the oldest reaches into
+	// other sessions'.
+	bases     map[baseKey]*baseline
+	baseBytes int
+	baseSeq   uint64
 
 	// quick and slow are quickTimeout and slowTimeout; tests shorten them.
 	quick, slow time.Duration
@@ -122,9 +130,14 @@ type Tools struct {
 }
 
 func New(m *sessions.Manager, log *slog.Logger) *Tools {
-	return &Tools{m: m, log: log, pages: map[string]*state{}, quick: quickTimeout, slow: slowTimeout,
+	t := &Tools{m: m, log: log, pages: map[string]*state{}, bases: map[baseKey]*baseline{}, quick: quickTimeout, slow: slowTimeout,
 		settle: 100 * time.Millisecond, coverWait: defaultCoverWait, coverPoll: 100 * time.Millisecond, poll: 250 * time.Millisecond, reads: make(chan struct{}, maxReads), readWait: 10 * time.Second,
 		newMotion: motion.NewRandom, pause: sleep}
+	if m != nil {
+		// A session's refs and kept lists go as it ends.
+		m.OnEnd(t.forgetSession)
+	}
+	return t
 }
 
 // SetFiles gives act's upload step the profiles' files folders.
@@ -186,18 +199,23 @@ func (t *Tools) state(sessionID string, gen uint64) *state {
 			for id := range t.pages {
 				if !live[id] {
 					delete(t.pages, id)
+					t.dropBaselinesLocked(id)
 				}
 			}
 		}
 		st = &state{refs: newRefs(), gen: gen, tabs: map[string]*tabState{}, mot: t.newMotion()}
 		t.pages[sessionID] = st
+		// A new ref epoch: lists kept with the old refs' items go.
+		t.dropBaselinesLocked(sessionID)
 	}
 	if st.gen != gen {
 		// A person had the browser since: whatever the refs named may
-		// have changed under them.
+		// have changed under them, and so may the page since the last
+		// snapshot.
 		st.refs.dropAll()
 		st.gen = gen
 		st.pointer = nil
+		t.dropBaselinesLocked(sessionID)
 	}
 	return st
 }

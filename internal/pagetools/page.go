@@ -50,6 +50,11 @@ type item struct {
 	group int
 	// label marks the text of a <label>; its ref is the label itself.
 	label bool
+	// parent is the nearest item enclosing this one in the DOM, plus one
+	// (0: none), which a diff shows a changed line under (linkParents).
+	parent int
+	// key is itemKey's, once worked out for a kept list (compact).
+	key uint64
 }
 
 // group is a navigation landmark or a menu.
@@ -738,7 +743,9 @@ func join(ctx context.Context, nodes []axNode, d *dom, view [4]float64) ([]item,
 	}
 	out = slices.DeleteFunc(out, func(it item) bool { return !it.control && !it.iframe && it.text == "" })
 	markCovered(out, d)
-	return dropLabelEchoes(out), groups, budget.cut || d.cut, nil
+	out = dropLabelEchoes(out)
+	linkParents(out, d)
+	return out, groups, budget.cut || d.cut, nil
 }
 
 // underFrame is the state of a control an iframe covers.
@@ -1008,6 +1015,7 @@ func textOnly(ctx context.Context, d *dom, view [4]float64) ([]item, bool, error
 		out[r.at].text = r.String()
 	}
 	out = slices.DeleteFunc(out, func(it item) bool { return it.text == "" })
+	linkParents(out, d)
 	return out, budget.cut || d.cut, nil
 }
 

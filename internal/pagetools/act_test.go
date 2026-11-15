@@ -118,8 +118,15 @@ func TestActLogsIn(t *testing.T) {
 			t.Errorf("activity: %q", a.What)
 		}
 	}
-	if strings.Contains(out, "SECRET") || strings.Contains(out, "ana@") {
+	// The steps never echo it. The changes after them (on by default
+	// after a snapshot, PROJ-114) show a field's value as a snapshot does,
+	// a secret one only as [filled].
+	steps, changes, _ := strings.Cut(out, "### Changes")
+	if strings.Contains(out, "SECRET") || strings.Contains(steps, "ana@") {
 		t.Errorf("typed text echoed:\n%s", out)
+	}
+	if !strings.Contains(changes, `+ `+r["Password"]+` textbox "Password" = [filled]`) {
+		t.Errorf("the changes don't show the password field filled:\n%s", out)
 	}
 	ev := strings.Join(f.fb.input(f.fb.tabs[0]).events, "|")
 	if !strings.Contains(ev, "mouseMoved Sign in|mousePressed Sign in|mouseReleased Sign in") {

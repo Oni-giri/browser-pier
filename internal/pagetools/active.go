@@ -64,6 +64,7 @@ func (c *call) forgetTab(id string) {
 	delete(c.st.tabs, id)
 	c.st.order = slices.DeleteFunc(c.st.order, func(t string) bool { return t == id })
 	c.st.refs.dropTarget(id)
+	c.t.dropBaseline(c.sess.ID, id)
 	if c.st.active == id {
 		c.st.active = ""
 	}
