@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -189,5 +190,93 @@ func TestIsolatedWorldSeesResourceTiming(t *testing.T) {
 	_ = json.Unmarshal(p.Call("Runtime.evaluate", map[string]any{"expression": count + ` + ':' + typeof window.proofMark`, "contextId": world.ExecutionContextID, "returnByValue": true}), &r)
 	if r.Result.Value != "3:undefined" {
 		t.Fatalf("the isolated world sees %v", r.Result.Value)
+	}
+}
+
+// waitMet reports whether a wait's answer says its condition was met.
+func waitMet(out string) bool {
+	return strings.HasPrefix(out, "waited ") || strings.HasPrefix(out, "already true when wait started: ")
+}
+
+// waitedFor reads the seconds out of "waited 1.4 s for …".
+func waitedFor(t *testing.T, out string) float64 {
+	t.Helper()
+	rest, ok := strings.CutPrefix(out, "waited ")
+	num, _, ok2 := strings.Cut(rest, " s for ")
+	v, err := strconv.ParseFloat(num, 64)
+	if !ok || !ok2 || err != nil {
+		t.Fatalf("not a wait's answer: %q", out)
+	}
+	return v
+}
+
+// TestWaitForAnswers is PROJ-122 on a real browser: wait_for says when
+// the text was already there and how long it waited, and load waits for
+// an app's fetches after its load, but not for a long poll.
+func TestWaitForAnswers(t *testing.T) {
+	a := newRealAPI(t)
+	site := browsertest.NewPageSite(t, browsertest.SiteHost(t))
+	s := a.startAPIBrowser(t, "w")
+	open := func(path string) {
+		t.Helper()
+		a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + path})
+	}
+
+	// Already there.
+	open("/hello")
+	if out := a.mustTool(s.ID, "wait", map[string]any{"text": "Hello"}); out != `already true when wait started: text "Hello" is on the page` {
+		t.Errorf("already there: %q", out)
+	}
+	// About a second later: the answer's seconds match the call's.
+	open("/done-later")
+	start := time.Now()
+	out := a.mustTool(s.ID, "wait", map[string]any{"text": "Done"})
+	took := time.Since(start).Seconds()
+	t.Logf("done-later: %q, %.2f s by the clock", out, took)
+	if w := waitedFor(t, out); w < 0.75 || w > 1.3 || w > took+0.05 || took-w > 0.3 {
+		t.Errorf("waited %v s by the answer, %.2f s by the clock: %q", w, took, out)
+	}
+
+	// An app that loads, then fetches three times in a row (400 ms each)
+	// before it renders: load ends 500 ms after the last fetch.
+	start = time.Now()
+	open("/spa-load")
+	out = a.mustTool(s.ID, "wait", map[string]any{"load": true})
+	took = time.Since(start).Seconds()
+	t.Logf("spa-load: %q, %.2f s after navigating", out, took)
+	if !strings.HasPrefix(out, "waited ") || !strings.HasSuffix(out, " s for the page to load and the network to go quiet") || took < 1.5 || took > 3 {
+		t.Errorf("spa-load: %q, %.2f s after navigating", out, took)
+	}
+	if found := a.mustTool(s.ID, "find", map[string]any{"text": "Ready"}); !strings.Contains(found, "1 match.") {
+		t.Errorf("find right after the load: %s", found)
+	}
+	// Quiet now: already true.
+	if out := a.mustTool(s.ID, "wait", map[string]any{"load": true}); out != "already true when wait started: the page is loaded and the network quiet" {
+		t.Errorf("spa-load again: %q", out)
+	}
+
+	// A fetch that never answers isn't waited for.
+	open("/longpoll")
+	start = time.Now()
+	out = a.mustTool(s.ID, "wait", map[string]any{"load": true})
+	t.Logf("longpoll: %q after %s", out, time.Since(start))
+	if !waitMet(out) || time.Since(start) > 1700*time.Millisecond {
+		t.Errorf("longpoll: %q after %s", out, time.Since(start))
+	}
+
+	// A ref that stays hidden: the timeout says so.
+	open("/later")
+	spinner := refFor(t, a.mustTool(s.ID, "find", map[string]any{"text": "loading spinner"}), "Loading spinner")
+	out = a.mustTool(s.ID, "wait", map[string]any{"ref": spinner, "state": "hidden", "timeout_ms": 5000})
+	if !waitMet(out) {
+		t.Fatalf("spinner hidden: %q", out)
+	}
+	if out := a.mustTool(s.ID, "wait", map[string]any{"ref": spinner, "timeout_ms": 500}); out != "timed out after 0.5 s waiting for "+spinner+" to be visible; now: "+spinner+" is on the page but hidden" {
+		t.Errorf("hidden: %q", out)
+	}
+	for _, act := range a.m.Activity(s.ID) {
+		if strings.Contains(act.What, "Hello") || strings.Contains(act.What, "Done") {
+			t.Errorf("the activity log has the text: %q", act.What)
+		}
 	}
 }

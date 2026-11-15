@@ -163,6 +163,10 @@ func TestPageToolsStayQuiet(t *testing.T) {
 		{"act", steps(map[string]any{"action": "upload", "ref": doc, "files": []string{up.Name}}), []string{"file-without-click@main"}},
 		{"wait", map[string]any{"text": "Account"}, nil},
 		{"wait", map[string]any{"ref": goBtn}, nil},
+		// The page polls every 200 ms, so load times out: what counts
+		// is that reading its Resource Timing entries isn't seen
+		// (PROJ-122).
+		{"wait", map[string]any{"load": true, "timeout_ms": 300}, nil},
 		{"tabs", map[string]any{}, nil},
 	}
 	// Each batch goes through w.Quiet, which tells a busy machine's

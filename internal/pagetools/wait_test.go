@@ -124,6 +124,11 @@ func TestWaitForLoad(t *testing.T) {
 	if out, err := f.waitIn(WaitIn{Load: true}); err != nil || out != "already true when wait started: the page is loaded and the network quiet" {
 		t.Errorf("quiet: %v %q", err, out)
 	}
+	// A full list of entries: said, since later requests can't be seen.
+	set(st("complete", 250, 2000))
+	if out, err := f.waitIn(WaitIn{Load: true}); err != nil || !strings.HasSuffix(out, "network quiet (but the page's list of finished requests is full at 250, so later ones can't be seen)") {
+		t.Errorf("full: %v %q", err, out)
+	}
 	// Requests that keep ending: not quiet until one is 500 ms old.
 	set(st("complete", 4, 100), st("complete", 5, 30), st("complete", 6, 499), st("complete", 6, 510))
 	if out, err := f.waitIn(WaitIn{Load: true}); err != nil || !strings.HasPrefix(out, "waited ") {

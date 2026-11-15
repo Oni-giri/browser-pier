@@ -151,16 +151,16 @@ func TestPageToolsAct(t *testing.T) {
 	open("/later")
 	spinner := refFor(t, a.mustTool(s.ID, "find", map[string]any{"text": "loading spinner"}), "Loading spinner")
 	start := time.Now()
-	if out := a.mustTool(s.ID, "wait", map[string]any{"text": "Payment confirmed"}); out != "ok" || time.Since(start) < time.Second {
+	if out := a.mustTool(s.ID, "wait", map[string]any{"text": "Payment confirmed"}); !strings.HasPrefix(out, "waited ") || time.Since(start) < time.Second {
 		t.Errorf("wait for text: %q after %s", out, time.Since(start))
 	}
-	if out := a.mustTool(s.ID, "wait", map[string]any{"ref": spinner, "state": "hidden", "timeout_ms": 5000}); out != "ok" {
+	if out := a.mustTool(s.ID, "wait", map[string]any{"ref": spinner, "state": "hidden", "timeout_ms": 5000}); !waitMet(out) {
 		t.Errorf("wait for hidden: %q", out)
 	}
 	if out := a.mustTool(s.ID, "find", map[string]any{"text": "payment confirmed"}); !strings.Contains(out, "1 match.") {
 		t.Errorf("find after the wait: %s", out)
 	}
-	if out := a.mustTool(s.ID, "wait", map[string]any{"text": "never there", "timeout_ms": 500}); out != "timed out after 500ms" {
+	if out := a.mustTool(s.ID, "wait", map[string]any{"text": "never there", "timeout_ms": 500}); out != `timed out after 0.5 s waiting for text "never there" to appear` {
 		t.Errorf("timeout: %q", out)
 	}
 

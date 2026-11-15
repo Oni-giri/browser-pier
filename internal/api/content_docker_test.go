@@ -319,7 +319,7 @@ func TestContentHiddenTextSpendsNoBudget(t *testing.T) {
 	s := a.startAPIBrowser(t, "cb")
 	for _, q := range []string{"k=none&mb=9", "k=script&mb=9"} {
 		a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/probe-budget?" + q})
-		if out := a.mustTool(s.ID, "wait", map[string]any{"text": "AFTER-BIG-HEADING"}); out != "ok" {
+		if out := a.mustTool(s.ID, "wait", map[string]any{"text": "AFTER-BIG-HEADING"}); !waitMet(out) {
 			t.Fatalf("%s: %s", q, out)
 		}
 		for _, format := range []string{"markdown", "readability"} {

@@ -154,7 +154,7 @@ func TestAgentLogsInWithPageTools(t *testing.T) {
 	if strings.Contains(out, "hunter2") {
 		t.Errorf("the password is in act's result:\n%s", out)
 	}
-	if out := tool("wait_for", map[string]any{"session_id": id, "text": "Signed in"}); out != "ok" {
+	if out := tool("wait_for", map[string]any{"session_id": id, "text": "Signed in"}); !strings.HasPrefix(out, "waited ") && !strings.HasPrefix(out, "already true when wait started: ") {
 		t.Fatalf("wait_for: %s (rejected: %s)", out, site.Rejected())
 	}
 	if site.Issued() == "" {
@@ -243,7 +243,7 @@ func TestAgentUploadsWithPageTools(t *testing.T) {
 	if !strings.Contains(out, "uploaded 1 file to") {
 		t.Errorf("act: %s", out)
 	}
-	if out := tool("wait_for", map[string]any{"session_id": id, "text": "Uploaded"}); out != "ok" {
+	if out := tool("wait_for", map[string]any{"session_id": id, "text": "Uploaded"}); !strings.HasPrefix(out, "waited ") && !strings.HasPrefix(out, "already true when wait started: ") {
 		t.Fatalf("wait_for: %s", out)
 	}
 	got := site.Uploads()

@@ -21,6 +21,11 @@ const (
 	MaxWait     = 30 * time.Second
 )
 
+// resourceBuffer is how many Resource Timing entries Chrome keeps for a
+// page unless it asks for more: a page with exactly this many has most
+// likely filled its list, and its later requests aren't recorded.
+const resourceBuffer = 250
+
 // loadQuiet is how long the load condition wants the page to have
 // finished no request (nor its load) before it counts as loaded.
 const loadQuiet = 500 * time.Millisecond
@@ -103,6 +108,8 @@ type waitCheck struct {
 	ok   bool
 	now  string
 	gone bool
+	// note qualifies a met condition, in BrowserPier's words.
+	note string
 }
 
 // waiter is one wait's state between looks.
@@ -178,11 +185,11 @@ func (t *Tools) WaitFor(ctx context.Context, s sessions.Session, who Caller, in 
 			switch {
 			case ck.ok && first:
 				c.note(what + ": already true")
-				return c.result("page", "", "already true when wait started: "+is), nil
+				return c.result("page", "", "already true when wait started: "+is+ck.note), nil
 			case ck.ok:
 				took := seconds(time.Since(start), false)
 				c.note(what + ": ok after " + took)
-				return c.result("page", "", "waited "+took+" for "+awaited), nil
+				return c.result("page", "", "waited "+took+" for "+awaited+ck.note), nil
 			case ck.gone:
 				took := seconds(time.Since(start), false)
 				c.note(what + ": gone after " + took)
@@ -292,7 +299,11 @@ func (c *call) checkLoad(ctx context.Context, w *waiter) (waitCheck, error) {
 		idle = min(idle, time.Since(w.quietFrom))
 	}
 	if idle >= loadQuiet {
-		return waitCheck{ok: true}, nil
+		ck := waitCheck{ok: true}
+		if st.Count == resourceBuffer {
+			ck.note = fmt.Sprintf(" (but the page's list of finished requests is full at %d, so later ones can't be seen)", resourceBuffer)
+		}
+		return ck, nil
 	}
 	return waitCheck{now: "the document is complete, but requests keep ending (the last " + seconds(idle, false) + " ago)"}, nil
 }
