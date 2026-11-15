@@ -440,7 +440,9 @@ func TestActCoveredClicks(t *testing.T) {
 	snap = open("/fading")
 	start := time.Now()
 	code, msg := a.tool(s.ID, "act", steps(map[string]any{"action": "click", "ref": refFor(t, snap, `button "Behind the backdrop"`), "pace": "instant"}))
-	if d := time.Since(start); code != http.StatusOK || d > 1500*time.Millisecond {
+	d := time.Since(start)
+	t.Logf("fading backdrop: clicked after %s", d)
+	if code != http.StatusOK || d > 1500*time.Millisecond {
 		t.Errorf("fading backdrop: %d after %s: %s", code, d, msg)
 	}
 	if !waitEvent("fading clicked") || site.HasEvent("backdrop clicked") {
@@ -462,11 +464,12 @@ func TestActCoveredClicks(t *testing.T) {
 	snap = open("/cookie-dialog")
 	start = time.Now()
 	code, msg = a.tool(s.ID, "act", steps(map[string]any{"action": "click", "ref": refFor(t, snap, `button "Behind the cookie dialog"`)}))
-	if d := time.Since(start); code != http.StatusConflict || d > 1300*time.Millisecond {
+	d = time.Since(start)
+	t.Logf("cookie dialog: refused after %s", d)
+	if code != http.StatusConflict || d > 1300*time.Millisecond {
 		t.Errorf("cookie dialog: %d after %s: %s", code, d, msg)
 	}
-	i := strings.Index(msg, `dialog "Cookie settings" is open`)
-	if i < 0 || strings.LastIndex(msg[:i], "<untrusted-content-") <= strings.LastIndex(msg[:i], "</untrusted-content-") {
+	if !fencedIn(msg, `dialog "Cookie settings" is open`) {
 		t.Errorf("cookie dialog: the title isn't named, fenced: %s", msg)
 	}
 	time.Sleep(300 * time.Millisecond)
@@ -503,4 +506,19 @@ func TestActCoveredClicks(t *testing.T) {
 	if target != "link" || x < r[0] || x > r[0]+r[2] || y < r[1] || y > r[1]+r[3] {
 		t.Errorf("wrapped link: the click hit %s at (%v, %v), not inside the second line %v", target, x, y, r)
 	}
+}
+
+// fencedIn reports whether text is in msg inside one fence: after a
+// fence's opening tag, before that fence's closing line.
+func fencedIn(msg, text string) bool {
+	i := strings.Index(msg, text)
+	if i < 0 {
+		return false
+	}
+	open := strings.LastIndex(msg[:i], "<untrusted-content-")
+	if open < 0 {
+		return false
+	}
+	id, _, ok := strings.Cut(msg[open+len("<untrusted-content-"):], " ")
+	return ok && strings.Contains(msg[i:], "\n</untrusted-content-"+id+">")
 }

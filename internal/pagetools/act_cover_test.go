@@ -139,8 +139,13 @@ func TestActNamesAnOpenDialogFenced(t *testing.T) {
 	}
 	msg := err.Error()
 	i := strings.Index(msg, `dialog "Cookie settings" is open`)
-	if i < 0 || !strings.Contains(msg[:i], "; <untrusted-content-") || !strings.Contains(msg[i:], "</untrusted-content-") {
-		t.Errorf("the dialog isn't named, fenced:\n%s", msg)
+	open := strings.LastIndex(msg[:max(i, 0)], "; <untrusted-content-")
+	if i < 0 || open < 0 {
+		t.Fatalf("the dialog isn't named, after a fence:\n%s", msg)
+	}
+	id, _, _ := strings.Cut(msg[open+len("; <untrusted-content-"):], " ")
+	if !strings.Contains(msg[i:], "\n</untrusted-content-"+id+">") {
+		t.Errorf("the dialog's title isn't inside its fence:\n%s", msg)
 	}
 	if !strings.Contains(msg, `region "Promotion overlay"`) {
 		t.Errorf("the cover isn't named:\n%s", msg)

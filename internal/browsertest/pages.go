@@ -99,8 +99,9 @@ var pageSitePages = map[string]string{ //nolint:gosec // test pages, not credent
 <div style="height:2000px"></div>
 <script>window.scrollTo(0, 480)</script></body>`,
 	// PROJ-115 B: a full-screen backdrop over a button that starts fading
-	// 400 ms after load and is gone 500 ms later, at 900 ms: still there
-	// when a call made right after navigate looks, gone within its wait.
+	// 200 ms after load and is gone 500 ms later, at 700 ms: still there
+	// when a call made right after navigate looks (navigate returns
+	// within about 100 ms of load), gone well within a 1 s wait.
 	"/fading": `<!doctype html><title>Fading backdrop</title>` + report + `
 <button onclick="report('fading clicked')" style="position:absolute;left:50px;top:50px;width:200px;height:60px">Behind the backdrop</button>
 <div id="backdrop" role="region" aria-label="Fading backdrop" style="position:fixed;inset:0;background:rgba(0,0,0,.5);transition:opacity .5s linear" onclick="report('backdrop clicked')"></div>
@@ -108,7 +109,7 @@ var pageSitePages = map[string]string{ //nolint:gosec // test pages, not credent
   const b = document.getElementById('backdrop');
   b.style.opacity = '0';
   setTimeout(() => b.remove(), 500);
-}, 400))</script>`,
+}, 200))</script>`,
 	// PROJ-115 C: a cookie dialog that stays, over a button.
 	"/cookie-dialog": `<!doctype html><title>Cookie dialog</title>` + report + `
 <button onclick="report('behind cookie clicked')" style="position:absolute;left:50px;top:50px;width:200px;height:60px">Behind the cookie dialog</button>
