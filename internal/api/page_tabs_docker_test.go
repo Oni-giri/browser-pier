@@ -119,6 +119,9 @@ func TestPageToolsTabs(t *testing.T) {
 	}
 }
 
+// inTurn is a batch's bodies, sent one after the other.
+type inTurn []any
+
 // TestPageToolsStayQuiet is scenario 14: 20 runs of each page tool, with
 // nothing else attached, against the continuous detector, which must
 // catch its positive control. Hits are listed in
@@ -137,8 +140,13 @@ func TestPageToolsStayQuiet(t *testing.T) {
 	snap := a.mustTool(s.ID, "snapshot", nil)
 	email, pw, goBtn := refFor(t, snap, `textbox "Email"`), refFor(t, snap, `textbox "Password"`), refFor(t, snap, `button "Continue"`)
 	doc := refFor(t, snap, `"Document"`)
-	var up struct{ Name string }
+	// Two files, set in turn: setting the file the input already holds
+	// may fire no events, and each run should.
+	var up, up2 struct{ Name string }
 	if code := a.do(http.MethodPost, "/api/sessions/"+s.ID+"/files?name=quiet.txt", "a file to upload", &up); code != http.StatusCreated {
+		t.Fatalf("upload: %d", code)
+	}
+	if code := a.do(http.MethodPost, "/api/sessions/"+s.ID+"/files?name=quiet2.txt", "another file to upload", &up2); code != http.StatusCreated {
 		t.Fatalf("upload: %d", code)
 	}
 	runs := []struct {
@@ -160,7 +168,8 @@ func TestPageToolsStayQuiet(t *testing.T) {
 		{"act", map[string]any{"steps": []any{map[string]any{"action": "hover", "ref": goBtn}}, "changes": true}, nil},
 		{"snapshot", map[string]any{"diff": true}, nil},
 		// Files set without a click to open the chooser (PROJ-117).
-		{"act", steps(map[string]any{"action": "upload", "ref": doc, "files": []string{up.Name}}), []string{"file-without-click@main"}},
+		{"act", inTurn{steps(map[string]any{"action": "upload", "ref": doc, "files": []string{up.Name}}),
+			steps(map[string]any{"action": "upload", "ref": doc, "files": []string{up2.Name}})}, []string{"file-without-click@main"}},
 		{"wait", map[string]any{"text": "Account"}, nil},
 		{"wait", map[string]any{"ref": goBtn}, nil},
 		// Targets read the AX tree, as snapshot does (PROJ-123).
@@ -178,7 +187,16 @@ func TestPageToolsStayQuiet(t *testing.T) {
 	quiet := true
 	for _, r := range runs {
 		raw, _ := json.Marshal(r.body)
-		if _, ok := w.Quiet(t, fmt.Sprintf("20 × %s %s", r.tool, raw), 20, func() { a.mustTool(s.ID, r.tool, r.body) }, r.allowed...); !ok {
+		n := 0
+		call := func() {
+			body := r.body
+			if bodies, ok := body.(inTurn); ok {
+				body = bodies[n%len(bodies)]
+			}
+			n++
+			a.mustTool(s.ID, r.tool, body)
+		}
+		if _, ok := w.Quiet(t, fmt.Sprintf("20 × %s %s", r.tool, raw), 20, call, r.allowed...); !ok {
 			quiet = false
 		}
 	}
