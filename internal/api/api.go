@@ -512,10 +512,50 @@ func (a *API) input(path string) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "body too large")
 			return
 		}
-		if a.act(w, r, s, path, body) {
-			w.WriteHeader(http.StatusNoContent)
+		var mark *files.Mark
+		var wait time.Duration
+		if path == "/input/click" {
+			// A click may start a download (PROJ-116); the browser
+			// doesn't take download_wait_ms, which is BrowserPier's.
+			var ms *int
+			if body, ms, err = takeDownloadWait(body); err == nil {
+				wait, err = files.DownloadWait(ms)
+			}
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			mark = a.markDownloads(s.Profile)
 		}
+		if !a.act(w, r, s, path, body) {
+			return
+		}
+		if mark != nil {
+			a.reportDownloads(w, r, s, mark, wait)
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// takeDownloadWait takes download_wait_ms out of a click's JSON body,
+// leaving the rest as it was. A body that isn't a JSON object goes on
+// unchanged, for the browser to refuse.
+func takeDownloadWait(body []byte) ([]byte, *int, error) {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(body, &fields) != nil {
+		return body, nil, nil
+	}
+	raw, ok := fields["download_wait_ms"]
+	if !ok {
+		return body, nil, nil
+	}
+	var ms int
+	if err := json.Unmarshal(raw, &ms); err != nil {
+		return nil, nil, errors.New("download_wait_ms: want a number of milliseconds")
+	}
+	delete(fields, "download_wait_ms")
+	out, err := json.Marshal(fields)
+	return out, &ms, err
 }
 
 // act runs one input action through the control socket and logs it, or

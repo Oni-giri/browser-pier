@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
+	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
@@ -48,7 +49,15 @@ type computerRequest struct {
 	// Pace is human (the default: the pointer glides, aims and holds, and
 	// keys come at a typist's rhythm) or instant (PROJ-113).
 	Pace string `json:"pace"`
+	// DownloadWaitMS is how long a click or key press waits for a
+	// download it started to finish: 3,000 ms if unset, 0 not to wait,
+	// at most 30,000 (PROJ-116). Other actions ignore it.
+	DownloadWaitMS *int `json:"download_wait_ms"`
 }
+
+// downloads reports whether an action may start a download, so its
+// notice is looked for: a click on a link, or a key (Return on one).
+func (c computerRequest) downloads() bool { return c.Action == "click" || c.Action == "key" }
 
 // inputBody is what the control socket takes for an input action, or an
 // error saying what is missing.
@@ -160,6 +169,11 @@ func (a *API) computer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	wait, err := files.DownloadWait(c.DownloadWaitMS)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	s, ok := a.running(w, r, true)
 	if !ok {
 		return
@@ -169,9 +183,18 @@ func (a *API) computer(w http.ResponseWriter, r *http.Request) {
 		a.internal(w, "encoding an action", err)
 		return
 	}
-	if a.act(w, r, s, path, raw) {
-		a.done(w, r, s, c)
+	var mark *files.Mark
+	if c.downloads() {
+		mark = a.markDownloads(s.Profile)
 	}
+	if !a.act(w, r, s, path, raw) {
+		return
+	}
+	if mark != nil {
+		// Before the screenshot, which then shows the page after it.
+		a.reportDownloads(w, r, s, mark, wait)
+	}
+	a.done(w, r, s, c)
 }
 
 // done answers an action that ran: with the screen if asked, else 204.

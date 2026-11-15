@@ -34,6 +34,9 @@ type browser struct {
 	leaks  []string // credentials that reached the browser
 	// noScreen makes screenshots fail.
 	noScreen bool
+	// onInput, if set, runs as each input action does, with its path:
+	// a click that starts a download, say.
+	onInput func(path string)
 }
 
 func (b *browser) handler() http.Handler {
@@ -82,7 +85,11 @@ func (b *browser) handler() http.Handler {
 		body, _ := io.ReadAll(r.Body)
 		b.mu.Lock()
 		b.inputs = append(b.inputs, r.URL.Path+" "+string(body))
+		onInput := b.onInput
 		b.mu.Unlock()
+		if onInput != nil {
+			onInput(r.URL.Path)
+		}
 		if strings.Contains(string(body), "99999") {
 			http.Error(w, "(99999, 1) is outside the 1440x900 screen", http.StatusBadRequest)
 			return
