@@ -848,11 +848,10 @@ func (m *Manager) cleanup(cid string) string {
 // state can't be saved after a few tries, the profile is released anyway:
 // the next Start for it, or the next Reconcile, clears the stale row.
 func (m *Manager) end(l *live, lastLog string, final func(*Session)) {
-	m.mu.Lock()
-	final(&l.sess)
 	// The container's words are kept and shown after the session, when
 	// its secrets are gone: scrubbed now (PROJ-125).
-	sc := m.secrets.For(l.sess.ID)
+	sc := m.lockScrubber(l.sess.ID)
+	final(&l.sess)
 	l.sess.LastLog = sc.String(lastLog)
 	l.sess.Error = sc.String(l.sess.Error)
 	l.sess.UpdatedAt = m.now()

@@ -92,11 +92,14 @@ func (s *Scrubber) String(text string) string {
 
 // Registry holds the secrets typed into each owner's page (a session's
 // ID), in memory only, and caches a Scrubber per set of owners, rebuilt
-// only when a secret is added or an owner forgotten.
+// only when a secret is added or an owner forgotten. Building one takes
+// time and memory in the secrets' forms, so it happens outside the
+// registry's lock: nothing else waits on it.
 type Registry struct {
 	mu      sync.Mutex
 	secrets map[string][]string
 	cache   map[string]*Scrubber
+	version uint64 // bumped by every change to secrets
 }
 
 // NewRegistry makes an empty registry.
@@ -104,8 +107,12 @@ func NewRegistry() *Registry {
 	return &Registry{secrets: map[string][]string{}, cache: map[string]*Scrubber{}}
 }
 
-// maxCached bounds the cache of Scrubbers by owner set.
-const maxCached = 64
+// maxCached bounds the cache of Scrubbers by owner set: a Scrubber for a
+// few long secrets can take a few megabytes.
+const maxCached = 8
+
+// build makes a Scrubber; tests replace it to watch the locks.
+var build = New
 
 // Add registers a secret for owner. Values under MinRunes characters are
 // ignored, as Scrubber ignores them; adding one twice is harmless.
@@ -119,6 +126,7 @@ func (r *Registry) Add(owner, value string) {
 		return
 	}
 	r.secrets[owner] = append(r.secrets[owner], value)
+	r.version++
 	clear(r.cache)
 }
 
@@ -130,6 +138,7 @@ func (r *Registry) Forget(owner string) {
 		return
 	}
 	delete(r.secrets, owner)
+	r.version++
 	clear(r.cache)
 }
 
@@ -140,11 +149,11 @@ func (r *Registry) Count(owner string) int {
 	return len(r.secrets[owner])
 }
 
-// For is the Scrubber for the union of owners' secrets, nil when they
-// have none.
+// For is the Scrubber for the union of owners' secrets as they are when it
+// is called, nil when they have none. A Scrubber that isn't cached is
+// built outside the lock and cached only if no secret changed meanwhile.
 func (r *Registry) For(owners ...string) *Scrubber {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	var with []string
 	for _, o := range owners {
 		if len(r.secrets[o]) > 0 {
@@ -152,22 +161,32 @@ func (r *Registry) For(owners ...string) *Scrubber {
 		}
 	}
 	if len(with) == 0 {
+		r.mu.Unlock()
 		return nil
 	}
 	slices.Sort(with)
 	with = slices.Compact(with)
 	key := strings.Join(with, "\x00")
 	if s, ok := r.cache[key]; ok {
+		r.mu.Unlock()
 		return s
 	}
 	var all []string
 	for _, o := range with {
 		all = append(all, r.secrets[o]...)
 	}
-	s := New(all)
-	if len(r.cache) >= maxCached {
-		clear(r.cache)
+	version := r.version
+	r.mu.Unlock()
+
+	s := build(all)
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.version == version {
+		if len(r.cache) >= maxCached {
+			clear(r.cache)
+		}
+		r.cache[key] = s
 	}
-	r.cache[key] = s
 	return s
 }

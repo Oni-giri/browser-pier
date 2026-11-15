@@ -73,3 +73,19 @@ func (m *Manager) Scrubber(allow func(profile string) bool) *scrub.Scrubber {
 	m.mu.Unlock()
 	return m.secrets.For(ids...)
 }
+
+// lockScrubber locks m.mu and returns the session's Scrubber as its
+// secrets are now. The Scrubber is built before the lock is taken, since
+// building one can take a while, and again if a secret came in meanwhile
+// (secrets only grow until the session ends).
+func (m *Manager) lockScrubber(sessionID string) *scrub.Scrubber {
+	for {
+		n := m.secrets.Count(sessionID)
+		sc := m.secrets.For(sessionID)
+		m.mu.Lock()
+		if m.secrets.Count(sessionID) == n {
+			return sc
+		}
+		m.mu.Unlock()
+	}
+}

@@ -339,3 +339,61 @@ func TestLongPatternsUseAWiderRing(t *testing.T) {
 		}
 	}
 }
+
+// Building a Scrubber happens outside the registry's lock: adding,
+// counting and other owners' cached Scrubbers don't wait for it, and a
+// Scrubber built while the set changed isn't cached.
+func TestRegistryBuildsOutsideItsLock(t *testing.T) {
+	r := NewRegistry()
+	r.Add("s1", "first-secret")
+	r.Add("s2", "second-secret")
+	cached := r.For("s2")
+	building, release := make(chan struct{}), make(chan struct{})
+	build = func(secrets []string) *Scrubber {
+		close(building)
+		<-release
+		return New(secrets)
+	}
+	t.Cleanup(func() { build = New })
+	got := make(chan *Scrubber)
+	go func() { got <- r.For("s1") }()
+	<-building
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if r.For("s2") != cached || r.Count("s1") != 1 {
+			t.Error("the registry answered wrong while building")
+		}
+		r.Add("s1", "more-secret") // changes the set being built
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the registry's lock was held while a Scrubber was built")
+	}
+	close(release)
+	if s := <-got; s.String("first-secret more-secret") != "<hidden> more-secret" {
+		t.Errorf("the Scrubber built from the set as For was called: %q", s.String("first-secret more-secret"))
+	}
+	build = New
+	if r.For("s1").String("first-secret more-secret") != "<hidden> <hidden>" {
+		t.Error("a Scrubber built while the set changed was cached")
+	}
+}
+
+func TestRegistryCacheIsSmall(t *testing.T) {
+	r := NewRegistry()
+	for i := range 20 {
+		r.Add(fmt.Sprint("s", i), fmt.Sprint("secret-", i))
+	}
+	most := 0
+	for i := range 20 {
+		_ = r.For(fmt.Sprint("s", i))
+		r.mu.Lock()
+		most = max(most, len(r.cache))
+		r.mu.Unlock()
+	}
+	if most != 8 {
+		t.Fatalf("up to %d Scrubbers cached, want 8", most)
+	}
+}
