@@ -160,7 +160,7 @@ func TestAWorldNumberThatNamesAnotherWorldIsNeverUsed(t *testing.T) {
 		f.fb.mu.Unlock()
 	}()
 	out, err := f.tools.WaitFor(context.Background(), f.session(), f.who, WaitIn{Text: "arrived", TimeoutMS: 5000})
-	if err != nil || out != "ok" {
+	if err != nil || !strings.HasPrefix(out, "waited ") {
 		t.Fatalf("%v %q", err, out)
 	}
 	f.closedAfter()
