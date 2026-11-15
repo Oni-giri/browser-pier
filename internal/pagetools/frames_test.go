@@ -93,7 +93,7 @@ func TestActSaysAnIframeCoversARef(t *testing.T) {
 	for _, want := range []string{
 		"Step 1 (click) failed: " + r["Yes, I agree"] + " is covered by <untrusted-content-",
 		`iframe "SP Consent Message" from https://cdn.consent.example`,
-		"an embedded frame", "request_handoff", "POST /api/sessions/{id}/handoff", "start_browser with mode visual",
+		"an iframe in the way", "request_handoff", "POST /api/sessions/{id}/handoff", "start_browser with mode visual",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("missing %q in\n%s", want, msg)

@@ -327,13 +327,16 @@ func frameAddress(raw string) string {
 	return collapse(capText(u.Scheme+":", maxField))
 }
 
-// coveredByFrame is the advice when what covers a ref is an iframe: a
-// consent or sign-in banner from another site, most often. Its content
-// is out of the tools' reach (they read and act in the top frame only),
-// so a person, or a click on the screen in Visual mode, has to do it.
-const coveredByFrame = ", an embedded frame (often a cookie or consent banner from another site). The page tools can't read or click inside frames. " +
-	"Ask a person to click it with request_handoff (POST /api/sessions/{id}/handoff), or restart the browser in Visual mode " +
-	"(stop_browser, then start_browser with mode visual) and click it on a screenshot."
+// coveredByFrame is the advice when what covers a ref is an iframe. It
+// is BrowserPier's own voice, after the fence, so it says only what is
+// known: the page decides what the frame is and says, so the advice
+// doesn't guess (a consent banner, say) or tell the agent what to click.
+// The frame is out of the tools' reach (they read and act in the top
+// frame only), so a person, or Visual mode, has to deal with it.
+const coveredByFrame = ", an iframe in the way. The page tools can't read or click inside frames, so they can't tell what it holds: " +
+	"check what it is first (snapshot lists it, with its origin). To get past it, ask a person with request_handoff " +
+	"(POST /api/sessions/{id}/handoff), or restart the browser in Visual mode (stop_browser, then start_browser with mode visual) " +
+	"and work on it on a screenshot."
 
 // callOn calls a function on an isolated-world object, returning its
 // value as JSON into out.
