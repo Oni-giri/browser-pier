@@ -2,10 +2,15 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/Oni-giri/browser-pier/internal/pagetools"
 )
 
 // pageTools are the API-mode page tools, which say so, with valid arguments.
@@ -71,5 +76,28 @@ func TestPageContent(t *testing.T) {
 	}
 	if res, out := call(t, cs, "page_content", map[string]any{"session_id": s.ID, "format": "html"}); !res.IsError || !strings.Contains(out, "format") {
 		t.Errorf("format html: %s", out)
+	}
+}
+
+// act's MCP steps carry every field the REST step takes, by the same
+// name, and a cover_wait_ms of 0 (don't wait) gets through.
+func TestActStepsMatchREST(t *testing.T) {
+	names := func(v any) []string {
+		var out []string
+		ty := reflect.TypeOf(v)
+		for i := range ty.NumField() {
+			out = append(out, strings.Split(ty.Field(i).Tag.Get("json"), ",")[0])
+		}
+		slices.Sort(out)
+		return out
+	}
+	if m, r := names(stepArgs{}), names(pagetools.Step{}); !slices.Equal(m, r) {
+		t.Errorf("MCP step fields %v, REST step fields %v", m, r)
+	}
+	zero := 0
+	raw, _ := json.Marshal(stepArgs{Action: "click", Ref: "a1e2", CoverWaitMS: &zero})
+	var st pagetools.Step
+	if err := json.Unmarshal(raw, &st); err != nil || st.CoverWaitMS == nil || *st.CoverWaitMS != 0 {
+		t.Errorf("cover_wait_ms 0 became %s", raw)
 	}
 }
