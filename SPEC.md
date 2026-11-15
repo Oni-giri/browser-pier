@@ -164,11 +164,11 @@ Self-hosted, persistent browsers for AI agents. Agents start a browser when they
 
 ## 7. Handoff: agent asks a human to take over
 
-1. The agent calls `POST /api/sessions/{id}/handoff` with a reason, a detail (e.g. "Enter the 2FA code") and optionally a stricter `require` level.
+1. The agent calls `POST /api/sessions/{id}/handoff` with a reason, a detail (e.g. "Enter the 2FA code"), optionally a stricter `require` level, and optionally `until_url`, where the task ends (see Handing back by itself).
 2. The session enters Needs help, the agent is paused, and the API returns a one-time URL.
 3. The agent sends the URL to the human through its own channel (chat, Telegram, Slack). BrowserPier sends no notifications of its own; the link is the notification.
 4. The human opens the link (usually on a phone) and passes the profile's policy check. Control is then theirs, with the agent's reason shown.
-5. The human taps **Done, hand back** or **Can't do this**, with an optional note.
+5. The human taps **Done, hand back** or **Can't do this**, with an optional note. With `until_url`, the handoff also ends as done by itself once the page gets there.
 6. The agent, long-polling `GET /api/handoffs/{id}`, receives the status and note, then carries on or stops cleanly.
 
 ### Handoff policy, per profile
@@ -193,6 +193,15 @@ Self-hosted, persistent browsers for AI agents. Agents start a browser when they
 - **While the link is open:** the person drives the live view from the start, and the agent is paused: its connections close and its input is refused until hand-back, expiry or cancellation.
 - **If the browser stops:** an open handoff is cancelled.
 
+### Handing back by itself (`until_url`, PROJ-118)
+
+People often stop once they see the signed-in page, without tapping Done, and the agent then waits up to 15 minutes for nothing. An agent that knows where the task ends can say so:
+- **The pattern:** `until_url` is text matched, as a substring, against a tab's origin and path (`https://host[:port]/path`, as the browser shows it, the path percent-encoded or decoded), never its query, fragment or user name, such as `example.com/account` or `/dashboard`. At most 200 characters; control and invisible characters, and `?` or `#` (which could never match), answer 400; an empty one is none. Only `http` and `https` pages match. Case counts (hosts are lower case).
+- **Watching:** while the handoff is open, the orchestrator asks the browser for its tabs every 500 ms with `Target.getTargets`, over a short-lived browser-level connection on the control socket whose allow-list holds nothing else. It attaches to no page, opens no page session, enables nothing and goes through neither the page tools nor their lease, so the person shares the browser with no CDP client, in either mode. The watch stops the moment the handoff ends, expires or is cancelled, or the browser stops or leaves Needs help; one goroutine per open handoff, none after. After an orchestrator restart, the sweep watches open handoffs again.
+- **Which tab:** `Target.getTargets` doesn't say which tab is in front (its order is not the order tabs were last activated in; measured, Chromium 156), and finding out would mean attaching. So any tab counts, but only once its origin and path have changed since the watch first looked (when the handoff opened), or it opened since: a page already at the address, one that reloads, or one that changes only its query never ends a handoff; it takes a navigation to a matching origin and path. **Limits:** a background tab that navigates itself to a matching address ends the handoff too; a sign-in that ends on the page it started on (a form posting back to `/account` itself) never does, and the person taps Done as before; if the first look fails (the browser busy), the first that works is where the tabs start from, so a navigation before it doesn't count, nor does one made while the orchestrator was restarting.
+- **The end:** the handoff ends as `done`, as for a tap, with the fixed note "the page reached a matching address", never the address. The API adds `until_url_reached: true` (and echoes the agent's own `until_url`); MCP's `wait_for_handoff` says the page reached it. The phone's page shows **Done: handed back automatically**; the activity log says "Handed back when the page reached the expected address". Nothing the watch reads reaches the agent.
+- **Unchanged:** the person can still tap Done or Can't do this (a tap and a match at the same moment end it once, whichever is first); expiry, the PIN, the policy (never lowered) and every rule above stay as they are. A match after the handoff ended, or once its 15 minutes are up, does nothing. An agent can't end a handoff sooner than a real navigation to the origin and path it named, nor learn where the person went.
+
 ### Handoff reasons
 
 Typed so the UI can word the request well, each with a free-text detail:
@@ -210,6 +219,7 @@ Typed so the UI can word the request well, each with a free-text detail:
   - The endpoint keeps MCP sessions (the 2025-11-25 protocol), since asking the client to show a link needs one. A client on the session-less 2026-07-28 protocol falls back to it.
 - **Other clients** get the link to pass on themselves, and wait with `wait_for_handoff`.
 - **The same rules as the API apply:** a PIN-policy handoff is refused while no handoff PIN is set.
+- **`until_url`** works as in the API; `wait_for_handoff` then says the page reached the address instead of quoting a note from the person.
 
 ---
 
@@ -240,8 +250,8 @@ All endpoints take `Authorization: Bearer <agent token>`. The same actions are e
 | POST | `/api/sessions/{id}/content` | The active tab as Markdown or its main text (API mode), a screenshot (either mode) or a PDF (API mode) `{format, …}` |
 | WS | `/cdp/{profile}` | API mode: CDP, proxied and token-checked |
 | POST | `/api/sessions/{id}/cdp-ticket` | API mode: a one-minute, single-use CDP URL for clients that can't set headers |
-| POST | `/api/sessions/{id}/handoff` | One-time link for a human: `{reason, detail, require?}` |
-| GET | `/api/handoffs/{id}` | Long-poll for done / can't, plus the human's note |
+| POST | `/api/sessions/{id}/handoff` | One-time link for a human: `{reason, detail, require?, until_url?}`; with `until_url` it also ends as done when a tab navigates to a matching origin and path (§7) |
+| GET | `/api/handoffs/{id}` | Long-poll for done / can't, plus the human's note (or `until_url_reached` and a fixed note) |
 | DELETE | `/api/handoffs/{id}` | Withdraw a request the agent no longer needs: `{note?}`. Refused (409) once a person has opened the link. |
 
 Starting a session returns its id, the CDP URL (proxied through the orchestrator) and the live view URL.
@@ -506,6 +516,7 @@ Designs live in the repo: `design/DESIGN.md` (tokens, rules, components, routes)
 | act and wait_for targets | `role=…[name="…"]` and `text=…` resolved against the accessibility tree and DOM snapshot a snapshot reads, exactly one visible match or an error listing up to 5 with refs; no CSS selectors | An agent that knows what to click had to snapshot first, and every navigation made its refs stale. Selectors run in the page would reach what the snapshot hides by design (hidden text, `aria-hidden` copies) and are a script in the page; the AX tree is what the agent sees, and an ambiguous target never guesses. |
 | Div and span controls in a snapshot | An element with no role on which the pointer cursor starts, or with a tabindex of 0 or more, with text and no control inside, is a `generic "<text>"` line with a ref; its text isn't repeated when the line shows it whole | Many pages build buttons from divs with a click handler; the AX tree shows their text with nothing to click. The pointer cursor is what a person goes by, and only where it starts (children inherit it), so a list of 2,000 rows is one line, not 2,000. Playwright does the same. Decided 2026-11-15 (PROJ-124). |
 | Download notices | Two listings of the downloads folder around the action, through `os.Root`, no CDP; a 40 ms look for a download to start, a wait only while a partial download is there, and what finished between actions told with the next; REST in an `X-Downloads` header | Works the same in both modes, and Visual mode keeps nothing attached to the page. An action that downloads nothing is held up 40 ms at most (often 0, under act's changes or a screenshot). A header keeps 204 and the screenshot's 200 as they were. |
+| Handing back at an address | `until_url`, matched against a tab's origin and path, watched with `Target.getTargets` every 500 ms; any tab that has navigated since the handoff opened counts; a fixed note | A person who stops at the signed-in page no longer leaves the agent waiting 15 minutes. `Target.getTargets` attaches to nothing but doesn't say which tab is in front, so the rule asks for a navigation rather than guessing, and a background tab that navigated there is evidence enough. `/json/list`, ordered by activation, would name the front tab, but the watch keeps to one CDP method on the browser connection. The query never counts: it carries OAuth codes and tokens, and the agent never learns the address. Decided 2026-11-15 (PROJ-118). |
 | Chromium sandbox | On, with a seccomp profile that allows user namespaces | Pages are untrusted; the container is a second boundary, not the only one. |
 | Desktop in the browser container | JWM with a 32-pixel taskbar along the bottom (a clock only); the browser window at 0,0, unframed, fills the rest | A bare Xvfb screen has no work area, which detection reads as headless. A real window manager reserves the taskbar's strip, so nothing is faked. At the bottom, the window stays at 0,0 and Visual-mode coordinates stay screen coordinates. About 7 MB, with no terminal emulator: an empty package stands in for the one jwm depends on. |
 | TURN credentials | Each viewer's own, derived from a shared secret (TURN REST API) and expiring, with one stable user id per viewer; a static login only for services without it | A static password reaches every viewer's browser and works for anyone it leaks to until changed. Derived ones run out for new relays, and the secret stays on the server. A stable id per viewer lets the TURN server's per-user quota stop one handoff holder from taking every relay. |
