@@ -110,6 +110,7 @@ type Mark struct {
 	ended            time.Time       // when the action ended (Ended)
 	poll, gracePoll  time.Duration
 	grace            time.Duration
+	beforeSettle     func() // tests: runs before the look again for a vanished download
 }
 
 // Mark lists the profile's downloads folder before an action of the
@@ -263,13 +264,10 @@ func (m *Mark) Downloads(ctx context.Context, wait time.Duration) []Download {
 	finished := map[string]seen{} // new finished files, as last seen
 	started := map[string]seen{}  // new partial downloads ever seen
 	var last map[string]seen
-	for {
-		cur, err := m.s.downloads(m.profile)
-		if err != nil {
-			break // keep the last listing
-		}
+	// scan takes in a listing; it reports how many new partial downloads
+	// it holds.
+	scan := func(cur map[string]seen) (active int) {
 		last = cur
-		active := 0
 		for name, e := range cur {
 			if !fresh(m.before, e) {
 				continue
@@ -281,6 +279,14 @@ func (m *Mark) Downloads(ctx context.Context, wait time.Duration) []Download {
 				finished[name] = e
 			}
 		}
+		return active
+	}
+	for {
+		cur, err := m.s.downloads(m.profile)
+		if err != nil {
+			break // keep the last listing
+		}
+		active := scan(cur)
 		poll := m.poll
 		switch {
 		case active > 0 && time.Now().Add(m.poll).Before(deadline):
@@ -305,8 +311,40 @@ func (m *Mark) Downloads(ctx context.Context, wait time.Duration) []Download {
 	if last == nil {
 		return m.earlier
 	}
+	ds := report(last, finished, started)
+	if vanished(ds) && ctx.Err() == nil {
+		// A listing isn't atomic: one taken while Chrome renames the
+		// partial file to its name may hold neither. Look once more
+		// before saying a download vanished.
+		if m.beforeSettle != nil {
+			m.beforeSettle()
+		}
+		t := time.NewTimer(settle)
+		select {
+		case <-ctx.Done():
+		case <-t.C:
+		}
+		t.Stop()
+		if cur, err := m.s.downloads(m.profile); err == nil {
+			scan(cur)
+			ds = report(last, finished, started)
+		}
+	}
 	m.s.remember(m.session, last)
-	return append(m.earlier, report(last, finished, started)...)
+	return append(m.earlier, ds...)
+}
+
+// settle is how long a notice waits before listing the folder once more,
+// when the last listing would say a download vanished.
+const settle = 50 * time.Millisecond
+
+func vanished(ds []Download) bool {
+	for _, d := range ds {
+		if d.State == Vanished {
+			return true
+		}
+	}
+	return false
 }
 
 // report sorts what was seen into a notice: finished files (oldest

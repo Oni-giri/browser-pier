@@ -146,6 +146,23 @@ func TestDownloadsPartialRemoved(t *testing.T) {
 	}
 }
 
+// A listing taken while Chrome renames a partial download to its name can
+// hold neither: the notice looks once more before saying it vanished.
+func TestDownloadsRenameBetweenListingsIsntVanished(t *testing.T) {
+	s, dir := setup(t, 0)
+	dl := filepath.Join(dir, Downloads)
+	m := s.Mark("google", "")
+	m.poll = 20 * time.Millisecond
+	write(t, filepath.Join(dl, "report.csv.crdownload"), "part", 0)
+	later(t, 100*time.Millisecond, func() { _ = os.Remove(filepath.Join(dl, "report.csv.crdownload")) })
+	// The finished file comes just after a listing that saw neither.
+	m.beforeSettle = func() { write(t, filepath.Join(dl, "report.csv"), "whole", 0) }
+	got := m.Downloads(context.Background(), 3*time.Second)
+	if want := []Download{{Name: "report.csv", Size: 5, State: Downloaded}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Downloads = %+v, want %+v", got, want)
+	}
+}
+
 // The files cap's eviction can remove a finished download between two
 // listings: the notice says so, and nothing fails.
 func TestDownloadsFinishedThenEvicted(t *testing.T) {
