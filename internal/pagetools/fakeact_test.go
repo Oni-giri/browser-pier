@@ -23,6 +23,15 @@ type behaviour struct {
 	multiple, disabled bool
 	files              []string
 	control            *fnode
+	// quads are its content quads, instead of one from its box.
+	quads [][]float64
+	// dialog is the title of a dialog open over the page, nil for none.
+	dialog *string
+	// onHit is called (with the fake locked) before each hit test on it,
+	// with how many there have been; it can move it or lift its cover.
+	onHit func(hits int)
+	// hits counts hit tests on it; centred, scrolls to the middle.
+	hits, centred int
 }
 
 // tabState of the fake: what has the focus, what was aimed at, and the
@@ -33,6 +42,7 @@ type fakeInput struct {
 	aimed    *fnode
 	events   []string
 	mouse    []mouseEvent // the mouse events, with where they were
+	released int          // objects released
 }
 
 type mouseEvent struct {
@@ -111,6 +121,9 @@ func (fb *fakeBrowser) dom(tb *ftab, m cdptest.Message, p map[string]any) (any, 
 		}
 		b := *n.box
 		in.aimed = n
+		if bh := fb.behave[n]; bh != nil && bh.quads != nil {
+			return map[string]any{"quads": bh.quads}, true, nil
+		}
 		return map[string]any{"quads": [][]float64{{b[0], b[1], b[0] + b[2], b[1], b[0] + b[2], b[1] + b[3], b[0], b[1] + b[3]}}}, true, nil
 	case "DOM.focus":
 		n := backend()
@@ -175,6 +188,9 @@ func (fb *fakeBrowser) dom(tb *ftab, m cdptest.Message, p map[string]any) (any, 
 				*in.focused.value = ""
 			}
 		}
+		return nil, true, nil
+	case "Runtime.releaseObject":
+		in.released++
 		return nil, true, nil
 	case "Input.insertText":
 		in.events = append(in.events, "insertText")
@@ -260,10 +276,22 @@ func (fb *fakeBrowser) function(tb *ftab, n *fnode, p map[string]any) (any, bool
 	case "connected":
 		return value(!fb.removed[n]), true, nil
 	case "hittest":
+		bh.hits++
+		if bh.onHit != nil {
+			bh.onHit(bh.hits)
+		}
 		if bh.cover != nil {
 			return nodeObj(bh.cover), true, nil
 		}
 		return map[string]any{"result": map[string]any{"type": "boolean", "value": true}}, true, nil
+	case "centre":
+		bh.centred++
+		return map[string]any{"result": map[string]any{"type": "undefined"}}, true, nil
+	case "dialog":
+		if bh.dialog == nil {
+			return map[string]any{"result": map[string]any{"type": "object", "subtype": "null", "value": nil}}, true, nil
+		}
+		return value(*bh.dialog), true, nil
 	case "focused":
 		return value(in.focused == n), true, nil
 	case "active":

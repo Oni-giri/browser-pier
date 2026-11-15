@@ -25,6 +25,17 @@ const MaxSteps = 20
 // maxText caps what one fill or type step puts in.
 const maxText = 10000
 
+// defaultCoverWait is how long a pointer step waits for what covers its
+// element to go (an overlay fading out) when the step doesn't say;
+// maxCoverWait caps what a step may ask for.
+const (
+	defaultCoverWait = time.Second
+	maxCoverWait     = 10 * time.Second
+)
+
+// maxDialogTitle caps the title of an open dialog a refusal names.
+const maxDialogTitle = 60
+
 // Step is one action of an act call.
 type Step struct {
 	// Action is click, fill, type, press, select, check, uncheck, hover
@@ -51,6 +62,10 @@ type Step struct {
 	// keys at a typist's rhythm) or instant (PROJ-113). It applies to
 	// click, hover, check, uncheck, type and press.
 	Pace string `json:"pace,omitempty"`
+	// CoverWaitMS is how long a pointer step (click, hover, check,
+	// uncheck) waits for whatever covers its element to go: 1,000 ms if
+	// unset, 0 not to wait, at most 10,000.
+	CoverWaitMS *int `json:"cover_wait_ms,omitempty"`
 }
 
 // instant reports whether a step runs at instant pace.
@@ -79,6 +94,9 @@ func checkStep(s Step) error {
 	case "", paceHuman, paceInstant:
 	default:
 		return fmt.Errorf("pace %q: want human or instant", s.Pace)
+	}
+	if w := s.CoverWaitMS; w != nil && (*w < 0 || time.Duration(*w)*time.Millisecond > maxCoverWait) {
+		return fmt.Errorf("%s: cover_wait_ms is 0 to %d", s.Action, maxCoverWait.Milliseconds())
 	}
 	needRef := func() error {
 		if s.Ref == "" {
@@ -157,11 +175,13 @@ func checkUploadName(name string) error {
 // as they are when it acts, so the agent sees what it actually hit; typed
 // text is never echoed, only counted.
 //
-// Pointer steps scroll the element into view, find its centre, check in
-// the isolated world that it isn't covered (walking up through shadow
-// roots, closed ones too; the element's own label counts as it), then
-// dispatch the mouse events at once. Typing steps focus the element and
-// check it has the focus before and after. The page can still change in
+// Pointer steps scroll the element into view, find the centre of its
+// largest box, check in the isolated world that it isn't covered (walking
+// up through shadow roots, closed ones too; the element's own label counts
+// as it), then dispatch the mouse events. If it is covered, they scroll
+// it to the middle of the screen and look again, then keep looking for up
+// to the step's cover_wait_ms (see aim). Typing steps focus the element
+// and check it has the focus before and after. The page can still change in
 // the milliseconds between a check and the input: act resolves, checks
 // and dispatches back to back and echoes what it hit, but promises no more.
 func (t *Tools) Act(ctx context.Context, s sessions.Session, who Caller, in ActIn) (string, error) {
@@ -415,6 +435,48 @@ const (
     root = el.getRootNode();
   }
 }`
+	// jsCentre scrolls the element to the middle of its scrollers, when
+	// something covers it where it is.
+	jsCentre = `/*bp:centre*/ function() {
+  if (this.scrollIntoView) this.scrollIntoView({block: 'center', inline: 'center', behavior: 'instant'});
+}`
+	// jsDialog finds the last open dialog in the document that the
+	// element isn't in (walking out of shadow roots), and returns its
+	// title: its aria-label, its aria-labelledby text or its first
+	// heading's text; null if there is no such dialog.
+	jsDialog = `/*bp:dialog*/ function() {
+  const target = this, doc = this.ownerDocument;
+  if (!doc) return null;
+  const holds = d => {
+    for (let n = target; n; ) {
+      if (d === n || d.contains(n)) return true;
+      const r = n.getRootNode();
+      n = r instanceof ShadowRoot ? r.host : null;
+    }
+    return false;
+  };
+  const isOpen = d => {
+    if (d.localName === 'dialog' && !d.matches('[role=dialog],[role=alertdialog],[aria-modal=true]')) {
+      try { if (!d.matches(':modal')) return false; } catch (e) { return false; }
+    }
+    return d.getClientRects().length > 0 && getComputedStyle(d).visibility !== 'hidden';
+  };
+  const open = Array.from(doc.querySelectorAll('[role=dialog],[role=alertdialog],[aria-modal=true],dialog')).filter(d => isOpen(d) && !holds(d));
+  const d = open[open.length - 1];
+  if (!d) return null;
+  const clip = s => (s || '').slice(0, 300).replace(/\s+/g, ' ').trim();
+  let t = clip(d.getAttribute('aria-label'));
+  if (!t) {
+    const root = d.getRootNode();
+    t = clip((d.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean)
+      .map(id => { const e = root.getElementById ? root.getElementById(id) : null; return e ? e.textContent.slice(0, 300) : ''; }).join(' '));
+  }
+  if (!t) {
+    const h = d.querySelector('h1,h2,h3,h4,h5,h6,[role=heading]');
+    t = h ? clip(h.textContent) : '';
+  }
+  return t;
+}`
 	jsFocused = `/*bp:focused*/ function() { return this.getRootNode().activeElement === this; }`
 	jsActive  = `/*bp:active*/ function() { let a = this.getRootNode().activeElement; return a || null; }`
 	// jsField says what kind of field an element is.
@@ -454,6 +516,24 @@ const (
 }`
 )
 
+// coverTry is one pointer step's patience with what covers its element:
+// how long it waits for it to go (cover_wait_ms), the deadline once it
+// has first seen it, and whether it has scrolled the element to the
+// middle yet (once a step at most).
+type coverTry struct {
+	wait    time.Duration
+	until   time.Time
+	centred bool
+}
+
+func (c *call) newCoverTry(st Step) *coverTry {
+	w := c.t.coverWait
+	if st.CoverWaitMS != nil {
+		w = time.Duration(*st.CoverWaitMS) * time.Millisecond
+	}
+	return &coverTry{wait: w}
+}
+
 // step runs one step and returns its result line.
 func (c *call) step(ctx context.Context, st Step) (string, error) {
 	if st.Action == "press" {
@@ -481,7 +561,8 @@ func (c *call) step(ctx context.Context, st Step) (string, error) {
 		if f.File {
 			return "", &Error{Status: 422, Msg: n.ref + " opens a file chooser, which act doesn't click; put the file in the session with upload_file (or POST /api/sessions/{id}/files), then use an upload step on " + n.ref}
 		}
-		x, y, err := c.aim(ctx, n)
+		ct := c.newCoverTry(st)
+		x, y, err := c.aim(ctx, n, ct)
 		if err != nil {
 			return "", err
 		}
@@ -489,7 +570,7 @@ func (c *call) step(ctx context.Context, st Step) (string, error) {
 		if button == "" {
 			button = "left"
 		}
-		if err := c.click(ctx, n, x, y, button, st.Double); err != nil {
+		if err := c.click(ctx, n, ct, x, y, button, st.Double); err != nil {
 			return "", err
 		}
 		what := map[string]string{"left": "Clicked", "right": "Right-clicked", "middle": "Middle-clicked"}[button]
@@ -499,7 +580,7 @@ func (c *call) step(ctx context.Context, st Step) (string, error) {
 		c.note(what + " " + n.ref)
 		return strings.ToLower(what) + " " + n.echo(), nil
 	case "hover":
-		x, y, err := c.aim(ctx, n)
+		x, y, err := c.aim(ctx, n, c.newCoverTry(st))
 		if err != nil {
 			return "", err
 		}
@@ -535,16 +616,29 @@ func (c *call) step(ctx context.Context, st Step) (string, error) {
 		c.note("Selected an option in " + n.ref)
 		return "selected " + quote(capText(r.Text, maxField)) + " in " + n.echo(), nil
 	case "check", "uncheck":
-		return c.check(ctx, n, st.Action == "check")
+		return c.check(ctx, n, st.Action == "check", c.newCoverTry(st))
 	case "upload":
 		return c.upload(ctx, n, st.Files)
 	}
 	return "", &Error{Status: 400, Msg: "unknown action " + st.Action}
 }
 
-// aim scrolls a node into view and finds the point to act at: its
-// centre, if nothing covers it there.
-func (c *call) aim(ctx context.Context, n *node) (x, y float64, err error) {
+// aim scrolls a node into view and finds the point to act at: the centre
+// of its largest box (a wrapped link's first line can be a sliver), if
+// nothing covers it there.
+//
+// When something does, it scrolls the node to the middle of the screen,
+// once (a sticky header covers what scrolling just into view leaves at
+// the top), and looks again; then every coverPoll for up to wait (an
+// overlay fading out), finding the box afresh each time in case the node
+// moved. The wait is counted from the first covered look, and shared by
+// a second aim in the same step (click's, when something covered the
+// point while the pointer went to it). An iframe over the element counts
+// like any other cover: a consent banner from another site rarely goes
+// by itself, but waiting for it costs only the wait. Only the scrolls
+// and the input are seen by the page: the looks are hit tests in the
+// isolated world. A handoff, a stop or a revocation ends the wait at once.
+func (c *call) aim(ctx context.Context, n *node, ct *coverTry) (x, y float64, err error) {
 	if err := c.renderer(ctx, c.t.quick, "DOM.scrollIntoViewIfNeeded", map[string]any{"backendNodeId": n.backend}, nil); err != nil {
 		var ce *cdp.Error
 		if errors.As(err, &ce) {
@@ -552,43 +646,137 @@ func (c *call) aim(ctx context.Context, n *node) (x, y float64, err error) {
 		}
 		return 0, 0, err
 	}
+	x, y, hit, err := c.aimOnce(ctx, n)
+	if err != nil || hit.ok {
+		return x, y, err
+	}
+	if ct.until.IsZero() {
+		ct.until = time.Now().Add(ct.wait)
+	}
+	if !ct.centred {
+		// Covered, or not on screen at its centre: bring it to the middle.
+		ct.centred = true
+		c.releaseCover(ctx, hit)
+		if err := c.callOn(ctx, n.obj, jsCentre, nil, nil); err != nil {
+			return 0, 0, err
+		}
+		x, y, hit, err = c.aimOnce(ctx, n)
+		if err != nil || hit.ok {
+			return x, y, err
+		}
+	}
+	for {
+		left := time.Until(ct.until)
+		if left <= 0 {
+			break
+		}
+		c.releaseCover(ctx, hit)
+		select {
+		case <-ctx.Done():
+			return 0, 0, ctx.Err()
+		case <-time.After(min(c.t.coverPoll, left)):
+		}
+		x, y, hit, err = c.aimOnce(ctx, n)
+		if err != nil || hit.ok {
+			return x, y, err
+		}
+	}
+	if hit.cover != "" {
+		return 0, 0, c.coveredError(ctx, n, hit.cover)
+	}
+	return 0, 0, &Error{Status: 422, Msg: n.ref + " isn't on screen at its centre"}
+}
+
+// hitResult is what a hit test found at a point: the node itself (ok),
+// something covering it (cover, an object in the isolated world), or
+// neither, when the point is off screen.
+type hitResult struct {
+	ok    bool
+	cover string
+}
+
+// aimOnce finds a node's point now, from its largest box, and hit-tests it.
+func (c *call) aimOnce(ctx context.Context, n *node) (x, y float64, hit hitResult, err error) {
 	var q struct {
 		Quads [][]float64 `json:"quads"`
 	}
 	if err := c.renderer(ctx, c.t.quick, "DOM.getContentQuads", map[string]any{"backendNodeId": n.backend}, &q); err != nil {
 		var ce *cdp.Error
 		if !errors.As(err, &ce) {
-			return 0, 0, err
+			return 0, 0, hit, err
 		}
 	}
-	for _, quad := range q.Quads {
-		if len(quad) != 8 {
-			continue
-		}
-		x, y = (quad[0]+quad[2]+quad[4]+quad[6])/4, (quad[1]+quad[3]+quad[5]+quad[7])/4
-		if area(quad) >= 1 {
-			break
-		}
-	}
-	if x == 0 && y == 0 {
-		return 0, 0, &Error{Status: 422, Msg: n.ref + " has no box on the page (it may be hidden or empty)"}
+	x, y, ok := pickQuad(q.Quads)
+	if !ok {
+		return 0, 0, hit, &Error{Status: 422, Msg: n.ref + " has no box on the page (it may be hidden or empty)"}
 	}
 	r, err := c.callOnObject(ctx, n.obj, jsHitTest, []any{x, y}, false)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, hit, err
 	}
 	switch {
 	case r.Type == "boolean" && string(r.Value) == "true":
-		return x, y, nil
+		hit.ok = true
 	case r.Type == "object" && r.ObjectID != "":
-		what, frame := c.describeFrame(ctx, r.ObjectID)
-		msg := n.ref + " is covered by " + what
-		if frame {
-			msg += coveredByFrame
-		}
-		return 0, 0, &Error{Status: http.StatusConflict, Msg: msg}
+		hit.cover = r.ObjectID
 	}
-	return 0, 0, &Error{Status: 422, Msg: n.ref + " isn't on screen at its centre"}
+	return x, y, hit, nil
+}
+
+// pickQuad is the centre of the largest of a node's boxes (content quads,
+// one per line a wrapped inline takes); false if it has none, or only an
+// empty one at the page's corner.
+func pickQuad(quads [][]float64) (x, y float64, ok bool) {
+	best := -1.0
+	for _, quad := range quads {
+		if len(quad) != 8 {
+			continue
+		}
+		if a := area(quad); a > best {
+			best = a
+			x, y = (quad[0]+quad[2]+quad[4]+quad[6])/4, (quad[1]+quad[3]+quad[5]+quad[7])/4
+		}
+	}
+	if best < 0 || (x == 0 && y == 0) {
+		return 0, 0, false
+	}
+	return x, y, true
+}
+
+// releaseCover lets go of a hit test's cover object that act won't name.
+func (c *call) releaseCover(ctx context.Context, hit hitResult) {
+	if hit.cover != "" {
+		_ = c.renderer(ctx, c.t.quick, "Runtime.releaseObject", map[string]any{"objectId": hit.cover}, nil)
+	}
+}
+
+// coveredError is the refusal for a node something still covers: what
+// covers it, the advice for an iframe if it is one, and the title of a
+// dialog open over the page if one is (page text fenced).
+func (c *call) coveredError(ctx context.Context, n *node, cover string) error {
+	what, frame := c.describeFrame(ctx, cover)
+	msg := n.ref + " is covered by " + what
+	if frame {
+		msg += coveredByFrame
+	}
+	if d := c.openDialog(ctx, n); d != "" {
+		msg += "; " + fence.Wrap("page dialog", d)
+	}
+	return &Error{Status: http.StatusConflict, Msg: msg}
+}
+
+// openDialog names a dialog open on the page that the node isn't in:
+// `dialog "Cookie settings" is open`, or "" if there is none.
+func (c *call) openDialog(ctx context.Context, n *node) string {
+	var title *string
+	if c.callOn(ctx, n.obj, jsDialog, nil, &title) != nil || title == nil {
+		return ""
+	}
+	t := capText(strings.Join(strings.Fields(*title), " "), maxDialogTitle)
+	if t == "" {
+		return "a dialog is open"
+	}
+	return "dialog " + quote(t) + " is open"
 }
 
 func area(q []float64) float64 {
@@ -623,21 +811,35 @@ func (c *call) mouse(ctx context.Context, typ string, x, y float64, button strin
 
 // click moves the mouse to n's point (x, y), which aim checked, and
 // clicks. At human pace the pointer glides to a point scattered around
-// it (glide), pauses, and holds the button down for a moment. A press is
+// it (glide), pauses, checks the point again, and holds the button down
+// for a moment. A press is
 // always followed by its release, even if the call is cancelled in
 // between.
-func (c *call) click(ctx context.Context, n *node, x, y float64, button string, double bool) error {
-	x, y, err := c.glide(ctx, n, x, y)
-	if err != nil {
-		return err
-	}
-	if !c.instant {
+func (c *call) click(ctx context.Context, n *node, ct *coverTry, x, y float64, button string, double bool) error {
+	for again := false; ; again = true {
+		var err error
+		if x, y, err = c.glide(ctx, n, x, y); err != nil {
+			return err
+		}
+		if c.instant {
+			break
+		}
 		if err := c.t.pause(ctx, c.st.mot.Dwell()); err != nil {
 			return err
 		}
 		// The pointer took a while to get there: check nothing has
-		// moved over the point meanwhile.
-		if err := c.stillThere(ctx, n, x, y); err != nil {
+		// moved over the point meanwhile. If something covers it now,
+		// aim again (waiting for it to go, within what is left of the
+		// step's cover wait) and go there, once.
+		cover, err := c.stillThere(ctx, n, x, y)
+		if err == nil {
+			break
+		}
+		if cover == "" || again {
+			return err
+		}
+		c.releaseCover(ctx, hitResult{cover: cover})
+		if x, y, err = c.aim(ctx, n, ct); err != nil {
 			return err
 		}
 	}
@@ -757,19 +959,20 @@ func (c *call) scatter(ctx context.Context, n *node, x, y float64) (motion.Point
 }
 
 // stillThere checks nothing covers n at (x, y) (jsHitTest), as aim does
-// before a pointer step.
-func (c *call) stillThere(ctx context.Context, n *node, x, y float64) error {
+// before a pointer step. When something does, it returns it (an object
+// in the isolated world) along with the refusal.
+func (c *call) stillThere(ctx context.Context, n *node, x, y float64) (cover string, err error) {
 	r, err := c.callOnObject(ctx, n.obj, jsHitTest, []any{x, y}, false)
 	if err != nil {
-		return err
+		return "", err
 	}
 	switch {
 	case r.Type == "boolean" && string(r.Value) == "true":
-		return nil
+		return "", nil
 	case r.Type == "object" && r.ObjectID != "":
-		return &Error{Status: http.StatusConflict, Msg: n.ref + " is covered by " + c.describe(ctx, r.ObjectID)}
+		return r.ObjectID, c.coveredError(ctx, n, r.ObjectID)
 	}
-	return &Error{Status: http.StatusConflict, Msg: n.ref + " moved while the pointer went to it; take a new snapshot"}
+	return "", &Error{Status: http.StatusConflict, Msg: n.ref + " moved while the pointer went to it; take a new snapshot"}
 }
 
 // key dispatches one key event.
@@ -1100,7 +1303,7 @@ func (c *call) focusHolder(ctx context.Context, n *node) string {
 
 // check checks or unchecks a checkbox, radio button or switch by
 // clicking it (or its label), unless it already is, and checks it took.
-func (c *call) check(ctx context.Context, n *node, want bool) (string, error) {
+func (c *call) check(ctx context.Context, n *node, want bool, ct *coverTry) (string, error) {
 	state := func() (bool, bool, error) {
 		var f fieldInfo
 		if err := c.callOn(ctx, n.obj, jsField, nil, &f); err != nil {
@@ -1126,11 +1329,11 @@ func (c *call) check(ctx context.Context, n *node, want bool) (string, error) {
 	if now == want {
 		return n.echo() + " was already " + verb, nil
 	}
-	x, y, err := c.aim(ctx, n)
+	x, y, err := c.aim(ctx, n, ct)
 	if err != nil {
 		return "", err
 	}
-	if err := c.click(ctx, n, x, y, "left", false); err != nil {
+	if err := c.click(ctx, n, ct, x, y, "left", false); err != nil {
 		return "", err
 	}
 	if after, _, err := state(); err != nil {

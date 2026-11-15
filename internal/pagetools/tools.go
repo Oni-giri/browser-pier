@@ -105,6 +105,9 @@ type Tools struct {
 	quick, slow time.Duration
 	// settle is how long act waits after a step for the page to react.
 	settle time.Duration
+	// coverWait is how long a pointer step waits for what covers its
+	// element to go, unless it says; coverPoll how often it looks.
+	coverWait, coverPoll time.Duration
 	// poll is how often wait_for and navigate look at the page.
 	poll time.Duration
 	// reads holds a slot per whole-page read under way (maxReads);
@@ -120,7 +123,7 @@ type Tools struct {
 
 func New(m *sessions.Manager, log *slog.Logger) *Tools {
 	return &Tools{m: m, log: log, pages: map[string]*state{}, quick: quickTimeout, slow: slowTimeout,
-		settle: 100 * time.Millisecond, poll: 250 * time.Millisecond, reads: make(chan struct{}, maxReads), readWait: 10 * time.Second,
+		settle: 100 * time.Millisecond, coverWait: defaultCoverWait, coverPoll: 100 * time.Millisecond, poll: 250 * time.Millisecond, reads: make(chan struct{}, maxReads), readWait: 10 * time.Second,
 		newMotion: motion.NewRandom, pause: sleep}
 }
 
