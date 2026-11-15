@@ -166,7 +166,10 @@ func cloudflareNote(cf *cfInfo) string {
 		mx, my := screenshot.Screen{W: g.screenW, H: g.screenH}.FromScreen(sx, sy)
 		mcp = fmt.Sprintf(" (MCP: click at %d, %d in screenshot pixels)", mx, my)
 	}
-	return lead + fmt.Sprintf("click its checkbox, which snapshot can't see, with a real click where the page's layout puts it: computer click at screen x=%d, y=%d%s,", sx, sy, mcp) + tail
+	// The point comes from the page's layout, and the browser's own
+	// prompts (a permission bubble, say) can sit over the page: the agent
+	// looks before it clicks.
+	return lead + fmt.Sprintf("take a screenshot and check its checkbox, which snapshot can't see, is at this point (the browser's own prompts can cover the page), then click it with a real click where the page's layout puts it: computer click at screen x=%d, y=%d%s,", sx, sy, mcp) + tail
 }
 
 // noteChallenge adds the Cloudflare note to the call's notices, which

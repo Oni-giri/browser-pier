@@ -129,6 +129,8 @@ func TestCloudflareNote(t *testing.T) {
 		"request_handoff with reason captcha",
 		"A named profile keeps the pass.",
 		"where the page's layout puts it",
+		// The browser's own prompts can cover the page: look first.
+		"take a screenshot and check its checkbox, which snapshot can't see, is at this point (the browser's own prompts can cover the page), then click it",
 	} {
 		if !strings.Contains(n, want) {
 			t.Errorf("no %q in %q", want, n)
