@@ -42,6 +42,10 @@ type Step struct {
 	// or upload.
 	Action string `json:"action"`
 	Ref    string `json:"ref,omitempty"`
+	// Target names the element instead of a ref (PROJ-123):
+	// role=button[name="Save"], text=Save or text="Save", optionally with
+	// " >> nth=N". It must match exactly one visible element.
+	Target string `json:"target,omitempty"`
 	// Button is left (the default), right or middle; Double double-clicks.
 	Button string `json:"button,omitempty"`
 	Double bool   `json:"double,omitempty"`
@@ -107,8 +111,15 @@ func checkStep(s Step) error {
 		return fmt.Errorf("%s: cover_wait_ms is 0 to %d", s.Action, maxCoverWait.Milliseconds())
 	}
 	needRef := func() error {
-		if s.Ref == "" {
-			return fmt.Errorf("%s: want a ref from snapshot or find", s.Action)
+		switch {
+		case s.Ref != "" && s.Target != "":
+			return fmt.Errorf("%s: give a ref or a target, not both", s.Action)
+		case s.Target != "":
+			if _, err := parseTarget(s.Target); err != nil {
+				return fmt.Errorf("%s: %w", s.Action, err)
+			}
+		case s.Ref == "":
+			return fmt.Errorf("%s: want a ref from snapshot or find, or a target (%s)", s.Action, targetForms)
 		}
 		return nil
 	}
@@ -139,6 +150,9 @@ func checkStep(s Step) error {
 		}
 		return needRef()
 	case "press":
+		if s.Target != "" {
+			return errors.New("press: presses keys wherever the focus is; it takes no target (click or fill the element first)")
+		}
 		_, err := parseKeys(s.Keys)
 		return err
 	case "upload":
@@ -642,7 +656,14 @@ func (c *call) step(ctx context.Context, st Step) (string, error) {
 		c.note(describeKeys(combos))
 		return "pressed " + st.Keys, nil
 	}
-	n, err := c.resolve(ctx, st.Ref)
+	ref := st.Ref
+	if st.Target != "" {
+		var err error
+		if ref, err = c.resolveTarget(ctx, st.Target); err != nil {
+			return "", err
+		}
+	}
+	n, err := c.resolve(ctx, ref)
 	if err != nil {
 		return "", err
 	}

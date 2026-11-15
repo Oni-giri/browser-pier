@@ -118,6 +118,9 @@ type Tools struct {
 	coverWait, coverPoll time.Duration
 	// poll is how often wait_for and navigate look at the page.
 	poll time.Duration
+	// ambiguousFor is how long wait_for lets a target match several
+	// elements before it fails (PROJ-123).
+	ambiguousFor time.Duration
 	// chainQuiet, chainPoll and chainCap are navigate's watch for script
 	// redirects after a load (PROJ-121): how long a document must stay
 	// put, how often it is looked at meanwhile, and the longest the chain
@@ -136,7 +139,7 @@ type Tools struct {
 
 func New(m *sessions.Manager, log *slog.Logger) *Tools {
 	t := &Tools{m: m, log: log, pages: map[string]*state{}, bases: map[baseKey]*baseline{}, quick: quickTimeout, slow: slowTimeout,
-		settle: 100 * time.Millisecond, coverWait: defaultCoverWait, coverPoll: 100 * time.Millisecond, poll: 250 * time.Millisecond,
+		settle: 100 * time.Millisecond, coverWait: defaultCoverWait, coverPoll: 100 * time.Millisecond, poll: 250 * time.Millisecond, ambiguousFor: time.Second,
 		chainQuiet: chainQuiet, chainPoll: chainPoll, chainCap: chainCap, reads: make(chan struct{}, maxReads), readWait: 10 * time.Second,
 		newMotion: motion.NewRandom, pause: sleep}
 	if m != nil {

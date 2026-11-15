@@ -35,8 +35,12 @@ type WaitIn struct {
 	// Text waits for the page's visible text to contain it (ignoring case).
 	Text string `json:"text,omitempty"`
 	// Ref waits for an element to be State: visible (the default) or hidden.
-	Ref   string `json:"ref,omitempty"`
-	State string `json:"state,omitempty"`
+	Ref string `json:"ref,omitempty"`
+	// Target waits for what a target names instead (PROJ-123): visible
+	// is exactly one visible match (several for a second fail),
+	// hidden is none.
+	Target string `json:"target,omitempty"`
+	State  string `json:"state,omitempty"`
 	// URLChange waits for the tab's URL to change.
 	URLChange bool `json:"url_change,omitempty"`
 	// Load waits for the document to be complete and the page to have
@@ -80,12 +84,16 @@ func waitCond(in WaitIn) (is, awaited string) {
 		return "the URL changed", "the URL to change"
 	case in.Load:
 		return "the page is loaded and the network quiet", "the page to load and the network to go quiet"
-	case in.Ref != "":
+	case in.Ref != "" || in.Target != "":
 		state := in.State
 		if state == "" {
 			state = "visible"
 		}
-		return in.Ref + " is " + state, in.Ref + " to be " + state
+		what := in.Ref
+		if in.Target != "" {
+			what = capText(collapse(in.Target), 2*maxField)
+		}
+		return what + " is " + state, what + " to be " + state
 	}
 	q := strconv.Quote(capText(collapse(in.Text), maxField))
 	return "text " + q + " is on the page", "text " + q + " to appear"
@@ -122,6 +130,11 @@ type waiter struct {
 	// too, as the entries' times can't tell it.
 	count     int
 	quietFrom time.Time
+	// tgt is the target awaited; deadline is when the wait ends, and
+	// ambiguous since when the target has matched several elements.
+	tgt       target
+	deadline  time.Time
+	ambiguous time.Time
 }
 
 // WaitFor waits for one condition on the active tab, polling every 250 ms
@@ -133,13 +146,20 @@ type waiter struct {
 // 10 s waiting for …" with, for a ref, what it is now (PROJ-122).
 func (t *Tools) WaitFor(ctx context.Context, s sessions.Session, who Caller, in WaitIn) (string, error) {
 	conds := 0
-	for _, set := range []bool{in.Text != "", in.Ref != "", in.URLChange, in.Load} {
+	for _, set := range []bool{in.Text != "", in.Ref != "", in.Target != "", in.URLChange, in.Load} {
 		if set {
 			conds++
 		}
 	}
 	if conds != 1 {
-		return "", &Error{Status: 400, Msg: "wait for one thing: text, a ref (visible or hidden), url_change or load"}
+		return "", &Error{Status: 400, Msg: "wait for one thing: text, a ref or a target (visible or hidden), url_change or load"}
+	}
+	var tgt target
+	if in.Target != "" {
+		var err error
+		if tgt, err = parseTarget(in.Target); err != nil {
+			return "", err
+		}
 	}
 	if len([]rune(in.Text)) > maxQuery {
 		return "", &Error{Status: 400, Msg: fmt.Sprintf("text: at most %d characters", maxQuery)}
@@ -149,8 +169,8 @@ func (t *Tools) WaitFor(ctx context.Context, s sessions.Session, who Caller, in 
 	default:
 		return "", &Error{Status: 400, Msg: "state: visible or hidden"}
 	}
-	if in.State != "" && in.Ref == "" {
-		return "", &Error{Status: 400, Msg: "state goes with a ref"}
+	if in.State != "" && in.Ref == "" && in.Target == "" {
+		return "", &Error{Status: 400, Msg: "state goes with a ref or a target"}
 	}
 	timeout := DefaultWait
 	if in.TimeoutMS != 0 {
@@ -161,7 +181,7 @@ func (t *Tools) WaitFor(ctx context.Context, s sessions.Session, who Caller, in 
 	}
 	return t.run(ctx, s, who, func(c *call) (string, error) {
 		ctx := c.lease.Ctx
-		w := &waiter{in: in}
+		w := &waiter{in: in, tgt: tgt}
 		what := "Waited for text"
 		switch {
 		case in.URLChange:
@@ -173,10 +193,18 @@ func (t *Tools) WaitFor(ctx context.Context, s sessions.Session, who Caller, in 
 			what = "Waited for the page to load"
 		case in.Ref != "":
 			what = "Waited for " + in.Ref + " to be " + cmp.Or(in.State, "visible")
+		case in.Target != "":
+			// The target's words may be the page's: the log keeps its kind.
+			kind := "a text target"
+			if tgt.role != "" {
+				kind = "a role target"
+			}
+			what = "Waited for " + kind + " to be " + cmp.Or(in.State, "visible")
 		}
 		is, awaited := waitCond(in)
 		start := time.Now()
 		deadline := start.Add(timeout)
+		w.deadline = deadline
 		for first := true; ; first = false {
 			ck, err := c.check1(ctx, w, first)
 			if err != nil {
@@ -233,6 +261,8 @@ func (c *call) check1(ctx context.Context, w *waiter, first bool) (waitCheck, er
 		return waitCheck{ok: ok}, err
 	case in.Load:
 		return c.checkLoad(ctx, w)
+	case in.Target != "":
+		return c.checkTarget(ctx, w)
 	}
 	hidden := in.State == "hidden"
 	n, err := c.resolve(ctx, in.Ref)
@@ -306,4 +336,63 @@ func (c *call) checkLoad(ctx context.Context, w *waiter) (waitCheck, error) {
 		return ck, nil
 	}
 	return waitCheck{now: "the document is complete, but requests keep ending (the last " + seconds(idle, false) + " ago)"}, nil
+}
+
+// checkTarget is a target's condition. Visible: exactly one visible match
+// (or, with nth, that one), whose ref the answer gives. Several matches
+// fail the wait once they have lasted ambiguousFor (1 s), or at its deadline,
+// with act's error and its candidates. Hidden: no visible match.
+func (c *call) checkTarget(ctx context.Context, w *waiter) (waitCheck, error) {
+	t := w.tgt
+	r, err := c.readTarget(ctx, t)
+	if errors.Is(err, cdp.ErrWorldGone) {
+		return waitCheck{now: "the next page is still coming"}, nil
+	}
+	if errors.Is(err, errTargetMoved) {
+		// Navigated while it was read: look again.
+		return waitCheck{now: "the page is changing"}, nil
+	}
+	if err != nil {
+		return waitCheck{}, err
+	}
+	n := len(r.matches)
+	picked := -1
+	switch {
+	case t.hasNth && t.nth >= 0 && t.nth < n:
+		picked = t.nth
+	case t.hasNth && t.nth < 0 && n+t.nth >= 0:
+		picked = n + t.nth
+	case !t.hasNth && n == 1:
+		picked = 0
+	}
+	now := "no visible element matches"
+	if n > 0 {
+		now = plural(n, "visible element") + " match"
+		if n == 1 {
+			now += "es"
+		}
+	}
+	if w.in.State == "hidden" {
+		if picked < 0 && (t.hasNth || n == 0) {
+			return waitCheck{ok: true}, nil
+		}
+		return waitCheck{now: now}, nil
+	}
+	if picked >= 0 {
+		w.ambiguous = time.Time{}
+		c.st.refs.dropStale(c.tgt.ID, r.loader)
+		ref := c.st.refs.ref(refKey{target: c.tgt.ID, frame: r.frame, loader: r.loader, backend: r.matches[picked].backend})
+		return waitCheck{ok: true, note: " (it is " + ref + ")"}, nil
+	}
+	if !t.hasNth && n > 1 {
+		if w.ambiguous.IsZero() {
+			w.ambiguous = time.Now()
+		}
+		if time.Since(w.ambiguous) >= c.t.ambiguousFor || !time.Now().Before(w.deadline) {
+			return waitCheck{}, c.ambiguous(t, r)
+		}
+	} else {
+		w.ambiguous = time.Time{}
+	}
+	return waitCheck{now: now}, nil
 }
