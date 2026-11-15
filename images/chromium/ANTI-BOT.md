@@ -132,6 +132,8 @@ Console calls getting slow (`console-slow`: 50 `console.debug` calls costing fiv
 
 **act's re-centre on a covered element** (PROJ-115): only when a pointer step's hit test finds the element covered (or off screen), act calls the element's `scrollIntoView({block: 'center', inline: 'center', behavior: 'instant'})` once, as a function on its isolated-world object, then keeps hit-testing in the isolated world for up to `cover_wait_ms`. Nothing runs in the page's world; what the page can see is a scroll with no wheel or key event before it, as with `DOM.scrollIntoViewIfNeeded` which every pointer step already sends. The waiting adds no input and nothing the page can see. `TestPageToolsStayQuiet`'s clicks aren't covered, so it never takes this path. **Decision: accepted**, like the scroll into view.
 
+**act's changes** (PROJ-114): after a snapshot, act reads the page again after its steps, to answer with what changed. The read is `snapshot`'s (frame tree, isolated world, DOM snapshot, AX tree) plus one more `Page.getFrameTree` to check the document didn't change during it; nothing new reaches the page, and the diff itself is worked out in the orchestrator. `TestPageToolsStayQuiet` takes a snapshot before its act runs, so every act batch there includes the read, and has a batch with `changes: true` and one of `snapshot` with `diff: true`. **Decision: nothing to accept**, the reads were already measured quiet.
+
 ## Page content (PROJ-20)
 
 `POST /api/sessions/{id}/content` (MCP `page_content`) reads the active tab as Markdown or its main text, takes a screenshot or prints a PDF. Its CDP calls go through the same per-call connection as the page tools, with their own allow-list (`contentAllowList` in `internal/pagetools`), and nothing is enabled.
