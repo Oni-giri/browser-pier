@@ -172,7 +172,7 @@ func TestHandoffUntilURL(t *testing.T) {
 	path := "/api/sessions/" + s.ID + "/handoff"
 	for _, bad := range []string{
 		`"/` + strings.Repeat("a", 200) + `"`,
-		`"/acc\u0007ount"`, `"/acc\nount"`, `"/acc‮ount"`,
+		`"/acc\u0007ount"`, `"/acc\nount"`, `"/acc\u202eount"`,
 		`"/cb?code="`, `"/account#top"`,
 	} {
 		var e struct{ Error string }
