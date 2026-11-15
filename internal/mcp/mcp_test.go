@@ -42,6 +42,8 @@ type fixture struct {
 
 	mu     sync.Mutex
 	clicks []string // what the fake browser was asked to click
+	// onClick, if set, runs as the fake browser clicks: a download, say.
+	onClick func()
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -122,7 +124,11 @@ func (f *fixture) browser() http.Handler {
 		b, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
 		f.clicks = append(f.clicks, string(b))
+		onClick := f.onClick
 		f.mu.Unlock()
+		if onClick != nil {
+			onClick()
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 	return mux
