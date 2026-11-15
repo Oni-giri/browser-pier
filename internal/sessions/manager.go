@@ -23,6 +23,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/docker"
 	"github.com/Oni-giri/browser-pier/internal/fence"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
+	"github.com/Oni-giri/browser-pier/internal/scrub"
 )
 
 // Runtime runs browser containers; *docker.Client is the real one.
@@ -130,6 +131,10 @@ type Manager struct {
 	inputsDone *sync.Cond
 	// onEnd is called with a session's ID once it has ended (OnEnd).
 	onEnd []func(id string)
+	// secrets are the values BrowserPier typed into each live session's
+	// page, by session ID (RegisterSecret); in memory only. Its lock
+	// nests inside mu.
+	secrets *scrub.Registry
 
 	// admit is held from checking there is room for a new browser to
 	// recording its session, so two starts can't both squeeze in.
@@ -206,6 +211,7 @@ func NewManager(db *sql.DB, rt Runtime, layout Layout, log *slog.Logger) (*Manag
 		cancel:       cancel,
 		live:         map[string]*live{},
 		held:         map[string]bool{},
+		secrets:      scrub.NewRegistry(),
 	}
 	m.inputsDone = sync.NewCond(&m.mu)
 	return m, nil
@@ -812,7 +818,11 @@ func (m *Manager) cleanup(cid string) string {
 func (m *Manager) end(l *live, lastLog string, final func(*Session)) {
 	m.mu.Lock()
 	final(&l.sess)
-	l.sess.LastLog = lastLog
+	// The container's words are kept and shown after the session, when
+	// its secrets are gone: scrubbed now (PROJ-125).
+	sc := m.secrets.For(l.sess.ID)
+	l.sess.LastLog = sc.String(lastLog)
+	l.sess.Error = sc.String(l.sess.Error)
 	l.sess.UpdatedAt = m.now()
 	s := l.sess
 	m.mu.Unlock()
@@ -829,6 +839,7 @@ func (m *Manager) end(l *live, lastLog string, final func(*Session)) {
 	if m.live[s.Profile] == l {
 		delete(m.live, s.Profile)
 	}
+	m.secrets.Forget(s.ID)
 	l.disconnectLocked()
 	l.cancelAllLocked(ErrStopping)
 	hooks := slices.Clone(m.onEnd)

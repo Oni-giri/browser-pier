@@ -33,6 +33,9 @@ func (m *Manager) note(sessionID, agent, what string, attention bool) {
 	if l == nil {
 		return
 	}
+	// A file name or an address in an entry may hold a secret the page
+	// echoed (PROJ-125).
+	what = m.secrets.For(sessionID).String(what)
 	a := Activity{At: m.now(), Agent: agent, What: what, Attention: attention}
 	if len(l.activity) < maxActivity {
 		l.activity = append(l.activity, a)
