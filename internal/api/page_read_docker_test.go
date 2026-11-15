@@ -5,6 +5,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"os/exec"
 	"regexp"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/browsertest"
+	"github.com/Oni-giri/browser-pier/internal/screenshot"
 )
 
 // TestPageToolsRead is PROJ-21's reading scenarios on a real browser:
@@ -353,6 +355,107 @@ func TestPageToolsClickableDivs(t *testing.T) {
 	for _, e := range []string{"decor", "card", "save", "link"} {
 		if site.HasEvent(e) {
 			t.Errorf("%s was clicked: %v", e, site.Events())
+		}
+	}
+}
+
+// TestCloudflareChallengeNote is PROJ-120 on a real browser: navigate,
+// snapshot, find and page_content spot a challenge page and say where its
+// checkbox is; a /computer click at instant pace there lands on it, also
+// with the page zoomed; the MCP pixels are the MCP tools' own scaling;
+// a site's own Turnstile gets no note.
+func TestCloudflareChallengeNote(t *testing.T) {
+	a := newRealAPI(t)
+	site := browsertest.NewPageSite(t, browsertest.SiteHost(t))
+	s := a.startAPIBrowser(t, "cf")
+	sw, sh := a.screenSize(t, s.ID)
+	at := regexp.MustCompile(`computer click at screen x=(\d+), y=(\d+) with pace instant \(MCP: click at (\d+), (\d+) in screenshot pixels`)
+	// note checks the answer has the note in its fence and returns its
+	// screen point.
+	note := func(what, out string) (int, int) {
+		t.Helper()
+		m := at.FindStringSubmatch(out)
+		i, end := strings.Index(out, "Cloudflare challenge."), strings.LastIndex(out, "</untrusted-content-")
+		if m == nil || i < 0 || i > end {
+			t.Fatalf("%s: no note in the fence:\n%s", what, out)
+		}
+		n := make([]int, 4)
+		for k := range n {
+			n[k], _ = strconv.Atoi(m[k+1])
+		}
+		// The screenshot's pixels are the MCP tools' own scaling of it.
+		sc := screenshot.Screen{W: sw, H: sh}
+		if mx, my := sc.FromScreen(n[0], n[1]); mx != n[2] || my != n[3] {
+			t.Errorf("%s: MCP pixels %d, %d; want %d, %d", what, n[2], n[3], mx, my)
+		}
+		return n[0], n[1]
+	}
+	// click clicks there at instant pace and checks it landed within 4 px
+	// of the checkbox's middle, as the page reports both.
+	click := func(what string, x, y int) {
+		t.Helper()
+		before := len(site.Events())
+		body := fmt.Sprintf(`{"action": "click", "x": %d, "y": %d, "pace": "instant"}`, x, y)
+		if code := a.do(http.MethodPost, "/api/sessions/"+s.ID+"/computer", body, nil); code != http.StatusNoContent {
+			t.Fatalf("%s: click: %d", what, code)
+		}
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+			for _, e := range site.Events()[before:] {
+				var cx, cy, bx, by float64
+				if _, err := fmt.Sscanf(e, "cf-click %g %g %g %g", &cx, &cy, &bx, &by); err != nil {
+					continue
+				}
+				if math.Abs(cx-bx) > 4 || math.Abs(cy-by) > 4 {
+					t.Errorf("%s: the click at screen %d, %d landed at %g, %g; the checkbox is at %g, %g", what, x, y, cx, cy, bx, by)
+				}
+				return
+			}
+		}
+		t.Fatalf("%s: no click reached the page; events %v", what, site.Events())
+	}
+
+	x, y := note("navigate", a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/cf-challenge"}))
+	click("at 100%", x, y)
+	for _, out := range []string{
+		a.mustTool(s.ID, "snapshot", nil),
+		a.mustTool(s.ID, "find", map[string]any{"text": "verify you are human"}),
+		a.contentText(s.ID, map[string]any{"format": "markdown"}),
+		a.contentText(s.ID, map[string]any{"format": "readability"}),
+	} {
+		if sx, sy := note("a read", out); sx != x || sy != y {
+			t.Errorf("the reads disagree: %d, %d and %d, %d", sx, sy, x, y)
+		}
+	}
+
+	// Zoomed in (ctrl+= twice: 125%), the point moves and still lands.
+	for range 2 {
+		if code := a.do(http.MethodPost, "/api/sessions/"+s.ID+"/computer", `{"action": "key", "keys": "ctrl+equal", "pace": "instant"}`, nil); code != http.StatusNoContent {
+			t.Fatalf("zoom: %d", code)
+		}
+	}
+	var zx, zy int
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+		if zx, zy = note("zoomed snapshot", a.mustTool(s.ID, "snapshot", map[string]any{"max_chars": 0})); zx != x || time.Now().After(deadline) {
+			break
+		}
+	}
+	t.Logf("the checkbox at 100%%: %d, %d; at 125%%: %d, %d (screen %dx%d)", x, y, zx, zy, sw, sh)
+	if zx == x && zy == y {
+		t.Errorf("zooming didn't move the point (%d, %d)", x, y)
+	}
+	click("at 125%", zx, zy)
+	if code := a.do(http.MethodPost, "/api/sessions/"+s.ID+"/computer", `{"action": "key", "keys": "ctrl+0", "pace": "instant"}`, nil); code != http.StatusNoContent {
+		t.Fatalf("unzoom: %d", code)
+	}
+
+	// A site's own Turnstile isn't a challenge page.
+	for _, out := range []string{
+		a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/turnstile-login"}),
+		a.mustTool(s.ID, "snapshot", nil),
+		a.contentText(s.ID, map[string]any{"format": "markdown"}),
+	} {
+		if strings.Contains(out, "Cloudflare") {
+			t.Errorf("a Turnstile in a form has the note:\n%s", out)
 		}
 	}
 }
