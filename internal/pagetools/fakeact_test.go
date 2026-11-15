@@ -81,7 +81,7 @@ func (fb *fakeBrowser) dom(tb *ftab, m cdptest.Message, p map[string]any) (any, 
 		if n == nil {
 			return nil, true, gone
 		}
-		return map[string]any{"node": map[string]any{"backendNodeId": n.backend, "nodeName": strings.ToUpper(n.tag)}}, true, nil
+		return map[string]any{"node": map[string]any{"backendNodeId": n.backend, "nodeName": strings.ToUpper(n.tag), "attributes": append([]string{}, n.attrs...)}}, true, nil
 	case "Accessibility.getPartialAXTree":
 		n := backend()
 		if n == nil {

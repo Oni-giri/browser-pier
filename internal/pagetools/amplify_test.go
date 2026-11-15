@@ -32,7 +32,11 @@ func readFake(t testing.TB, doc *fnode) (*dom, []axNode) {
 	t.Helper()
 	number(doc)
 	fb := &fakeBrowser{}
-	raw, err := json.Marshal(fb.snapshot(&ftab{id: "T", url: "https://example.com/", doc: doc}))
+	styles := make([]any, len(snapshotStyles))
+	for i, st := range snapshotStyles {
+		styles[i] = st
+	}
+	raw, err := json.Marshal(fb.snapshot(&ftab{id: "T", url: "https://example.com/", doc: doc}, map[string]any{"computedStyles": styles, "includePaintOrder": true}))
 	if err != nil {
 		t.Fatal(err)
 	}
