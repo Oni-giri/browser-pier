@@ -201,6 +201,25 @@ type Site struct {
 	iconServed bool
 	// rejected is what the last refused login sent.
 	rejected string
+	// released lets /later's page go on (ReleaseLater); arrived is set
+	// once it has.
+	released, arrived bool
+}
+
+// ReleaseLater sends the /later page, wherever it is, on to
+// /account-later, which its tab can be told to match without being the
+// account page.
+func (s *Site) ReleaseLater() {
+	s.mu.Lock()
+	s.released = true
+	s.mu.Unlock()
+}
+
+// LaterArrived reports whether the /later page got to /account-later.
+func (s *Site) LaterArrived() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.arrived
 }
 
 // SessionCookie makes later logins set a session-only cookie, with no
@@ -294,6 +313,26 @@ func NewSite(t *testing.T, host string) *Site {
 		}
 		http.SetCookie(w, c)
 		_, _ = io.WriteString(w, "<p>Signed in</p>")
+	})
+	// A page that navigates by itself once the test says so (ReleaseLater),
+	// as a background tab or popup might.
+	mux.HandleFunc("GET /later", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `<title>Later</title><p>Waiting</p><script>
+setInterval(async () => { if ((await fetch('/later/go')).status === 200) location = '/account-later' }, 250)</script>`)
+	})
+	mux.HandleFunc("GET /later/go", func(w http.ResponseWriter, _ *http.Request) {
+		s.mu.Lock()
+		released := s.released
+		s.mu.Unlock()
+		if !released {
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+	mux.HandleFunc("GET /account-later", func(w http.ResponseWriter, _ *http.Request) {
+		s.mu.Lock()
+		s.arrived = true
+		s.mu.Unlock()
+		_, _ = io.WriteString(w, "<title>Moved</title><p>Moved by itself</p>")
 	})
 	mux.HandleFunc("GET /account", func(w http.ResponseWriter, r *http.Request) {
 		v := ""

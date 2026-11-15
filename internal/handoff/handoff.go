@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -246,10 +245,7 @@ func (s *Service) Open(ctx context.Context, r Request) (Handoff, string, error) 
 func (s *Service) pageOrigin(ctx context.Context, profile string) string {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	sock := s.m.Layout().ControlSocket(profile)
-	c := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "unix", sock)
-	}}}
+	c := controlClient(s.m.Layout().ControlSocket(profile))
 	defer c.CloseIdleConnections()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://control/cdp/json/list", nil)
 	resp, err := c.Do(req)

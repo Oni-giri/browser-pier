@@ -20,10 +20,12 @@ import (
 )
 
 // TestHandoffHandsBackAtUntilURL is PROJ-118 with a real browser: an agent
-// asks for a sign-in with until_url "/account", a person signs in on the
-// test site and opens the account page (here through the container's X
-// display, as the live view's input goes), and the handoff ends as done
-// without a tap, with the fixed note. Meanwhile no page has a CDP client
+// asks for a sign-in with until_url "/account", a person opens the link,
+// signs in on the test site and opens the account page (here through the
+// container's X display, as the live view's input goes), and the handoff
+// ends as done without a tap, with the fixed note. Before that, a
+// background tab navigating by itself to a matching address doesn't end
+// it: only the tab in front counts. Meanwhile no page has a CDP client
 // attached.
 func TestHandoffHandsBackAtUntilURL(t *testing.T) {
 	a := newRealAPI(t)
@@ -38,6 +40,10 @@ func TestHandoffHandsBackAtUntilURL(t *testing.T) {
 	if _, err := a.m.Profiles().Update(context.Background(), p); err != nil {
 		t.Fatal(err)
 	}
+	// A second tab, behind, which will navigate by itself to an address
+	// the pattern matches (/account-later).
+	a.mustTool(s.ID, "tabs", map[string]any{"action": "new", "url": site.URL + "/later"})
+	a.mustTool(s.ID, "tabs", map[string]any{"action": "switch", "id": "t1"})
 	a.mustTool(s.ID, "navigate", map[string]any{"url": site.URL + "/login"})
 	sock := a.m.Layout().ControlSocket(s.Profile)
 	control := browsertest.ControlClient(sock)
@@ -55,6 +61,15 @@ func TestHandoffHandsBackAtUntilURL(t *testing.T) {
 		}
 	}
 	noneAttached("as the handoff opens")
+	// The person opens the link: the watch starts from there.
+	ho, err := a.ho.Get(context.Background(), h.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.ho.Unlock(context.Background(), ho, "the person's browser"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second) // the first look
 	status := func() handoffJSON {
 		t.Helper()
 		var got handoffJSON
@@ -94,6 +109,22 @@ func TestHandoffHandsBackAtUntilURL(t *testing.T) {
 		near := func(v uint32, want uint8) bool { return max(int(v>>8), int(want))-min(int(v>>8), int(want)) <= 8 }
 		return near(cr, r) && near(cg, g) && near(cb, b)
 	}
+	// The background tab gets to a matching address by itself: not the tab
+	// in front, so the handoff stays open.
+	site.ReleaseLater()
+	for deadline := time.Now().Add(15 * time.Second); !site.LaterArrived(); time.Sleep(100 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the background tab never navigated")
+		}
+	}
+	time.Sleep(2 * time.Second) // a few looks
+	if got := status(); got.Status != "pending" {
+		t.Fatalf("a background tab reaching the address ended the handoff: %+v", got)
+	}
+	if front := frontPage(t, control); !strings.HasSuffix(front, "/login") {
+		t.Fatalf("the tab in front is %s, not the sign-in page", front)
+	}
+
 	// The fields are 200 px bands under the toolbar: the user field blue
 	// across the screen's y 200, the password field green across y 400.
 	deadline := time.Now().Add(20 * time.Second)
@@ -158,4 +189,25 @@ func TestHandoffHandsBackAtUntilURL(t *testing.T) {
 	if out := a.mustTool(s.ID, "snapshot", map[string]any{}); !strings.Contains(out, "Signed in as pier") {
 		t.Fatalf("snapshot after hand-back: %s", out)
 	}
+}
+
+// frontPage is the URL of the tab in front: the first page /json/list
+// lists.
+func frontPage(t *testing.T, control *http.Client) string {
+	t.Helper()
+	resp, err := control.Get("http://control/cdp/json/list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var list []struct{ Type, URL string }
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range list {
+		if p.Type == "page" {
+			return p.URL
+		}
+	}
+	return ""
 }

@@ -21,7 +21,7 @@ func (s *Server) addHandoffTools(srv *sdk.Server) {
 		"They get a one-time link; you're paused until they hand back. Clients that can open links show it to the user and wait; " +
 		"otherwise send the link yourself and call wait_for_handoff. " +
 		"If you know where the task ends (the account page after a sign-in), give until_url: the handoff then also ends by itself, as done, " +
-		"once a tab navigates to an address with that text in its origin and path, so you don't wait for a person who forgot to tap Done."}, s.requestHandoff)
+		"once the tab in front navigates to an address with that text in its origin and path, after the person opened the link, so you don't wait for a person who forgot to tap Done."}, s.requestHandoff)
 	sdk.AddTool(srv, &sdk.Tool{Name: "wait_for_handoff", Description: "Wait for the person to hand back. Returns at once if they have; call it again while it says pending."}, s.waitForHandoff)
 	sdk.AddTool(srv, &sdk.Tool{Name: "cancel_handoff", Description: "Withdraw a handoff nobody will take: the link stops working and you get the browser back."}, s.cancelHandoff)
 }
@@ -31,7 +31,7 @@ type handoffArgs struct {
 	Reason    string `json:"reason" jsonschema:"sensitive_input (login, 2FA, payment), captcha, file_upload, review or manual_step"`
 	Detail    string `json:"detail" jsonschema:"what the person should do, in one sentence: Enter the 2FA code Google sent to your phone"`
 	Require   string `json:"require,omitempty" jsonschema:"ask for a stricter check than the profile's: pin or signin"`
-	UntilURL  string `json:"until_url,omitempty" jsonschema:"optional: end the handoff by itself when a tab navigates to an address whose origin and path contain this text, such as example.com/account or /dashboard; never the query or fragment, so no ? or #; at most 200 characters. A page already there when you ask doesn't count"`
+	UntilURL  string `json:"until_url,omitempty" jsonschema:"optional: end the handoff by itself when the tab in front navigates to an address whose origin and path contain this text, such as example.com/account or /dashboard; never the query or fragment, so no ? or #; 4 to 200 characters, naming a page (not just / or https://). A page already there when the person opens the link doesn't count"`
 }
 
 type handoffOut struct {

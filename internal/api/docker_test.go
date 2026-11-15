@@ -43,6 +43,7 @@ type agent struct {
 	base  string
 	token string
 	m     *sessions.Manager
+	ho    *handoff.Service
 }
 
 func (a agent) do(method, path, body string, out any) int {
@@ -126,7 +127,7 @@ func newRealAPI(t *testing.T) agent {
 	a.Register(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return agent{t: t, base: srv.URL, token: secret, m: m}
+	return agent{t: t, base: srv.URL, token: secret, m: m, ho: handoffs}
 }
 
 // allowLocalNetwork lets the profile's pages reach the test sites, on the

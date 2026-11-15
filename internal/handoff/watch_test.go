@@ -2,6 +2,7 @@ package handoff
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -11,13 +12,12 @@ import (
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
-	"github.com/Oni-giri/browser-pier/internal/cdp/cdptest"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
-// fakeTabs is what the fake browser's Target.getTargets answers, and how
-// many times it was asked.
+// fakeTabs is what the fake browser's /json/list answers (the tab in
+// front first), and how many times it was asked.
 type fakeTabs struct {
 	mu    sync.Mutex
 	tabs  []tab
@@ -36,14 +36,13 @@ func (f *fakeTabs) count() int {
 	return f.polls
 }
 
-func (f *fakeTabs) handle(m cdptest.Message) (any, error) {
-	if m.Method != "Target.getTargets" {
-		return nil, cdptest.Error{Message: "not in the fake: " + m.Method}
-	}
+// serveList answers /json/list, a service worker listed before the pages.
+func (f *fakeTabs) serveList(w http.ResponseWriter, _ *http.Request) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.polls++
-	return map[string]any{"targetInfos": append([]tab{{ID: "W1", Typ: "service_worker", URL: "https://site.example/account/sw.js"}}, f.tabs...)}, nil
+	list := append([]tab{{ID: "W1", Typ: "service_worker", URL: "https://site.example/account/sw.js"}}, f.tabs...)
+	f.mu.Unlock()
+	_ = json.NewEncoder(w).Encode(list)
 }
 
 func (f *fixture) openUntil(until string) (Handoff, string) {
@@ -93,6 +92,10 @@ func TestCheckUntilURL(t *testing.T) {
 		"/account":               "/account",
 		"  example.com/account ": "example.com/account",
 		"/café":                  "/café",
+		"/acc":                   "/acc",
+		"x.io":                   "x.io",
+		"https://x.io":           "https://x.io",
+		"httpbin.org":            "httpbin.org",
 		strings.Repeat("a", 200): strings.Repeat("a", 200),
 		strings.Repeat("é", 200): strings.Repeat("é", 200), // characters, not bytes
 	} {
@@ -106,6 +109,9 @@ func TestCheckUntilURL(t *testing.T) {
 		"/acc\u202eount", "/acc\u200bount", "/acc\u2028ount", // bidi, zero-width, line separator
 		"/acc\xffount",                  // not UTF-8
 		"/cb?code=", "/account#welcome", // never matched, so refused
+		// Too general: they would match nearly any address.
+		"/", ".", "/a", "abc", "///", "/./", "....", ":/:/", "https://", "http://", "HTTPS://", "https", "http:",
+		"https:///", "  http://  ",
 	} {
 		if got, err := CheckUntilURL(in); !errors.Is(err, ErrBadUntilURL) {
 			t.Errorf("CheckUntilURL(%q) = %q, %v; want ErrBadUntilURL", in, got, err)
@@ -139,7 +145,7 @@ func TestMatchesOriginAndPathOnly(t *testing.T) {
 	}
 }
 
-func TestLookCountsOnlyTabsThatMoved(t *testing.T) {
+func TestLookCountsOnlyTheFrontTabOnceItMoved(t *testing.T) {
 	const until = "/account"
 	login := tab{ID: "A", Typ: "page", URL: "https://site/login?next=/account"}
 	seen, hit := look(nil, []tab{{ID: "B", Typ: "page", URL: "https://site/account"}, login}, until)
@@ -152,18 +158,31 @@ func TestLookCountsOnlyTabsThatMoved(t *testing.T) {
 			t.Fatalf("a tab that stayed at the address matched: %s", b)
 		}
 	}
-	// A navigation to it does.
-	if _, hit = look(seen, []tab{{ID: "B", Typ: "page", URL: "https://site/account"}, {ID: "A", Typ: "page", URL: "https://site/account"}}, until); !hit {
-		t.Fatal("a tab that navigated to the address didn't match")
+	// A navigation to it does, in front.
+	if _, hit = look(seen, []tab{{ID: "A", Typ: "page", URL: "https://site/account"}, {ID: "B", Typ: "page", URL: "https://site/account"}}, until); !hit {
+		t.Fatal("the front tab that navigated to the address didn't match")
+	}
+	// Not in the background: a tab (or popup) behind the person's.
+	back, hit := look(seen, []tab{{ID: "B", Typ: "page", URL: "https://site/account"}, {ID: "A", Typ: "page", URL: "https://site/account"}}, until)
+	if hit {
+		t.Fatal("a background tab that navigated to the address matched")
+	}
+	// Once it comes to the front, having moved, it does (an opener a
+	// sign-in popup sent on, then closed).
+	if _, hit = look(back, []tab{{ID: "A", Typ: "page", URL: "https://site/account"}, {ID: "B", Typ: "page", URL: "https://site/account"}}, until); !hit {
+		t.Fatal("a tab that moved in the background didn't match once in front")
 	}
 	// So does one that went elsewhere first, then got there.
 	s2, _ := look(seen, []tab{{ID: "A", Typ: "page", URL: "https://site/2fa"}}, until)
 	if _, hit = look(s2, []tab{{ID: "A", Typ: "page", URL: "https://site/account?welcome=1"}}, until); !hit {
 		t.Fatal("a tab that moved twice didn't match")
 	}
-	// And a tab opened since the first look.
-	if _, hit = look(seen, []tab{login, {ID: "C", Typ: "page", URL: "https://site/account"}}, until); !hit {
-		t.Fatal("a new tab at the address didn't match")
+	// And a tab opened since the first look, in front; not behind.
+	if _, hit = look(seen, []tab{{ID: "C", Typ: "page", URL: "https://site/account"}, login}, until); !hit {
+		t.Fatal("a new tab in front at the address didn't match")
+	}
+	if _, hit = look(seen, []tab{login, {ID: "C", Typ: "page", URL: "https://site/account"}}, until); hit {
+		t.Fatal("a new background tab at the address matched")
 	}
 	// A first look that saw no tab at all still counts as a look.
 	empty, _ := look(nil, nil, until)
@@ -172,10 +191,48 @@ func TestLookCountsOnlyTabsThatMoved(t *testing.T) {
 	}
 }
 
-// TestUntilURLEndsTheHandoff is the fake browser's check: Target.getTargets
+// The watch looks only once the person has opened the link: its first look
+// is then, so nothing before (the page, the agent) can end a handoff the
+// person hasn't seen.
+func TestTheWatchStartsWhenTheLinkIsOpened(t *testing.T) {
+	f := newFixture(t, profiles.PolicyLink, auth.WebOptions{})
+	ctx := context.Background()
+	f.svc.watchPoll = 20 * time.Millisecond
+	f.tabs.set(tab{ID: "T1", Typ: "page", URL: "https://site.example/login"})
+	h, token := f.openUntil("/account")
+	n := f.tabs.count() // the origin, read as it opened
+	time.Sleep(10 * f.svc.watchPoll)
+	if f.tabs.count() != n {
+		t.Fatal("the watch looked at the tabs before the link was opened")
+	}
+	// The page gets to the address before anyone opened the link.
+	f.tabs.set(tab{ID: "T1", Typ: "page", URL: "https://site.example/account"})
+	time.Sleep(10 * f.svc.watchPoll)
+	if got, _ := f.svc.Get(ctx, h.ID); got.Status != Pending {
+		t.Fatalf("before the link was opened: %s", got.Status)
+	}
+	// The person opens it: the first look is there, already at the address.
+	if p := f.do(browser(), "GET", "/h/"+token, nil, nil); p.code != http.StatusSeeOther {
+		t.Fatalf("opening the link: %d", p.code)
+	}
+	eventually(t, "a look", func() bool { return f.tabs.count() > n+1 })
+	time.Sleep(5 * f.svc.watchPoll)
+	if got, _ := f.svc.Get(ctx, h.ID); got.Status != Pending {
+		t.Fatalf("a page already at the address when the link was opened ended it: %s", got.Status)
+	}
+	// Moving away and back, in front, does.
+	f.tabs.set(tab{ID: "T1", Typ: "page", URL: "https://site.example/2fa"})
+	time.Sleep(5 * f.svc.watchPoll)
+	f.tabs.set(tab{ID: "T1", Typ: "page", URL: "https://site.example/account"})
+	if got, err := f.svc.Wait(ctx, h.ID, 5*time.Second); err != nil || got.Status != Done || !got.Auto {
+		t.Fatalf("after the person got there: %+v, %v", got, err)
+	}
+}
+
+// TestUntilURLEndsTheHandoff is the fake browser's check: /json/list
 // answers a new address after two looks, and the handoff ends as done with
-// the fixed note within a second, having sent nothing but
-// Target.getTargets, and its watch is gone.
+// the fixed note within a second, with no CDP connection at all, and its
+// watch is gone.
 func TestUntilURLEndsTheHandoff(t *testing.T) {
 	f := newFixture(t, profiles.PolicyLink, auth.WebOptions{})
 	ctx := context.Background()
@@ -204,10 +261,8 @@ func TestUntilURLEndsTheHandoff(t *testing.T) {
 	if took > time.Second {
 		t.Fatalf("the handoff ended %s after the change, want within 1 s", took)
 	}
-	for _, m := range f.cdp.Methods() {
-		if m != "Target.getTargets" {
-			t.Fatalf("the watch sent %s; only Target.getTargets may go to the browser", m)
-		}
+	if n := f.cdp.Dials(); n != 0 {
+		t.Fatalf("the watch made %d CDP connections; it reads /json/list over HTTP only", n)
 	}
 	f.watchEnds(h.ID, w)
 	if live, _ := f.m.Live("google"); live.State != sessions.Running {
@@ -238,9 +293,10 @@ func TestUntilURLEndsTheHandoff(t *testing.T) {
 func TestNoUntilURLNoWatch(t *testing.T) {
 	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
 	h, _ := f.open("")
+	n := f.tabs.count() // the origin, read as it opened
 	time.Sleep(3 * f.svc.watchPoll)
-	if f.watched(h.ID) != nil || f.cdp.Dials() != 0 {
-		t.Fatalf("a handoff without until_url is watched: %d dials", f.cdp.Dials())
+	if f.watched(h.ID) != nil || f.tabs.count() != n || f.cdp.Dials() != 0 {
+		t.Fatalf("a handoff without until_url is watched: %d looks, %d dials", f.tabs.count()-n, f.cdp.Dials())
 	}
 }
 
@@ -439,7 +495,10 @@ func TestSweepWatchesAgainAfterARestart(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t, profiles.PolicyLink, auth.WebOptions{})
 	f.tabs.set(tab{ID: "T1", Typ: "page", URL: "https://site.example/login"})
-	h, _ := f.openUntil("/account")
+	h, token := f.openUntil("/account")
+	if p := f.do(browser(), "GET", "/h/"+token, nil, nil); p.code != http.StatusSeeOther {
+		t.Fatalf("opening the link: %d", p.code)
+	}
 	f.svc.Close()
 	again := New(f.svc.db, f.m, f.svc.log)
 	t.Cleanup(again.Close)

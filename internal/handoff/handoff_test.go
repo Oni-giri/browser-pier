@@ -60,12 +60,13 @@ func newFixture(t *testing.T, policy profiles.HandoffPolicy, opts auth.WebOption
 	rt := sessionstest.New(dir)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok\n") })
-	mux.HandleFunc("GET /cdp/json/list", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, `[{"type":"page","url":"https://accounts.google.com/signin/v2?continue=https%3A%2F%2Fevil.example%2Fpay+now"}]`)
-	})
 	tabs := &fakeTabs{}
 	tabs.set(tab{ID: "T1", Typ: "page", URL: "https://accounts.google.com/signin/v2?continue=https%3A%2F%2Fevil.example%2Fpay+now"})
-	b := cdptest.New(tabs.handle)
+	mux.HandleFunc("GET /cdp/json/list", tabs.serveList)
+	// No CDP: what the handoff reads of the browser, it reads over HTTP.
+	b := cdptest.New(func(m cdptest.Message) (any, error) {
+		return nil, cdptest.Error{Message: "not in the fake: " + m.Method}
+	})
 	rt.Control = b.Handler(mux)
 	m, err := sessions.NewManager(d, rt, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)
 	if err != nil {

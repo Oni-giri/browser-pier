@@ -37,9 +37,9 @@ type browser struct {
 	// onInput, if set, runs as each input action does, with its path:
 	// a click that starts a download, say.
 	onInput func(path string)
-	// pageURL is the one tab's address, as Target.getTargets answers it
-	// on the browser's WebSocket (a handoff's until_url watch); other
-	// messages are echoed.
+	// pageURL is the one tab's address, as /json/list and
+	// Target.getTargets answer it (a handoff's until_url watch reads the
+	// former); other messages on the browser's WebSocket are echoed.
 	pageURL string
 	// methods are the CDP methods sent on the browser's WebSocket.
 	methods []string
@@ -52,7 +52,11 @@ func (b *browser) handler() http.Handler {
 		_, _ = io.WriteString(w, `{"Browser":"Chrome/156","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/abc"}`)
 	})
 	mux.HandleFunc("GET /cdp/json/list", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, `[{"id":"p1","type":"page","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/page/p1","devtoolsFrontendUrl":"/devtools/inspector.html?ws=127.0.0.1:9222/devtools/page/p1"}]`)
+		b.mu.Lock()
+		page := b.pageURL
+		b.mu.Unlock()
+		_ = json.NewEncoder(w).Encode([]map[string]string{{"id": "p1", "type": "page", "url": page,
+			"webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/p1", "devtoolsFrontendUrl": "/devtools/inspector.html?ws=127.0.0.1:9222/devtools/page/p1"}})
 	})
 	mux.HandleFunc("GET /cdp/devtools/browser/abc", func(w http.ResponseWriter, r *http.Request) {
 		b.checkLeaks(r)

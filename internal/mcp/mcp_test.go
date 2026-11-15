@@ -3,6 +3,7 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"image"
 	"image/png"
@@ -45,8 +46,8 @@ type fixture struct {
 	clicks []string // what the fake browser was asked to click
 	// onClick, if set, runs as the fake browser clicks: a download, say.
 	onClick func()
-	// pageURL is the one tab's address, as Target.getTargets answers it
-	// (a handoff's until_url watch).
+	// pageURL is the one tab's address, as /json/list answers it (a
+	// handoff's until_url watch); "" for a sign-in page.
 	pageURL string
 }
 
@@ -120,7 +121,13 @@ func (f *fixture) browser() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok\n") })
 	mux.HandleFunc("GET /cdp/json/list", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, `[{"type":"page","url":"https://accounts.example.com/signin?x=1"}]`)
+		f.mu.Lock()
+		page := f.pageURL
+		f.mu.Unlock()
+		if page == "" {
+			page = "https://accounts.example.com/signin?x=1"
+		}
+		_ = json.NewEncoder(w).Encode([]map[string]string{{"id": "p1", "type": "page", "url": page}})
 	})
 	mux.HandleFunc("GET /screenshot", func(w http.ResponseWriter, r *http.Request) {
 		width, height := 1440, 900
@@ -412,6 +419,10 @@ func TestHandoffUntilURLOverMCP(t *testing.T) {
 	open, _ := f.handoffs.Pending(context.Background())
 	if len(open) != 1 || open[0].UntilURL != "site.example/account" || !strings.Contains(out, "wait_for_handoff") {
 		t.Fatalf("request_handoff: %s (pending %+v)", out, open)
+	}
+	// The person opens the link: the watch looks from then.
+	if err := f.handoffs.Unlock(context.Background(), open[0], "the person's browser"); err != nil {
+		t.Fatal(err)
 	}
 	go func() {
 		time.Sleep(time.Second)

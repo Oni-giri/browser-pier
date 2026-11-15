@@ -2,38 +2,47 @@ package handoff
 
 // Handoffs that hand back by themselves (PROJ-118): an agent that knows
 // where a task ends (the account page after a sign-in) gives that address
-// as until_url, and the handoff ends as done once a tab gets there, so the
-// agent isn't left waiting for a person who stopped at the signed-in page
-// without tapping Done.
+// as until_url, and the handoff ends as done once the tab in front gets
+// there, so the agent isn't left waiting for a person who stopped at the
+// signed-in page without tapping Done.
 //
 // While the handoff is open, a watch asks the browser for its tabs every
-// watchEvery with Target.getTargets, on a short-lived browser-level
-// connection through the control socket that can send nothing else
-// (watchList). It attaches to no page, opens no page session, enables
-// nothing and goes through neither the page tools nor their lease, so a
-// person driving the browser (in either mode) shares it with no CDP client.
+// watchEvery with a plain HTTP GET of its /json/list, through the control
+// socket's relay: no CDP connection at all, so nothing attaches to a page,
+// opens a session or enables anything, and the watch goes through neither
+// the page tools nor their lease. A person driving the browser (in either
+// mode) shares it with no CDP client.
 //
-// Target.getTargets doesn't say which tab is in front (its order isn't the
-// order tabs were last activated in; measured, Chromium 156), so a watch
-// doesn't guess: any tab counts, but only once its origin and path have
-// changed since the watch first looked, or it opened since. A page already
-// at the address, or one that reloads or changes only its query, never
-// ends a handoff; it takes a navigation to a matching origin and path.
+// /json/list lists tabs most recently in front first (Chromium sorts it by
+// each tab's last activation; measured on the image's Chromium after tabs
+// switch, tabs new, ctrl+Tab, ctrl+1 and closing a tab through the live
+// view's keys), so its first page is the tab in front. Only that tab
+// counts, and only once its origin and path have changed since the watch
+// first looked, or it opened since: a page already at the address, or one
+// that reloads or changes only its query, never ends a handoff, nor does a
+// background tab or popup that navigates by itself.
+//
+// The first look is taken once the person has opened the link (the
+// handoff is unlocked), not when the agent asks: nothing the page or the
+// agent does before then can end a handoff the person hasn't seen.
 //
 // What the watch reads stays in it: the agent learns only that the
 // handoff ended, with a fixed note (AutoNote), never the address.
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/Oni-giri/browser-pier/internal/cdp"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
@@ -42,20 +51,20 @@ const (
 	MaxUntilURL = 200
 	// watchEvery is how often a watch looks at the tabs.
 	watchEvery = 500 * time.Millisecond
-	// watchCallTimeout bounds one look: the dial and Target.getTargets,
-	// which the browser answers even while a page has a dialog open.
+	// watchCallTimeout bounds one look: the GET of /json/list, which the
+	// browser answers even while a page has a dialog open.
 	watchCallTimeout = 3 * time.Second
+	// minUntilURL is the shortest until_url pattern, in characters.
+	minUntilURL = 4
 )
-
-// watchList is all a watch may send. It is unexported, so no other caller
-// can borrow it, and it can't attach to anything.
-var watchList = cdp.NewAllowList("handoff address watch", "Target.getTargets")
 
 // CheckUntilURL checks an until_url pattern and returns it without the
 // spaces around it. An empty one is no pattern. It is matched against
 // the origin and path only, so a pattern with ? or # could never match,
 // and is refused, as are invisible characters and more than MaxUntilURL
-// characters.
+// characters. So is one that would match nearly any address: under
+// minUntilURL characters, made only of "/", "." and ":", or a bare scheme
+// ("https://").
 func CheckUntilURL(raw string) (string, error) {
 	if !utf8.ValidString(raw) {
 		return "", fmt.Errorf("%w: not valid UTF-8", ErrBadUntilURL)
@@ -71,6 +80,18 @@ func CheckUntilURL(raw string) (string, error) {
 	}
 	if strings.ContainsAny(p, "?#") {
 		return "", fmt.Errorf("%w: it is matched against the address's origin and path only, so leave out ? and #", ErrBadUntilURL)
+	}
+	if p == "" {
+		return "", nil
+	}
+	bare := strings.ToLower(p)
+	if b, ok := strings.CutPrefix(bare, "https"); ok {
+		bare = b
+	} else {
+		bare = strings.TrimPrefix(bare, "http")
+	}
+	if utf8.RuneCountInString(p) < minUntilURL || strings.Trim(bare, "/.:") == "" {
+		return "", fmt.Errorf("%w: too general, it would match nearly any address; give at least %d characters naming the page, like /account or example.com/home", ErrBadUntilURL, minUntilURL)
 	}
 	return p, nil
 }
@@ -95,9 +116,9 @@ func matches(pattern, raw string) bool {
 	return ok && pattern != "" && (strings.Contains(shown, pattern) || strings.Contains(decoded, pattern))
 }
 
-// tab is a page target, as Target.getTargets lists it.
+// tab is a target, as /json/list lists it.
 type tab struct {
-	ID  string `json:"targetId"`
+	ID  string `json:"id"`
 	Typ string `json:"type"`
 	URL string `json:"url"`
 }
@@ -109,13 +130,16 @@ type tabSeen struct {
 	moved bool
 }
 
-// look compares the tabs with what the last look saw, and reports whether
-// a tab that has moved is at a matching address. The first look (seen is
-// nil) only takes note of where the tabs are.
+// look compares the tabs (page targets, the one in front first) with what
+// the last look saw, and reports whether the tab in front has moved and is
+// at a matching address. The first look (seen is nil) only takes note of
+// where the tabs are. Every tab is remembered, so one that moved while in
+// the background (an opener a sign-in popup sent on) counts once it is in
+// front.
 func look(seen map[string]tabSeen, tabs []tab, pattern string) (map[string]tabSeen, bool) {
 	next := make(map[string]tabSeen, len(tabs))
 	hit := false
-	for _, t := range tabs {
+	for i, t := range tabs {
 		where := t.URL
 		if shown, _, ok := address(t.URL); ok {
 			where = shown
@@ -123,31 +147,45 @@ func look(seen map[string]tabSeen, tabs []tab, pattern string) (map[string]tabSe
 		was, known := seen[t.ID]
 		moved := seen != nil && (!known || was.moved || was.where != where)
 		next[t.ID] = tabSeen{where: where, moved: moved}
-		if moved && matches(pattern, t.URL) {
+		if i == 0 && moved && matches(pattern, t.URL) {
 			hit = true
 		}
 	}
 	return next, hit
 }
 
-// listTabs asks the browser for its page targets, on a connection of its
-// own that it closes before returning.
+// controlClient is an HTTP client for a browser's control socket.
+func controlClient(sock string) *http.Client {
+	return &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", sock)
+	}}}
+}
+
+// listTabs asks the browser for its page targets, the one in front first,
+// with a GET of /json/list (no CDP connection).
 func listTabs(ctx context.Context, sock string) ([]tab, error) {
 	ctx, cancel := context.WithTimeout(ctx, watchCallTimeout)
 	defer cancel()
-	c, err := cdp.Dial(ctx, sock, watchList, cdp.Options{MaxMessage: 4 << 20})
+	c := controlClient(sock)
+	defer c.CloseIdleConnections()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://control/cdp/json/list", nil)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = c.Close() }()
-	var r struct {
-		TargetInfos []tab `json:"targetInfos"`
-	}
-	if err := c.Call(ctx, "", "Target.getTargets", nil, &r); err != nil {
+	resp, err := c.Do(req) //nolint:gosec // our own control socket
+	if err != nil {
 		return nil, err
 	}
-	tabs := r.TargetInfos[:0]
-	for _, t := range r.TargetInfos {
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("/json/list: %s", resp.Status)
+	}
+	var all []tab
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&all); err != nil {
+		return nil, err
+	}
+	tabs := all[:0]
+	for _, t := range all {
 		if t.Typ == "page" {
 			tabs = append(tabs, t)
 		}
@@ -198,19 +236,24 @@ func (s *Service) watch(h Handoff) {
 	}()
 }
 
-// runWatch looks at the tabs now, then every watchPoll, until one that has
-// moved is at a matching address, or the handoff is over.
+// runWatch looks at the tabs every watchPoll, from when the person has
+// opened the link, until the tab in front has moved to a matching address,
+// or the handoff is over.
 func (s *Service) runWatch(ctx context.Context, h Handoff) {
 	sock := s.m.Layout().ControlSocket(h.Profile)
 	t := time.NewTicker(s.watchPoll)
 	defer t.Stop()
 	var seen map[string]tabSeen // nil until the first look that worked
+	unlocked := h.unlocked
 	for {
 		open, now := s.stillOpen(ctx, h)
 		if !open {
 			return
 		}
-		if now {
+		if now && !unlocked {
+			unlocked = s.isUnlocked(ctx, h.ID)
+		}
+		if now && unlocked {
 			tabs, err := listTabs(ctx, sock)
 			if err == nil {
 				var hit bool
@@ -228,6 +271,13 @@ func (s *Service) runWatch(ctx context.Context, h Handoff) {
 		case <-t.C:
 		}
 	}
+}
+
+// isUnlocked reports whether a person has opened the handoff's link.
+func (s *Service) isUnlocked(ctx context.Context, id string) bool {
+	var unlocked bool
+	err := s.db.QueryRowContext(ctx, `SELECT browser_hash != '' FROM handoffs WHERE id = ?`, id).Scan(&unlocked)
+	return err == nil && unlocked
 }
 
 // stillOpen reports whether a watch should go on: the handoff hasn't been
