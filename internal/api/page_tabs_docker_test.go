@@ -155,6 +155,10 @@ func TestPageToolsStayQuiet(t *testing.T) {
 		{"act", steps(map[string]any{"action": "type", "ref": pw, "text": "pw"}), nil},
 		{"act", steps(map[string]any{"action": "press", "keys": "Tab"}), nil},
 		{"act", steps(map[string]any{"action": "hover", "ref": goBtn}), nil},
+		// What changed, explicitly (it is on by default after the
+		// snapshot above, PROJ-114), and the snapshot diff.
+		{"act", map[string]any{"steps": []any{map[string]any{"action": "hover", "ref": goBtn}}, "changes": true}, nil},
+		{"snapshot", map[string]any{"diff": true}, nil},
 		// Files set without a click to open the chooser (PROJ-117).
 		{"act", steps(map[string]any{"action": "upload", "ref": doc, "files": []string{up.Name}}), []string{"file-without-click@main"}},
 		{"wait", map[string]any{"text": "Account"}, nil},

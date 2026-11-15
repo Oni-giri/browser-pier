@@ -125,6 +125,17 @@ var pageSitePages = map[string]string{ //nolint:gosec // test pages, not credent
   const rects = Array.from(document.getElementById('wrapped').getClientRects()).map(r => [r.left, r.top, r.width, r.height]);
   report('wrapped click ' + (e.target.closest('a') ? 'link' : e.target.localName) + ' ' + JSON.stringify([e.clientX, e.clientY, rects]));
 })</script></body>`,
+	// A button that opens a menu of three links (PROJ-114's changes); a
+	// link reports its click and goes nowhere.
+	"/menu": `<!doctype html><title>Menu</title>` + report + `
+<main><h1>Shop</h1>
+<button id="menu" aria-expanded="false" aria-controls="list" onclick="const open = this.getAttribute('aria-expanded') === 'true'; this.setAttribute('aria-expanded', String(!open)); document.getElementById('list').hidden = open">Menu</button>
+<ul id="list" hidden>
+<li><a href="#one" onclick="event.preventDefault(); report('menu One')">One</a></li>
+<li><a href="#two" onclick="event.preventDefault(); report('menu Two')">Two</a></li>
+<li><a href="#three" onclick="event.preventDefault(); report('menu Three')">Three</a></li>
+</ul>
+<p>Free delivery on every order.</p></main>`,
 	// A transparent overlay covering a button.
 	"/overlay": `<!doctype html><title>Overlay</title>` + report + `
 <button id="buy" onclick="report('buy clicked')" style="position:absolute;left:50px;top:50px;width:200px;height:60px">Buy now</button>

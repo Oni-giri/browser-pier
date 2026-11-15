@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -521,4 +522,76 @@ func fencedIn(msg, text string) bool {
 	}
 	id, _, ok := strings.Cut(msg[open+len("<untrusted-content-"):], " ")
 	return ok && strings.Contains(msg[i:], "\n</untrusted-content-"+id+">")
+}
+
+// TestActReportsChanges is PROJ-114 on a real browser: after a snapshot,
+// act answers with what its steps changed, in a few hundred characters,
+// and a ref from that answer works.
+func TestActReportsChanges(t *testing.T) {
+	a := newRealAPI(t)
+	site := browsertest.NewPageSite(t, browsertest.SiteHost(t))
+	s := a.startAPIBrowser(t, "d")
+	a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/menu"})
+	snap := a.mustTool(s.ID, "snapshot", nil)
+	menu := refFor(t, snap, `button "Menu"`)
+	if strings.Contains(snap, `link "Two"`) {
+		t.Fatalf("the menu is open before the click:\n%s", snap)
+	}
+
+	out := a.mustTool(s.ID, "act", map[string]any{"steps": []any{map[string]any{"action": "click", "ref": menu}}, "changes": true})
+	t.Logf("act's answer (%d characters):\n%s", len(out), out)
+	_, changes, ok := strings.Cut(out, "\n### Changes\n")
+	if !ok || !strings.HasPrefix(changes, "<untrusted-content-") {
+		t.Fatalf("no fenced changes:\n%s", out)
+	}
+	if !strings.Contains(changes, "+ "+menu+` button "Menu" [expanded]`) || !strings.Contains(changes, "- "+menu+` button "Menu" [collapsed]`) {
+		t.Errorf("the button's state change is missing:\n%s", changes)
+	}
+	links := map[string]string{}
+	for _, m := range regexp.MustCompile(`(?m)^\+ +([a-z][a-z0-9]e[0-9]+) link "(One|Two|Three)"$`).FindAllStringSubmatch(changes, -1) {
+		links[m[2]] = m[1]
+	}
+	if len(links) != 3 {
+		t.Errorf("want the 3 new links with refs, got %v in\n%s", links, changes)
+	}
+	if strings.Contains(changes, "Free delivery") || strings.Contains(changes, "Shop") {
+		t.Errorf("unchanged lines reported:\n%s", changes)
+	}
+	if len(out) >= 1000 {
+		t.Errorf("the answer is %d characters, want under 1,000", len(out))
+	}
+
+	// A ref from the changes works; on by default now, the next answer
+	// has only its own changes (none: the link goes nowhere, and focus
+	// moving isn't a change).
+	if links["Two"] == "" {
+		t.FailNow()
+	}
+	out = a.mustTool(s.ID, "act", steps(map[string]any{"action": "click", "ref": links["Two"]}))
+	deadline := time.Now().Add(5 * time.Second)
+	for !site.HasEvent("menu Two") && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !site.HasEvent("menu Two") {
+		t.Errorf("clicking the link from the changes did nothing: %v", site.Events())
+	}
+	if !strings.Contains(out, "### Changes\nno changes since the last snapshot") {
+		t.Errorf("the second act's changes:\n%s", out)
+	}
+
+	// snapshot diff: the menu closing.
+	a.mustTool(s.ID, "act", map[string]any{"steps": []any{map[string]any{"action": "click", "ref": menu}}, "changes": false})
+	diff := a.mustTool(s.ID, "snapshot", map[string]any{"diff": true})
+	for _, want := range []string{"+ " + menu + ` button "Menu" [collapsed]`, "- " + links["One"] + ` link "One"`} {
+		if !strings.Contains(diff, want) {
+			t.Errorf("snapshot diff: missing %q in\n%s", want, diff)
+		}
+	}
+
+	// Another page: the changes say so.
+	a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/menu"})
+	out = a.mustTool(s.ID, "act", map[string]any{"steps": []any{map[string]any{"action": "press", "keys": "Tab"}}, "changes": true})
+	if !strings.Contains(out, "navigated to "+site.URL+"/menu") || !strings.Contains(out, "take a snapshot of the new page") {
+		t.Errorf("after a navigation:\n%s", out)
+	}
 }
