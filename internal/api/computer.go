@@ -185,16 +185,17 @@ func (a *API) computer(w http.ResponseWriter, r *http.Request) {
 	}
 	var mark *files.Mark
 	if c.downloads() {
-		mark = a.markDownloads(s.Profile)
+		mark = a.markDownloads(s)
 	}
 	if !a.act(w, r, s, path, raw) {
 		return
 	}
-	if mark != nil {
-		// Before the screenshot, which then shows the page after it.
-		a.reportDownloads(w, r, s, mark, wait)
-	}
-	a.done(w, r, s, c)
+	mark.Ended()
+	a.doneWith(w, r, s, c, func() {
+		if mark != nil {
+			a.reportDownloads(w, r, s, mark, wait)
+		}
+	})
 }
 
 // done answers an action that ran: with the screen if asked, else 204.
@@ -202,7 +203,15 @@ func (a *API) computer(w http.ResponseWriter, r *http.Request) {
 // call (an agent would retry it, clicking or paying twice): it answers
 // 204 with X-Screenshot-Error.
 func (a *API) done(w http.ResponseWriter, r *http.Request, s sessions.Session, c computerRequest) {
+	a.doneWith(w, r, s, c, func() {})
+}
+
+// doneWith is done, with headers set by before just ahead of the answer:
+// after the screenshot is taken, so that a download notice gets the
+// screenshot's time to see a download start.
+func (a *API) doneWith(w http.ResponseWriter, r *http.Request, s sessions.Session, c computerRequest, before func()) {
 	if !c.Screenshot {
+		before()
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -210,18 +219,29 @@ func (a *API) done(w http.ResponseWriter, r *http.Request, s sessions.Session, c
 	if c.Width > 0 {
 		target += "?width=" + strconv.Itoa(c.Width)
 	}
+	var shot []byte
 	resp, err := a.control(r.Context(), s.Profile, http.MethodGet, target, nil)
-	if err == nil && resp.StatusCode != http.StatusOK {
-		err = fmt.Errorf("the browser answered %d", resp.StatusCode)
+	if err == nil {
+		if resp.StatusCode != http.StatusOK {
+			err = fmt.Errorf("the browser answered %d", resp.StatusCode)
+		} else {
+			shot, err = io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+		}
 		_ = resp.Body.Close()
 	}
+	before()
 	if err != nil {
 		w.Header().Set("X-Screenshot-Error", strings.ReplaceAll(err.Error(), "\n", " "))
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	defer func() { _ = resp.Body.Close() }()
-	relay(w, resp, "Content-Type", "X-Screen-Width", "X-Screen-Height")
+	for _, h := range []string{"Content-Type", "X-Screen-Width", "X-Screen-Height"} {
+		if v := resp.Header.Get(h); v != "" {
+			w.Header().Set(h, v)
+		}
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(shot)
 }
 
 // zoom answers with a region of the screen at full resolution. The region

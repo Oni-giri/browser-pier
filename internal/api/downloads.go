@@ -26,13 +26,13 @@ type downloadsNotice struct {
 	More  int              `json:"more,omitempty"`
 }
 
-// markDownloads lists the downloads folder before an action, if the API
-// has a files store.
-func (a *API) markDownloads(profile string) *files.Mark {
+// markDownloads lists the session's downloads folder before an action,
+// if the API has a files store.
+func (a *API) markDownloads(s sessions.Session) *files.Mark {
 	if a.files == nil {
 		return nil
 	}
-	return a.files.Mark(profile)
+	return a.files.Mark(s.Profile, s.ID)
 }
 
 // reportDownloads compares the downloads folder with mark after an

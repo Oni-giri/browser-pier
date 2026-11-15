@@ -43,6 +43,9 @@ type API struct {
 func New(m *sessions.Manager, web *auth.Web, fs *files.Store, log *slog.Logger, publicURL string) *API {
 	tools := pagetools.New(m, log)
 	tools.SetFiles(fs)
+	if fs != nil {
+		m.OnEnd(fs.Forget) // what download notices keep about a session
+	}
 	return &API{m: m, web: web, files: fs, log: log, public: strings.TrimRight(publicURL, "/"), tools: tools}
 }
 
@@ -525,12 +528,13 @@ func (a *API) input(path string) http.HandlerFunc {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
-			mark = a.markDownloads(s.Profile)
+			mark = a.markDownloads(s)
 		}
 		if !a.act(w, r, s, path, body) {
 			return
 		}
 		if mark != nil {
+			mark.Ended()
 			a.reportDownloads(w, r, s, mark, wait)
 		}
 		w.WriteHeader(http.StatusNoContent)
