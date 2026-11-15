@@ -40,10 +40,23 @@ func New(secrets []string) *Scrubber {
 			continue
 		}
 		kept = append(kept, s)
+		add := func(p string) {
+			if !seen[p] {
+				seen[p] = true
+				pats = append(pats, p)
+			}
+		}
 		for _, f := range forms(s) {
-			if !seen[f] {
-				seen[f] = true
-				pats = append(pats, f)
+			p := normalize(f)
+			add(p)
+			if loneBackslash(f) {
+				// The text's next byte pairs with it if it is punctuation:
+				// "ab\" then "." reads as "ab.".
+				for c := byte('!'); c < 0x7F; c++ {
+					if isPunct(c) {
+						add(p[:len(p)-1] + string(c))
+					}
+				}
 			}
 		}
 	}

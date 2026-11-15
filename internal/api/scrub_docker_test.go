@@ -26,13 +26,16 @@ func TestFilledSecretIsHiddenEverywhere(t *testing.T) {
 	a := newRealAPI(t)
 	site := browsertest.NewPageSite(t, browsertest.SiteHost(t))
 	s := a.startAPIBrowser(t, "scrub")
-	const secret = "Pier Secret+4&2é"
+	// Markdown escapes "_*[]" and the backtick: page_content must hide
+	// the escaped form too.
+	const secret = "Pier Secret_*[4]+&2é`"
 	if err := a.m.RegisterSecret(s.ID, secret); err != nil {
 		t.Fatal(err)
 	}
 	quoted, _ := json.Marshal(secret)
 	leaks := []string{secret, url.QueryEscape(secret), url.PathEscape(secret), html.EscapeString(secret),
-		strings.Trim(string(quoted), `"`), "Pier Secret", "Pier+Secret", "Pier%20Secret", "Secret+4", "Secret%2B4"}
+		strings.Trim(string(quoted), `"`), "Pier Secret", "Pier+Secret", "Pier%20Secret", "Secret_", `Secret\_`,
+		"[4]", `\[4\]`, "%5B4%5D", "]+&", "]%2B"}
 	check := func(what, out string) {
 		t.Helper()
 		for _, l := range leaks {

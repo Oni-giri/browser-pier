@@ -1,16 +1,25 @@
 package scrub
 
-import "slices"
+import (
+	"math/bits"
+	"slices"
+	"unicode/utf8"
+)
 
 // matcher finds every occurrence of a set of patterns in one pass
 // (Aho-Corasick, as a DFA over byte classes), so scrubbing costs the same
-// however many secrets and forms there are: a table lookup a byte.
+// however many secrets and forms there are: a table lookup a byte. It
+// matches the text's normalized shape (normalize.go) as it reads it.
 type matcher struct {
-	class   [256]uint16 // byte → class; 0 is every byte no pattern has
+	class   [256]uint16 // byte → class; 0 is every byte no pattern has; normFlag marks a byte normalizing may change
 	classes int
 	next    []int32 // state*classes+class → state; negated when a pattern ends there
 	longest []int32 // the longest pattern ending at each state, 0 if none
+	maxLen  int     // the longest pattern
 }
+
+// normFlag, in a class, marks a byte with a normKind.
+const normFlag = 0x8000
 
 // span is a half-open byte range of the text to hide.
 type span struct{ start, end int }
@@ -42,6 +51,7 @@ func newMatcher(pats []string) *matcher {
 			st = m.next[int(st)*nc+c]
 		}
 		m.longest[st] = max(m.longest[st], int32(len(p))) //nolint:gosec // as above
+		m.maxLen = max(m.maxLen, len(p))
 	}
 	// Failure links, breadth first, folded into the table so scanning
 	// never follows them; each state also ends the longest pattern its
@@ -75,24 +85,71 @@ func newMatcher(pats []string) *matcher {
 			m.next[i] = -st
 		}
 	}
+	for c := range m.class {
+		if normKind[c] != 0 {
+			m.class[c] |= normFlag
+		}
+	}
 	return m
 }
 
 // find returns the spans of text to hide, sorted and merged, or nil
-// (without allocating) when no pattern occurs.
+// (without allocating) when no pattern occurs. It reads text in its
+// normalized shape, remembering where each of the last maxLen normalized
+// bytes started in text, so a match maps back to the bytes it stands for.
 func (m *matcher) find(text string) []span {
 	nc := int32(m.classes) //nolint:gosec // at most 257
 	class := m.class       // on the stack: the hot loop reads it once a byte
 	next := m.next
+	var buf [1024]int // ring of the normalized bytes' starts in text
+	ring := buf[:]
+	if m.maxLen > len(buf) {
+		ring = make([]int, 1<<bits.Len(uint(m.maxLen)))
+	}
+	mask := len(ring) - 1
 	st := int32(0)
+	n := 0         // normalized bytes read
+	space := false // the last one was a normalized space
 	var spans []span
-	for i := 0; i < len(text); i++ {
-		st = next[st*nc+int32(class[text[i]])]
-		if st < 0 {
-			st = -st
-			n := int(m.longest[st])
-			spans = append(spans, span{i + 1 - n, i + 1})
+	for i := 0; i < len(text); {
+		c := text[i]
+		cl := class[c]
+		if cl&normFlag == 0 {
+			ring[n&mask] = i
+			n++
+			i++
+			space = false
+			st = next[st*nc+int32(cl)]
+			if st < 0 {
+				st = -st
+				spans = append(spans, span{ring[(n-int(m.longest[st]))&mask], i})
+			}
+			continue
 		}
+		r, end := norm(text, i)
+		var enc [utf8.UTFMax]byte
+		var out []byte
+		switch {
+		case r == ' ' && space:
+			i = end // collapsed into the space before
+			continue
+		case r < 0:
+			enc[0] = c
+			out = enc[:1]
+		default:
+			out = enc[:utf8.EncodeRune(enc[:], r)]
+		}
+		space = r == ' '
+		for _, b := range out {
+			ring[n&mask] = i
+			n++
+			st = next[st*nc+int32(class[b]&^normFlag)]
+			if st < 0 {
+				st = -st
+				spans = append(spans, span{ring[(n-int(m.longest[st]))&mask], end})
+			}
+		}
+		i = end
 	}
 	if len(spans) < 2 {
 		return spans

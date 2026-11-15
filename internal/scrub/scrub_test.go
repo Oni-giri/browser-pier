@@ -14,8 +14,25 @@ import (
 )
 
 // secret holds a space, "/", '"', "&", "+", "%", "'", "<", a non-ASCII
-// letter and an emoji.
-const secret = `p@ss w/rd"&+%'<é🙂x`
+// letter, an emoji and what Markdown escapes ("_*[`]").
+const secret = `p@ss w/rd"&+%'<é🙂x_*[` + "`]"
+
+// mdSecret is secret as page_content's Markdown writes it.
+const mdSecret = `p@ss w/rd"&+%'<é🙂x\_\*\[\` + "`" + `\]`
+
+// entities is s with every character but ASCII letters and digits as a
+// numeric character reference, in format (&#%d; &#x%x; &#x%X;).
+func entities(s, format string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r < 0x80 && (r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			continue
+		}
+		fmt.Fprintf(&b, format, r)
+	}
+	return b.String()
+}
 
 // goJSON is s inside a JSON string as encoding/json writes it.
 func goJSON(s string, escapeHTML bool) string {
@@ -37,18 +54,33 @@ func TestEveryEncodingIsHidden(t *testing.T) {
 		"JSON twice":            goJSON(once, false),
 		`JSON twice with \/`:    strings.ReplaceAll(goJSON(strings.ReplaceAll(once, "/", `\/`), false), "/", `\/`),
 		"JSON twice, HTML-safe": goJSON(goJSON(secret, true), true),
-		"JSON, ASCII only":      `p@ss w/rd\"&+%'<\u00e9\ud83d\ude42x`,
-		"encodeURIComponent":    `p%40ss%20w%2Frd%22%26%2B%25'%3C%C3%A9%F0%9F%99%82x`,
-		"form-urlencoded":       `p%40ss+w%2Frd%22%26%2B%25%27%3C%C3%A9%F0%9F%99%82x`,
+		"JSON, ASCII only":      `p@ss w/rd\"&+%'<\u00e9\ud83d\ude42x_*[` + "`]",
+		"JSON, ASCII, upper":    `p@ss w/rd\"&+%'<\u00E9\uD83D\uDE42x_*[` + "`]",
+		"JSON, HTML-safe upper": `p@ss w/rd\"\u0026+%'\u003Cé🙂x_*[` + "`]",
+		"encodeURIComponent":    `p%40ss%20w%2Frd%22%26%2B%25'%3C%C3%A9%F0%9F%99%82x_*%5B%60%5D`,
+		"form-urlencoded":       `p%40ss+w%2Frd%22%26%2B%25%27%3C%C3%A9%F0%9F%99%82x_*%5B%60%5D`,
+		"form, lowercase hex":   `p%40ss+w%2frd%22%26%2b%25%27%3c%c3%a9%f0%9f%99%82x_*%5b%60%5d`,
 		"Go QueryEscape":        url.QueryEscape(secret),
+		"QueryEscape twice":     url.QueryEscape(url.QueryEscape(secret)),
 		"Go PathEscape":         url.PathEscape(secret),
 		"url.Values":            strings.TrimPrefix(url.Values{"p": {secret}}.Encode(), "p="),
-		"a URL's query":         `p@ss%20w/rd%22&+%%27%3C%C3%A9%F0%9F%99%82x`,
+		"a URL's query":         `p@ss%20w/rd%22&+%%27%3C%C3%A9%F0%9F%99%82x_*[` + "`]",
 		"HTML, Go":              html.EscapeString(secret),
-		"HTML text":             `p@ss w/rd"&amp;+%'&lt;é🙂x`,
-		"HTML &quot; &#x27;":    `p@ss w/rd&quot;&amp;+%&#x27;&lt;é🙂x`,
-		"HTML &quot; &#039;":    `p@ss w/rd&quot;&amp;+%&#039;&lt;é🙂x`,
-		"HTML attribute":        `p@ss w/rd&quot;&amp;+%'<é🙂x`,
+		"HTML text":             `p@ss w/rd"&amp;+%'&lt;é🙂x_*[` + "`]",
+		"HTML &quot; &#x27;":    `p@ss w/rd&quot;&amp;+%&#x27;&lt;é🙂x_*[` + "`]",
+		"HTML &quot; &#039;":    `p@ss w/rd&quot;&amp;+%&#039;&lt;é🙂x_*[` + "`]",
+		"HTML attribute":        `p@ss w/rd&quot;&amp;+%'<é🙂x_*[` + "`]",
+		"HTML, mustache":        `p@ss w&#x2F;rd&quot;&amp;+%&#39;&lt;é🙂x_*[&#x60;]`,
+		"HTML, html/template":   `p@ss w/rd&#34;&amp;&#43;%&#39;&lt;é🙂x_*[` + "`]",
+		"HTML, .NET":            `p@ss w/rd&quot;&amp;+%&#39;&lt;&#233;🙂x_*[` + "`]",
+		"HTML, every &#NN;":     entities(secret, "&#%d;"),
+		"HTML, every &#xnn;":    entities(secret, "&#x%x;"),
+		"HTML, every &#xNN;":    entities(secret, "&#x%X;"),
+		"Markdown":              mdSecret,
+		"no-break space":        strings.Replace(secret, " ", "\u00a0", 1),
+		"&nbsp;":                strings.Replace(secret, " ", "&nbsp;", 1),
+		"line break":            strings.Replace(secret, " ", "\n", 1),
+		"two spaces":            strings.Replace(secret, " ", "  ", 1),
 	}
 	s := New([]string{secret})
 	for name, enc := range cases {
@@ -59,16 +91,22 @@ func TestEveryEncodingIsHidden(t *testing.T) {
 			}
 		})
 	}
+	// A URL carried in another's query: what comes before the secret stays.
+	in := url.QueryEscape("https://example.com/?p=" + url.QueryEscape(secret))
+	if got, want := s.String(in), url.QueryEscape("https://example.com/?p=")+Hidden; got != want {
+		t.Errorf("a URL in a query: %q, want %q", got, want)
+	}
 }
 
 func TestEachSpecialCharacterAlone(t *testing.T) {
 	// One special character per secret, so a form that mangles it is
 	// caught on its own, through the stdlib's own encoders.
-	for _, c := range []string{" ", "/", `"`, "&", "+", "%", "é", "🙂", "<", "'", `\`, "\n"} {
+	for _, c := range []string{" ", "/", `"`, "&", "+", "%", "é", "🙂", "<", "'", `\`, "\n", "_", "*", "[", "]", "`", "#", "|", "\u00a0"} {
 		sec := "ab" + c + "cd"
 		s := New([]string{sec})
 		for _, enc := range []string{sec, goJSON(sec, false), goJSON(sec, true), goJSON(goJSON(sec, false), false),
-			url.QueryEscape(sec), url.PathEscape(sec), html.EscapeString(sec)} {
+			url.QueryEscape(sec), url.PathEscape(sec), html.EscapeString(sec), strings.ToLower(url.QueryEscape(sec)),
+			url.QueryEscape(url.QueryEscape(sec)), entities(sec, "&#%d;"), entities(sec, "&#x%x;")} {
 			if got := s.String("x " + enc + " y"); got != "x "+Hidden+" y" {
 				t.Errorf("secret %q as %q: %q", sec, enc, got)
 			}
@@ -263,5 +301,41 @@ func TestUnion(t *testing.T) {
 	}
 	if got := Union(a, b).String("alpha-secret bravo-secret"); got != "<hidden> <hidden>" {
 		t.Errorf("union: %q", got)
+	}
+}
+
+func TestNormalizedMatchesMapBackToTheirBytes(t *testing.T) {
+	cases := []struct {
+		name, secret, in, out string
+	}{
+		{"around entities", "s3cr&t!x", "a &amp; b s3cr&#38;t&#x21;x c &lt; d", "a &amp; b <hidden> c &lt; d"},
+		{"multi-byte reference", "café-pass", "x caf&#233;-pass y", "x <hidden> y"},
+		{"escaped backslash before", "*star-pass", `x \\\*star-pass y`, `x \\<hidden> y`},
+		{"lone backslash before", "*star-pass", `x \*star-pass y`, `x <hidden> y`},
+		{"ends in a backslash, then punctuation", `back-pass\`, `x back-pass\. y`, `x <hidden> y`},
+		{"ends in a backslash, then a letter", `back-pass\`, `x back-pass\n y`, `x <hidden>n y`},
+		{"whitespace run", "two words", "x two \n\t words y", "x <hidden> y"},
+		{"no-break space", "two words", "x two words y", "x <hidden> y"},
+		{"at the very end", "s3cr&t!x", "end s3cr&amp;t!x", "end <hidden>"},
+		{"near miss, entity", "hunter22", "hunter&#50;3 hunter&#50;2", "hunter&#50;3 <hidden>"},
+		{"not a reference", "a&b;c-pass", "x a&b;c-pass &bogus; &#xZZ; &#0; &#55296; y", "x <hidden> &bogus; &#xZZ; &#0; &#55296; y"},
+		{"a backslash before a letter stays", `ab\ncd-pass`, `x ab\ncd-pass y abncd-pass`, `x <hidden> y abncd-pass`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := New([]string{c.secret}).String(c.in); got != c.out {
+				t.Errorf("%q in %q: %q, want %q", c.secret, c.in, got, c.out)
+			}
+		})
+	}
+}
+
+func TestLongPatternsUseAWiderRing(t *testing.T) {
+	long := strings.Repeat("Ab1/é", 200) // forms well past 1024 bytes
+	s := New([]string{long})
+	for _, enc := range []string{long, url.QueryEscape(url.QueryEscape(long)), entities(long, "&#x%X;")} {
+		if got := s.String("x " + enc + " y"); got != "x "+Hidden+" y" {
+			t.Errorf("a %d-byte form: %.60q…", len(enc), got)
+		}
 	}
 }
