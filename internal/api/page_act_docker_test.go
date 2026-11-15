@@ -380,11 +380,11 @@ func TestPageToolsUpload(t *testing.T) {
 		got[u.Field] = append(got[u.Field], u)
 	}
 	want := map[string][]browsertest.Upload{
-		"doc":    {{Field: "doc", Name: "report.bin", Size: int64(len(report)), SHA256: hash(report)}},
+		"doc":    {{Field: "doc", Name: "report..v2.bin", Size: int64(len(report)), SHA256: hash(report)}},
 		"photo":  {{Field: "photo", Name: "photo.png", Size: int64(len(photo)), SHA256: hash(photo)}},
 		"avatar": {{Field: "avatar", Name: "photo.png", Size: int64(len(photo)), SHA256: hash(photo)}},
 		"cv":     {{Field: "cv", Name: "photo.png", Size: int64(len(photo)), SHA256: hash(photo)}},
-		"more": {{Field: "more", Name: "report.bin", Size: int64(len(report)), SHA256: hash(report)},
+		"more": {{Field: "more", Name: "report..v2.bin", Size: int64(len(report)), SHA256: hash(report)},
 			{Field: "more", Name: "photo.png", Size: int64(len(photo)), SHA256: hash(photo)}},
 	}
 	for field, w := range want {
