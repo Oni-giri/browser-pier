@@ -41,7 +41,9 @@ func New(secrets []string) *Scrubber {
 		}
 		kept = append(kept, s)
 		add := func(p string) {
-			if !seen[p] {
+			// Normalized, a secret of spaces or escapes can be shorter
+			// than MinRunes ("    " is " "), and would hide ordinary text.
+			if !seen[p] && utf8.RuneCountInString(p) >= MinRunes {
 				seen[p] = true
 				pats = append(pats, p)
 			}

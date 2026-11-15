@@ -129,6 +129,8 @@ func TestOverlapsRepeatsShortSecretsAndNearMisses(t *testing.T) {
 		{"four runes, not bytes", []string{"éé"}, "éé", "éé"},
 		{"near misses", []string{"hunter22"}, "hunter2 Hunter22 hunter 22 hunter%2022 huntér22", "hunter2 Hunter22 hunter 22 hunter%2022 huntér22"},
 		{"empty text", []string{"hunter22"}, "", ""},
+		{"spaces only: one space, normalized", []string{"    "}, "a b  c", "a b  c"},
+		{"escapes only, normalized short", []string{"&amp;", `\\\\`}, `a & b \ c`, `a & b \ c`},
 		{"whole text", []string{"hunter22"}, "hunter22", "<hidden>"},
 	}
 	for _, c := range cases {
