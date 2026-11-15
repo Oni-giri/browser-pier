@@ -70,6 +70,11 @@ type ftab struct {
 	// readyAfter is how many more readyState reads say "loading".
 	readyAfter int
 	scroll     [2]float64
+	// hopIn is how many more frame-tree reads before the document moves
+	// on by script (fakeBrowser.scripted); unreachable is the address
+	// that failed, when the document is the browser's error page.
+	hopIn       int
+	unreachable string
 }
 
 // fakeBrowser is a browser with a few tabs whose pages are fnode trees.
@@ -87,6 +92,12 @@ type fakeBrowser struct {
 	// sends a navigation to one URL on to another.
 	pages     func(url string) *fnode
 	redirects map[string]string
+	// scripted is where a page at url sends itself by script once loaded
+	// ("" for nowhere), hopReads frame-tree reads after it loads; fails
+	// is the browser error of a URL that can't be loaded.
+	scripted func(url string) string
+	hopReads int
+	fails    map[string]string
 	// eval answers isolated-world scripts the fake doesn't know.
 	eval func(tab *ftab, expr string) (any, error)
 	// call answers methods the fake doesn't know (phase 2's DOM and Input).
@@ -225,7 +236,18 @@ func (fb *fakeBrowser) handle(m cdptest.Message) (any, error) {
 	}
 	switch m.Method {
 	case "Page.getFrameTree":
-		return map[string]any{"frameTree": map[string]any{"frame": map[string]any{"id": "F-" + tb.id, "loaderId": tb.loader, "url": strings.SplitN(tb.url, "#", 2)[0]}}}, nil
+		if tb.hopIn > 0 {
+			if tb.hopIn--; tb.hopIn == 0 && fb.scripted != nil {
+				// location.replace: the entry is replaced.
+				fb.go_(tb, fb.scripted(tb.url))
+				tb.history[tb.at] = tb.url
+			}
+		}
+		frame := map[string]any{"id": "F-" + tb.id, "loaderId": tb.loader, "url": strings.SplitN(tb.url, "#", 2)[0]}
+		if tb.unreachable != "" {
+			frame["unreachableUrl"] = tb.unreachable
+		}
+		return map[string]any{"frameTree": map[string]any{"frame": frame}}, nil
 	case "Page.createIsolatedWorld":
 		fb.nextCtx++
 		for strings.HasSuffix(fb.worlds[fb.nextCtx], "/main") && strings.HasPrefix(fb.worlds[fb.nextCtx], tb.id+"/"+tb.loader) {
@@ -250,9 +272,17 @@ func (fb *fakeBrowser) handle(m cdptest.Message) (any, error) {
 		return map[string]any{"nodes": axTree(tb.doc)}, nil
 	case "Page.navigate":
 		url, _ := p["url"].(string)
-		fb.go_(tb, url)
 		tb.history = append(tb.history[:tb.at+1], url)
 		tb.at = len(tb.history) - 1
+		if doc, frag, ok := strings.Cut(url, "#"); ok && frag != "" && doc == strings.SplitN(tb.url, "#", 2)[0] {
+			// Same document: no loader.
+			tb.url = url
+			return map[string]any{"frameId": "F-" + tb.id}, nil
+		}
+		fb.go_(tb, url)
+		if tb.unreachable != "" {
+			return map[string]any{"frameId": "F-" + tb.id, "loaderId": tb.loader, "errorText": fb.fails[tb.unreachable]}, nil
+		}
 		return map[string]any{"frameId": "F-" + tb.id, "loaderId": tb.loader}, nil
 	case "Page.reload":
 		fb.go_(tb, tb.url)
@@ -292,6 +322,12 @@ func (fb *fakeBrowser) go_(tb *ftab, url string) {
 	tb.url = url
 	tb.title = "Page " + url
 	tb.loader = fmt.Sprintf("L-%d", time.Now().UnixNano())
+	tb.hopIn, tb.unreachable = 0, ""
+	if _, ok := fb.fails[url]; ok {
+		tb.url, tb.title, tb.unreachable = "chrome-error://chromewebdata/", "", url
+	} else if fb.scripted != nil && fb.scripted(url) != "" {
+		tb.hopIn = max(fb.hopReads, 1)
+	}
 	tb.doc = fb.pages(url)
 	number(tb.doc)
 	if fb.reuseIDs {
