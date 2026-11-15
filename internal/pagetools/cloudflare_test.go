@@ -124,7 +124,7 @@ func TestCloudflareNote(t *testing.T) {
 	mx, my := screenshot.Screen{W: 1440, H: 900}.FromScreen(sx, sy)
 	for _, want := range []string{
 		"Cloudflare challenge. If it is still here after about 10 s,",
-		fmt.Sprintf("computer click at screen x=%d, y=%d with pace instant", sx, sy),
+		fmt.Sprintf("computer click at screen x=%d, y=%d (MCP", sx, sy),
 		fmt.Sprintf("MCP: click at %d, %d in screenshot pixels", mx, my),
 		"request_handoff with reason captcha",
 		"A named profile keeps the pass.",
@@ -136,6 +136,11 @@ func TestCloudflareNote(t *testing.T) {
 	}
 	if mx == sx {
 		t.Error("the screenshot's pixels aren't scaled")
+	}
+	// Visual mode's human-paced click lands within about 3 px, well inside
+	// the box, so the note doesn't send the agent to instant pace.
+	if strings.Contains(n, "instant") {
+		t.Errorf("the note asks for instant pace: %q", n)
 	}
 	// A taller widget: the checkbox is halfway down its first 65 px.
 	tall := *cf
@@ -173,7 +178,7 @@ func TestCloudflareNoteInTools(t *testing.T) {
 		if i < 0 || i > end || start < 0 || start > i {
 			t.Errorf("%s: no note in the fence:\n%s", name, out)
 		}
-		if !strings.Contains(out, "computer click at screen x=591, y=413 with pace instant") {
+		if !strings.Contains(out, "computer click at screen x=591, y=413 (MCP") {
 			t.Errorf("%s: coordinates:\n%s", name, out)
 		}
 	}

@@ -274,7 +274,7 @@ func TestVisualInputLooksHuman(t *testing.T) {
 	looksLikeAHandsClick(t, take())
 
 	// Ten clicks at one point land on more than one pixel, within 40% of
-	// 44 px of it.
+	// the 8 px landing size (about 3 px; 4 with rounding) of it.
 	for range 10 {
 		computer(fmt.Sprintf(`{"action": "click", "x": %d, "y": %d}`, bx, y0))
 	}
@@ -284,7 +284,7 @@ func TestVisualInputLooksHuman(t *testing.T) {
 	seen := map[[2]float64]bool{}
 	for _, d := range ofType(ev, "mousedown") {
 		seen[[2]float64{d.X, d.Y}] = true
-		if dx, dy := d.X+offX-float64(bx), d.Y+offY-float64(y0); math.Abs(dx) > 18 || math.Abs(dy) > 18 {
+		if dx, dy := d.X+offX-float64(bx), d.Y+offY-float64(y0); math.Abs(dx) > 4 || math.Abs(dy) > 4 {
 			t.Errorf("a click at (%d, %d) landed %v, %v px away", bx, y0, dx, dy)
 		}
 	}

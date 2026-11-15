@@ -134,18 +134,18 @@ func cloudflareNote(cf *cfInfo) string {
 	const tail = " or request_handoff with reason captcha. A named profile keeps the pass."
 	g, ok := geometry(*cf)
 	if !ok {
-		return lead + "click its checkbox, which snapshot can't see, with a real click (computer click on a screenshot, with pace instant)," + tail
+		return lead + "click its checkbox, which snapshot can't see, with a real click (computer click on a screenshot)," + tail
 	}
 	sx, sy, in := g.toScreen(cf.L+cfCheckboxLeft, cf.T+math.Min(cf.H, cfWidgetHeight)/2)
 	if !in {
 		return lead + "click its checkbox, which snapshot can't see, with a real click; the page has it outside the visible area, so scroll to it and look again," + tail
 	}
-	why := "a human-paced click's aim can miss so small a box"
+	mcp := ""
 	if g.screenW > 0 && g.screenH > 0 {
 		mx, my := screenshot.Screen{W: g.screenW, H: g.screenH}.FromScreen(sx, sy)
-		why = fmt.Sprintf("MCP: click at %d, %d in screenshot pixels; ", mx, my) + why
+		mcp = fmt.Sprintf(" (MCP: click at %d, %d in screenshot pixels)", mx, my)
 	}
-	return lead + fmt.Sprintf("click its checkbox, which snapshot can't see, with a real click where the page's layout puts it: computer click at screen x=%d, y=%d with pace instant (%s),", sx, sy, why) + tail
+	return lead + fmt.Sprintf("click its checkbox, which snapshot can't see, with a real click where the page's layout puts it: computer click at screen x=%d, y=%d%s,", sx, sy, mcp) + tail
 }
 
 // noteChallenge adds the Cloudflare note to the call's notices, which

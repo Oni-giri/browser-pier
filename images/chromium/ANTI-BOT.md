@@ -79,7 +79,7 @@ Blocking happens in the container's SOCKS forwarder, by host name, before anythi
 Before PROJ-113, Visual mode's pointer jumped (`mousemove X Y click`), pressed and released at once, and typed every key 12 ms apart (about 83 characters a second); act moved once to the element's exact centre and pressed with no hold. Pages that score behaviour read exactly that. Now, at human pace (the default; `pace: "instant"` keeps the old input), both modes follow `internal/motion`, a Go port of agweb's Motion model (MIT, see NOTICE):
 
 - **The pointer** glides from where it is (read from X in Visual mode; where act last left it in API mode, or in from an edge of the window at first) along a bowed cubic Bézier with a wobble of about a pixel, at 60 Hz, on minimum-jerk timing whose speed peaks early, in a Fitts's-law time (0.2–1.15 s); hard throws fall short (or now and then overshoot) and correct.
-- **The aim** is scattered around the target's middle (SD a sixth of its size, never past 40% of it): 44 px in Visual mode, which sees only a point; the element's own box for act, whose chosen point goes through the same hit test as the centre, and again just before the press.
+- **The aim** is scattered around the target's middle (SD a sixth of its size, never past 40% of it): in Visual mode, which sees only a point, 8 px (within about 3 px, so a small checkbox or a dense row isn't missed), while the glide's timing assumes 44 px; the element's own box for act, whose chosen point goes through the same hit test as the centre, and again just before the press.
 - **Buttons and keys** go down after a pause (median 0.16 s) and are held about 116 ms. **Typing** has log-normal gaps (median 0.2 s), longer after spaces and punctuation, shorter when the hands alternate, with a hesitation now and then. **Scrolling** turns the wheel in notches that come faster mid-turn.
 
 What a page's own script records (`browsertest.Detector`'s input recorder, `InputURL`), in `TestVisualInputLooksHuman` and `TestActInputLooksHuman`, 2026-11-15, Chromium 156:
@@ -88,7 +88,7 @@ What a page's own script records (`browsertest.Detector`'s input recorder, `Inpu
 |---|---|---|
 | A 400 px click: moves before the press | 45, up to 11 px off the straight line | 43, up to 18 px off it |
 | Button held | 60–200 ms | 60–200 ms |
-| Ten clicks at one point | scattered, within 18 px | scattered, all on the button |
+| Ten clicks at one point | scattered, within 3 px | scattered, all on the button |
 | Key-down gaps, 30 characters | mean 0.28 s, CV 0.41 | mean 0.20 s, CV 0.44 |
 | `isTrusted` | true for every event | (not checked; CDP's are trusted too) |
 

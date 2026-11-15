@@ -115,10 +115,16 @@ func instant(pace string) (bool, error) {
 	return false, fmt.Errorf("pace %q: want human or instant", pace)
 }
 
-// aimSize is the target size, in pixels, Visual mode assumes for Fitts's
-// law and the aim's scatter: it sees only a point, not what is there. A
-// click lands within 40% of it (about 18 px) of the point asked for.
-const aimSize = 44
+// Visual mode sees only a point, not what is there, so it assumes a
+// target's size. aimSize, a typical control's, sets the glide's Fitts's-law
+// timing. landingSize sets the landing's scatter: small, because the point
+// may be a 13 px checkbox or a row in a dense list, where a miss is the
+// wrong action. A click lands within 40% of it (about 3 px) of the point
+// asked for, with a standard deviation of about 1.3 px.
+const (
+	aimSize     = 44
+	landingSize = 8
+)
 
 type clickRequest struct {
 	X, Y   int
@@ -159,7 +165,7 @@ func (v *visual) clickArgs(c clickRequest) ([]string, error) {
 // double click). The request has been checked (clickArgs).
 func (v *visual) humanClick(from hand, c clickRequest) []string {
 	b := buttons[c.Button]
-	at := v.mot.Aim(motion.Point{X: float64(c.X), Y: float64(c.Y)}, motion.Size{W: aimSize, H: aimSize})
+	at := v.mot.Aim(motion.Point{X: float64(c.X), Y: float64(c.Y)}, motion.Size{W: landingSize, H: landingSize})
 	args := v.glide(nil, from, at)
 	args = append(args, "sleep", secs(v.mot.Dwell()))
 	presses := 1

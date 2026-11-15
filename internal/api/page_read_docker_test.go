@@ -362,15 +362,15 @@ func TestPageToolsClickableDivs(t *testing.T) {
 
 // TestCloudflareChallengeNote is PROJ-120 on a real browser: navigate,
 // snapshot, find and page_content spot a challenge page and say where its
-// checkbox is; a /computer click at instant pace there lands on it, also
-// with the page zoomed; the MCP pixels are the MCP tools' own scaling;
+// checkbox is; a /computer click there lands on it, at instant pace and,
+// with the page zoomed, at human pace; the MCP pixels are the MCP tools' own scaling;
 // a site's own Turnstile gets no note.
 func TestCloudflareChallengeNote(t *testing.T) {
 	a := newRealAPI(t)
 	site := browsertest.NewPageSite(t, browsertest.SiteHost(t))
 	s := a.startAPIBrowser(t, "cf")
 	sw, sh := a.screenSize(t, s.ID)
-	at := regexp.MustCompile(`computer click at screen x=(\d+), y=(\d+) with pace instant \(MCP: click at (\d+), (\d+) in screenshot pixels`)
+	at := regexp.MustCompile(`computer click at screen x=(\d+), y=(\d+) \(MCP: click at (\d+), (\d+) in screenshot pixels`)
 	// note checks the answer has the note in its fence and returns its
 	// screen point.
 	note := func(what, out string) (int, int) {
@@ -391,12 +391,17 @@ func TestCloudflareChallengeNote(t *testing.T) {
 		}
 		return n[0], n[1]
 	}
-	// click clicks there at instant pace and checks it landed within 4 px
-	// of the checkbox's middle, as the page reports both.
-	click := func(what string, x, y int) {
+	// click clicks there at a pace and checks it landed on the checkbox,
+	// within 4 px of its middle (7 px at human pace, whose landing scatters
+	// up to about 3 px), as the page reports both.
+	click := func(what string, x, y int, pace string) {
 		t.Helper()
 		before := len(site.Events())
-		body := fmt.Sprintf(`{"action": "click", "x": %d, "y": %d, "pace": "instant"}`, x, y)
+		near := 4.0
+		if pace == "human" {
+			near = 7
+		}
+		body := fmt.Sprintf(`{"action": "click", "x": %d, "y": %d, "pace": %q}`, x, y, pace)
 		if code := a.do(http.MethodPost, "/api/sessions/"+s.ID+"/computer", body, nil); code != http.StatusNoContent {
 			t.Fatalf("%s: click: %d", what, code)
 		}
@@ -406,7 +411,7 @@ func TestCloudflareChallengeNote(t *testing.T) {
 				if _, err := fmt.Sscanf(e, "cf-click %g %g %g %g", &cx, &cy, &bx, &by); err != nil {
 					continue
 				}
-				if math.Abs(cx-bx) > 4 || math.Abs(cy-by) > 4 {
+				if math.Abs(cx-bx) > near || math.Abs(cy-by) > near {
 					t.Errorf("%s: the click at screen %d, %d landed at %g, %g; the checkbox is at %g, %g", what, x, y, cx, cy, bx, by)
 				}
 				return
@@ -416,7 +421,7 @@ func TestCloudflareChallengeNote(t *testing.T) {
 	}
 
 	x, y := note("navigate", a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/cf-challenge"}))
-	click("at 100%", x, y)
+	click("at 100%", x, y, "instant")
 	for _, out := range []string{
 		a.mustTool(s.ID, "snapshot", nil),
 		a.mustTool(s.ID, "find", map[string]any{"text": "verify you are human"}),
@@ -428,7 +433,8 @@ func TestCloudflareChallengeNote(t *testing.T) {
 		}
 	}
 
-	// Zoomed in (ctrl+= twice: 125%), the point moves and still lands.
+	// Zoomed in (ctrl+= twice: 125%), the point moves and still lands, at
+	// human pace too.
 	for range 2 {
 		if code := a.do(http.MethodPost, "/api/sessions/"+s.ID+"/computer", `{"action": "key", "keys": "ctrl+equal", "pace": "instant"}`, nil); code != http.StatusNoContent {
 			t.Fatalf("zoom: %d", code)
@@ -444,7 +450,7 @@ func TestCloudflareChallengeNote(t *testing.T) {
 	if zx == x && zy == y {
 		t.Errorf("zooming didn't move the point (%d, %d)", x, y)
 	}
-	click("at 125%", zx, zy)
+	click("at 125%", zx, zy, "human")
 	if code := a.do(http.MethodPost, "/api/sessions/"+s.ID+"/computer", `{"action": "key", "keys": "ctrl+0", "pace": "instant"}`, nil); code != http.StatusNoContent {
 		t.Fatalf("unzoom: %d", code)
 	}

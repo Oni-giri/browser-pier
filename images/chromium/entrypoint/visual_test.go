@@ -299,8 +299,9 @@ func TestHumanClickGlidesAimsAndHolds(t *testing.T) {
 		t.Fatalf("held %v s", hold)
 	}
 
-	// Over many clicks at one point, the landing scatters, within 40% of
-	// the 44 px target.
+	// Over many clicks at one point, the landing scatters, but within 40%
+	// of the 8 px landing size, so a click asked for on a 13 px checkbox
+	// stays on it.
 	seen := map[point]bool{}
 	for seed := range uint64(300) {
 		*calls = nil
@@ -308,7 +309,7 @@ func TestHumanClickGlidesAimsAndHolds(t *testing.T) {
 		serveVisual(v, http.MethodPost, "/input/click", `{"x": 640, "y": 400, "button": "right"}`)
 		pts, rest := moves(t, (*calls)[0].args)
 		at := pts[len(pts)-1]
-		if d := max(abs(at.X-640), abs(at.Y-400)); d > 18 {
+		if d := max(abs(at.X-640), abs(at.Y-400)); d > 3 {
 			t.Fatalf("seed %d: landed at %v, %d px from the point", seed, at, d)
 		}
 		if rest[3] != "3" {
@@ -316,7 +317,7 @@ func TestHumanClickGlidesAimsAndHolds(t *testing.T) {
 		}
 		seen[at] = true
 	}
-	if len(seen) < 50 {
+	if len(seen) < 10 {
 		t.Fatalf("300 clicks landed on only %d pixels", len(seen))
 	}
 }
