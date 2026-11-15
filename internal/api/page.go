@@ -66,7 +66,7 @@ func pageTool[In any](a *API, f pageFunc[In]) http.HandlerFunc {
 		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 			return // the client went away
 		case err != nil:
-			a.internal(w, "a page tool", err)
+			a.pageInternal(w, s, "a page tool", err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"text": out})

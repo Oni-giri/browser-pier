@@ -733,3 +733,12 @@ func (a *API) internal(w http.ResponseWriter, what string, err error) {
 	a.log.Error(what, "err", err)
 	writeError(w, http.StatusInternalServerError, what+" failed")
 }
+
+// pageInternal is internal for a call on a session's page: the error may
+// quote the page, so it is logged with the session's filled secrets
+// hidden (PROJ-125).
+func (a *API) pageInternal(w http.ResponseWriter, s sessions.Session, what string, err error) {
+	sc := a.m.Scrubber(func(p string) bool { return p == s.Profile })
+	a.log.Error(what, "session", s.ID, "err", sc.String(err.Error()))
+	writeError(w, http.StatusInternalServerError, what+" failed")
+}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/pagetools"
+	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
 // contentIn is POST /api/sessions/{id}/content's body. Options that
@@ -60,7 +61,7 @@ func (a *API) content(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		out, err := a.tools.Text(r.Context(), s, who, pagetools.TextIn{Format: in.Format, MaxChars: deref(in.MaxChars), Offset: deref(in.Offset)})
-		if a.contentError(w, err) {
+		if a.contentError(w, s, err) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"text": out})
@@ -91,7 +92,7 @@ func (a *API) content(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		out, err := a.tools.PDF(r.Context(), s, who, pagetools.PDFIn{Landscape: deref(in.Landscape), Background: deref(in.Background), Pages: deref(in.Pages)})
-		if a.contentError(w, err) {
+		if a.contentError(w, s, err) {
 			return
 		}
 		// The PDF is the page's own content: never rendered here.
@@ -108,7 +109,7 @@ func (a *API) content(w http.ResponseWriter, r *http.Request) {
 
 // contentError writes a content call's error, reporting whether there
 // was one.
-func (a *API) contentError(w http.ResponseWriter, err error) bool {
+func (a *API) contentError(w http.ResponseWriter, s sessions.Session, err error) bool {
 	var pe *pagetools.Error
 	switch {
 	case err == nil:
@@ -118,7 +119,7 @@ func (a *API) contentError(w http.ResponseWriter, err error) bool {
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		// the client went away
 	default:
-		a.internal(w, "a content call", err)
+		a.pageInternal(w, s, "a content call", err)
 	}
 	return true
 }

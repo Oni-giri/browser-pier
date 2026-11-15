@@ -1,7 +1,10 @@
 package api
 
 import (
+	"bytes"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -247,5 +250,29 @@ func TestRealRoutesScrubFileNamesAndDownloadNotices(t *testing.T) {
 	}
 	if f.m.SecretCount(s.ID) != 0 {
 		t.Error("the secrets outlived the session")
+	}
+}
+
+// A page tool's internal error may quote the page: it is logged with the
+// session's secrets hidden.
+func TestPageToolErrorsAreLoggedScrubbed(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.all, "google", "api")
+	if err := f.m.RegisterSecret(s.ID, filledSecret); err != nil {
+		t.Fatal(err)
+	}
+	live, ok := f.m.Live("google")
+	if !ok {
+		t.Fatal("no live session")
+	}
+	var logs bytes.Buffer
+	a := New(f.m, nil, nil, slog.New(slog.NewTextHandler(&logs, nil)), "")
+	rec := httptest.NewRecorder()
+	a.pageInternal(rec, live, "a page tool", fmt.Errorf("evaluating: the page threw %q", "no user "+filledSecret))
+	if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "Vault") {
+		t.Errorf("answer: %d %s", rec.Code, rec.Body)
+	}
+	if strings.Contains(logs.String(), "Vault Value") || !strings.Contains(logs.String(), "hidden") {
+		t.Errorf("the log: %s", logs.String())
 	}
 }
