@@ -210,3 +210,47 @@ func TestBaselinesStayBounded(t *testing.T) {
 		t.Errorf("baseBytes %d, lists %d", tl.baseBytes, sum)
 	}
 }
+
+// TestDiffRemovedChildUnderItsChangedParent: a removed item whose
+// enclosing item changed (or went too) is printed right after that one's
+// removed line, at its depth, never before or outside it (PROJ-114).
+func TestDiffRemovedChildUnderItsChangedParent(t *testing.T) {
+	old := []item{txtItem(9, "Header", 0), ctl(1, "button", "Menu", 0, "expanded"), ctl(2, "menuitem", "Settings", 2), ctl(3, "menuitem", "Log out", 2), txtItem(8, "Footer", 0)}
+	new := []item{txtItem(9, "Header", 0), ctl(1, "button", "Menu", 0, "collapsed"), txtItem(8, "Footer", 0)}
+	body, _ := renderDiff(old, new)
+	want := strings.Join([]string{
+		`- e1 button "Menu" [expanded]`,
+		`-   e2 menuitem "Settings"`,
+		`-   e3 menuitem "Log out"`,
+		`+ e1 button "Menu" [collapsed]`,
+	}, "\n")
+	if body != want {
+		t.Errorf("got\n%s\nwant\n%s", body, want)
+	}
+	// Both gone: the parent, then what was in it.
+	new = []item{txtItem(9, "Header", 0), txtItem(8, "Footer", 0)}
+	body, _ = renderDiff(old, new)
+	want = strings.Join([]string{`- e1 button "Menu" [expanded]`, `-   e2 menuitem "Settings"`, `-   e3 menuitem "Log out"`}, "\n")
+	if body != want {
+		t.Errorf("both gone: got\n%s\nwant\n%s", body, want)
+	}
+}
+
+// TestDiffSaysAChangePastTheLine: a changed item whose two lines read the
+// same (the change is past what a line shows) says so on its added line.
+func TestDiffSaysAChangePastTheLine(t *testing.T) {
+	long := strings.Repeat("word ", 60)
+	old := []item{txtItem(1, long+"old ending", 0)}
+	new := []item{txtItem(1, long+"new ending", 0)}
+	cut := func(it item, _ bool) string { return capText(it.text, maxDiffText) }
+	body, _ := diffItems(old, new).render(cut)
+	lines := strings.Split(body, "\n")
+	if len(lines) != 2 || lines[0] != "- "+capText(long, maxDiffText) || lines[1] != "+ "+capText(long, maxDiffText)+diffChangedPast {
+		t.Errorf("got\n%s", body)
+	}
+	// Lines that differ say nothing more.
+	body, _ = renderDiff([]item{ctl(2, "button", "Menu", 0, "collapsed")}, []item{ctl(2, "button", "Menu", 0, "expanded")})
+	if strings.Contains(body, diffChangedPast) {
+		t.Errorf("got\n%s", body)
+	}
+}

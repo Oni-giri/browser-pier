@@ -35,6 +35,8 @@ const (
 	diffNoBaseline = "no earlier snapshot of this page; take one"
 	diffNoChanges  = "no changes since the last snapshot"
 	diffNavigated  = "take a snapshot of the new page"
+	// diffChangedPast ends an added line that reads as its removed one.
+	diffChangedPast = " (changed past what this line shows)"
 )
 
 // keySeed seeds the items' keys; keys are compared only within this process.
@@ -114,6 +116,10 @@ type diffLine struct {
 	depth int
 	it    item
 	old   bool
+	// pair, for an added line whose node had another line before (a
+	// changed state), is the index of that removed line among the
+	// diff's lines; -1 otherwise.
+	pair int
 }
 
 // itemDiff is what diffItems found.
@@ -184,7 +190,7 @@ func diffItems(old, new []item) itemDiff {
 				continue
 			}
 			shownOld[o], shownNew[n] = true, true
-			d.lines = append(d.lines, diffLine{sign: ' ', depth: depthOf(list, a), it: list[a], old: isOld})
+			d.lines = append(d.lines, diffLine{sign: ' ', depth: depthOf(list, a), it: list[a], old: isOld, pair: -1})
 		}
 	}
 	// A removed item whose node is still there with another line (a
@@ -207,13 +213,31 @@ func diffItems(old, new []item) itemDiff {
 			sameNode[new[j].backend] = is[1:]
 		}
 	}
-	removed := func(i int) {
+	// A removed item whose enclosing item was removed or changed too goes
+	// right after that one's removed line, not before or outside it.
+	under := make([]bool, len(old))
+	kids := map[int][]int{}
+	for i := range old {
+		if p := old[i].parent - 1; matchOld[i] < 0 && p >= 0 && p < i && matchOld[p] < 0 {
+			under[i] = true
+			kids[p] = append(kids[p], i)
+		}
+	}
+	var removed func(i int) int
+	removed = func(i int) int {
 		enclose(old, i, true)
-		d.lines = append(d.lines, diffLine{sign: '-', depth: depthOf(old, i), it: old[i], old: true})
+		at := len(d.lines)
+		d.lines = append(d.lines, diffLine{sign: '-', depth: depthOf(old, i), it: old[i], old: true, pair: -1})
+		for _, k := range kids[i] {
+			if !paired[k] {
+				removed(k)
+			}
+		}
+		return at
 	}
 	unpaired := func(is []int) {
 		for _, i := range is {
-			if !paired[i] {
+			if !paired[i] && !under[i] {
 				removed(i)
 			}
 		}
@@ -221,11 +245,12 @@ func diffItems(old, new []item) itemDiff {
 	unpaired(removedAfter[-1])
 	for j := range new {
 		if matchNew[j] < 0 {
+			pair := -1
 			if i := pairOf[j]; i >= 0 {
-				removed(i)
+				pair = removed(i)
 			}
 			enclose(new, j, false)
-			d.lines = append(d.lines, diffLine{sign: '+', depth: depthOf(new, j), it: new[j]})
+			d.lines = append(d.lines, diffLine{sign: '+', depth: depthOf(new, j), it: new[j], pair: pair})
 		}
 		unpaired(removedAfter[j])
 	}
@@ -252,6 +277,7 @@ func (d itemDiff) render(line func(it item, old bool) string) (body, trailer str
 		return "", diffNoChanges
 	}
 	var b strings.Builder
+	shown := make([]string, 0, min(len(d.lines), maxDiffLines))
 	for k, l := range d.lines {
 		if k == maxDiffLines {
 			trailer = "(" + thousands(len(d.lines)-maxDiffLines) + " more lines; snapshot for the whole page)"
@@ -260,10 +286,17 @@ func (d itemDiff) render(line func(it item, old bool) string) (body, trailer str
 		if k > 0 {
 			b.WriteByte('\n')
 		}
+		s := line(l.it, l.old)
+		shown = append(shown, s)
+		if l.pair >= 0 && l.pair < k && shown[l.pair] == s {
+			// What changed is past what the line shows (a long text's
+			// end, say): the two lines would read the same.
+			s += diffChangedPast
+		}
 		b.WriteByte(l.sign)
 		b.WriteByte(' ')
 		b.WriteString(strings.Repeat("  ", l.depth))
-		b.WriteString(line(l.it, l.old))
+		b.WriteString(s)
 	}
 	return b.String(), trailer
 }
