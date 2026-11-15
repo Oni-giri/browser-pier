@@ -25,7 +25,8 @@ func (a agent) startAPIBrowser(t *testing.T, prefix string) sessionJSON {
 	}
 	a.allowLocalNetwork(t, name)
 	var s sessionJSON
-	if code := a.do(http.MethodPost, "/api/sessions", fmt.Sprintf(`{"profile": %q}`, name), &s); code != http.StatusCreated {
+	// It blocks ads and trackers, as new profiles do (PROJ-119).
+	if code := a.do(http.MethodPost, "/api/sessions", fmt.Sprintf(`{"profile": %q}`, name), &s); code != http.StatusCreated || !s.BlockAds {
 		t.Fatalf("start: %d %+v", code, s)
 	}
 	return s

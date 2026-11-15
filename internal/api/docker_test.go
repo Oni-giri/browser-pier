@@ -5,6 +5,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -26,11 +27,16 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/browsertest"
 	"github.com/Oni-giri/browser-pier/internal/db"
 	"github.com/Oni-giri/browser-pier/internal/docker"
+	"github.com/Oni-giri/browser-pier/internal/domainset"
 	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/handoff"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
+
+// testBlocklist is the ad and tracker list real-API tests' browsers get:
+// a few real ad and tracker domains, and the test's own listed names.
+var testBlocklist = []string{"doubleclick.net", "googlesyndication.com", "google-analytics.com", "scorecardresearch.com", "ads.blocked.test"}
 
 type agent struct {
 	t     *testing.T
@@ -89,6 +95,11 @@ func newRealAPI(t *testing.T) agent {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Every browser here blocks, as new profiles do, with a list of its
+	// own: the tests show blocking changes nothing else (PROJ-119).
+	var list bytes.Buffer
+	_, _ = domainset.Build(testBlocklist).WriteTo(&list)
+	m.SetBlocklist(list.Bytes)
 	t.Cleanup(func() {
 		for _, s := range m.List() {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)

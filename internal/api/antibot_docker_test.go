@@ -36,7 +36,7 @@ func TestVisualModeLooksLikeAPerson(t *testing.T) {
 	a.allowLocalNetwork(t, name)
 
 	var s sessionJSON
-	if code := a.do(http.MethodPost, "/api/sessions", fmt.Sprintf(`{"profile": %q}`, name), &s); code != http.StatusCreated || s.Mode != "visual" {
+	if code := a.do(http.MethodPost, "/api/sessions", fmt.Sprintf(`{"profile": %q}`, name), &s); code != http.StatusCreated || s.Mode != "visual" || !s.BlockAds {
 		t.Fatalf("start: %d %+v", code, s)
 	}
 	// Open the page as a person would: the address bar, the URL, Enter.
