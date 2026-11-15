@@ -58,6 +58,11 @@
       <label class="sr-only" for="proxy">Proxy URL</label>
       <input class="input mono" id="proxy" name="proxy" value="{{.Proxy}}" form="defaults" placeholder="socks5://user:pass@host:port" autocomplete="off" spellcheck="false">
       <ul class="checks" style="margin:14px 0 0"><li>Time zone and language follow the proxy’s location</li></ul>
+      <div class="field" style="margin:18px 0 0">
+        <input type="hidden" name="block_ads_field" value="1" form="defaults">
+        <label class="check"><input type="checkbox" name="block_ads" value="1" form="defaults"{{if .DefaultBlockAds}} checked{{end}}> Block ads and trackers in new profiles</label>
+        <span class="hint">Pages load faster and agents read less. Each profile can turn it off under Advanced.</span>
+      </div>
     </section>
 
     <section class="cell span-5" id="account" aria-labelledby="acct-title">

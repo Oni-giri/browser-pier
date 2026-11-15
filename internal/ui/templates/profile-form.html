@@ -67,6 +67,11 @@
           <label class="check"><input type="checkbox" name="local_network" value="1"{{if .Profile.LocalNetwork}} checked{{end}}> Let pages reach the local network</label>
           <span class="hint">For a router's admin page, say. Off, pages can't open addresses on your LAN, this server or its other apps.</span>
         </div>
+        <div class="field">
+          <input type="hidden" name="block_ads_field" value="1">
+          <label class="check"><input type="checkbox" name="block_ads" value="1"{{if .Profile.BlockAds}} checked{{end}}> Block ads and trackers</label>
+          <span class="hint">Known ad and tracker servers can't be reached, so pages load faster and agents read less. A page opened directly by its address still loads. An agent can turn it off for one session.</span>
+        </div>
         <fieldset class="field picker" style="border:0;padding:0;margin:0 0 18px">
           <legend class="label" style="font-weight:500;margin-bottom:8px">Icon when the site has none</legend>
           <div class="picker-head">

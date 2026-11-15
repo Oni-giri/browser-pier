@@ -132,6 +132,10 @@ func (u *UI) saveSettings(w http.ResponseWriter, r *http.Request) {
 		proxy = st.DefaultProxy
 	}
 	st.DefaultProxy = proxy
+	// A form without the checkbox (an older page) leaves it as it was.
+	if r.PostFormValue("block_ads_field") == "1" {
+		st.DefaultBlockAds = r.PostFormValue("block_ads") == "1"
+	}
 	ramChanged := false
 	if v := r.PostFormValue("ram"); v != "" && !u.o.RAMLimitFromEnv {
 		n, err := strconv.Atoi(v)

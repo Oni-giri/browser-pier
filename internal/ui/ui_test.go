@@ -60,6 +60,9 @@ func newFixture(t *testing.T) *fixture {
 		w.Header().Set("Content-Type", "image/png")
 		_, _ = w.Write([]byte("\x89PNG fake"))
 	})
+	ctl.HandleFunc("GET /proxy/stats", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"blocked": 42}`)
+	})
 	ctl.HandleFunc("GET /cdp/json/list", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `[{"type":"page","url":"https://accounts.example.com/signin"}]`)
 	})
@@ -191,6 +194,8 @@ func TestEveryPageRenders(t *testing.T) {
 	want(t, f.get("/profiles/new"), http.StatusOK, "Create profile")
 	want(t, f.get("/profiles/new", "HX-Request", "true"), http.StatusOK, "<dialog data-open")
 	want(t, f.get("/profiles/google"), http.StatusOK, `id="stage"`, "/static/live.js", "Enter the 2FA code", "Done, hand back", "Paused, waiting for you")
+	want(t, f.get("/profiles/google"), http.StatusOK, "<dt>Ads and trackers</dt><dd class=\"num\">42 blocked</dd>")
+	want(t, f.get("/profiles/github"), http.StatusOK, "<dt>Ads and trackers</dt><dd>On</dd>")
 	want(t, f.get("/profiles/github"), http.StatusOK, "Start browser", "This browser is stopped",
 		`data-dialog="export-dialog" data-name="github"`, `data-dialog="delete-dialog" data-name="github"`)
 	if r := f.get("/profiles/google"); !strings.Contains(r.body, `href="/profiles/google/edit"`) || !strings.Contains(r.body, `data-dialog="delete-dialog"`) {
@@ -289,6 +294,16 @@ func TestCreateProfile(t *testing.T) {
 	if p, _ = f.m.Profiles().Get(context.Background(), "amazon"); p.LocalNetwork {
 		t.Fatal("unticking the local network kept it on")
 	}
+
+	// Ad and tracker blocking: off here, from the saved defaults; ticked on.
+	if p.BlockAds {
+		t.Fatal("the settings' default (off) didn't apply")
+	}
+	f.post("/profiles/amazon/edit", url.Values{"policy": {"signin"}, "proxy": {"socks5://u:••••@proxy.example:1080"}, "block_ads_field": {"1"}, "block_ads": {"1"}})
+	if p, _ = f.m.Profiles().Get(context.Background(), "amazon"); !p.BlockAds {
+		t.Fatal("ticking blocking left it off")
+	}
+	want(t, f.get("/profiles/amazon/edit"), http.StatusOK, `name="block_ads" value="1" checked`)
 
 	// "Start it now" sends you to the live view, which starts the browser.
 	r = f.post("/profiles", url.Values{"name": {"bank"}, "start": {"1"}})
@@ -465,6 +480,20 @@ func TestSettings(t *testing.T) {
 		t.Fatalf("settings %+v, ram applied %d", st, f.ram)
 	}
 	want(t, f.post("/settings", url.Values{"ram": {"5"}}), http.StatusUnprocessableEntity, "between 10% and 100%")
+	// Ad and tracker blocking for new profiles: on until unticked; a form
+	// without the box leaves it.
+	want(t, f.get("/settings"), http.StatusOK, `name="block_ads" value="1" form="defaults" checked`)
+	if st, _ = f.settings.Get(ctx); !st.DefaultBlockAds {
+		t.Fatal("a form without the box turned blocking off")
+	}
+	f.post("/settings", url.Values{"block_ads_field": {"1"}})
+	if st, _ = f.settings.Get(ctx); st.DefaultBlockAds {
+		t.Fatal("unticking the box kept blocking on")
+	}
+	f.post("/settings", url.Values{"block_ads_field": {"1"}, "block_ads": {"1"}})
+	if st, _ = f.settings.Get(ctx); !st.DefaultBlockAds {
+		t.Fatal("ticking the box left blocking off")
+	}
 
 	// Setting the PIN the first time needs no current PIN; changing it does.
 	if r := f.post("/settings/pin", url.Values{"pin": {"4821"}}); r.code != http.StatusSeeOther {

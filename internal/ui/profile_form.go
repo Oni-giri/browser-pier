@@ -38,6 +38,9 @@ func (f profileForm) Summary() string {
 	if f.Profile.LocalNetwork {
 		s += " · local network"
 	}
+	if !f.Profile.BlockAds {
+		s += " · ads not blocked"
+	}
 	return s
 }
 
@@ -205,6 +208,10 @@ func readProfileForm(r *http.Request, p *profiles.Profile, keepProxy string) str
 	}
 	p.Proxy = proxy
 	p.LocalNetwork = r.PostFormValue("local_network") == "1"
+	// A form without the checkbox leaves it as it is.
+	if r.PostFormValue("block_ads_field") == "1" {
+		p.BlockAds = r.PostFormValue("block_ads") == "1"
+	}
 	// A form without the icon fields leaves them as they are.
 	if _, ok := r.PostForm["site"]; ok {
 		p.Site = profiles.NormalizeSite(r.PostFormValue("site"))

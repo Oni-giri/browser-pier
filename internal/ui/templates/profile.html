@@ -78,6 +78,7 @@
     <div><dt>Up for</dt><dd class="num">{{.UpFor}}</dd></div>
     <div><dt>In use by</dt><dd>{{.Agent}}</dd></div>
     <div><dt>Handoff</dt><dd>{{.PolicyLabel}}</dd></div>
+    <div><dt>Ads and trackers</dt><dd{{if .BlockedRead}} class="num"{{end}}>{{.AdsLabel}}</dd></div>
   </dl>
 </section>
 <section class="cell" aria-labelledby="log-title">
