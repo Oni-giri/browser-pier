@@ -38,6 +38,9 @@ type fnode struct {
 	pointer string
 	zIndex  string
 	paint   int
+	// cursor is the node's own cursor ("" inherits its parent's, as the
+	// computed style does; auto at the top).
+	cursor  string
 	value   *string // the DOM snapshot's inputValue
 	kids    []*fnode
 	backend int64
@@ -427,8 +430,11 @@ func (fb *fakeBrowser) snapshot(tb *ftab, p map[string]any) any {
 	var styles [][]int
 	var bounds [][4]float64
 	var paints []int
-	var walk func(n *fnode, p int)
-	walk = func(n *fnode, p int) {
+	var walk func(n *fnode, p int, cursor string)
+	walk = func(n *fnode, p int, cursor string) {
+		if n.cursor != "" {
+			cursor = n.cursor
+		}
 		i := len(parent)
 		parent = append(parent, p)
 		switch n.tag {
@@ -462,7 +468,7 @@ func (fb *fakeBrowser) snapshot(tb *ftab, p map[string]any) any {
 			var st []int
 		styles:
 			for _, name := range names {
-				v := map[string]string{"display": n.display, "visibility": n.visib, "pointer-events": n.pointer, "z-index": n.zIndex}
+				v := map[string]string{"display": n.display, "visibility": n.visib, "pointer-events": n.pointer, "z-index": n.zIndex, "cursor": cursor}
 				val, ok := v[name.(string)]
 				switch {
 				case !ok:
@@ -477,10 +483,10 @@ func (fb *fakeBrowser) snapshot(tb *ftab, p map[string]any) any {
 			paints = append(paints, n.paint)
 		}
 		for _, k := range n.kids {
-			walk(k, i)
+			walk(k, i, cursor)
 		}
 	}
-	walk(tb.doc, -1)
+	walk(tb.doc, -1, "auto")
 	layout := map[string]any{"nodeIndex": lnode, "styles": styles, "bounds": bounds}
 	if inc, _ := p["includePaintOrder"].(bool); inc {
 		layout["paintOrders"] = paints
