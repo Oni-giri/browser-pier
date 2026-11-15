@@ -334,7 +334,17 @@ func (t *Tools) act(ctx context.Context, s sessions.Session, who Caller, in ActI
 				case <-time.After(c.t.settle):
 				}
 			}
+			if where, ok := c.navigatedFromBaseline(ctx); ok {
+				// A step navigated: the new page isn't read only to say so.
+				c.t.dropBaseline(c.sess.ID, c.tgt.ID)
+				c.notices = nil
+				return out + c.result("page changes", "navigated to "+where, diffNavigated), nil
+			}
+			// The changes are extra: the read waits briefly for a slot,
+			// not holding the session for readWait.
+			c.slotWait = actChangesSlotWait
 			_, r, err := c.changes(ctx, false)
+			c.slotWait = 0
 			if err != nil {
 				return out + "The changes couldn't be read: " + c.fail(err).Error(), nil
 			}
@@ -343,6 +353,28 @@ func (t *Tools) act(ctx context.Context, s sessions.Session, who Caller, in ActI
 		}
 		return out, nil
 	})
+}
+
+// actChangesSlotWait is how long act's changes wait for a whole-page read
+// slot before giving up on them (the steps' result stands).
+const actChangesSlotWait = 1500 * time.Millisecond
+
+// navigatedFromBaseline says whether the active tab's document is another
+// than the one its kept list is of (a step navigated), and where it is
+// now, by the frame tree alone: no read of the new page.
+func (c *call) navigatedFromBaseline(ctx context.Context) (where string, navigated bool) {
+	b := c.t.baseline(c.sess.ID, c.tgt.ID)
+	if b == nil {
+		return "", false
+	}
+	f, err := c.topFrame(ctx, c.tgt)
+	if err != nil || (f.LoaderID == b.loader && f.ID == b.frame) {
+		return "", false
+	}
+	if f.UnreachableURL != "" {
+		return capText(f.UnreachableURL, maxHeader) + ", which couldn't be loaded", true
+	}
+	return capText(f.URL, maxHeader), true
 }
 
 // stepFailed is act's answer when step i failed: what the earlier steps

@@ -130,6 +130,16 @@ func TestActChangesAfterANavigation(t *testing.T) {
 	f.fb.pages = func(string) *fnode { return newMenuPage(f.fb).doc }
 	r := f.refs()
 	f.fb.behave[p.signin].onClick = func() { f.fb.go_(tb, "https://example.com/next") }
+	reads := func() int {
+		n := 0
+		for _, m := range f.fb.Received() {
+			if m.Method == "DOMSnapshot.captureSnapshot" || m.Method == "Accessibility.getFullAXTree" {
+				n++
+			}
+		}
+		return n
+	}
+	before := reads()
 	out, err := f.act(Step{Action: "click", Ref: r["Sign in"], Pace: paceInstant})
 	if err != nil {
 		t.Fatal(err)
@@ -137,6 +147,10 @@ func TestActChangesAfterANavigation(t *testing.T) {
 	ch := changesOf(out)
 	if !strings.Contains(ch, "navigated to https://example.com/next") || !strings.HasSuffix(ch, "\n"+diffNavigated) || strings.Contains(ch, "+ ") {
 		t.Fatalf("after a navigation:\n%s", out)
+	}
+	// The new page isn't read only to say it navigated (PROJ-114).
+	if n := reads() - before; n != 0 {
+		t.Errorf("%d whole-page reads after the step navigated", n)
 	}
 	// The kept list is dropped: the next act has nothing to compare with,
 	// so changes are off by default, and asked for say so.
@@ -282,12 +296,13 @@ func TestActChangesInput(t *testing.T) {
 
 func TestActChangesWhenReadsAreBusy(t *testing.T) {
 	// Every read slot taken: act's steps still run and answer; the changes
-	// say they couldn't be read, without waiting long.
+	// say they couldn't be read, after waiting actChangesSlotWait for a
+	// slot, not the tools' readWait (PROJ-114).
 	f := newFixture(t)
 	p := newMenuPage(f.fb)
 	f.fb.addTab("https://example.com/", p.doc, true)
 	r := f.refs()
-	f.tools.readWait = 50 * time.Millisecond
+	f.tools.readWait = 10 * time.Second
 	for range maxReads {
 		f.tools.reads <- struct{}{}
 	}
@@ -296,12 +311,16 @@ func TestActChangesWhenReadsAreBusy(t *testing.T) {
 			<-f.tools.reads
 		}
 	}()
+	start := time.Now()
 	out, err := f.act(Step{Action: "click", Ref: r["Menu"], Pace: paceInstant})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out, "clicked "+r["Menu"]) || !strings.Contains(changesOf(out), "The changes couldn't be read: "+errBusy.Msg) {
 		t.Errorf("busy:\n%s", out)
+	}
+	if took := time.Since(start); took < actChangesSlotWait || took > actChangesSlotWait+2*time.Second {
+		t.Errorf("waited %s for a read slot", took)
 	}
 	if p.menu.props["expanded"] != "true" {
 		t.Error("the click didn't happen")
