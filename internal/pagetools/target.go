@@ -264,6 +264,8 @@ type candidate struct {
 	name    string
 	// text is the element's rendered text, for naming one that has no name.
 	text string
+	// generic marks a generic control (findGenerics), named by its text.
+	generic bool
 }
 
 // targetRead is what one read of the active tab found for a target: its
@@ -312,10 +314,19 @@ func (c *call) readTarget(ctx context.Context, t target) (*targetRead, error) {
 	if err != nil {
 		return nil, err
 	}
-	if t.role != "" {
+	var gs *generics
+	if t.role == "" || t.role == "generic" {
+		if gs, err = findGenerics(ctx, nodes, d); err != nil {
+			return nil, err
+		}
+	}
+	switch {
+	case t.role == "generic":
+		matchGeneric(t, d, gs, r)
+	case t.role != "":
 		err = matchRole(ctx, t, nodes, d, r)
-	} else {
-		err = matchText(ctx, t, nodes, d, r)
+	default:
+		err = matchText(ctx, t, nodes, d, gs, r)
 	}
 	if err != nil {
 		return nil, err
@@ -408,6 +419,20 @@ func matchRole(ctx context.Context, t target, nodes []axNode, d *dom, r *targetR
 	}, nil)
 }
 
+// matchGeneric finds a role=generic target's matches: the generic
+// controls a snapshot lists (PROJ-124), by the text it shows as their
+// name. Chromium's generic role is on every plain div, with no name: a
+// target for those would match the whole page.
+func matchGeneric(t target, d *dom, gs *generics, r *targetRead) {
+	for _, ni := range gs.order {
+		cd := candidate{backend: d.s.Documents[0].Nodes.BackendNodeID[ni], role: "generic", name: gs.names[ni], generic: true}
+		r.near = append(r.near, cd)
+		if !t.hasName || strings.Contains(fold(collapse(cd.name)), t.name) {
+			r.matches = append(r.matches, cd)
+		}
+	}
+}
+
 // docText gathers a page's rendered text twice over (as it is, and
 // folded), with its whitespace collapsed and a space between blocks, so
 // that each element's text is a range of it.
@@ -448,11 +473,11 @@ func (p *docText) add(s string, block int) {
 
 // span is an element's text, as a range of a docText: start and end in
 // raw (r) and in folded (f). parent is the nearest enclosing span's index
-// (-1: none).
+// (-1: none); gen the generic control's span it is in, or is (-1: none).
 type span struct {
 	cand           candidate
 	r0, r1, f0, f1 int
-	parent         int
+	parent, gen    int
 	matched, below bool
 }
 
@@ -460,14 +485,53 @@ type span struct {
 // whose rendered text holds the text (or, exact, is it) while no visible
 // element inside it does. Text is a node's own rendered text: what the
 // AX tree's text nodes show (the DOM's own characters for their spaces),
-// not fields' values, nor what is hidden.
-func matchText(ctx context.Context, t target, nodes []axNode, d *dom, r *targetRead) error {
+// not fields' values, nor what is hidden. A match inside a generic
+// control (gs) is the generic, which a snapshot lists as one control,
+// even when the AX tree ignores it or leaves it out.
+func matchText(ctx context.Context, t target, nodes []axNode, d *dom, gs *generics, r *targetRead) error {
 	pt := &docText{space: true, block: -1, left: maxPageText}
 	var spans []span
 	var stack []int  // open spans: index in spans, -1 for a node that isn't one
 	var closed []int // spans as they close: one inside another first
+	top := func() int {
+		for k := len(stack) - 1; k >= 0; k-- {
+			if stack[k] >= 0 {
+				return stack[k]
+			}
+		}
+		return -1
+	}
+	open := func(cd candidate) int {
+		parent, gen := top(), -1
+		if cd.generic {
+			gen = len(spans)
+		} else if parent >= 0 {
+			gen = spans[parent].gen
+		}
+		spans = append(spans, span{cand: cd, r0: pt.raw.Len(), f0: pt.folded.Len(), parent: parent, gen: gen})
+		return len(spans) - 1
+	}
+	shut := func(i int) {
+		spans[i].r1, spans[i].f1 = pt.raw.Len(), pt.folded.Len()
+		closed = append(closed, i)
+	}
+	// The span of a generic the AX tree leaves out (a span whose click a
+	// listener on the document handles) is open over its text nodes.
+	pruned, prunedNode := -1, -1
+	shutPruned := func() {
+		if pruned >= 0 {
+			shut(pruned)
+			pruned, prunedNode = -1, -1
+		}
+	}
+	genericCand := func(ni int) candidate {
+		return candidate{backend: d.s.Documents[0].Nodes.BackendNodeID[ni], role: "generic", name: gs.names[ni], generic: true}
+	}
 	err := axWalk(ctx, nodes, func(n *axNode) bool {
 		role := n.Role.String()
+		if role != "StaticText" {
+			shutPruned()
+		}
 		switch {
 		case role == "StaticText":
 			if n.Ignored {
@@ -479,6 +543,12 @@ func matchText(ctx context.Context, t target, nodes []axNode, d *dom, r *targetR
 			}
 			if _, shown := d.shown(ni); !shown {
 				return false
+			}
+			if o := gs.prunedOwner(ni); o != prunedNode {
+				shutPruned()
+				if _, isGen := gs.names[o]; isGen && o >= 0 {
+					pruned, prunedNode = open(genericCand(o)), o
+				}
 			}
 			s := n.Name.String()
 			if doc := d.s.Documents[0].Nodes; doc.NodeType[ni] == 3 {
@@ -492,28 +562,26 @@ func matchText(ctx context.Context, t target, nodes []axNode, d *dom, r *targetR
 		case !n.Ignored && editableRoles[role]:
 			return false // a field's text is its value
 		}
-		parent := -1
-		for k := len(stack) - 1; k >= 0; k-- {
-			if stack[k] >= 0 {
-				parent = stack[k]
-				break
+		if ni, ok := d.byBack[n.Backend]; ok {
+			if _, isGen := gs.names[ni]; isGen {
+				// Shown by its rules, though the AX tree may ignore it.
+				stack = append(stack, open(genericCand(ni)))
+				return true
 			}
 		}
 		if _, ok := visibleElement(n, d); !ok {
 			stack = append(stack, -1)
 			return true
 		}
-		spans = append(spans, span{cand: candidate{backend: n.Backend, role: role, name: cutBytes(n.Name.String(), maxName)},
-			r0: pt.raw.Len(), f0: pt.folded.Len(), parent: parent})
-		stack = append(stack, len(spans)-1)
+		stack = append(stack, open(candidate{backend: n.Backend, role: role, name: cutBytes(n.Name.String(), maxName)}))
 		return true
 	}, func(n *axNode) {
+		shutPruned()
 		if len(stack) == 0 {
 			return
 		}
 		if i := stack[len(stack)-1]; i >= 0 {
-			spans[i].r1, spans[i].f1 = pt.raw.Len(), pt.folded.Len()
-			closed = append(closed, i)
+			shut(i)
 		}
 		stack = stack[:len(stack)-1]
 	})
@@ -542,18 +610,24 @@ func matchText(ctx context.Context, t target, nodes []axNode, d *dom, r *targetR
 		return k < len(at) && at[k]+len(t.text) <= s.f1
 	}
 	// Spans close inner first, so an inner one is judged before its
-	// parent; their order of opening is document order.
+	// parent; their order of opening is document order. A match inside a
+	// generic control is the generic.
 	for _, i := range closed {
 		s := &spans[i]
-		if !s.below && holds(s) {
+		hit := !s.below && holds(s)
+		if hit && s.gen >= 0 {
+			spans[s.gen].matched = true
+		} else if hit {
 			s.matched = true
 		}
-		if (s.matched || s.below) && s.parent >= 0 {
+		if (hit || s.matched || s.below) && s.parent >= 0 {
 			spans[s.parent].below = true
 		}
 	}
+	seen := map[int64]bool{} // a generic left out of the AX tree may have had several spans
 	for i := range spans {
-		if spans[i].matched {
+		if spans[i].matched && !seen[spans[i].cand.backend] {
+			seen[spans[i].cand.backend] = true
 			cd := spans[i].cand
 			cd.text = capText(collapse(raw[spans[i].r0:spans[i].r1]), 40)
 			r.matches = append(r.matches, cd)
@@ -613,7 +687,7 @@ func (c *call) candidates(r *targetRead, cs []candidate) string {
 	lines := make([]string, 0, min(len(cs), maxCandidates))
 	for _, cd := range cs[:min(len(cs), maxCandidates)] {
 		role := cd.role
-		if role == "" || role == "generic" || role == "none" {
+		if !cd.generic && (role == "" || role == "generic" || role == "none") {
 			role = "element"
 		}
 		name := collapse(cd.name)

@@ -272,3 +272,33 @@ func TestGenericControlsInASnapshot(t *testing.T) {
 		t.Errorf("diff: %v\n%s", err, out)
 	}
 }
+
+// TestTargetsFindGenericControls: a text target inside a generic control
+// is the generic, as the snapshot lists it, even one the AX tree leaves
+// out; role=generic names the generics by the text they show.
+func TestTargetsFindGenericControls(t *testing.T) {
+	f := newFixture(t)
+	p := newDivsPage(f.fb)
+	f.fb.addTab("https://example.com/inbox", p.doc, true)
+	r := f.refs()
+	for _, c := range []struct{ target, ref string }{
+		{"text=Archive", r["Archive (3)"]},
+		{`text="Archive (3)"`, r["Archive (3)"]},
+		{"text=star", r["Star it"]},
+		{`role=generic[name="Mark read"]`, r["Mark read"]},
+		{`role=generic[name="star"]`, r["Star it"]},
+	} {
+		out, err := f.act(Step{Action: "click", Target: c.target})
+		if err != nil || !strings.Contains(out, "clicked "+c.ref+" ") {
+			t.Errorf("%s: %v\n%s", c.target, err, out)
+		}
+	}
+	_, err := f.act(Step{Action: "click", Target: "role=generic"})
+	if err == nil || !strings.Contains(err.Error(), "matches 3 visible elements") || !strings.Contains(err.Error(), `generic "Archive (3)" [ref=`+r["Archive (3)"]+`]`) {
+		t.Errorf("role=generic: %v", err)
+	}
+	// A text match that isn't in one is as before.
+	if out, err := f.act(Step{Action: "hover", Target: "text=Liked by"}); err != nil || !strings.Contains(out, "paragraph") {
+		t.Errorf("text=Liked by: %v\n%s", err, out)
+	}
+}
