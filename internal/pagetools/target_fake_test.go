@@ -192,6 +192,10 @@ func TestATargetWithNoMatch(t *testing.T) {
 	if !isStatus(err, 400) || !strings.Contains(err.Error(), "not both") {
 		t.Errorf("ref and target: %v", err)
 	}
+	_, err = f.act(Step{Action: "press", Keys: "Enter", Target: `role=button`})
+	if !isStatus(err, 400) || !strings.Contains(err.Error(), "it takes no target") {
+		t.Errorf("press with a target: %v", err)
+	}
 }
 
 // TestHiddenCopiesDontCount: a display:none, visibility:hidden or
