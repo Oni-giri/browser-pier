@@ -121,6 +121,10 @@ type fakeBrowser struct {
 	inputs  map[*ftab]*fakeInput
 	// onInput is called (with the fake locked) on each input event.
 	onInput func(typ string)
+	// onFunction is called (with the fake locked) each time one of act's
+	// isolated-world scripts runs on an element, by its marker, before it
+	// answers: a test changes the page at an exact point with it.
+	onFunction func(marker string)
 	// reuseIDs makes navigations start context numbers again, as a new
 	// renderer does; mainRuns counts code that ran in a page's own world.
 	reuseIDs bool

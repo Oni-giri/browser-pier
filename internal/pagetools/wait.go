@@ -289,6 +289,11 @@ func (c *call) check1(ctx context.Context, w *waiter, first bool) (waitCheck, er
 	}
 	var visible bool
 	if err := c.callOn(ctx, n.obj, jsVisible, nil, &visible); err != nil {
+		if errors.Is(err, cdp.ErrWorldGone) {
+			// Its document went since resolve: the next look tells gone
+			// from hidden, and whether it can come back.
+			return waitCheck{now: in.Ref + " is gone (the page changed)"}, nil
+		}
 		return waitCheck{}, err
 	}
 	ck := waitCheck{ok: visible != hidden}

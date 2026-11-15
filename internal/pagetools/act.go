@@ -414,6 +414,10 @@ func (c *call) resolve(ctx context.Context, ref string) (*node, error) {
 	n := &node{ref: ref, backend: k.backend, obj: obj}
 	var connected bool
 	if err := c.callOn(ctx, n.obj, jsConnected, nil, &connected); err != nil {
+		if errors.Is(err, cdp.ErrWorldGone) {
+			// The document went between resolving it and this.
+			return nil, errStale(ref)
+		}
 		return nil, err
 	}
 	if !connected {
@@ -564,7 +568,9 @@ func (c *call) callOnObject(ctx context.Context, obj, fn string, args []any, byV
 	err := c.renderer(ctx, c.t.quick, "Runtime.callFunctionOn", map[string]any{"objectId": obj, "functionDeclaration": fn,
 		"arguments": as, "returnByValue": byValue, "silent": true}, &r)
 	if err != nil {
-		return r.Result, err
+		// An object whose document went (a navigation since it was
+		// resolved) is ErrWorldGone, still wrapping the browser's error.
+		return r.Result, cdp.WorldGone(err)
 	}
 	if r.ExceptionDetails != nil {
 		return r.Result, fmt.Errorf("script error: %s", r.ExceptionDetails.Text)

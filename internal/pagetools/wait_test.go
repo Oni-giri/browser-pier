@@ -2,11 +2,15 @@ package pagetools
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Oni-giri/browser-pier/internal/cdp/cdptest"
 )
 
 // waitIn runs wait_for on the fixture's session.
@@ -173,36 +177,120 @@ func TestWaitTimeoutSaysWhy(t *testing.T) {
 	if err != nil || out != "timed out after 0.06 s waiting for "+r["Sign in"]+" to be visible; now: "+r["Sign in"]+" is on the page but hidden" {
 		t.Errorf("hidden: %v %q", err, out)
 	}
-	// Taken out of the document during the wait: it might be put back,
-	// so the wait goes on, and the timeout says it's gone.
-	go func() {
-		time.Sleep(30 * time.Millisecond)
-		f.fb.mu.Lock()
-		f.fb.removed[p.signin] = true
-		f.fb.mu.Unlock()
-	}()
+	// Taken out of the document during the wait (after its second look):
+	// it might be put back, so the wait goes on, and the timeout says
+	// it's gone.
+	looks := 0
+	f.fb.mu.Lock()
+	f.fb.onFunction = func(marker string) {
+		if marker == "visible" {
+			if looks++; looks == 2 {
+				f.fb.removed[p.signin] = true
+			}
+		}
+	}
+	f.fb.mu.Unlock()
 	out, err = f.waitIn(WaitIn{Ref: r["Sign in"], TimeoutMS: 150})
-	if err != nil || out != "timed out after 0.15 s waiting for "+r["Sign in"]+" to be visible; now: "+r["Sign in"]+" is gone (the page changed)" {
-		t.Errorf("removed: %v %q", err, out)
+	if err != nil || out != "timed out after 0.15 s waiting for "+r["Sign in"]+" to be visible; now: "+r["Sign in"]+" is gone (the page changed)" || looks != 2 {
+		t.Errorf("removed: %v %q after %d looks", err, out, looks)
 	}
 	// Gone before the wait: stale, as every tool says.
 	if _, err := f.waitIn(WaitIn{Ref: r["Sign in"]}); !isStatus(err, 409) {
 		t.Errorf("stale at the start: %v", err)
 	}
-	// Another document during the wait: the ref can't come back.
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		f.fb.mu.Lock()
-		f.fb.go_(tb, "https://example.com/next")
-		f.fb.mu.Unlock()
-	}()
+	// Another document during the wait, on its second look, between
+	// resolving the ref and asking whether it's visible: its object dies
+	// with the document, which is no refusal, and the ref can't come back.
+	looks = 0
 	f.fb.mu.Lock()
+	f.fb.onFunction = func(marker string) {
+		if marker == "connected" {
+			if looks++; looks == 2 {
+				f.fb.go_(tb, "https://example.com/next")
+			}
+		}
+	}
 	p.buy.box = nil
 	f.fb.mu.Unlock()
 	start := time.Now()
 	out, err = f.waitIn(WaitIn{Ref: r["Buy now"], TimeoutMS: 5000})
 	if err != nil || !strings.HasPrefix(out, "gave up after ") || !strings.HasSuffix(out, " s waiting for "+r["Buy now"]+" to be visible; now: "+r["Buy now"]+" is gone (the page changed)") || time.Since(start) > 2*time.Second {
 		t.Errorf("navigated: %v %q after %s", err, out, time.Since(start))
+	}
+	checkSent(t, f.fb)
+}
+
+// TestObjectGoneIsNoRefusal: an element's object that dies with its
+// document between resolving a ref and the code run on it ("Could not
+// find object with given id") is a page that changed, never "the browser
+// refused" (PROJ-122): a wait looks again, act says the ref is stale.
+func TestObjectGoneIsNoRefusal(t *testing.T) {
+	f := newFixture(t)
+	p := newActPage(f.fb)
+	f.fb.addTab("https://example.com/", p.doc, true)
+	r := f.refs()
+	// fail makes the next n runs of the script with this marker answer
+	// as a dead object does.
+	var mu sync.Mutex
+	left := map[string]int{}
+	fail := func(marker string, n int) {
+		mu.Lock()
+		defer mu.Unlock()
+		left[marker] = n
+	}
+	f.fb.mu.Lock()
+	f.fb.call = func(tb *ftab, m cdptest.Message) (any, bool, error) {
+		if m.Method != "Runtime.callFunctionOn" {
+			return nil, false, nil
+		}
+		var p struct {
+			Fn string `json:"functionDeclaration"`
+		}
+		_ = json.Unmarshal(m.Params, &p)
+		mu.Lock()
+		defer mu.Unlock()
+		for marker, n := range left {
+			if n > 0 && strings.Contains(p.Fn, "/*bp:"+marker+"*/") {
+				left[marker]--
+				return nil, true, cdptest.Error{Message: "Could not find object with given id"}
+			}
+		}
+		return nil, false, nil
+	}
+	f.fb.mu.Unlock()
+
+	// visible: one dead look, then the next sees it.
+	fail("visible", 1)
+	out, err := f.waitIn(WaitIn{Ref: r["Sign in"], TimeoutMS: 2000})
+	if err != nil || !strings.HasPrefix(out, "waited ") {
+		t.Errorf("visible after a dead look: %v %q", err, out)
+	}
+	// Dead every look until the timeout: it says so, as a change.
+	fail("visible", 1000)
+	out, err = f.waitIn(WaitIn{Ref: r["Sign in"], TimeoutMS: 60})
+	if err != nil || out != "timed out after 0.06 s waiting for "+r["Sign in"]+" to be visible; now: "+r["Sign in"]+" is gone (the page changed)" {
+		t.Errorf("dead until the timeout: %v %q", err, out)
+	}
+	fail("visible", 0)
+	// Dead at the connected check, during a wait: as stale.
+	fail("connected", 1)
+	if _, err := f.waitIn(WaitIn{Ref: r["Sign in"]}); !isStatus(err, http.StatusConflict) || !strings.Contains(err.Error(), "stale ref") {
+		t.Errorf("wait, dead at connected: %v", err)
+	}
+	fail("connected", 1)
+	out, err = f.waitIn(WaitIn{Ref: r["Sign in"], State: "hidden"})
+	if err != nil || !strings.HasPrefix(out, "already true") {
+		t.Errorf("hidden, dead at connected: %v %q", err, out)
+	}
+	// Act: dead at the connected check is a stale ref; dead later in a
+	// step is a page that changed, not a refusal.
+	fail("connected", 1)
+	if _, err := f.act(Step{Action: "click", Ref: r["Sign in"]}); !isStatus(err, http.StatusConflict) || !strings.Contains(err.Error(), "stale ref") {
+		t.Errorf("act, dead at connected: %v", err)
+	}
+	fail("hittest", 1)
+	if _, err := f.act(Step{Action: "click", Ref: r["Sign in"]}); !isStatus(err, http.StatusConflict) || !strings.Contains(err.Error(), "the page changed") || strings.Contains(err.Error(), "refused") {
+		t.Errorf("act, dead at the hit test: %v", err)
 	}
 	checkSent(t, f.fb)
 }

@@ -304,6 +304,9 @@ func (fb *fakeBrowser) function(tb *ftab, n *fnode, p map[string]any) (any, bool
 	}
 	in := fb.input(tb)
 	marker := fn[strings.Index(fn, "/*bp:")+5 : strings.Index(fn, "*/")]
+	if fb.onFunction != nil {
+		fb.onFunction(marker)
+	}
 	switch marker {
 	case "connected":
 		return value(!fb.removed[n]), true, nil

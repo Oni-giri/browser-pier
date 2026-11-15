@@ -327,6 +327,10 @@ func (c *call) fail(err error) error {
 		return e
 	case errors.Is(err, cdp.ErrTooLarge):
 		return &Error{Status: http.StatusUnprocessableEntity, Msg: "the browser's answer was too large"}
+	case errors.Is(err, cdp.ErrWorldGone):
+		// An element or the isolated world died with its document under
+		// the call: the page navigated, which is no refusal.
+		return &Error{Status: http.StatusConflict, Msg: "the page changed while BrowserPier was working on it (it navigated); take a new snapshot and try again"}
 	}
 	var ce *cdp.Error
 	if errors.As(err, &ce) {
