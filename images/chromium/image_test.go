@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -208,6 +209,27 @@ func (b *browser) onScreen(t *testing.T, x, y int, want color.RGBA) {
 	}
 }
 
+// pageURLs lists the browser's tabs' URLs, from CDP's /json/list.
+func (b *browser) pageURLs() []string {
+	b.t.Helper()
+	resp, err := b.http.Get("http://control/cdp/json/list")
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var targets []struct{ Type, URL string }
+	if err := json.NewDecoder(resp.Body).Decode(&targets); err != nil {
+		b.t.Fatal(err)
+	}
+	var urls []string
+	for _, tg := range targets {
+		if tg.Type == "page" {
+			urls = append(urls, tg.URL)
+		}
+	}
+	return urls
+}
+
 func (b *browser) page() *browsertest.CDP {
 	b.t.Helper()
 	return browsertest.Page(b.t, b.http)
@@ -379,6 +401,15 @@ func TestRestoredPostPageIsNotResubmitted(t *testing.T) {
 
 	b = startBrowser(t, image, vol)
 	b.page().Close()
+	// The tab on POST /login's answer is restored: without it, nothing
+	// could be resubmitted and the check below would pass for nothing.
+	start := time.Now()
+	for !slices.Contains(b.pageURLs(), s.URL+"/login") {
+		if time.Since(start) > 15*time.Second {
+			t.Fatalf("no tab at %s/login after the restart; tabs %q", s.URL, b.pageURLs())
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 	// Long enough for a restored tab to load, or post, several times over.
 	time.Sleep(5 * time.Second)
 	if got := s.Issued(); got != token {
