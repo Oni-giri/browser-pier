@@ -550,6 +550,7 @@ func (a *API) input(path string) http.HandlerFunc {
 		if path == "/input/click" {
 			// A click may start a download (PROJ-116); the browser
 			// doesn't take download_wait_ms, which is BrowserPier's.
+			// When it is set, the click expects one (files.Mark.Expect).
 			var ms *int
 			if body, ms, err = takeDownloadWait(body); err == nil {
 				wait, err = files.DownloadWait(ms)
@@ -559,6 +560,9 @@ func (a *API) input(path string) http.HandlerFunc {
 				return
 			}
 			mark = a.markDownloads(s)
+			if ms != nil {
+				mark.Expect(wait)
+			}
 		}
 		if !a.act(w, r, s, path, body) {
 			return

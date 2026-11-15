@@ -149,7 +149,7 @@ type actArgs struct {
 	// Changes is a pointer: unset (on after a snapshot) differs from false.
 	Changes *bool `json:"changes,omitempty" jsonschema:"append what changed since your last snapshot of this page; on by default once you have one (and snapshot isn't set), false to turn it off"`
 	// DownloadWaitMS is a pointer, so 0 (don't wait) differs from unset.
-	DownloadWaitMS *int `json:"download_wait_ms,omitempty" jsonschema:"how long to wait for a download the steps started to finish, in ms; default 3000, 0 not to wait, at most 30000"`
+	DownloadWaitMS *int `json:"download_wait_ms,omitempty" jsonschema:"how long to wait for a download the steps started to finish, in ms; default 3000, 0 not to wait, at most 30000; when set, also how long to look for one to start, so a slow server's download is told now rather than with the next action"`
 }
 
 func (s *Server) actOnPage(ctx context.Context, req *sdk.CallToolRequest, in actArgs) (*sdk.CallToolResult, any, error) {

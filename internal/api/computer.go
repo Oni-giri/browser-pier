@@ -51,7 +51,8 @@ type computerRequest struct {
 	Pace string `json:"pace"`
 	// DownloadWaitMS is how long a click or key press waits for a
 	// download it started to finish: 3,000 ms if unset, 0 not to wait,
-	// at most 30,000 (PROJ-116). Other actions ignore it.
+	// at most 30,000 (PROJ-116). When set, it is also how long it looks
+	// for one to start (files.Mark.Expect). Other actions ignore it.
 	DownloadWaitMS *int `json:"download_wait_ms"`
 }
 
@@ -186,6 +187,9 @@ func (a *API) computer(w http.ResponseWriter, r *http.Request) {
 	var mark *files.Mark
 	if c.downloads() {
 		mark = a.markDownloads(s)
+		if c.DownloadWaitMS != nil {
+			mark.Expect(wait) // the caller expects a download: look as long for it to start
+		}
 	}
 	if !a.act(w, r, s, path, raw) {
 		return

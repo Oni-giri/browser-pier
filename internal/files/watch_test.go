@@ -316,6 +316,50 @@ func TestDownloadsLookForALateStart(t *testing.T) {
 	}
 }
 
+// A caller that set download_wait_ms expects a download: the notice looks
+// that long for one to start, as a remote server's answer comes later
+// than StartGrace; without it, a late start waits for the next action.
+func TestDownloadsExpectedLooksLongerForAStart(t *testing.T) {
+	s, dir := setup(t, 0)
+	dl := filepath.Join(dir, Downloads)
+	m := s.Mark("google", "")
+	m.Ended()
+	later(t, 200*time.Millisecond, func() { write(t, filepath.Join(dl, "slow.csv"), "slow", 0) })
+	if got := m.Downloads(context.Background(), 3*time.Second); len(got) != 0 {
+		t.Fatalf("without Expect, Downloads = %+v, want nothing yet", got)
+	}
+	time.Sleep(300 * time.Millisecond) // slow.csv is there before the next mark
+	m = s.Mark("google", "")
+	m.Expect(time.Second)
+	m.Ended()
+	later(t, 200*time.Millisecond, func() { write(t, filepath.Join(dl, "slower.csv"), "slower", 0) })
+	start := time.Now()
+	got := m.Downloads(context.Background(), time.Second)
+	if want := []Download{{Name: "slower.csv", Size: 6, State: Downloaded}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("with Expect, Downloads = %+v, want %+v", got, want)
+	}
+	if d := time.Since(start); d > 700*time.Millisecond {
+		t.Errorf("it kept looking for %v after the download came", d)
+	}
+	// Nothing comes: it looks for the whole wait, no longer.
+	m = s.Mark("google", "")
+	m.Expect(300 * time.Millisecond)
+	m.Ended()
+	start = time.Now()
+	if got := m.Downloads(context.Background(), 300*time.Millisecond); len(got) != 0 {
+		t.Fatalf("Downloads = %+v", got)
+	}
+	if d := time.Since(start); d < 250*time.Millisecond || d > 600*time.Millisecond {
+		t.Errorf("it looked for %v, want about 300 ms", d)
+	}
+	// 0 (don't wait) keeps StartGrace.
+	m = s.Mark("google", "")
+	m.Expect(0)
+	if m.grace != StartGrace {
+		t.Errorf("Expect(0): grace %v", m.grace)
+	}
+}
+
 // What finished after a session's notice, before its next action, is
 // told with that action, once; a new session starts afresh.
 func TestDownloadsEarlierTold(t *testing.T) {

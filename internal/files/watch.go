@@ -24,8 +24,9 @@ import (
 //
 // Chrome creates the file only once the server has answered, which can be
 // after the action has returned: a notice looks for StartGrace after the
-// action for a download to start, and whatever finished between one
-// action of a session and the next is told with the next (Earlier).
+// action for a download to start (or for the caller's download_wait_ms,
+// when it set one: Expect), and whatever finished between one action of a
+// session and the next is told with the next (Earlier).
 
 const (
 	// DefaultDownloadWait is how long an action waits for a download it
@@ -44,6 +45,9 @@ const (
 	// gracePoll how often one is looked for during StartGrace.
 	downloadPoll = 200 * time.Millisecond
 	gracePoll    = 10 * time.Millisecond
+	// expectPoll is how often one is looked for when the caller expects
+	// one (Expect), which may be for seconds.
+	expectPoll = 50 * time.Millisecond
 )
 
 // unconfirmed is how Chrome names a download until it is finished, when
@@ -133,6 +137,21 @@ func (s *Store) Mark(profile, session string) *Mark {
 	}
 	sort.Sort(byTime{m.earlier, at})
 	return m
+}
+
+// Expect makes the notice look for a download to start for wait after
+// the action, instead of StartGrace: for an action whose caller set
+// download_wait_ms itself, and so expects one. A remote server's answer
+// can come well after StartGrace, which is tuned to a near one; a caller
+// that didn't say is told of a late start with its next action. A wait
+// under StartGrace (0, say) keeps StartGrace.
+func (m *Mark) Expect(wait time.Duration) {
+	if m != nil {
+		m.grace = max(StartGrace, min(wait, MaxDownloadWait))
+		if m.grace > StartGrace {
+			m.gracePoll = expectPoll
+		}
+	}
 }
 
 // Ended records that the action has ended: StartGrace counts from here.

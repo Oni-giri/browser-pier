@@ -295,7 +295,7 @@ type clickArgs struct {
 	Button string `json:"button,omitempty" jsonschema:"left (default), right or middle"`
 	Double bool   `json:"double,omitempty" jsonschema:"double-click"`
 	// DownloadWaitMS is a pointer, so 0 (don't wait) differs from unset.
-	DownloadWaitMS *int `json:"download_wait_ms,omitempty" jsonschema:"how long to wait for a download the click started to finish, in ms; default 3000, 0 not to wait, at most 30000"`
+	DownloadWaitMS *int `json:"download_wait_ms,omitempty" jsonschema:"how long to wait for a download the click started to finish, in ms; default 3000, 0 not to wait, at most 30000; when set, also how long to look for one to start, so a slow server's download is told now rather than with the next action"`
 }
 
 func (s *Server) click(ctx context.Context, req *sdk.CallToolRequest, in clickArgs) (*sdk.CallToolResult, any, error) {
@@ -359,7 +359,7 @@ type keysArgs struct {
 	Screenshot bool   `json:"screenshot,omitempty" jsonschema:"return a screenshot after"`
 	Pace       string `json:"pace,omitempty" jsonschema:"human (default): moves, aims and types like a hand, so it takes longer; instant: at once"`
 	// DownloadWaitMS is a pointer, so 0 (don't wait) differs from unset.
-	DownloadWaitMS *int `json:"download_wait_ms,omitempty" jsonschema:"how long to wait for a download the keys started to finish, in ms; default 3000, 0 not to wait, at most 30000"`
+	DownloadWaitMS *int `json:"download_wait_ms,omitempty" jsonschema:"how long to wait for a download the keys started to finish, in ms; default 3000, 0 not to wait, at most 30000; when set, also how long to look for one to start, so a slow server's download is told now rather than with the next action"`
 }
 
 func (s *Server) pressKeys(ctx context.Context, req *sdk.CallToolRequest, in keysArgs) (*sdk.CallToolResult, any, error) {

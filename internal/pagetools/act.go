@@ -239,6 +239,9 @@ func (t *Tools) Act(ctx context.Context, s sessions.Session, who Caller, in ActI
 	var mark *files.Mark
 	if t.files != nil {
 		mark = t.files.Mark(s.Profile, s.ID)
+		if in.DownloadWaitMS != nil {
+			mark.Expect(wait) // the caller expects a download: look as long for it to start
+		}
 	}
 	out, err := t.act(ctx, s, who, in, mark)
 	var e *Error
