@@ -150,6 +150,7 @@ curl -s -X POST {{.Base}}/api/sessions/ID/computer -H "$H" -d '{"action": "click
 #   other actions: type {"text"}, key {"keys": "ctrl+l"}, scroll {"x", "y", "dy"}, drag {"from", "to"}, wait {"ms"}, zoom {"x", "y", "w", "h"}
 # a person is needed (sign-in, 2FA, CAPTCHA, payment): send them a link, then wait for them
 curl -s -X POST {{.Base}}/api/sessions/ID/handoff -H "$H" -d '{"reason": "sensitive_input", "detail": "Enter the 2FA code"}'
+#   with "until_url": "example.com/account" it also ends by itself once a tab navigates there (origin and path only)
 curl -s "{{.Base}}/api/handoffs/HANDOFF_ID?wait=900" -H "$H"
 # API mode instead ("mode": "api"): read the page, act on refs from it, all as text
 curl -s -X POST {{.Base}}/api/sessions/ID/navigate -H "$H" -d '{"url": "https://example.com/login"}'
@@ -164,7 +165,7 @@ curl -s -X POST {{.Base}}/api/sessions/ID/content -H "$H" -d '{"format": "pdf"}'
 curl -s -X DELETE {{.Base}}/api/sessions/ID -H "$H"
 ```
 
-Handoff reasons: `sensitive_input`, `captcha`, `file_upload`, `review`, `manual_step`.
+Handoff reasons: `sensitive_input`, `captcha`, `file_upload`, `review`, `manual_step`. If you know the address where the person's part ends (the account page after a sign-in), pass it as `until_url`, so you aren't left waiting when they stop there without tapping Done.
 
 ## Rules
 
