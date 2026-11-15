@@ -16,7 +16,10 @@ import (
 //
 //   - it has no role of its own (AX role generic or none, AX-ignored as
 //     uninteresting, or left out of the AX tree, as Chromium leaves out a
-//     span whose click a listener on the document handles);
+//     span whose click a listener on the document handles). Only those:
+//     a clickable li, tr, td, p or heading has a role of its own
+//     (listitem, row, cell, paragraph, heading) and isn't listed, though
+//     a text target still reaches it;
 //   - the pointer cursor starts on it (its computed cursor is pointer and
 //     its parent's isn't), or its tabindex is 0 or more;
 //   - it is shown, has rendered text, holds no shown control (a pointer
@@ -38,7 +41,8 @@ type generics struct {
 	names map[int]string
 	order []int
 	// inAX marks the DOM nodes the AX tree has a node for (ignored ones
-	// too); ctl the nodes a shown control is at or under.
+	// too); ctl the nodes that are or hold a shown control (the control
+	// and its ancestors).
 	inAX, ctl []bool
 	// owner memoises prunedOwner (0: not known yet, else the owner + 2);
 	// up memoises laidOutParent the same way.
