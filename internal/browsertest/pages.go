@@ -184,6 +184,19 @@ var pageSitePages = map[string]string{ //nolint:gosec // test pages, not credent
 	"/later": `<!doctype html><title>Later</title>
 <p id="status">Working…</p><div id="spinner">Loading spinner</div>
 <script>setTimeout(() => { document.getElementById('status').textContent = 'Payment confirmed'; document.getElementById('spinner').style.display = 'none'; }, 2000)</script>`,
+	// PROJ-122's waits: text already there, text 1 s later, an app that
+	// loads, then fetches three times in a row (400 ms each, /slow) before
+	// it renders, and one whose only fetch never answers (/hang).
+	"/hello": `<!doctype html><title>Hello</title><p>Hello</p>`,
+	"/done-later": `<!doctype html><title>Done later</title><p id="s">Working</p>
+<script>setTimeout(() => { document.getElementById('s').textContent = 'Done'; }, 1000)</script>`,
+	"/spa-load": `<!doctype html><title>App</title><p id="s">Loading</p>
+<script>addEventListener('load', async () => {
+  for (let i = 1; i <= 3; i++) await fetch('/slow?n=' + i);
+  document.getElementById('s').textContent = 'Ready';
+});</script>`,
+	"/longpoll": `<!doctype html><title>Long poll</title><p>Live updates</p>
+<script>addEventListener('load', () => { fetch('/hang').catch(() => {}); });</script>`,
 	// A page with an iframe.
 	// A news page under a consent banner: an iframe (from ?frame=, another
 	// site in tests) fixed on top of the page's own consent button
@@ -389,6 +402,10 @@ const (
 	BigSize   = 5_000_000
 )
 
+// SlowFetch is how long /slow takes to answer: /spa-load fetches it three
+// times in a row after its load.
+const SlowFetch = 400 * time.Millisecond
+
 // NewPageSite serves the pages on every interface; host is how the
 // browser container reaches this machine.
 func NewPageSite(t *testing.T, host string) *PageSite {
@@ -465,6 +482,15 @@ func NewPageSite(t *testing.T, host string) *PageSite {
 			}
 		}
 	})
+	// PROJ-122: an answer 400 ms late, and one that never comes.
+	mux.HandleFunc("GET /slow", func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(SlowFetch):
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+	mux.HandleFunc("GET /hang", func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() })
 	mux.HandleFunc("GET /event", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		s.events = append(s.events, r.URL.Query().Get("e"))

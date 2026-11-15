@@ -3,6 +3,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os/exec"
@@ -151,4 +152,42 @@ var pageToolBodies = map[string]any{
 	"snapshot": map[string]any{},
 	"find":     map[string]any{"text": "x"},
 	"navigate": map[string]any{"url": "https://example.com/"},
+}
+
+// TestIsolatedWorldSeesResourceTiming is PROJ-122's step 0: wait_for's
+// load condition reads the page's Resource Timing entries from an
+// isolated world, which must see the requests the page's own scripts
+// made in the main world.
+func TestIsolatedWorldSeesResourceTiming(t *testing.T) {
+	a := newRealAPI(t)
+	site := browsertest.NewPageSite(t, browsertest.SiteHost(t))
+	s := a.startAPIBrowser(t, "r")
+	a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/spa-load"})
+	p := browsertest.Page(t, browsertest.ControlClient(a.m.Layout().ControlSocket(s.Profile)))
+	deadline := time.Now().Add(10 * time.Second)
+	for p.Eval("document.body.innerText") != "Ready" {
+		if time.Now().After(deadline) {
+			t.Fatalf("the page never got ready: %v", p.Eval("document.body.innerText"))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	const count = `performance.getEntriesByType('resource').filter(e => e.name.includes('/slow?')).length`
+	if got := p.Eval(count); got != float64(3) {
+		t.Fatalf("the main world has %v /slow entries", got)
+	}
+	// A main-world global, which the isolated world must not see.
+	p.Eval("window.proofMark = 1")
+	var tree struct {
+		FrameTree struct{ Frame struct{ ID string } }
+	}
+	_ = json.Unmarshal(p.Call("Page.getFrameTree", nil), &tree)
+	var world struct{ ExecutionContextID int }
+	_ = json.Unmarshal(p.Call("Page.createIsolatedWorld", map[string]any{"frameId": tree.FrameTree.Frame.ID, "worldName": "proof"}), &world)
+	var r struct {
+		Result struct{ Value any }
+	}
+	_ = json.Unmarshal(p.Call("Runtime.evaluate", map[string]any{"expression": count + ` + ':' + typeof window.proofMark`, "contextId": world.ExecutionContextID, "returnByValue": true}), &r)
+	if r.Result.Value != "3:undefined" {
+		t.Fatalf("the isolated world sees %v", r.Result.Value)
+	}
 }
