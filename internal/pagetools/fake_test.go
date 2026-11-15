@@ -103,6 +103,9 @@ type fakeBrowser struct {
 	fails    map[string]string
 	// eval answers isolated-world scripts the fake doesn't know.
 	eval func(tab *ftab, expr string) (any, error)
+	// challenge is what jsPageInfo reports of a Cloudflare challenge
+	// widget on a page, by URL (PROJ-120); none: null.
+	challenge map[string]map[string]any
 	// call answers methods the fake doesn't know (phase 2's DOM and Input).
 	call func(tab *ftab, m cdptest.Message) (res any, handled bool, err error)
 	// maxNodes makes the DOM snapshot claim this many nodes, if set.
@@ -378,7 +381,7 @@ func (fb *fakeBrowser) evaluate(tb *ftab, expr string) (any, error) {
 		if fb.front == tb.id {
 			vis = "visible"
 		}
-		return map[string]any{"url": tb.url, "title": tb.title, "ready": ready, "visibility": vis, "w": 1280, "h": 800, "x": tb.scroll[0], "y": tb.scroll[1]}, nil
+		return map[string]any{"url": tb.url, "title": tb.title, "ready": ready, "visibility": vis, "w": 1280, "h": 800, "x": tb.scroll[0], "y": tb.scroll[1], "cf": fb.challenge[tb.url]}, nil
 	case strings.Contains(expr, "/*bp:visibility*/"):
 		if fb.front == tb.id {
 			return "visible", nil

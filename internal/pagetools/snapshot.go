@@ -52,6 +52,7 @@ func (t *Tools) Snapshot(ctx context.Context, s sessions.Session, who Caller, in
 				return "", err
 			}
 			c.note("Read the page")
+			c.noteChallenge(p.cf)
 			if r.kind == diffDone {
 				return c.result("page changes", r.body, r.trailer), nil
 			}
@@ -69,7 +70,7 @@ func (t *Tools) Snapshot(ctx context.Context, s sessions.Session, who Caller, in
 			if err != nil {
 				return "", err
 			}
-			p = &page{url: pi.URL, title: pi.Title}
+			p = &page{url: pi.URL, title: pi.Title, cf: pi.CF}
 		} else {
 			var err error
 			var moved bool
@@ -86,6 +87,7 @@ func (t *Tools) Snapshot(ctx context.Context, s sessions.Session, who Caller, in
 		}
 		body, marker := c.render(p, budget)
 		c.note("Read the page")
+		c.noteChallenge(p.cf)
 		return c.result("page snapshot", body, marker), nil
 	})
 }

@@ -79,6 +79,8 @@ type page struct {
 	// axRead is false when the page was too large for the AX tree: items
 	// are text only, from the DOM snapshot.
 	axRead bool
+	// cf is set when the page is a Cloudflare challenge (PROJ-120).
+	cf *cfInfo
 }
 
 // controlRoles are the AX roles shown as controls, with a ref.
@@ -570,9 +572,11 @@ type pageInfo struct {
 	H          float64 `json:"h"`
 	X          float64 `json:"x"`
 	Y          float64 `json:"y"`
+	// CF is set on a Cloudflare challenge page (PROJ-120).
+	CF *cfInfo `json:"cf"`
 }
 
-const jsPageInfo = `/*bp:info*/ ({url: location.href, title: document.title, ready: document.readyState, visibility: document.visibilityState, w: innerWidth, h: innerHeight, x: scrollX, y: scrollY})`
+const jsPageInfo = `/*bp:info*/ ({url: location.href, title: document.title, ready: document.readyState, visibility: document.visibilityState, w: innerWidth, h: innerHeight, x: scrollX, y: scrollY, cf: ` + jsChallenge + `})`
 
 func (c *call) info(ctx context.Context) (pageInfo, error) {
 	var pi pageInfo
@@ -596,7 +600,7 @@ func (c *call) read(ctx context.Context, needAX bool) (*page, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &page{url: pi.URL, title: pi.Title, frame: c.frame, loader: c.loader}
+	p := &page{url: pi.URL, title: pi.Title, frame: c.frame, loader: c.loader, cf: pi.CF}
 	view := [4]float64{pi.X, pi.Y, pi.W, pi.H}
 	if len(d.s.Documents[0].Nodes.BackendNodeID) > maxDOMNodes {
 		if needAX {

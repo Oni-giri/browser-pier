@@ -108,6 +108,14 @@ func (t *Tools) Text(ctx context.Context, s sessions.Session, who Caller, in Tex
 		if err != nil {
 			return "", err
 		}
+		// A Cloudflare challenge (PROJ-120) is looked for in the isolated
+		// world, as the page tools look for it; the text doesn't depend
+		// on it, so a look that fails leaves the note out, not the page.
+		if pi, err := c.info(c.lease.Ctx); err == nil {
+			c.noteChallenge(pi.CF)
+		} else if c.lease.Ctx.Err() != nil {
+			return "", err
+		}
 		// Rendering is linear, but a handoff, a stop or the caller going
 		// away still ends it, and it never runs long.
 		rctx, cancel := context.WithTimeout(c.lease.Ctx, renderTimeout)

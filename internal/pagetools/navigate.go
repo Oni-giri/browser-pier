@@ -164,6 +164,7 @@ func (t *Tools) Navigate(ctx context.Context, s sessions.Session, who Caller, in
 			pi.URL = c.url // a document still on its way
 		}
 		body := header(&page{url: pi.URL, title: pi.Title})
+		c.noteChallenge(pi.CF)
 		if loaded && target != "" && !sameAddress(target, pi.URL) {
 			// Inside the fence: the address is the agent's own, but the
 			// line sits among the page's.
