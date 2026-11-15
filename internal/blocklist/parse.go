@@ -19,9 +19,10 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/Oni-giri/browser-pier/internal/domainset"
 	"golang.org/x/net/idna"
 	"golang.org/x/net/publicsuffix"
+
+	"github.com/Oni-giri/browser-pier/internal/domainset"
 )
 
 const (
@@ -106,7 +107,7 @@ func Parse(r io.Reader, add func(name string)) (Stats, error) {
 				return
 			}
 			ip, err := netip.ParseAddr(f[0])
-			if err != nil || !(ip.IsUnspecified() || ip.IsLoopback()) {
+			if err != nil || (!ip.IsUnspecified() && !ip.IsLoopback()) {
 				// An address that sends the name somewhere real isn't a block.
 				st.Skipped++
 				return

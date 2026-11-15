@@ -11,8 +11,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Oni-giri/browser-pier/internal/blocklist"
 	"github.com/pion/stun/v4"
+
+	"github.com/Oni-giri/browser-pier/internal/blocklist"
 )
 
 const (

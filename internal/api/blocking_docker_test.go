@@ -41,7 +41,7 @@ func newAdSite(t *testing.T) *adSite {
 		switch r.URL.Path {
 		case "/":
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			fmt.Fprintf(w, `<!doctype html><title>Article</title><p id="own">The page's own text.</p>
+			_, _ = fmt.Fprintf(w, `<!doctype html><title>Article</title><p id="own">The page's own text.</p>
 <img id="ad" src="http://ads.blocked.test:%[1]s/pixel.gif"><script src="http://ads.blocked.test:%[1]s/ad.js"></script>`, s.port)
 		case "/pixel.gif":
 			w.Header().Set("Content-Type", "image/gif")

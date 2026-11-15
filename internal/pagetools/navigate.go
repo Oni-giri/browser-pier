@@ -9,10 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/net/idna"
+
 	"github.com/Oni-giri/browser-pier/internal/cdp"
 	"github.com/Oni-giri/browser-pier/internal/fence"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
-	"golang.org/x/net/idna"
 )
 
 // navigateTimeout is how long navigate waits for the page to load,
