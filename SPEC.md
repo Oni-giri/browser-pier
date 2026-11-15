@@ -141,7 +141,7 @@ Self-hosted, persistent browsers for AI agents. Agents start a browser when they
 
 - Auto-stop when idle: 5, 10, 15 (default), 30 minutes, or never, set per profile.
   - **What counts as use:** any agent API call on the session (start or attach, screenshot, click, type, upload, each API-mode page tool: snapshot, find, act, wait_for, navigate, tabs, and each content call). A page tool's call keeps the browser busy while it runs (a 30-second `wait_for` too), but it holds no connection between calls, so a browser driven only by the page tools still stops when idle.
-  - **In use the whole time:** an open CDP connection, and a browser a person has during a handoff, are never idle.
+  - **In use the whole time:** an open CDP connection, a page call or an agent input action under way (a human-paced type can take a couple of minutes), and a browser a person has during a handoff, are never idle.
   - **Stopping:** an idle browser is stopped gracefully, so its logins are kept.
 - A start takes a few seconds. The UI shows Starting… with a spinner and disables the action until the browser is ready.
 - **Orchestrator restarts:** browsers keep running while the orchestrator restarts, and it picks them up again. Each container is labelled with the version of its definition (`io.browserpier.spec`); a browser from an older one, such as one started before pages went through the egress filter, is stopped the usual way instead, logins kept, and the next start gets a current one. So is a browser BrowserPier typed a secret into (Filled secrets, §8): the values were in memory only, so its answers could no longer hide them.

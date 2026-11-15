@@ -243,6 +243,32 @@ func TestStopCancelsInput(t *testing.T) {
 	}
 }
 
+// A browser in the middle of a long agent input (a human-paced type)
+// isn't idle, however long ago the input began.
+func TestBrowserWithInputUnderWayIsNeverIdle(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	advance := f.clock()
+	f.profile("w", 5*time.Minute)
+	s := f.startProfile("w")
+	in, done, err := f.m.AgentInput(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { <-in.Done(); done() }() // a stop would cancel it
+	advance(time.Hour)
+	f.m.stopIdle(ctx)
+	if _, ok := f.m.Live("w"); !ok {
+		t.Fatal("stopped as idle with an input under way")
+	}
+	done()
+	advance(6 * time.Minute)
+	f.m.stopIdle(ctx)
+	if _, ok := f.m.Live("w"); ok {
+		t.Fatal("not stopped once the input ended and the auto-stop passed")
+	}
+}
+
 func TestWatchedBrowserIsNeverIdle(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
