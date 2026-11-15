@@ -90,6 +90,10 @@ type ActIn struct {
 	// snapshot of its document (PROJ-114). Unset, it is on when there is
 	// such a snapshot and Snapshot isn't set.
 	Changes *bool `json:"changes,omitempty"`
+	// DownloadWaitMS is how long the call waits for a download its steps
+	// started to finish: 3,000 ms if unset, 0 not to wait, at most 30,000
+	// (PROJ-116). It waits only while a new partial download is there.
+	DownloadWaitMS *int `json:"download_wait_ms,omitempty"`
 }
 
 // checkStep says what's wrong with a step, before any runs.
@@ -207,6 +211,53 @@ func (t *Tools) Act(ctx context.Context, s sessions.Session, who Caller, in ActI
 	if in.Snapshot && in.Changes != nil && *in.Changes {
 		return "", &Error{Status: 400, Msg: "snapshot and changes: ask for one; a snapshot already shows the whole page"}
 	}
+	wait, err := files.DownloadWait(in.DownloadWaitMS)
+	if err != nil {
+		return "", &Error{Status: 400, Msg: err.Error()}
+	}
+	// A step may start a download: the folder before the steps, to
+	// compare with after (PROJ-116). The comparison, and any wait for a
+	// download to finish, comes once the call has let go of the page, so
+	// it holds up no other call.
+	var mark *files.Mark
+	if t.files != nil {
+		mark = t.files.Mark(s.Profile)
+	}
+	out, err := t.act(ctx, s, who, in)
+	var e *Error
+	if mark == nil || (err != nil && !errors.As(err, &e)) {
+		return out, err // no files store, or the caller went away
+	}
+	notice := t.downloads(ctx, s, who, mark, wait)
+	switch {
+	case notice == "":
+		return out, err
+	case e != nil:
+		// A step failed, maybe after one that started a download.
+		return "", &Error{Status: e.Status, Msg: e.Msg + "\n" + notice}
+	}
+	return out + "\n" + notice, nil
+}
+
+// downloads is act's download notice: a "### Downloads" section with one
+// fenced line per file (the names come from the pages that offered them),
+// or "" when there is nothing to say. Each finished file goes in the
+// activity log.
+func (t *Tools) downloads(ctx context.Context, s sessions.Session, who Caller, mark *files.Mark, wait time.Duration) string {
+	ds := mark.Downloads(ctx, wait)
+	if len(ds) == 0 {
+		return ""
+	}
+	for _, d := range ds {
+		if line := d.LogLine(); line != "" {
+			t.m.Note(s.ID, who.Agent, line)
+		}
+	}
+	return "### Downloads\n" + fence.Wrap("downloads", strings.Join(files.Lines(ds), "\n"))
+}
+
+// act runs act's steps, once they have been checked.
+func (t *Tools) act(ctx context.Context, s sessions.Session, who Caller, in ActIn) (string, error) {
 	return t.run(ctx, s, who, func(c *call) (string, error) {
 		ctx := c.lease.Ctx
 		changes := in.Changes != nil && *in.Changes
