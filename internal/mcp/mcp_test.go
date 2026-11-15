@@ -361,31 +361,6 @@ func TestHandoffWithoutElicitationGivesTheLink(t *testing.T) {
 	}
 }
 
-func TestScreenToScreenshotScaling(t *testing.T) {
-	sc := screen{1440, 900}
-	if w, h := sc.shot(); w != 1152 || h != 720 {
-		t.Fatalf("shot %dx%d", w, h)
-	}
-	if x, y := sc.toScreen(576, 360); x != 720 || y != 450 {
-		t.Fatalf("centre maps to %d,%d", x, y)
-	}
-	if x, y := sc.toScreen(5000, 5000); x != 1439 || y != 899 {
-		t.Fatalf("off the edge maps to %d,%d", x, y)
-	}
-	if w, h := (screen{1280, 720}).shot(); w != 1280 || h != 720 {
-		t.Fatalf("a small screen is scaled: %dx%d", w, h)
-	}
-	// A tall screen: the height comes out as the browser computes it.
-	tall := screen{640, 728}
-	if w, h := tall.shot(); w != 632 || h != 728*632/640 {
-		t.Fatalf("tall shot %dx%d", w, h)
-	}
-	// A region's far edge can reach the screen's.
-	if x, y := sc.scale(1152, 720); x != 1440 || y != 900 {
-		t.Fatalf("far edge maps to %d,%d", x, y)
-	}
-}
-
 func TestClickIsScaledToTheScreen(t *testing.T) {
 	f := newFixture(t)
 	cs := f.connect(f.all, versions[0], nil)

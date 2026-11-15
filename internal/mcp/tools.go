@@ -17,14 +17,11 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/api"
 	"github.com/Oni-giri/browser-pier/internal/fence"
 	"github.com/Oni-giri/browser-pier/internal/files"
+	"github.com/Oni-giri/browser-pier/internal/screenshot"
 )
 
 // maxScreens bounds the screen-size cache.
 const maxScreens = 1024
-
-// Screenshots go to agents within this size: what models see best, and
-// what costs them the fewest tokens.
-const maxShotW, maxShotH = 1280, 720
 
 func (s *Server) addTools(srv *sdk.Server) {
 	sdk.AddTool(srv, &sdk.Tool{Name: "list_profiles", Description: "List the browser profiles this token can use, with whether each is running."}, s.listProfiles)
@@ -128,32 +125,9 @@ func (s *Server) stopBrowser(ctx context.Context, req *sdk.CallToolRequest, in s
 	return text("Stopped. Its cookies and logins are kept."), nil, nil
 }
 
-// screen is a session's screen size, and how screenshots shrink it.
-type screen struct{ w, h int }
-
-// shot is the size screenshots are scaled to: the whole screen, within
-// maxShotW × maxShotH. The height is worked out as the browser's
-// screenshot does, from the width, so the two agree to the pixel.
-func (sc screen) shot() (int, int) {
-	if sc.w <= maxShotW && sc.h <= maxShotH {
-		return sc.w, sc.h
-	}
-	sw := min(maxShotW, sc.w*maxShotH/sc.h)
-	return max(1, sw), max(1, sc.h*sw/sc.w)
-}
-
-// toScreen turns a point of a screenshot into a point on the screen.
-func (sc screen) toScreen(x, y int) (int, int) {
-	x, y = sc.scale(x, y)
-	return min(x, sc.w-1), min(y, sc.h-1)
-}
-
-// scale turns screenshot pixels into screen pixels, without keeping to
-// the screen: for a region's far edge.
-func (sc screen) scale(x, y int) (int, int) {
-	sw, sh := sc.shot()
-	return min(max(x, 0)*sc.w/sw, sc.w), min(max(y, 0)*sc.h/sh, sc.h)
-}
+// screen is a session's screen size, and how screenshots shrink it
+// (internal/screenshot, which the page tools' Cloudflare note shares).
+type screen = screenshot.Screen
 
 // forgetGone drops a session's screen size once the API says it's gone or
 // stopped (it ended some other way than stop_browser).
@@ -194,7 +168,7 @@ func (s *Server) rememberScreen(id string, r apiReply) (screen, error) {
 	if w <= 0 || h <= 0 {
 		return screen{}, fmt.Errorf("the browser didn't say its screen size")
 	}
-	sc := screen{w, h}
+	sc := screen{W: w, H: h}
 	s.screensMu.Lock()
 	if len(s.screens) >= maxScreens {
 		clear(s.screens) // sessions that ended unseen; sizes are asked again
@@ -206,7 +180,7 @@ func (s *Server) rememberScreen(id string, r apiReply) (screen, error) {
 
 // shotResult is a screenshot for the agent, saying what its pixels are.
 func shotResult(png []byte, sc screen, note string) *sdk.CallToolResult {
-	sw, sh := sc.shot()
+	sw, sh := sc.Size()
 	msg := fmt.Sprintf("Screenshot, %d×%d. Give coordinates in these pixels.", sw, sh)
 	if note != "" {
 		msg = note + " " + msg
@@ -222,7 +196,7 @@ func (s *Server) screenshot(ctx context.Context, req *sdk.CallToolRequest, in se
 	if err != nil {
 		return nil, nil, err
 	}
-	sw, _ := sc.shot()
+	sw, _ := sc.Size()
 	r, err := s.call(ctx, req.Extra, "GET", "/api/sessions/"+url.PathEscape(in.SessionID)+"/screenshot?width="+strconv.Itoa(sw), nil)
 	if err != nil {
 		return nil, nil, err
@@ -247,7 +221,7 @@ func (s *Server) act(ctx context.Context, extra *sdk.RequestExtra, id string, sc
 		delete(action, "download_wait_ms")
 	}
 	if shot {
-		sw, _ := sc.shot()
+		sw, _ := sc.Size()
 		action["screenshot"] = true
 		action["width"] = sw
 	}
@@ -318,7 +292,7 @@ func (s *Server) click(ctx context.Context, req *sdk.CallToolRequest, in clickAr
 	if err != nil {
 		return nil, nil, err
 	}
-	x, y := sc.toScreen(in.X, in.Y)
+	x, y := sc.ToScreen(in.X, in.Y)
 	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "click", "x": x, "y": y, "button": in.Button, "double": in.Double, "pace": in.Pace, "download_wait_ms": in.DownloadWaitMS}, in.Screenshot, "Clicked.")
 }
 
@@ -371,7 +345,7 @@ func (s *Server) scroll(ctx context.Context, req *sdk.CallToolRequest, in scroll
 	if err != nil {
 		return nil, nil, err
 	}
-	x, y := sc.toScreen(in.X, in.Y)
+	x, y := sc.ToScreen(in.X, in.Y)
 	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "scroll", "x": x, "y": y, "dx": in.Right, "dy": in.Down, "pace": in.Pace}, in.Screenshot, "Scrolled.")
 }
 
@@ -390,8 +364,8 @@ func (s *Server) drag(ctx context.Context, req *sdk.CallToolRequest, in dragArgs
 	if err != nil {
 		return nil, nil, err
 	}
-	fx, fy := sc.toScreen(in.FromX, in.FromY)
-	tx, ty := sc.toScreen(in.ToX, in.ToY)
+	fx, fy := sc.ToScreen(in.FromX, in.FromY)
+	tx, ty := sc.ToScreen(in.ToX, in.ToY)
 	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "drag",
 		"from": map[string]int{"x": fx, "y": fy}, "to": map[string]int{"x": tx, "y": ty}, "pace": in.Pace}, in.Screenshot, "Dragged.")
 }
@@ -431,8 +405,8 @@ func (s *Server) zoom(ctx context.Context, req *sdk.CallToolRequest, in zoomArgs
 	if in.Width <= 0 || in.Height <= 0 {
 		return nil, nil, toolError("give the region a width and a height")
 	}
-	x, y := sc.toScreen(in.X, in.Y)
-	x2, y2 := sc.scale(in.X+in.Width, in.Y+in.Height)
+	x, y := sc.ToScreen(in.X, in.Y)
+	x2, y2 := sc.Scale(in.X+in.Width, in.Y+in.Height)
 	r, err := s.call(ctx, req.Extra, "POST", "/api/sessions/"+url.PathEscape(in.SessionID)+"/computer",
 		map[string]any{"action": "zoom", "x": x, "y": y, "w": max(1, x2-x), "h": max(1, y2-y)})
 	if err != nil {
