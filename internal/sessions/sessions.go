@@ -57,7 +57,11 @@ type Session struct {
 	// LastLog is the container's last log line, kept when it stops or fails.
 	LastLog string
 	// Error says why the session failed, when it did.
-	Error     string
+	Error string
+	// BlockAds is whether the browser blocks ad and tracker domains: the
+	// profile's setting when it started, unless an agent turned it off for
+	// this session (StartOptions.AllowAds).
+	BlockAds  bool
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	// InUseBy names the agents connected to the browser right now, by
@@ -76,17 +80,17 @@ func newID() string {
 	return hex.EncodeToString(b)
 }
 
-const sessionColumns = `id, profile, state, mode, container_id, last_log, error, created_at, updated_at`
+const sessionColumns = `id, profile, state, mode, container_id, last_log, error, created_at, updated_at, block_ads`
 
 func insertSession(ctx context.Context, db *sql.DB, s Session) error {
-	_, err := db.ExecContext(ctx, `INSERT INTO sessions (`+sessionColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		s.ID, s.Profile, s.State, s.Mode, s.ContainerID, s.LastLog, s.Error, s.CreatedAt.UnixMilli(), s.UpdatedAt.UnixMilli())
+	_, err := db.ExecContext(ctx, `INSERT INTO sessions (`+sessionColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		s.ID, s.Profile, s.State, s.Mode, s.ContainerID, s.LastLog, s.Error, s.CreatedAt.UnixMilli(), s.UpdatedAt.UnixMilli(), s.BlockAds)
 	return err
 }
 
 func updateSession(ctx context.Context, db *sql.DB, s Session) error {
-	_, err := db.ExecContext(ctx, `UPDATE sessions SET state = ?, container_id = ?, last_log = ?, error = ?, updated_at = ? WHERE id = ?`,
-		s.State, s.ContainerID, s.LastLog, s.Error, s.UpdatedAt.UnixMilli(), s.ID)
+	_, err := db.ExecContext(ctx, `UPDATE sessions SET state = ?, container_id = ?, last_log = ?, error = ?, updated_at = ?, block_ads = ? WHERE id = ?`,
+		s.State, s.ContainerID, s.LastLog, s.Error, s.UpdatedAt.UnixMilli(), s.BlockAds, s.ID)
 	return err
 }
 
@@ -119,7 +123,7 @@ func liveSessions(ctx context.Context, db *sql.DB) ([]Session, error) {
 func scanSession(row interface{ Scan(...any) error }) (Session, error) {
 	var s Session
 	var created, updated int64
-	err := row.Scan(&s.ID, &s.Profile, &s.State, &s.Mode, &s.ContainerID, &s.LastLog, &s.Error, &created, &updated)
+	err := row.Scan(&s.ID, &s.Profile, &s.State, &s.Mode, &s.ContainerID, &s.LastLog, &s.Error, &created, &updated, &s.BlockAds)
 	s.CreatedAt, s.UpdatedAt = time.UnixMilli(created), time.UnixMilli(updated)
 	return s, err
 }

@@ -23,6 +23,7 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/api"
 	"github.com/Oni-giri/browser-pier/internal/auth"
+	"github.com/Oni-giri/browser-pier/internal/blocklist"
 	"github.com/Oni-giri/browser-pier/internal/config"
 	"github.com/Oni-giri/browser-pier/internal/db"
 	"github.com/Oni-giri/browser-pier/internal/docker"
@@ -128,6 +129,18 @@ func run(log *slog.Logger) error {
 	}
 	defer mgr.Close()
 	mgr.SetGeoURL(cfg.GeoIPURL)
+	// The ad and tracker lists: what was downloaded before is read now,
+	// so browsers block from the first start; downloads happen in the
+	// background and never hold a start up.
+	lists, err := blocklist.New(filepath.Join(dataDir, "blocklists"), cfg.BlocklistURLs, log)
+	if err != nil {
+		return err
+	}
+	if err := lists.Load(); err != nil {
+		log.Warn("reading the ad and tracker lists", "err", err)
+	}
+	go lists.Run(ctx, 10*time.Minute)
+	mgr.SetBlocklist(lists.File)
 	// The addresses live viewers reach the host at are the host's own.
 	mgr.SetHostIPs(cfg.WebRTCIPs)
 	prefs := settings.New(database)

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Oni-giri/browser-pier/internal/blocklist"
 	"github.com/pion/stun/v4"
 )
 
@@ -51,6 +52,10 @@ type Config struct {
 	// time_zone) browsers use to find their exit location, through their
 	// proxy (BROWSERPIER_GEOIP_URL; "off" turns it off).
 	GeoIPURL string
+	// BlocklistURLs are the ad and tracker lists browsers block from
+	// (BROWSERPIER_BLOCKLIST_URLS, comma or space separated; "none" for
+	// none). Unset: blocklist.DefaultURLs.
+	BlocklistURLs []string
 	// WebRTCPort is the one UDP port (and TCP port, as a fallback) live
 	// views use (BROWSERPIER_WEBRTC_PORT).
 	WebRTCPort int
@@ -235,6 +240,13 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		c.GeoIPURL = ""
 	} else if u, err := url.Parse(c.GeoIPURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return Config{}, fmt.Errorf("BROWSERPIER_GEOIP_URL: want an http(s) URL or off, got %q", c.GeoIPURL)
+	}
+	bl, blSet := set("BROWSERPIER_BLOCKLIST_URLS")
+	c.BlocklistURLs = blocklist.ParseURLs(bl, blSet)
+	for _, s := range c.BlocklistURLs {
+		if u, err := url.Parse(s); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return Config{}, fmt.Errorf("BROWSERPIER_BLOCKLIST_URLS: want http(s) URLs or none, got %q", s)
+		}
 	}
 	rtcPort := get("BROWSERPIER_WEBRTC_PORT", "7438")
 	if c.WebRTCPort, err = strconv.Atoi(rtcPort); err != nil || c.WebRTCPort < 1 || c.WebRTCPort > 65535 {

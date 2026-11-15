@@ -110,6 +110,9 @@ type Manager struct {
 	now          func() time.Time
 	geoURL       string // where browsers look up their exit location; "" for nowhere
 	hostIPs      string // the Docker host's own addresses, comma separated
+	// blocklist returns the ad and tracker list's file for a browser
+	// container, nil for none (SetBlocklist).
+	blocklist func() []byte
 	// mem is the memory cap, set by SetMemoryLimit; nil for none.
 	mem atomic.Pointer[memLimits]
 	// hostFree reads what the host has free, set by SetHostFree; nil to
@@ -279,10 +282,26 @@ func (m *Manager) Layout() Layout { return m.layout }
 
 func containerName(profile string) string { return "browserpier-" + profile }
 
+// StartOptions are what a start may ask beyond the profile's settings.
+type StartOptions struct {
+	// Mode is the session's mode; "" means the profile's default.
+	Mode profiles.Mode
+	// AllowAds turns the profile's ad and tracker blocking off for this
+	// session, a running one included. Blocking can only be turned off
+	// this way, never on, and the profile's setting doesn't change.
+	AllowAds bool
+}
+
 // Start starts the profile's browser, or attaches to it if it is already
 // starting or running (attached is then true). It returns once the browser
 // is ready or has failed. mode "" means the profile's default.
 func (m *Manager) Start(ctx context.Context, profile string, mode profiles.Mode) (s Session, attached bool, err error) {
+	return m.StartWith(ctx, profile, StartOptions{Mode: mode})
+}
+
+// StartWith is Start with options.
+func (m *Manager) StartWith(ctx context.Context, profile string, opts StartOptions) (s Session, attached bool, err error) {
+	mode := opts.Mode
 	if m.ctx.Err() != nil {
 		return Session{}, false, ErrClosed
 	}
@@ -297,9 +316,13 @@ func (m *Manager) Start(ctx context.Context, profile string, mode profiles.Mode)
 				}
 				continue
 			}
-			return m.awaitStart(ctx, l, true)
+			s, attached, err := m.awaitStart(ctx, l, true)
+			if err == nil && opts.AllowAds && s.BlockAds {
+				s = m.allowAds(ctx, l)
+			}
+			return s, attached, err
 		}
-		l, p, again, err := m.admitAndBegin(ctx, profile, mode)
+		l, p, again, err := m.admitAndBegin(ctx, profile, mode, opts.AllowAds)
 		if err != nil {
 			return Session{}, false, err
 		}
@@ -318,7 +341,7 @@ func (m *Manager) Start(ctx context.Context, profile string, mode profiles.Mode)
 // start at a time: the admission lock is held from the memory check until
 // the session counts towards memory. again is true if a session for the
 // profile appeared meanwhile, to attach to instead.
-func (m *Manager) admitAndBegin(ctx context.Context, profile string, mode profiles.Mode) (l *live, p profiles.Profile, again bool, err error) {
+func (m *Manager) admitAndBegin(ctx context.Context, profile string, mode profiles.Mode, allowAds bool) (l *live, p profiles.Profile, again bool, err error) {
 	// Check the request before stopping anyone's browser for it.
 	if _, err := m.profiles.Get(ctx, profile); err != nil {
 		return nil, p, false, err
@@ -339,7 +362,7 @@ func (m *Manager) admitAndBegin(ctx context.Context, profile string, mode profil
 	if _, ok := m.live[profile]; ok {
 		return nil, p, true, nil
 	}
-	l, p, err = m.begin(ctx, profile, mode)
+	l, p, err = m.begin(ctx, profile, mode, allowAds)
 	return l, p, false, err
 }
 
@@ -351,7 +374,7 @@ func (m *Manager) hasLive(profile string) bool {
 }
 
 // begin records a new Starting session. m.mu must be held.
-func (m *Manager) begin(ctx context.Context, profile string, mode profiles.Mode) (*live, profiles.Profile, error) {
+func (m *Manager) begin(ctx context.Context, profile string, mode profiles.Mode, allowAds bool) (*live, profiles.Profile, error) {
 	if m.draining {
 		return nil, profiles.Profile{}, ErrClosed
 	}
@@ -375,7 +398,7 @@ func (m *Manager) begin(ctx context.Context, profile string, mode profiles.Mode)
 		WHERE profile = ? AND state IN ('starting', 'running', 'needs_help', 'stopping')`, now.UnixMilli(), profile); err != nil {
 		return nil, p, err
 	}
-	s := Session{ID: newID(), Profile: profile, Mode: mode, State: Starting, CreatedAt: now, UpdatedAt: now}
+	s := Session{ID: newID(), Profile: profile, Mode: mode, State: Starting, CreatedAt: now, UpdatedAt: now, BlockAds: p.BlockAds && !allowAds}
 	if err := insertSession(ctx, m.db, s); err != nil {
 		return nil, p, err
 	}
@@ -410,6 +433,11 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 		m.abort(l, "", fmt.Sprintf("handing over the proxy: %v", err))
 		return
 	}
+	blocking, err := m.writeBlockFile(p.Name, m.snapshot(l).BlockAds)
+	if err != nil {
+		m.abort(l, "", fmt.Sprintf("handing over the ad and tracker list: %v", err))
+		return
+	}
 	// A container left behind by a crash would hold the name.
 	if err := m.rt.RemoveStale(ctx, containerName(p.Name), p.Name); err != nil {
 		m.abort(l, "", err.Error())
@@ -433,6 +461,7 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 			"BROWSERPIER_LOCALE_OVERRIDE=" + p.Locale,
 			"BROWSERPIER_LOCAL_NETWORK=" + strconv.FormatBool(p.LocalNetwork),
 			"BROWSERPIER_HOST_IPS=" + m.hostIPs,
+			"BROWSERPIER_BLOCK_ADS=" + strconv.FormatBool(blocking),
 		},
 	}
 	var cid string
