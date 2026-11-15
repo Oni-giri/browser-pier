@@ -33,6 +33,10 @@ type visual struct {
 	// container is one session, so its seed, from crypto/rand, is this
 	// session's own.
 	mot *motion.Motion
+	// moved: an action has moved the pointer since the container started
+	// (with mu held). Before that, a pointer in the middle of the screen
+	// is where X put it, not where a hand left it.
+	moved bool
 	// live is the live view's continuous mouse and keyboard.
 	live *liveInput
 }
@@ -220,6 +224,7 @@ func (v *visual) perform(w http.ResponseWriter, r *http.Request, build func(from
 	for _, c := range build(func() hand { return v.pointer(ctx) }) {
 		err := ctx.Err()
 		if err == nil {
+			v.noteMove(c.args)
 			_, err = v.run(ctx, "xdotool", c.args...)
 		}
 		if err != nil {
@@ -241,16 +246,25 @@ type hand struct {
 	enter bool
 }
 
+// noteMove records that an xdotool run moves the pointer: every pointer
+// action's run starts with a mousemove, and no other does.
+func (v *visual) noteMove(args []string) {
+	if len(args) > 0 && args[0] == "mousemove" {
+		v.moved = true
+	}
+}
+
 // pointer is where the X pointer is now: wherever the last action, or a
-// person in the live view, left it. A pointer that has never moved sits
-// in the middle of the screen, where no hand starts from.
+// person in the live view, left it. Before any action has moved it, a
+// pointer in the middle of the screen is where X put it at start, where
+// no hand starts from; once one has, the middle is just another place.
 func (v *visual) pointer(ctx context.Context) hand {
 	out, err := v.output(ctx, "xdotool", "getmouselocation")
 	var x, y int
 	if err == nil {
 		_, err = fmt.Sscanf(string(out), "x:%d y:%d", &x, &y)
 	}
-	if err != nil || (x == v.width/2 && y == v.height/2) {
+	if err != nil || (!v.moved && x == v.width/2 && y == v.height/2) {
 		return hand{v.mot.Entry(motion.Size{W: float64(v.width), H: float64(v.height)}), true}
 	}
 	return hand{motion.Point{X: float64(x), Y: float64(y)}, false}
@@ -719,6 +733,7 @@ func (v *visual) drag(w http.ResponseWriter, r *http.Request) {
 func (v *visual) input(w http.ResponseWriter, r *http.Request, args []string) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	v.noteMove(args)
 	if _, err := v.run(r.Context(), "xdotool", args...); err != nil {
 		http.Error(w, "input failed: "+err.Error(), http.StatusInternalServerError)
 		return

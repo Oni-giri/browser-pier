@@ -350,6 +350,27 @@ func TestPointerEntersFromAnEdge(t *testing.T) {
 	}
 }
 
+// Once an action has moved the pointer, the middle of the screen is
+// where it was left, not a pointer that never moved: the next glide
+// starts there instead of coming in from an edge.
+func TestPointerLeftInTheMiddleStaysThere(t *testing.T) {
+	for _, first := range []string{
+		`{"x": 640, "y": 400}`,
+		`{"x": 640, "y": 400, "pace": "instant"}`,
+	} {
+		v, calls := newTestVisual(false)
+		at := "x:640 y:400 screen:0 window:1"
+		v.output = func(context.Context, string, ...string) ([]byte, error) { return []byte(at), nil }
+		serveVisual(v, http.MethodPost, "/input/click", first)
+		*calls = nil
+		serveVisual(v, http.MethodPost, "/input/click", `{"x": 200, "y": 300}`)
+		pts, _ := moves(t, (*calls)[0].args)
+		if p := pts[0]; abs(p.X-640) > 60 || abs(p.Y-400) > 60 {
+			t.Fatalf("after %s, the glide from the middle started at %v", first, p)
+		}
+	}
+}
+
 // typed reads back what a human-paced type types, and the gaps after
 // each keystroke.
 func typed(t *testing.T, cmds []call) (text string, gaps []string) {
