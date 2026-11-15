@@ -343,3 +343,23 @@ func TestComputerActionStandsWhenItsScreenshotFails(t *testing.T) {
 		t.Fatalf("click with a failing screenshot: %d %q", r.StatusCode, r.Header.Get("X-Screenshot-Error"))
 	}
 }
+
+// A screenshot over the cap isn't cut off and passed off as the screen:
+// the action stands, and X-Screenshot-Error says why there is none.
+func TestComputerScreenshotOverTheCap(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.all, "github", "visual")
+	old := maxScreenshot
+	maxScreenshot = 4
+	t.Cleanup(func() { maxScreenshot = old })
+	r, _ := f.raw(f.all, http.MethodPost, "/api/sessions/"+s.ID+"/computer", strings.NewReader(`{"action": "click", "x": 10, "y": 10, "screenshot": true, "width": 640}`), "application/json")
+	if r.StatusCode != http.StatusNoContent || !strings.Contains(r.Header.Get("X-Screenshot-Error"), "screenshot is over") {
+		t.Fatalf("click with a screenshot over the cap: %d %q", r.StatusCode, r.Header.Get("X-Screenshot-Error"))
+	}
+	// At the cap, it is the screen.
+	maxScreenshot = int64(len("PNG:640"))
+	code, _, raw := f.computer(s.ID, `{"action": "click", "x": 10, "y": 10, "screenshot": true, "width": 640}`)
+	if code != http.StatusOK || string(raw) != "PNG:640" {
+		t.Fatalf("at the cap: %d %q", code, raw)
+	}
+}

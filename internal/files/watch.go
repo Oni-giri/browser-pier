@@ -502,6 +502,29 @@ func DownloadWait(ms *int) (time.Duration, error) {
 	return time.Duration(*ms) * time.Millisecond, nil
 }
 
+// LogLines is what the activity log says of a notice: a line for each
+// finished file, at most MaxNotices, then "Downloaded N more files", as
+// the notice itself is capped.
+func LogLines(ds []Download) []string {
+	var out []string
+	n := 0
+	for _, d := range ds {
+		line := d.LogLine()
+		if line == "" {
+			continue
+		}
+		if n++; n <= MaxNotices {
+			out = append(out, line)
+		}
+	}
+	if more := n - MaxNotices; more == 1 {
+		out = append(out, "Downloaded 1 more file")
+	} else if more > 1 {
+		out = append(out, fmt.Sprintf("Downloaded %d more files", more))
+	}
+	return out
+}
+
 // LogLine is how the activity log names d, e.g. "Downloaded report.csv
 // (12 kB)", or "" for a download that didn't finish. The name is page
 // text: the web UI escapes it.

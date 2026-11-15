@@ -2,6 +2,7 @@ package files
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -281,6 +282,27 @@ func TestLinesCap(t *testing.T) {
 	l := Lines(ds)
 	if len(l) != 6 || l[5] != "and 3 more" || l[0] != "downloaded a.txt (0 B)" {
 		t.Fatalf("Lines = %q", l)
+	}
+}
+
+// The activity log names at most MaxNotices finished files of a notice,
+// then counts the rest; unfinished ones aren't logged.
+func TestLogLinesCap(t *testing.T) {
+	var ds []Download
+	for i := range 8 {
+		ds = append(ds, Download{Name: fmt.Sprintf("f%d.csv", i), Size: 1, State: Downloaded})
+	}
+	ds = append(ds, Download{Name: "big.iso", Size: 9, State: InProgress})
+	got := LogLines(ds)
+	want := []string{"Downloaded f0.csv (1 B)", "Downloaded f1.csv (1 B)", "Downloaded f2.csv (1 B)", "Downloaded f3.csv (1 B)", "Downloaded f4.csv (1 B)", "Downloaded 3 more files"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("LogLines = %q, want %q", got, want)
+	}
+	if got := LogLines(ds[2:]); len(got) != 6 || got[5] != "Downloaded 1 more file" {
+		t.Errorf("LogLines of 6 = %q", got)
+	}
+	if got := LogLines(ds[3:]); len(got) != 5 || got[4] != "Downloaded f7.csv (1 B)" {
+		t.Errorf("LogLines of 5 = %q", got)
 	}
 }
 

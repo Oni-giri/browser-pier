@@ -202,6 +202,10 @@ func (a *API) computer(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// maxScreenshot caps the screenshot an action answers with (a variable
+// for tests).
+var maxScreenshot int64 = 64 << 20
+
 // done answers an action that ran: with the screen if asked, else 204.
 // The action ran either way, so a screenshot that fails doesn't fail the
 // call (an agent would retry it, clicking or paying twice): it answers
@@ -229,7 +233,11 @@ func (a *API) doneWith(w http.ResponseWriter, r *http.Request, s sessions.Sessio
 		if resp.StatusCode != http.StatusOK {
 			err = fmt.Errorf("the browser answered %d", resp.StatusCode)
 		} else {
-			shot, err = io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+			shot, err = io.ReadAll(io.LimitReader(resp.Body, maxScreenshot+1))
+			if err == nil && int64(len(shot)) > maxScreenshot {
+				// Never a cut-off image passed off as the screen.
+				shot, err = nil, fmt.Errorf("the screenshot is over %d MiB", maxScreenshot>>20)
+			}
 		}
 		_ = resp.Body.Close()
 	}

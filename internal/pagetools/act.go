@@ -268,10 +268,8 @@ func (t *Tools) downloads(ctx context.Context, s sessions.Session, who Caller, m
 	if len(ds) == 0 {
 		return ""
 	}
-	for _, d := range ds {
-		if line := d.LogLine(); line != "" {
-			t.m.Note(s.ID, who.Agent, line)
-		}
+	for _, line := range files.LogLines(ds) {
+		t.m.Note(s.ID, who.Agent, line)
 	}
 	return "### Downloads\n" + fence.Wrap("downloads", strings.Join(files.Lines(ds), "\n"))
 }
