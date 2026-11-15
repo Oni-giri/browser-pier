@@ -78,6 +78,21 @@ func TestUploadFileRefusals(t *testing.T) {
 	if res, out := call(t, cs, "upload_file", map[string]any{"session_id": s.ID, "name": "a.txt", "content_base64": b64(1000)}); res.IsError {
 		t.Errorf("at the cap: %s", out)
 	}
+	// Wrapped base64 (MIME's 76-character lines, a space or a tab
+	// besides) at the cap: the whitespace isn't counted, nor decoded.
+	content := bytes.Repeat([]byte("y"), 1000)
+	enc := base64.StdEncoding.EncodeToString(content)
+	var wrapped strings.Builder
+	for i := 0; i < len(enc); i += 76 {
+		wrapped.WriteString(enc[i:min(i+76, len(enc))])
+		wrapped.WriteString([]string{"\r\n", "\n", " \t"}[i/76%3])
+	}
+	if res, out := call(t, cs, "upload_file", map[string]any{"session_id": s.ID, "name": "wrapped.txt", "content_base64": wrapped.String()}); res.IsError || !strings.Contains(out, "(1000 bytes)") {
+		t.Errorf("wrapped base64 at the cap: %s", out)
+	}
+	if got, _ := os.ReadFile(filepath.Join(f.m.Layout().FilesDir("google"), files.Uploads, "wrapped.txt")); !bytes.Equal(got, content) {
+		t.Errorf("the wrapped upload holds %q", got)
+	}
 	// Another token's session is 404, as everywhere: the scoped token
 	// sees google only, so github's session doesn't exist for it.
 	call(t, cs, "start_browser", map[string]any{"profile": "github"})

@@ -27,7 +27,7 @@ func (s *Server) addUploadTools(srv *sdk.Server) {
 type uploadArgs struct {
 	SessionID     string `json:"session_id" jsonschema:"from start_browser"`
 	Name          string `json:"name" jsonschema:"the file's name, like report.pdf: no folders, not starting with a dot"`
-	ContentBase64 string `json:"content_base64" jsonschema:"the file's bytes, in standard base64"`
+	ContentBase64 string `json:"content_base64" jsonschema:"the file's bytes, in standard base64 (line breaks and spaces are ignored)"`
 }
 
 // uploadFile writes the file through POST /api/sessions/{id}/files, the
@@ -38,6 +38,16 @@ func (s *Server) uploadFile(ctx context.Context, req *sdk.CallToolRequest, in up
 		return nil, nil, toolError("name: use a plain file name, like report.pdf: no folders, not starting with a dot")
 	}
 	max := s.maxUpload
+	// Wrapped base64 (MIME's 76-character lines) is common: whitespace
+	// is neither counted against the cap nor decoded.
+	if strings.ContainsAny(in.ContentBase64, " \t\r\n") {
+		in.ContentBase64 = strings.Map(func(r rune) rune {
+			if r == ' ' || r == '\t' || r == '\r' || r == '\n' {
+				return -1
+			}
+			return r
+		}, in.ContentBase64)
+	}
 	if int64(base64.StdEncoding.DecodedLen(len(in.ContentBase64))) > max+2 {
 		return nil, nil, toolError(fmt.Sprintf("the file is over %s; upload_file takes at most that (POST /api/sessions/%s/files takes up to 100 MiB)", mib(max), in.SessionID))
 	}
