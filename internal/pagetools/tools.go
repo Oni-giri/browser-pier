@@ -118,6 +118,11 @@ type Tools struct {
 	coverWait, coverPoll time.Duration
 	// poll is how often wait_for and navigate look at the page.
 	poll time.Duration
+	// chainQuiet, chainPoll and chainCap are navigate's watch for script
+	// redirects after a load (PROJ-121): how long a document must stay
+	// put, how often it is looked at meanwhile, and the longest the chain
+	// is followed. Tests shorten them.
+	chainQuiet, chainPoll, chainCap time.Duration
 	// reads holds a slot per whole-page read under way (maxReads);
 	// readWait is how long a call waits for one before answering busy.
 	reads    chan struct{}
@@ -131,7 +136,8 @@ type Tools struct {
 
 func New(m *sessions.Manager, log *slog.Logger) *Tools {
 	t := &Tools{m: m, log: log, pages: map[string]*state{}, bases: map[baseKey]*baseline{}, quick: quickTimeout, slow: slowTimeout,
-		settle: 100 * time.Millisecond, coverWait: defaultCoverWait, coverPoll: 100 * time.Millisecond, poll: 250 * time.Millisecond, reads: make(chan struct{}, maxReads), readWait: 10 * time.Second,
+		settle: 100 * time.Millisecond, coverWait: defaultCoverWait, coverPoll: 100 * time.Millisecond, poll: 250 * time.Millisecond,
+		chainQuiet: chainQuiet, chainPoll: chainPoll, chainCap: chainCap, reads: make(chan struct{}, maxReads), readWait: 10 * time.Second,
 		newMotion: motion.NewRandom, pause: sleep}
 	if m != nil {
 		// A session's refs and kept lists go as it ends.
@@ -231,13 +237,16 @@ type call struct {
 	conn  *cdp.Conn
 	// tgt is a session on the active tab, frame and loader its top
 	// frame's current document, world its isolated world there.
-	tgt     *cdp.Target
-	tab     *tabState
-	frame   string
-	loader  string
-	url     string // the frame's URL, without its fragment
-	world   int64
-	notices []string
+	tgt    *cdp.Target
+	tab    *tabState
+	frame  string
+	loader string
+	url    string // the frame's URL, without its fragment
+	// unreachable is the address the browser couldn't load, when the
+	// document is its error page.
+	unreachable string
+	world       int64
+	notices     []string
 	// instant: the step under way is at instant pace, not a hand's.
 	// keyAt is when act last pressed a key at human pace, and keyDue how
 	// long after it the next key goes down.
@@ -373,20 +382,30 @@ func (c *call) rendererOn(ctx context.Context, tgt *cdp.Target, timeout time.Dur
 
 // frameTree reads a tab's top frame: its ID, its document and its URL.
 func (c *call) frameTree(ctx context.Context, tgt *cdp.Target) (id, loader, url string, err error) {
+	f, err := c.topFrame(ctx, tgt)
+	return f.ID, f.LoaderID, f.URL, err
+}
+
+// topFrame is a target's top frame, as Page.getFrameTree describes it.
+type topFrame struct {
+	ID       string `json:"id"`
+	LoaderID string `json:"loaderId"`
+	URL      string `json:"url"`
+	// UnreachableURL is set when the document is the browser's error
+	// page: the address that couldn't be loaded.
+	UnreachableURL string `json:"unreachableUrl"`
+}
+
+func (c *call) topFrame(ctx context.Context, tgt *cdp.Target) (topFrame, error) {
 	var r struct {
 		FrameTree struct {
-			Frame struct {
-				ID       string `json:"id"`
-				LoaderID string `json:"loaderId"`
-				URL      string `json:"url"`
-			} `json:"frame"`
+			Frame topFrame `json:"frame"`
 		} `json:"frameTree"`
 	}
 	if err := c.rendererOn(ctx, tgt, c.t.quick, "Page.getFrameTree", nil, &r); err != nil {
-		return "", "", "", err
+		return topFrame{}, err
 	}
-	f := r.FrameTree.Frame
-	return f.ID, f.LoaderID, f.URL, nil
+	return r.FrameTree.Frame, nil
 }
 
 // refresh reads the active tab's current document and isolated world.
@@ -396,11 +415,12 @@ func (c *call) frameTree(ctx context.Context, tgt *cdp.Target) (id, loader, url 
 // the frame again, a few times, before giving up.
 func (c *call) refresh(ctx context.Context) error {
 	for try := 0; ; try++ {
-		frame, loader, u, err := c.frameTree(ctx, c.tgt)
+		f, err := c.topFrame(ctx, c.tgt)
 		if err != nil {
 			return err
 		}
-		c.url = u
+		frame, loader := f.ID, f.LoaderID
+		c.url, c.unreachable = f.URL, f.UnreachableURL
 		if loader == c.loader && frame == c.frame && c.world != 0 {
 			return nil
 		}

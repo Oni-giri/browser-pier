@@ -553,6 +553,7 @@ func newFixture(t *testing.T) *fixture {
 	tools := New(m, log)
 	tools.quick, tools.slow, tools.poll, tools.settle = 1500*time.Millisecond, 1500*time.Millisecond, 10*time.Millisecond, 0
 	tools.coverWait, tools.coverPoll = 30*time.Millisecond, 10*time.Millisecond
+	tools.chainQuiet, tools.chainPoll, tools.chainCap = 20*time.Millisecond, 5*time.Millisecond, time.Second
 	f := &fixture{t: t, m: m, tools: tools, fb: fb, sess: s, who: Caller{TokenID: "tok", Agent: "claude"}}
 	// Human pace with a fixed seed, its pauses noted and skipped.
 	tools.newMotion = func() *motion.Motion { return motion.New(1) }

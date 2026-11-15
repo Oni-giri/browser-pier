@@ -81,7 +81,7 @@ func (t *Tools) Tabs(ctx context.Context, s sessions.Session, who Caller, in Tab
 				return "", err
 			}
 			if url != "about:blank" {
-				if _, _, err := c.waitLoad(ctx, "", "", "", false); err != nil {
+				if _, _, err := c.waitLoad(ctx, "", "", "", false, time.Now().Add(navigateTimeout)); err != nil {
 					return "", err
 				}
 			}
