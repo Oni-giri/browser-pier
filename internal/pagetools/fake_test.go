@@ -41,6 +41,10 @@ type fnode struct {
 	kids    []*fnode
 	backend int64
 	parent  *fnode
+
+	// An iframe's document: docURL if it is in the page's process,
+	// remoteURL if out of it (a target of its own, as from another site).
+	docURL, remoteURL string
 }
 
 func box(x, y, w, h float64) *[4]float64 { return &[4]float64{x, y, w, h} }
@@ -184,6 +188,20 @@ func (fb *fakeBrowser) handle(m cdptest.Message) (any, error) {
 			infos = append(infos, map[string]any{"targetId": t.id, "type": "page", "url": t.url, "title": t.title, "openerId": t.opener})
 		}
 		infos = append(infos, map[string]any{"targetId": "W1", "type": "service_worker", "url": "https://x/sw.js"})
+		for _, t := range fb.tabs {
+			var walk func(n *fnode)
+			walk = func(n *fnode) {
+				if n.remoteURL != "" {
+					infos = append(infos, map[string]any{"targetId": frameID(n), "type": "iframe", "url": n.remoteURL})
+				}
+				for _, k := range n.kids {
+					walk(k)
+				}
+			}
+			if t.doc != nil {
+				walk(t.doc)
+			}
+		}
 		return map[string]any{"targetInfos": infos}, nil
 	case "Target.attachToTarget":
 		id, _ := p["targetId"].(string)

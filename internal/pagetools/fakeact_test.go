@@ -81,7 +81,14 @@ func (fb *fakeBrowser) dom(tb *ftab, m cdptest.Message, p map[string]any) (any, 
 		if n == nil {
 			return nil, true, gone
 		}
-		return map[string]any{"node": map[string]any{"backendNodeId": n.backend, "nodeName": strings.ToUpper(n.tag), "attributes": append([]string{}, n.attrs...)}}, true, nil
+		node := map[string]any{"backendNodeId": n.backend, "nodeName": strings.ToUpper(n.tag), "attributes": append([]string{}, n.attrs...)}
+		if n.tag == "iframe" || n.tag == "frame" {
+			node["frameId"] = frameID(n)
+			if n.docURL != "" {
+				node["contentDocument"] = map[string]any{"nodeName": "#document", "documentURL": n.docURL}
+			}
+		}
+		return map[string]any{"node": node}, true, nil
 	case "Accessibility.getPartialAXTree":
 		n := backend()
 		if n == nil {
@@ -268,3 +275,7 @@ func (fb *fakeBrowser) function(tb *ftab, n *fnode, p map[string]any) (any, bool
 }
 
 var _ = json.Marshal
+
+// frameID is the frame ID of an iframe's document, and the target ID of
+// one out of process, as in Chromium.
+func frameID(n *fnode) string { return "FR-" + strconv.FormatInt(n.backend, 10) }

@@ -32,6 +32,7 @@ func newConsentPage(fb *fakeBrowser) *consentPage {
 	// Out of the banner's box.
 	p.background = button("Menu", box(10, 10, 60, 30), 1)
 	p.frame = el("iframe", "Iframe", "SP Consent Message", box(0, 500, 1280, 300)).attr("src", "https://cdn.consent.example/index.html?x=1")
+	p.frame.remoteURL = "https://cdn.consent.example/index.html?x=1"
 	p.frame.paint = 5
 	// An iframe clicks go through, and one painted under its parent's
 	// content (a negative z-index): neither covers anything.
@@ -115,5 +116,50 @@ func TestActSaysAnIframeCoversARef(t *testing.T) {
 	_, err = f.act(Step{Action: "click", Ref: r["Buy now"]})
 	if err == nil || strings.Contains(err.Error(), "request_handoff") {
 		t.Errorf("an overlay that isn't a frame: %v", err)
+	}
+}
+
+// act names a covering iframe by the document it shows, not by its src,
+// which the page sets and can change the frame's address after; a src
+// alone, relative, is not echoed (PROJ-110).
+func TestActNamesAFrameByItsDocument(t *testing.T) {
+	cases := []struct {
+		name              string
+		src               string
+		docURL, remoteURL string
+		want, notWant     string
+	}{
+		{name: "navigated away, out of process", src: "https://accounts.google.com/signin?x=1",
+			remoteURL: "https://evil.example/landing?y=2", want: "from https://evil.example\n", notWant: "google"},
+		{name: "navigated away, in process", src: "https://accounts.google.com/signin",
+			docURL: "https://news.example/frame?y=2", want: "from https://news.example\n", notWant: "google"},
+		{name: "relative src, document unknown", src: "/embed?session=abc", want: "from an unknown origin\n", notWant: "session=abc"},
+		{name: "about:blank", src: "/embed?session=abc", docURL: "about:blank", want: "from about:blank\n", notWant: "session=abc"},
+		{name: "a data: document", docURL: "data:text/html,<p>secret</p>", want: "from data:\n", notWant: "secret"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			p := newConsentPage(f.fb)
+			p.frame.attrs = nil
+			if tc.src != "" {
+				p.frame.attr("src", tc.src)
+			}
+			p.frame.docURL, p.frame.remoteURL = tc.docURL, tc.remoteURL
+			f.fb.addTab("https://news.example/", p.doc, true)
+			r := f.refs()
+			_, err := f.act(Step{Action: "click", Ref: r["Yes, I agree"]})
+			if !isStatus(err, http.StatusConflict) {
+				t.Fatalf("got %v", err)
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, `iframe "SP Consent Message" `+tc.want) {
+				t.Errorf("missing %q in\n%s", tc.want, msg)
+			}
+			if strings.Contains(msg, tc.notWant) {
+				t.Errorf("%q is shown:\n%s", tc.notWant, msg)
+			}
+			checkSent(t, f.fb)
+		})
 	}
 }
