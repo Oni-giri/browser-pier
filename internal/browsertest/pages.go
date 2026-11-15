@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -341,6 +342,14 @@ if (kind === 'script') { const s = document.createElement('script'); s.type = 'a
 else if (kind === 'none') { for (let i = 0; i < mb; i++) { const d = document.createElement('div'); d.style.display = 'none'; d.textContent = 'var words = 1; '.repeat(69906); h.appendChild(d); } }
 document.title = 'Budget ready';</script>
 <article><h1>AFTER-BIG-HEADING</h1><p>Article body, long enough, with commas, to be an article of its own, and then some more text, to be sure of it, and more, and more, and more, and more again, until it passes the two hundred characters that an article needs to count. AFTER-BIG-END</p></article>`,
+	// PROJ-116: links that download, as large blocks so a Visual-mode
+	// click can't miss them, and a button that downloads nothing.
+	"/downloads": `<!doctype html><title>Downloads</title>` + report + `
+<body style="margin:0">
+<a href="/export.csv" style="position:fixed;left:0;top:0;width:100%;height:40vh;display:block;background:#cde">Export CSV</a>
+<a href="/big.csv" style="position:fixed;left:0;top:45vh;width:100%;height:20vh;display:block;background:#dce">Big file</a>
+<button onclick="report('nothing clicked')" style="position:fixed;left:0;top:70vh;width:100%;height:20vh">Nothing</button>
+</body>`,
 	// A page with a quarter of a million elements.
 	"/huge": `<!doctype html><title>Huge</title><div id="d"></div><script>
 const d = document.getElementById('d'); const f = document.createDocumentFragment();
@@ -372,6 +381,13 @@ func navLinks() string {
 	}
 	return b.String()
 }
+
+// ExportCSV is what /export.csv downloads; /big.csv is BigSize bytes,
+// sent over 5 s.
+const (
+	ExportCSV = "name,amount\nana,12\nbo,7\n"
+	BigSize   = 5_000_000
+)
 
 // NewPageSite serves the pages on every interface; host is how the
 // browser container reaches this machine.
@@ -420,6 +436,34 @@ func NewPageSite(t *testing.T, host string) *PageSite {
 	})
 	mux.HandleFunc("GET /redirect-fail", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "http://169.254.169.254/sso", http.StatusFound)
+	})
+	// PROJ-116: a small CSV, as an attachment, and a 5 MB one that takes
+	// 5 s to arrive. Both are CSV: Chrome holds a download of a type it
+	// warns about from a plain-HTTP site (a .bin, say) as "Unconfirmed
+	// N.crdownload" until a person keeps it, which would never finish.
+	mux.HandleFunc("GET /export.csv", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Disposition", `attachment; filename="export.csv"`)
+		w.Header().Set("Content-Type", "text/csv")
+		_, _ = io.WriteString(w, ExportCSV)
+	})
+	mux.HandleFunc("GET /big.csv", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Disposition", `attachment; filename="big.csv"`)
+		w.Header().Set("Content-Type", "text/csv")
+		w.Header().Set("Content-Length", strconv.Itoa(BigSize))
+		chunk := []byte(strings.Repeat("1,2\n", BigSize/50/4))
+		for range 50 {
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+			if fl, ok := w.(http.Flusher); ok {
+				fl.Flush()
+			}
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
 	})
 	mux.HandleFunc("GET /event", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
