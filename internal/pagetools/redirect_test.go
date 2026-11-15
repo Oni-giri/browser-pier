@@ -63,6 +63,15 @@ func TestSameAddress(t *testing.T) {
 		{"https://example.com/?a=1", "https://example.com/?a=2", false},
 		{"https://example.com/A", "https://example.com/a", false},
 		{"https://bücher.example/", "https://example.com/", false},
+		{"http://bücher.example/", "http://xn--evil.example/", false},
+		{"http://BÜCHER.example/", "http://xn--bcher-kva.example/", true},
+		{"http://bücher.example:8080/a", "http://xn--bcher-kva.example:8080/a", true},
+		{"http://bücher.example/", "http://xn--bcher-kva.evil/", false},
+		{"http://bücher.example/a", "http://xn--bcher-kva.example/b", false},
+		{"http://bücher.example:8080/", "http://xn--bcher-kva.example/", false},
+		{"http://www.bücher.example/", "http://xn--bcher-kva.example/", false},
+		{"http://пример.рф/", "http://xn--e1afmkfd.xn--p1ai/", true},
+		{"http://пример.рф/", "http://xn--evil-kva.xn--p1ai/", false},
 	} {
 		if got := sameAddress(c.requested, c.final); got != c.same {
 			t.Errorf("sameAddress(%q, %q) = %t", c.requested, c.final, got)
