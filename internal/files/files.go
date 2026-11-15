@@ -106,7 +106,9 @@ func (s *Store) List(profile string) ([]File, error) {
 	}
 	out := make([]File, 0, len(all))
 	for _, f := range all {
-		if !strings.HasSuffix(f.Name, partial) {
+		// Not a download under way, nor one of Chrome's hidden temporary
+		// files on the way to one.
+		if !strings.HasSuffix(f.Name, partial) && !strings.HasPrefix(f.Name, ".") {
 			out = append(out, f)
 		}
 	}

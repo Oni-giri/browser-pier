@@ -88,7 +88,14 @@ type seen struct {
 	info fs.FileInfo
 }
 
-func (e seen) partial() bool { return strings.HasSuffix(e.Name, partial) }
+// partial reports whether e is a download under way: a .crdownload, or
+// a hidden file, which Chrome writes on the way to the finished file
+// (".org.chromium.Chromium.XXXXXX") and is never a download of its own.
+func (e seen) partial() bool { return strings.HasSuffix(e.Name, partial) || e.temporary() }
+
+// temporary reports whether e is one of Chrome's hidden temporary files:
+// waited for like a partial download, but never named in a notice.
+func (e seen) temporary() bool { return strings.HasPrefix(e.Name, ".") }
 
 // Mark is the downloads folder as it was before an action.
 type Mark struct {
@@ -299,6 +306,9 @@ func report(last, finished, started map[string]seen) []Download {
 	}
 	sort.Sort(byTime{done, doneAt})
 	for name, e := range started {
+		if e.temporary() {
+			continue // part of a download named by its own file
+		}
 		if now, ok := last[name]; ok && os.SameFile(now.info, e.info) {
 			running = append(running, Download{Name: partialName(name), Size: now.Size, State: InProgress})
 			continue

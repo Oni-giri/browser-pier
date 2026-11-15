@@ -361,3 +361,35 @@ func TestDownloadsEarlierTold(t *testing.T) {
 		}
 	}
 }
+
+// Chrome may write a finished download through a hidden temporary file:
+// it is waited for, never named, and List doesn't show it.
+func TestDownloadsHiddenTemporaryFile(t *testing.T) {
+	s, dir := setup(t, 0)
+	dl := filepath.Join(dir, Downloads)
+	m := s.Mark("google", "")
+	m.poll = 20 * time.Millisecond
+	tmp := filepath.Join(dl, ".org.chromium.Chromium.oGaKNr")
+	write(t, tmp, "name,amount\n", 0)
+	if list, err := s.List("google"); err != nil || len(list) != 0 {
+		t.Fatalf("List = %+v, %v", list, err)
+	}
+	later(t, 100*time.Millisecond, func() { _ = os.Rename(tmp, filepath.Join(dl, "export.csv")) })
+	got := m.Downloads(context.Background(), 3*time.Second)
+	if want := []Download{{Name: "export.csv", Size: 12, State: Downloaded}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Downloads = %+v, want %+v", got, want)
+	}
+	// One left behind, or gone, says nothing.
+	m = s.Mark("google", "")
+	write(t, filepath.Join(dl, ".org.chromium.Chromium.x"), "x", 0)
+	if got := m.Downloads(context.Background(), 0); len(got) != 0 {
+		t.Fatalf("a temporary file at the deadline: %+v", got)
+	}
+	m = s.Mark("google", "")
+	m.poll = 20 * time.Millisecond
+	write(t, filepath.Join(dl, ".org.chromium.Chromium.y"), "y", 0)
+	later(t, 60*time.Millisecond, func() { _ = os.Remove(filepath.Join(dl, ".org.chromium.Chromium.y")) })
+	if got := m.Downloads(context.Background(), time.Second); len(got) != 0 {
+		t.Fatalf("a temporary file gone: %+v", got)
+	}
+}
