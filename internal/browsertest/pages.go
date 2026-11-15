@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -163,6 +164,13 @@ var pageSitePages = map[string]string{ //nolint:gosec // test pages, not credent
 <button aria-labelledby="lbl">x</button>
 <button aria-label="ARIA-LABEL-NAME">y</button>`,
 	// A password field the page filled in itself.
+	// PROJ-125: a sign-in that sends its password in the URL (a GET
+	// form), to /echo, which shows it in the title and the page.
+	"/get-signin": `<!doctype html><title>Old sign-in</title>
+<form method="get" action="/echo">
+<label for="p">Password</label> <input id="p" name="p" type="password">
+<button>Sign in</button>
+</form>`,
 	"/password": `<!doctype html><title>Saved password</title>
 <label for="u">User</label> <input id="u" value="pier">
 <label for="p">Password</label> <input id="p" type="password" value="PAGE-FILLED-SECRET">
@@ -504,6 +512,16 @@ func NewPageSite(t *testing.T, host string) *PageSite {
 	})
 	mux.HandleFunc("GET /redirect", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusFound)
+	})
+	// PROJ-125: echo p in the title, the text and a link, as a careless
+	// site echoes a password it got in its URL; /bounce redirects there.
+	mux.HandleFunc("GET /echo", func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Query().Get("p")
+		fmt.Fprintf(w, `<!doctype html><title>Welcome %s</title><h1>Signed in</h1><p>You said: %s</p><p><a href="/echo?p=%s">Again</a></p>`,
+			html.EscapeString(p), html.EscapeString(p), url.QueryEscape(p))
+	})
+	mux.HandleFunc("GET /bounce", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/echo?p="+url.QueryEscape(r.URL.Query().Get("p")), http.StatusFound)
 	})
 	mux.HandleFunc("GET /redirect-fail", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "http://169.254.169.254/sso", http.StatusFound)
