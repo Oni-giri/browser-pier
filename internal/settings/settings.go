@@ -22,6 +22,9 @@ type Settings struct {
 	// DefaultProxy is new profiles' proxy URL, "" for none. It may hold
 	// credentials: never log it.
 	DefaultProxy string
+	// DefaultBlockAds is whether new profiles block ad and tracker
+	// domains (PROJ-119); on unless the admin turns it off.
+	DefaultBlockAds bool
 	// RAMLimitPercent caps the memory all browsers may use together, as a
 	// share of the host's: 1 to 100, or 0 for not set here (the
 	// BROWSERPIER_RAM_LIMIT_PERCENT default then applies).
@@ -31,13 +34,13 @@ type Settings struct {
 // defaults are the settings before the admin changes any.
 func defaults() Settings {
 	p := profiles.New("")
-	return Settings{DefaultPolicy: p.HandoffPolicy, DefaultAutoStop: p.AutoStop}
+	return Settings{DefaultPolicy: p.HandoffPolicy, DefaultAutoStop: p.AutoStop, DefaultBlockAds: p.BlockAds}
 }
 
 // NewProfile is profiles.New with these defaults applied.
 func (s Settings) NewProfile(name string) profiles.Profile {
 	p := profiles.New(name)
-	p.HandoffPolicy, p.AutoStop, p.Proxy = s.DefaultPolicy, s.DefaultAutoStop, s.DefaultProxy
+	p.HandoffPolicy, p.AutoStop, p.Proxy, p.BlockAds = s.DefaultPolicy, s.DefaultAutoStop, s.DefaultProxy, s.DefaultBlockAds
 	return p
 }
 
@@ -61,6 +64,7 @@ const (
 	keyAutoStop = "ui.default_auto_stop_minutes"
 	keyProxy    = "ui.default_proxy"
 	keyRAM      = "ui.ram_limit_percent"
+	keyBlockAds = "ui.default_block_ads"
 )
 
 // Store keeps the settings in the database's settings table.
@@ -70,8 +74,8 @@ func New(db *sql.DB) *Store { return &Store{db: db} }
 
 // Get returns the settings, with the defaults for any never saved.
 func (s *Store) Get(ctx context.Context) (Settings, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT key, value FROM settings WHERE key IN (?, ?, ?, ?)`,
-		keyPolicy, keyAutoStop, keyProxy, keyRAM)
+	rows, err := s.db.QueryContext(ctx, `SELECT key, value FROM settings WHERE key IN (?, ?, ?, ?, ?)`,
+		keyPolicy, keyAutoStop, keyProxy, keyRAM, keyBlockAds)
 	if err != nil {
 		return Settings{}, err
 	}
@@ -97,6 +101,10 @@ func (s *Store) Get(ctx context.Context) (Settings, error) {
 			if out.RAMLimitPercent, err = strconv.Atoi(v); err != nil {
 				return Settings{}, fmt.Errorf("stored setting %s: %w", k, err)
 			}
+		case keyBlockAds:
+			if out.DefaultBlockAds, err = strconv.ParseBool(v); err != nil {
+				return Settings{}, fmt.Errorf("stored setting %s: %w", k, err)
+			}
 		}
 	}
 	return out, rows.Err()
@@ -117,6 +125,7 @@ func (s *Store) Save(ctx context.Context, set Settings) error {
 		{keyAutoStop, strconv.Itoa(int(set.DefaultAutoStop / time.Minute))},
 		{keyProxy, set.DefaultProxy},
 		{keyRAM, strconv.Itoa(set.RAMLimitPercent)},
+		{keyBlockAds, strconv.FormatBool(set.DefaultBlockAds)},
 	} {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`, kv[0], kv[1]); err != nil {
 			return err

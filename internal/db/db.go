@@ -125,6 +125,13 @@ var migrations = []string{
 	// agent gave (PROJ-118): the pattern, and whether it ended that way.
 	`ALTER TABLE handoffs ADD COLUMN until_url TEXT NOT NULL DEFAULT '';
 	ALTER TABLE handoffs ADD COLUMN auto_done INTEGER NOT NULL DEFAULT 0;`,
+
+	// Whether a profile's browser blocks ad and tracker domains (PROJ-119):
+	// off for the profiles that exist, which ran without it; new ones get
+	// the admin's default. And whether each session did, since an agent
+	// can turn it off for one session.
+	`ALTER TABLE profiles ADD COLUMN block_ads INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE sessions ADD COLUMN block_ads INTEGER NOT NULL DEFAULT 0;`,
 }
 
 // Open opens (creating if needed) the database at path and migrates it.

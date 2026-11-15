@@ -28,14 +28,14 @@ func TestDefaultsAndSave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (Settings{DefaultPolicy: profiles.PolicyPIN, DefaultAutoStop: 15 * time.Minute}); got != want {
+	if want := (Settings{DefaultPolicy: profiles.PolicyPIN, DefaultAutoStop: 15 * time.Minute, DefaultBlockAds: true}); got != want {
 		t.Fatalf("defaults %+v, want %+v", got, want)
 	}
 	if p := got.NewProfile("fresh"); p != profiles.New("fresh") {
 		t.Fatalf("the defaults change new profiles: %+v", p)
 	}
 
-	set := Settings{DefaultPolicy: profiles.PolicySignIn, DefaultAutoStop: 0, DefaultProxy: "socks5://u:p@proxy.example:1080", RAMLimitPercent: 50}
+	set := Settings{DefaultPolicy: profiles.PolicySignIn, DefaultAutoStop: 0, DefaultProxy: "socks5://u:p@proxy.example:1080", RAMLimitPercent: 50, DefaultBlockAds: false}
 	if err := s.Save(ctx, set); err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestDefaultsAndSave(t *testing.T) {
 		t.Fatalf("saved %+v, got %+v, %v", set, got, err)
 	}
 	p := got.NewProfile("work")
-	if p.Name != "work" || p.HandoffPolicy != profiles.PolicySignIn || p.AutoStop != 0 || p.Proxy != set.DefaultProxy || p.Width != 1440 {
+	if p.Name != "work" || p.HandoffPolicy != profiles.PolicySignIn || p.AutoStop != 0 || p.Proxy != set.DefaultProxy || p.Width != 1440 || p.BlockAds {
 		t.Fatalf("NewProfile = %+v", p)
 	}
 	if err := p.Validate(); err != nil {

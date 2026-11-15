@@ -179,3 +179,22 @@ func TestLocalNetworkIsOffUntilSet(t *testing.T) {
 		t.Fatalf("list: %+v", list)
 	}
 }
+
+func TestNewProfilesBlockAds(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	if _, err := s.Create(ctx, New("news")); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := s.Get(ctx, "news")
+	if !p.BlockAds {
+		t.Fatal("a new profile doesn't block ads")
+	}
+	p.BlockAds = false
+	if got, err := s.Update(ctx, p); err != nil || got.BlockAds {
+		t.Fatalf("update: %+v, %v", got, err)
+	}
+	if list, _ := s.List(ctx); len(list) != 1 || list[0].BlockAds {
+		t.Fatalf("list: %+v", list)
+	}
+}

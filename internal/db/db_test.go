@@ -130,3 +130,41 @@ func TestIconColumnsReachExistingProfiles(t *testing.T) {
 		t.Fatalf("after migrating: site %q, inferred %q, glyph %q, colour %q, %v; want all empty", site, inferred, glyph, color, err)
 	}
 }
+
+// TestBlockAdsIsOffForExistingProfiles: profiles from before PROJ-119 ran
+// without blocking and keep running without it; their sessions too.
+func TestBlockAdsIsOffForExistingProfiles(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "test.db")
+	d, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := len(migrations) - 1
+	for i, q := range migrations[:before] {
+		if _, err := d.ExecContext(ctx, q); err != nil {
+			t.Fatalf("migration %d: %v", i+1, err)
+		}
+	}
+	if _, err := d.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", before)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.ExecContext(ctx, `INSERT INTO profiles (name, default_mode, auto_stop_minutes, screen_width, screen_height, proxy, handoff_policy, created_at, updated_at) VALUES ('google', 'visual', 15, 1440, 900, '', 'pin', 0, 0);
+		INSERT INTO sessions (id, profile, state, mode, created_at, updated_at) VALUES ('s1', 'google', 'stopped', 'visual', 0, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = d.Close()
+
+	d, err = Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = d.Close() }()
+	var profile, session bool
+	if err := d.QueryRowContext(ctx, `SELECT block_ads FROM profiles WHERE name = 'google'`).Scan(&profile); err != nil || profile {
+		t.Fatalf("existing profile: block_ads %v, %v; want off", profile, err)
+	}
+	if err := d.QueryRowContext(ctx, `SELECT block_ads FROM sessions WHERE id = 's1'`).Scan(&session); err != nil || session {
+		t.Fatalf("existing session: block_ads %v, %v; want off", session, err)
+	}
+}
