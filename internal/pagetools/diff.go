@@ -50,25 +50,24 @@ func itemKey(it item) uint64 {
 	}
 	var h maphash.Hash
 	h.SetSeed(keySeed)
+	kind := "t"
 	switch {
 	case it.control:
-		h.WriteByte('c')
+		kind = "c"
 	case it.iframe:
-		h.WriteByte('i')
-	default:
-		h.WriteByte('t')
+		kind = "i"
 	}
-	h.WriteString(strconv.FormatInt(it.backend, 10))
+	_, _ = h.WriteString(kind + strconv.FormatInt(it.backend, 10))
 	for _, s := range []string{it.role, it.name, it.value, it.text} {
-		h.WriteByte(0)
-		h.WriteString(s)
+		_ = h.WriteByte(0)
+		_, _ = h.WriteString(s)
 	}
 	for _, st := range it.states {
 		if st == "focused" {
 			continue
 		}
-		h.WriteByte(1)
-		h.WriteString(st)
+		_ = h.WriteByte(1)
+		_, _ = h.WriteString(st)
 	}
 	k := h.Sum64()
 	if k == 0 {
@@ -339,7 +338,11 @@ func (t *Tools) baseline(session, target string) *baseline {
 // in place of any before. A list past maxBaseline isn't kept; past
 // maxBaselines in all, the oldest lists go.
 func (t *Tools) setBaseline(session, target, frame, loader string, items []item) {
-	kept := compact(items)
+	t.keepBaseline(session, target, frame, loader, compact(items))
+}
+
+// keepBaseline is setBaseline with items already compacted.
+func (t *Tools) keepBaseline(session, target, frame, loader string, kept []item) {
 	size := baseSize(kept)
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -455,7 +458,7 @@ func (c *call) changes(ctx context.Context, keepWhole bool) (*page, diffResult, 
 		}
 		return c.line(p, it)
 	})
-	c.t.setBaseline(sid, target, p.frame, p.loader, p.items)
+	c.t.keepBaseline(sid, target, p.frame, p.loader, cur)
 	return p, diffResult{kind: diffDone, body: body, trailer: trailer}, nil
 }
 
