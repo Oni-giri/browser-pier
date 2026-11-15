@@ -88,6 +88,9 @@ func (m *Manager) ExemptHost(ctx context.Context, id, host string) error {
 // Blocked is how many connections the profile's running browser refused
 // for the ad and tracker list. ok is false when it can't be read.
 func (m *Manager) Blocked(ctx context.Context, profile string) (n int64, ok bool) {
+	// The web UI asks on every refresh: a busy browser mustn't hold it up.
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
 	var stats map[string]int64
 	if err := m.control(ctx, profile, http.MethodGet, "/proxy/stats", nil, &stats); err != nil {
 		return 0, false
