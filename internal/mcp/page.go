@@ -15,7 +15,7 @@ import (
 func (s *Server) addPageTools(srv *sdk.Server) {
 	sdk.AddTool(srv, &sdk.Tool{Name: "snapshot", Description: "API mode only. Read the page: URL, title, controls with refs (like a7e12) and text, within a budget; the open dialog and what's in view come first. Hidden text a person can't see may still appear: it is fenced like the rest."}, s.snapshot)
 	sdk.AddTool(srv, &sdk.Tool{Name: "find", Description: "API mode only. Find text on the page (case-insensitive), with the text around each match and the nearest ref."}, s.find)
-	sdk.AddTool(srv, &sdk.Tool{Name: "act", Description: "API mode only. Act on refs from snapshot or find, 1 to 20 steps in order, stopping at the first that fails: click, fill (replace a field's text), type (key by key), press (keys, like Enter or ctrl+a), select (an option of a <select>), check, uncheck, hover. Each result names what was hit. A step that navigates makes later refs stale. No date, range or file inputs."}, s.actOnPage)
+	sdk.AddTool(srv, &sdk.Tool{Name: "act", Description: "API mode only. Act on refs from snapshot or find, 1 to 20 steps in order, stopping at the first that fails: click, fill (replace a field's text), type (key by key), press (keys, like Enter or ctrl+a), select (an option of a <select>), check, uncheck, hover, upload (set files from upload_file on an <input type=file> or its <label>; no chooser opens, and a page's own button that opens one can't be handled). Each result names what was hit. A step that navigates makes later refs stale. No date or range inputs."}, s.actOnPage)
 	sdk.AddTool(srv, &sdk.Tool{Name: "wait_for", Description: "API mode only. Wait for text to appear, a ref to be visible or hidden, or the URL to change; up to 10 s by default, 30 s at most. Answers ok or timed out."}, s.waitFor)
 	sdk.AddTool(srv, &sdk.Tool{Name: "tabs", Description: "API mode only. List the browser's tabs (the active one is the one in front), or switch to one, close one, or open a new one. Tools always act on the active tab; when a page opens a tab, results say so and you switch to it."}, s.tabs)
 	sdk.AddTool(srv, &sdk.Tool{Name: "navigate", Description: "API mode only. Open an http(s) URL in the active tab, or go back, forward or reload; waits for the page to load. The tab's refs go stale."}, s.navigate)
@@ -123,14 +123,15 @@ func (s *Server) navigate(ctx context.Context, req *sdk.CallToolRequest, in navi
 }
 
 type stepArgs struct {
-	Action string  `json:"action" jsonschema:"click, fill, type, press, select, check, uncheck or hover"`
-	Ref    string  `json:"ref,omitempty" jsonschema:"the element, from snapshot or find (not for press)"`
-	Text   *string `json:"text,omitempty" jsonschema:"for fill and type"`
-	Keys   string  `json:"keys,omitempty" jsonschema:"for press: Enter, Tab, Escape, ctrl+a…, several separated by spaces"`
-	Option string  `json:"option,omitempty" jsonschema:"for select: the option's value or visible text"`
-	Button string  `json:"button,omitempty" jsonschema:"for click: left (default), right or middle"`
-	Double bool    `json:"double,omitempty" jsonschema:"for click: double-click"`
-	Pace   string  `json:"pace,omitempty" jsonschema:"for click, hover, check, uncheck, type and press: human (default) moves, aims and types like a hand, so it takes longer (type: at most 500 characters per call); instant: at once"`
+	Action string   `json:"action" jsonschema:"click, fill, type, press, select, check, uncheck, hover or upload"`
+	Ref    string   `json:"ref,omitempty" jsonschema:"the element, from snapshot or find (not for press)"`
+	Text   *string  `json:"text,omitempty" jsonschema:"for fill and type"`
+	Keys   string   `json:"keys,omitempty" jsonschema:"for press: Enter, Tab, Escape, ctrl+a…, several separated by spaces"`
+	Option string   `json:"option,omitempty" jsonschema:"for select: the option's value or visible text"`
+	Files  []string `json:"files,omitempty" jsonschema:"for upload: 1 to 10 names upload_file returned (several only if the input takes multiple)"`
+	Button string   `json:"button,omitempty" jsonschema:"for click: left (default), right or middle"`
+	Double bool     `json:"double,omitempty" jsonschema:"for click: double-click"`
+	Pace   string   `json:"pace,omitempty" jsonschema:"for click, hover, check, uncheck, type and press: human (default) moves, aims and types like a hand, so it takes longer (type: at most 500 characters per call); instant: at once"`
 }
 
 type actArgs struct {

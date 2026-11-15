@@ -41,12 +41,15 @@ type Server struct {
 	// screens caches each session's screen size, for scaling coordinates.
 	screensMu sync.Mutex
 	screens   map[string]screen
+
+	// maxUpload caps what upload_file takes (MaxUpload; tests lower it).
+	maxUpload int64
 }
 
 // New makes the MCP endpoint over api, the mux the agent API is registered on.
 func New(api http.Handler, web *auth.Web, log *slog.Logger, version string) *Server {
 	return &Server{api: api, web: web, log: log, version: version,
-		handlers: map[string]*sdk.StreamableHTTPHandler{}, screens: map[string]screen{}}
+		handlers: map[string]*sdk.StreamableHTTPHandler{}, screens: map[string]screen{}, maxUpload: MaxUpload}
 }
 
 // Register adds /mcp, for agents with a token.
@@ -84,6 +87,9 @@ func (s *Server) handler(tokenID string) *sdk.StreamableHTTPHandler {
 		// Host checks are the reverse proxy's and auth's job; BrowserPier
 		// is often reached on localhost through one.
 		DisableLocalhostProtection: true,
+		// Room for one upload_file: its content in base64, and the rest
+		// of the message. The SDK's default is 4 MiB.
+		MaxRequestBodyBytes: s.maxUpload/3*4 + 1<<20,
 	})
 	s.handlers[tokenID] = h
 	return h
@@ -136,22 +142,26 @@ func (a apiReply) ok() bool { return a.status >= 200 && a.status < 300 }
 // call runs one agent API request in-process, as the agent that made the
 // tool call: its token, its address and the host it used.
 func (s *Server) call(ctx context.Context, extra *sdk.RequestExtra, method, path string, body any) (apiReply, error) {
-	var rd io.Reader = http.NoBody
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return apiReply{}, err
-		}
-		rd = bytes.NewReader(b)
+	if body == nil {
+		return s.callRaw(ctx, extra, method, path, "", http.NoBody)
 	}
-	req := httptest.NewRequestWithContext(ctx, method, path, rd)
+	b, err := json.Marshal(body)
+	if err != nil {
+		return apiReply{}, err
+	}
+	return s.callRaw(ctx, extra, method, path, "application/json", bytes.NewReader(b))
+}
+
+// callRaw is call with a body of any type.
+func (s *Server) callRaw(ctx context.Context, extra *sdk.RequestExtra, method, path, contentType string, body io.Reader) (apiReply, error) {
+	req := httptest.NewRequestWithContext(ctx, method, path, body)
 	if extra == nil || extra.Header == nil {
 		return apiReply{}, fmt.Errorf("no request headers")
 	}
 	h := extra.Header
 	req.Header.Set("Authorization", h.Get("Authorization"))
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 	for _, k := range []string{"X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host"} {
 		if v := h.Values(k); len(v) > 0 {

@@ -35,6 +35,7 @@ type fixture struct {
 	m        *sessions.Manager
 	tokens   *auth.Tokens
 	handoffs *handoff.Service
+	mcp      *Server
 	srv      *httptest.Server
 	all      string // a token for every profile
 	scoped   string // a token for google only
@@ -91,7 +92,8 @@ func newFixture(t *testing.T) *fixture {
 	a.Register(routes)
 	mux := http.NewServeMux()
 	a.Register(mux)
-	New(routes, web, log, "test").Register(mux)
+	f.mcp = New(routes, web, log, "test")
+	f.mcp.Register(mux)
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	return f

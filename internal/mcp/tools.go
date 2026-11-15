@@ -36,6 +36,7 @@ func (s *Server) addTools(srv *sdk.Server) {
 	sdk.AddTool(srv, &sdk.Tool{Name: "wait", Description: "Wait for the page, up to 10 seconds."}, s.wait)
 	sdk.AddTool(srv, &sdk.Tool{Name: "zoom", Description: "See a region of the last screenshot at the screen's full resolution, to read small text."}, s.zoom)
 	sdk.AddTool(srv, &sdk.Tool{Name: "list_files", Description: "List the files the profile's browser downloaded, newest first."}, s.listFiles)
+	s.addUploadTools(srv)
 	s.addPageTools(srv)
 	s.addHandoffTools(srv)
 }
