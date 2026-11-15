@@ -459,7 +459,8 @@ func TestNewTabNotice(t *testing.T) {
 	pop := f.fb.addTab("https://accounts.example/signin?client=x", loginPage(), true)
 	pop.opener = "T1"
 	out := f.mustSnapshot(nil)
-	if !strings.Contains(out, "a new tab opened: t2 (https://accounts.example)") {
+	// Its origin and path; not its query, which tabs lists.
+	if !strings.Contains(out, "a new tab opened: t2 (https://accounts.example/signin)\n") {
 		t.Fatalf("no notice:\n%s", out)
 	}
 	if !strings.Contains(out, "URL: https://accounts.example/signin") {

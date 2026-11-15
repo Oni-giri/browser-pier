@@ -84,8 +84,10 @@ var controlRoles = map[string]bool{
 	"DisclosureTriangle": true, "PopUpButton": true, "ToggleButton": true,
 }
 
-// snapshotStyles are the computed styles asked of DOMSnapshot.captureSnapshot, in order.
-var snapshotStyles = []string{"display", "visibility"}
+// snapshotStyles are the computed styles asked of DOMSnapshot.captureSnapshot, in order:
+// display and visibility first, as dom.shown expects; pointer-events and
+// z-index tell an iframe that clicks would land on (see markCovered).
+var snapshotStyles = []string{"display", "visibility", "pointer-events", "z-index"}
 
 type rareStrings struct {
 	Index []int `json:"index"`
@@ -124,6 +126,10 @@ type domSnapshot struct {
 			NodeIndex []int        `json:"nodeIndex"`
 			Styles    [][]int      `json:"styles"`
 			Bounds    [][4]float64 `json:"bounds"`
+			// PaintOrders is each layout node's paint layer, in the order
+			// layers are painted (includePaintOrder): nodes of one layer
+			// share it.
+			PaintOrders []int `json:"paintOrders"`
 		} `json:"layout"`
 		ScrollOffsetX float64 `json:"scrollOffsetX"`
 		ScrollOffsetY float64 `json:"scrollOffsetY"`
@@ -517,7 +523,7 @@ var errTooLarge = &Error{Status: 422, Msg: "page too large to snapshot; use find
 // readDOM takes the DOM snapshot of the target's top document.
 func (c *call) readDOM(ctx context.Context) (*dom, error) {
 	var s domSnapshot
-	if err := c.renderer(ctx, c.t.slow, "DOMSnapshot.captureSnapshot", map[string]any{"computedStyles": snapshotStyles, "includeDOMRects": true}, &s); err != nil {
+	if err := c.renderer(ctx, c.t.slow, "DOMSnapshot.captureSnapshot", map[string]any{"computedStyles": snapshotStyles, "includeDOMRects": true, "includePaintOrder": true}, &s); err != nil {
 		if errors.Is(err, cdp.ErrTooLarge) {
 			return nil, &Error{Status: 422, Msg: "page too large to read"}
 		}
@@ -730,7 +736,118 @@ func join(ctx context.Context, nodes []axNode, d *dom, view [4]float64) ([]item,
 		out[r.at].text = r.String()
 	}
 	out = slices.DeleteFunc(out, func(it item) bool { return !it.control && !it.iframe && it.text == "" })
+	markCovered(out, d)
 	return dropLabelEchoes(out), groups, budget.cut || d.cut, nil
+}
+
+// underFrame is the state of a control an iframe covers.
+const underFrame = "under an iframe"
+
+// Bounds on markCovered's work, whatever the page: it tries the iframes
+// painted last, and uses the first few that clicks would land on.
+const (
+	maxCoverTries  = 64
+	maxCoverFrames = 16
+)
+
+// markCovered marks the controls whose centre an iframe covers (a consent
+// banner from another site, most often), which act can't click, from what
+// the DOM snapshot already holds: boxes and paint order. Nothing more is
+// asked of the page.
+//
+// An iframe covers a control when its box holds the control's centre and
+// its paint layer comes later in paint order. Chromium numbers layers
+// parent first, so a layer with a negative z-index, painted under its
+// parent's content, still comes after it: an iframe with a negative
+// z-index on it or an ancestor (a video behind a hero banner) is left
+// out, as is one with pointer-events: none, which clicks go through, as
+// act's hit test does. What this can't see (a covering iframe clipped by
+// its parent's overflow, a control out of view that a fixed banner will
+// cover once scrolled to) act still finds when it hit-tests.
+func markCovered(items []item, d *dom) {
+	l := d.s.Documents[0].Layout
+	if len(l.PaintOrders) == 0 {
+		return
+	}
+	order := func(ni int) (int, bool) {
+		li, ok := d.layout[ni]
+		if !ok || li >= len(l.PaintOrders) {
+			return 0, false
+		}
+		return l.PaintOrders[li], true
+	}
+	type cover struct {
+		ni    int
+		box   [4]float64
+		order int
+	}
+	var frames []cover
+	for _, it := range items {
+		if !it.iframe {
+			continue
+		}
+		ni := d.byBack[it.backend]
+		box, ok := d.shown(ni)
+		o, has := order(ni)
+		if ok && has {
+			frames = append(frames, cover{ni, box, o})
+		}
+	}
+	if len(frames) == 0 {
+		return
+	}
+	slices.SortStableFunc(frames, func(a, b cover) int { return b.order - a.order })
+	var covers []cover
+	for k, f := range frames {
+		if k >= maxCoverTries || len(covers) >= maxCoverFrames {
+			break
+		}
+		if d.takesClicks(f.ni) {
+			covers = append(covers, f)
+		}
+	}
+	for i := range items {
+		it := &items[i]
+		if !it.control {
+			continue
+		}
+		ni := d.byBack[it.backend]
+		box, ok := d.shown(ni)
+		o, has := order(ni)
+		if !ok || !has {
+			continue
+		}
+		x, y := box[0]+box[2]/2, box[1]+box[3]/2
+		for _, f := range covers {
+			if f.order > o && x >= f.box[0] && x < f.box[0]+f.box[2] && y >= f.box[1] && y < f.box[1]+f.box[3] {
+				it.states = append(it.states, underFrame)
+				break
+			}
+		}
+	}
+}
+
+// takesClicks reports whether clicks on node i's box land on it, as far as
+// the DOM snapshot tells: its pointer-events aren't none, and neither it
+// nor an ancestor has a negative z-index (see markCovered).
+func (d *dom) takesClicks(i int) bool {
+	st := d.s.Documents[0].Layout.Styles
+	style := func(ni, k int) string {
+		li, ok := d.layout[ni]
+		if !ok || li >= len(st) || k >= len(st[li]) {
+			return ""
+		}
+		return d.str(st[li][k])
+	}
+	if style(i, 2) == "none" {
+		return false
+	}
+	for p := i; p >= 0; p = d.parent(p) {
+		if strings.HasPrefix(style(p, 3), "-") {
+			return false
+		}
+	}
+	return true
 }
 
 // run gathers a block's text, joined once at the end (joining as it grew

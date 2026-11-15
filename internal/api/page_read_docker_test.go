@@ -69,7 +69,7 @@ func TestPageToolsRead(t *testing.T) {
 	}
 
 	// 11. A password the page filled in never shows.
-	open("/password")
+	password := open("/password#top")
 	snap = a.mustTool(s.ID, "snapshot", nil)
 	found = a.mustTool(s.ID, "find", map[string]any{"text": "password"})
 	for _, out := range []string{snap, found} {
@@ -85,6 +85,13 @@ func TestPageToolsRead(t *testing.T) {
 	got := open("/redirect")
 	if !strings.Contains(got, "URL: "+site.URL+"/login") || !strings.Contains(got, "Title: Sign in") {
 		t.Errorf("redirect: %s", got)
+	}
+	// It says so, in the fence (PROJ-110); a fragment isn't a redirect.
+	if i := strings.Index(got, "Redirected from: "+site.URL+"/redirect\n"); i < 0 || i > strings.LastIndex(got, "</untrusted-content-") {
+		t.Errorf("no redirect note in the fence: %s", got)
+	}
+	if strings.Contains(password, "Redirected") {
+		t.Errorf("a fragment counted as a redirect: %s", password)
 	}
 	for _, bad := range []string{"javascript:alert(1)", "file:///etc/passwd", "https://u:p@example.com/"} {
 		if code, msg := a.tool(s.ID, "navigate", map[string]string{"url": bad}); code != http.StatusBadRequest {

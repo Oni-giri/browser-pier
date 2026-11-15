@@ -242,22 +242,50 @@ func (c *call) axName(ctx context.Context, backend int64) (role, name string) {
 // describe names an element the page gave back as an object (what covers
 // a ref, what took the focus): its role and name, fenced.
 func (c *call) describe(ctx context.Context, obj string) string {
+	what, _ := c.describeFrame(ctx, obj)
+	return what
+}
+
+// describeFrame is describe, also saying whether the element is an
+// iframe (or a frame): a document of its own, which the tools don't read
+// or act in. An iframe's origin, from its src, is added in the fence.
+func (c *call) describeFrame(ctx context.Context, obj string) (what string, frame bool) {
 	var d struct {
 		Node struct {
-			BackendNodeID int64  `json:"backendNodeId"`
-			NodeName      string `json:"nodeName"`
+			BackendNodeID int64    `json:"backendNodeId"`
+			NodeName      string   `json:"nodeName"`
+			Attributes    []string `json:"attributes"`
 		} `json:"node"`
 	}
-	what := "something"
+	what = "something"
 	if c.renderer(ctx, c.t.quick, "DOM.describeNode", map[string]any{"objectId": obj}, &d) == nil {
 		role, name := c.axName(ctx, d.Node.BackendNodeID)
-		if role == "element" {
-			role = strings.ToLower(d.Node.NodeName)
+		tag := strings.ToLower(d.Node.NodeName)
+		frame = tag == "iframe" || tag == "frame"
+		if role == "element" || frame {
+			// Chromium's role for an iframe is "Iframe"; say it plainly.
+			role = tag
 		}
-		what = role + " " + quote(capText(strings.Join(strings.Fields(name), " "), maxField))
+		what = role + " " + quote(capText(collapse(name), maxField))
+		if frame {
+			for i := 0; i+1 < len(d.Node.Attributes); i += 2 {
+				if strings.EqualFold(d.Node.Attributes[i], "src") && d.Node.Attributes[i+1] != "" {
+					what += " from " + collapse(origin(cutBytes(d.Node.Attributes[i+1], maxURL)))
+					break
+				}
+			}
+		}
 	}
-	return fence.Wrap("page element", what)
+	return fence.Wrap("page element", what), frame
 }
+
+// coveredByFrame is the advice when what covers a ref is an iframe: a
+// consent or sign-in banner from another site, most often. Its content
+// is out of the tools' reach (they read and act in the top frame only),
+// so a person, or a click on the screen in Visual mode, has to do it.
+const coveredByFrame = ", an embedded frame (often a cookie or consent banner from another site). The page tools can't read or click inside frames. " +
+	"Ask a person to click it with request_handoff (POST /api/sessions/{id}/handoff), or restart the browser in Visual mode " +
+	"(stop_browser, then start_browser with mode visual) and click it on a screenshot."
 
 // callOn calls a function on an isolated-world object, returning its
 // value as JSON into out.
@@ -468,7 +496,12 @@ func (c *call) aim(ctx context.Context, n *node) (x, y float64, err error) {
 	case r.Type == "boolean" && string(r.Value) == "true":
 		return x, y, nil
 	case r.Type == "object" && r.ObjectID != "":
-		return 0, 0, &Error{Status: http.StatusConflict, Msg: n.ref + " is covered by " + c.describe(ctx, r.ObjectID)}
+		what, frame := c.describeFrame(ctx, r.ObjectID)
+		msg := n.ref + " is covered by " + what
+		if frame {
+			msg += coveredByFrame
+		}
+		return 0, 0, &Error{Status: http.StatusConflict, Msg: msg}
 	}
 	return 0, 0, &Error{Status: 422, Msg: n.ref + " isn't on screen at its centre"}
 }

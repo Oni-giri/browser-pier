@@ -32,6 +32,11 @@ type fnode struct {
 	box     *[4]float64 // nil: not laid out
 	display string
 	visib   string
+	// pointer and zIndex are the computed pointer-events and z-index
+	// ("" for auto); paint is the node's paint order.
+	pointer string
+	zIndex  string
+	paint   int
 	value   *string // the DOM snapshot's inputValue
 	kids    []*fnode
 	backend int64
@@ -77,8 +82,10 @@ type fakeBrowser struct {
 	nextID  int
 	worlds  map[int64]string // execution context → tab
 	nextCtx int64
-	// pages makes the document a navigation lands on, by URL.
-	pages func(url string) *fnode
+	// pages makes the document a navigation lands on, by URL; redirects
+	// sends a navigation to one URL on to another.
+	pages     func(url string) *fnode
+	redirects map[string]string
 	// eval answers isolated-world scripts the fake doesn't know.
 	eval func(tab *ftab, expr string) (any, error)
 	// call answers methods the fake doesn't know (phase 2's DOM and Input).
@@ -237,7 +244,7 @@ func (fb *fakeBrowser) handle(m cdptest.Message) (any, error) {
 		}
 		return map[string]any{"result": map[string]any{"type": "object", "objectId": fmt.Sprintf("g/%d/%s", ctx, w)}}, nil
 	case "DOMSnapshot.captureSnapshot":
-		return fb.snapshot(tb), nil
+		return fb.snapshot(tb, p), nil
 	case "Accessibility.getFullAXTree":
 		return map[string]any{"nodes": axTree(tb.doc)}, nil
 	case "Page.navigate":
@@ -278,6 +285,9 @@ func (fb *fakeBrowser) handle(m cdptest.Message) (any, error) {
 
 // go_ loads url in tb: a new document.
 func (fb *fakeBrowser) go_(tb *ftab, url string) {
+	if to, ok := fb.redirects[url]; ok {
+		url = to
+	}
 	tb.url = url
 	tb.title = "Page " + url
 	tb.loader = fmt.Sprintf("L-%d", time.Now().UnixNano())
@@ -360,7 +370,8 @@ func pageText(n *fnode) string {
 }
 
 // snapshot is DOMSnapshot.captureSnapshot of tb's document.
-func (fb *fakeBrowser) snapshot(tb *ftab) any {
+func (fb *fakeBrowser) snapshot(tb *ftab, p map[string]any) any {
+	names, _ := p["computedStyles"].([]any)
 	var strs []string
 	idx := map[string]int{}
 	s := func(v string) int {
@@ -378,6 +389,7 @@ func (fb *fakeBrowser) snapshot(tb *ftab) any {
 	var lnode []int
 	var styles [][]int
 	var bounds [][4]float64
+	var paints []int
 	var walk func(n *fnode, p int)
 	walk = func(n *fnode, p int) {
 		i := len(parent)
@@ -408,14 +420,34 @@ func (fb *fakeBrowser) snapshot(tb *ftab) any {
 		}
 		if n.box != nil {
 			lnode = append(lnode, i)
-			styles = append(styles, []int{s(n.display), s(n.visib)})
+			// The styles asked for, in order, up to the first the fake
+			// doesn't know.
+			var st []int
+		styles:
+			for _, name := range names {
+				v := map[string]string{"display": n.display, "visibility": n.visib, "pointer-events": n.pointer, "z-index": n.zIndex}
+				val, ok := v[name.(string)]
+				switch {
+				case !ok:
+					break styles
+				case val == "":
+					val = "auto"
+				}
+				st = append(st, s(val))
+			}
+			styles = append(styles, st)
 			bounds = append(bounds, *n.box)
+			paints = append(paints, n.paint)
 		}
 		for _, k := range n.kids {
 			walk(k, i)
 		}
 	}
 	walk(tb.doc, -1)
+	layout := map[string]any{"nodeIndex": lnode, "styles": styles, "bounds": bounds}
+	if inc, _ := p["includePaintOrder"].(bool); inc {
+		layout["paintOrders"] = paints
+	}
 	if fb.bigDOM > 0 {
 		for len(back) < fb.bigDOM {
 			back = append(back, 0)
@@ -426,7 +458,7 @@ func (fb *fakeBrowser) snapshot(tb *ftab) any {
 			"documentURL": s(tb.url), "title": s(tb.title), "frameId": s("F-" + tb.id),
 			"nodes": map[string]any{"parentIndex": parent, "nodeType": typ, "nodeName": name, "nodeValue": value,
 				"backendNodeId": back, "attributes": attrs, "inputValue": map[string]any{"index": inputIdx, "value": inputVal}},
-			"layout":        map[string]any{"nodeIndex": lnode, "styles": styles, "bounds": bounds},
+			"layout":        layout,
 			"scrollOffsetX": tb.scroll[0], "scrollOffsetY": tb.scroll[1],
 		}},
 		"strings": strs,

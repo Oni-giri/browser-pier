@@ -3,6 +3,7 @@ package pagetools
 import (
 	"context"
 	"errors"
+	"net"
 	"net/url"
 	"strings"
 	"time"
@@ -124,8 +125,64 @@ func (t *Tools) Navigate(ctx context.Context, s sessions.Session, who Caller, in
 		if !loaded {
 			trailer = "The page was still loading after 30 s."
 		}
-		return c.result("page", header(&page{url: pi.URL, title: pi.Title}), trailer), nil
+		body := header(&page{url: pi.URL, title: pi.Title})
+		if loaded && target != "" && !sameAddress(target, pi.URL) {
+			// Inside the fence: the address is the agent's own, but the
+			// line sits among the page's.
+			body += "\nRedirected from: " + capText(target, maxHeader)
+		}
+		return c.result("page", body, trailer), nil
 	})
+}
+
+// sameAddress reports whether the page landed where it was sent: the same
+// URL once both are normalised as a browser would show them, ignoring the
+// fragment, a trailing slash, the case of the scheme and host, a default
+// port and percent-encoding. Only a real move (a redirect, server or
+// script) makes navigate say "Redirected from".
+func sameAddress(requested, final string) bool {
+	a, errA := url.Parse(requested)
+	b, errB := url.Parse(final)
+	if errA != nil || errB != nil {
+		return requested == final
+	}
+	// A name typed in Unicode comes back as punycode, which the standard
+	// library can't convert: taken as the same name.
+	punycode := nonASCII(hostOf(a)) && strings.Contains(hostOf(b), "xn--")
+	if hostOf(a) != hostOf(b) && !punycode {
+		return false
+	}
+	return addressRest(a) == addressRest(b)
+}
+
+// hostOf is a URL's host in lower case, with its port unless it is the
+// scheme's default.
+func hostOf(u *url.URL) string {
+	scheme, host, p := strings.ToLower(u.Scheme), strings.ToLower(u.Hostname()), u.Port()
+	defaultPort := (scheme == "http" && p == "80") || (scheme == "https" && p == "443")
+	if p != "" && !defaultPort {
+		return net.JoinHostPort(host, p)
+	}
+	return host
+}
+
+func nonASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return true
+		}
+	}
+	return false
+}
+
+// addressRest is a URL's scheme, path (without a trailing slash) and
+// query, percent-decoded.
+func addressRest(u *url.URL) string {
+	query := u.RawQuery
+	if q, err := url.PathUnescape(query); err == nil {
+		query = q
+	}
+	return strings.ToLower(u.Scheme) + " " + strings.TrimRight(u.Path, "/") + "?" + query
 }
 
 // waitLoad polls the active tab until a new document (want, if known;

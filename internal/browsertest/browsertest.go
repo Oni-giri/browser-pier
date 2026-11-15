@@ -397,3 +397,41 @@ func (s *Site) Account(t *testing.T, p *CDP) string {
 	_, seen := s.state()
 	return seen
 }
+
+// OtherAddress is another name for the test site's host, as a different
+// site: what host resolves to in the browser's container when it's a name
+// (host.docker.internal under rootless Podman), or else, since an address
+// has no name to resolve (getent would fail on Docker's bridge gateway,
+// CI's default), another IPv4 address of this machine that the container
+// reaches the site at (the test site listens on every interface). Not
+// every one does: rootless Podman's network namespace holds a copy of the
+// host's LAN address, so the container can't reach the host there.
+// container is the browser container's name.
+func OtherAddress(t *testing.T, container, host, port string) string {
+	t.Helper()
+	if net.ParseIP(host) == nil {
+		out, err := exec.Command("docker", "exec", container, "getent", "hosts", host).Output() //nolint:gosec // a test's own container and host
+		if err != nil || len(strings.Fields(string(out))) == 0 {
+			t.Fatalf("can't resolve %s in the container: %v %q", host, err, out)
+		}
+		return strings.Fields(string(out))[0]
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range addrs {
+		n, ok := a.(*net.IPNet)
+		if !ok || n.IP.To4() == nil || !n.IP.IsGlobalUnicast() || n.IP.Equal(net.ParseIP(host)) || n.Contains(net.ParseIP(host)) {
+			continue
+		}
+		probe := exec.Command("docker", "exec", container, "timeout", "3", "bash", "-c", "exec 3<>/dev/tcp/"+n.IP.String()+"/"+port) //nolint:gosec // a test's own container
+		if probe.Run() != nil {
+			t.Logf("the container can't reach %s; trying another address", n.IP)
+			continue
+		}
+		return n.IP.String()
+	}
+	t.Fatalf("no address of this machine but %s that the browser's container reaches; set BROWSERPIER_TEST_SITE_HOST to a name", host)
+	return ""
+}
