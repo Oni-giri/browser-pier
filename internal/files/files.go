@@ -232,6 +232,41 @@ func (s *Store) Upload(profile, name string, r io.Reader, max int64) (File, stri
 	return File{Name: final, Size: n, Modified: time.Now()}, path.Join(MountPoint, Uploads, final), nil
 }
 
+// Uploaded checks that uploads/name is a file the browser can be given
+// (PROJ-117): a plain name (ValidName), opened inside the uploads
+// folder's root without following a link, and a regular file. It returns
+// the file and its path in the browser, /files/uploads/<name>, the only
+// kind of path act's upload step hands to DOM.setFileInputFiles. A
+// symlink, a folder, a FIFO or a missing file is ErrNotFound.
+func (s *Store) Uploaded(profile, name string) (File, string, error) {
+	if !ValidName(name) {
+		return File{}, "", ErrBadName
+	}
+	root, err := s.open(profile, Uploads)
+	if err != nil {
+		return File{}, "", err
+	}
+	defer func() { _ = root.Close() }()
+	// os.Root follows a link that stays inside the folder, but the
+	// browser resolves the path in its own filesystem: the name itself
+	// must be a regular file, not a link of any kind (Lstat), and what is
+	// opened must be that same file.
+	link, err := root.Lstat(name)
+	if err != nil || !link.Mode().IsRegular() {
+		return File{}, "", ErrNotFound
+	}
+	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return File{}, "", ErrNotFound
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() || !os.SameFile(link, info) {
+		return File{}, "", ErrNotFound
+	}
+	return File{Name: name, Size: info.Size(), Modified: info.ModTime()}, path.Join(MountPoint, Uploads, name), nil
+}
+
 // publish links tmp in as name, or name with " (2)", " (3)"… before its
 // extension, whichever is free. A hard link never replaces an existing
 // file, so two uploads with the same name can't overwrite each other.
