@@ -163,6 +163,10 @@ func TestPageToolsStayQuiet(t *testing.T) {
 		{"act", steps(map[string]any{"action": "upload", "ref": doc, "files": []string{up.Name}}), []string{"file-without-click@main"}},
 		{"wait", map[string]any{"text": "Account"}, nil},
 		{"wait", map[string]any{"ref": goBtn}, nil},
+		// Targets read the AX tree, as snapshot does (PROJ-123).
+		{"act", steps(map[string]any{"action": "hover", "target": `role=button[name="Continue"]`}), nil},
+		{"act", steps(map[string]any{"action": "click", "target": `role=button[name="continue"]`}), nil},
+		{"wait", map[string]any{"target": `role=button[name="Continue"]`}, nil},
 		// The page polls every 200 ms, so load times out: what counts
 		// is that reading its Resource Timing entries isn't seen
 		// (PROJ-122).

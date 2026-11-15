@@ -229,6 +229,16 @@ document.getElementById('video').src = '/consent-frame';</script>`,
 <button onmouseover="report('hovered')">Hover me</button>
 <label>Upload <input type="file"></label>`,
 	"/signed-in": `<!doctype html><title>Account</title><h1>Signed in</h1>`,
+	// PROJ-123: two buttons named alike, a hidden third, and a paragraph
+	// with a link in it, for role and text targets.
+	"/two-deletes": `<!doctype html><title>Two deletes</title>` + report + `
+<main><h1>Your files</h1>
+<ul><li>report.pdf <button onclick="report('delete 1')">Delete</button></li>
+<li>notes.txt <button onclick="report('delete 2')">Delete</button></li>
+<li style="display:none">old.txt <button onclick="report('delete hidden')">Delete</button></li></ul>
+<p>Deleted files stay in the bin for 30 days; <a href="#bin" onclick="report('bin')">open the bin</a> to restore one.</p>
+<button onclick="setTimeout(() => { const b = document.createElement('button'); b.textContent = 'Undo'; b.onclick = () => report('undo'); document.querySelector('main').append(b); }, 1000)">Offer a way back</button>
+</main>`,
 	// A sign-in bounce by script (PROJ-121): a session check, a callback,
 	// then the page; a page that never stops redirecting; one that sends
 	// itself to an address the browser can't reach (link-local: the

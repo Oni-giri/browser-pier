@@ -352,8 +352,8 @@ func (c *call) checkTarget(ctx context.Context, w *waiter) (waitCheck, error) {
 	if errors.Is(err, cdp.ErrWorldGone) {
 		return waitCheck{now: "the next page is still coming"}, nil
 	}
-	if errors.Is(err, errTargetMoved) {
-		// Navigated while it was read: look again.
+	if errors.Is(err, errTargetMoved) || errors.Is(err, errNoDocument) {
+		// Navigated while it was read, or between documents: look again.
 		return waitCheck{now: "the page is changing"}, nil
 	}
 	if err != nil {

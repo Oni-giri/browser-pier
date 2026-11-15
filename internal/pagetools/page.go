@@ -526,6 +526,10 @@ func (c *call) readSlot(ctx context.Context) (release func(), err error) {
 // errTooLarge is snapshot's answer on a page past the size cap.
 var errTooLarge = &Error{Status: 422, Msg: "page too large to snapshot; use find"}
 
+// errNoDocument: the DOM snapshot found no document, as between a
+// navigation's start and its new document.
+var errNoDocument = &Error{Status: 502, Msg: "the page has no document yet; try again"}
+
 // readDOM takes the DOM snapshot of the target's top document.
 func (c *call) readDOM(ctx context.Context) (*dom, error) {
 	var s domSnapshot
@@ -536,7 +540,7 @@ func (c *call) readDOM(ctx context.Context) (*dom, error) {
 		return nil, err
 	}
 	if len(s.Documents) == 0 || len(s.Documents[0].Nodes.BackendNodeID) == 0 {
-		return nil, &Error{Status: 502, Msg: "the page has no document yet; try again"}
+		return nil, errNoDocument
 	}
 	return indexDOM(&s), nil
 }

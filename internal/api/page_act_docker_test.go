@@ -595,3 +595,109 @@ func TestActReportsChanges(t *testing.T) {
 		t.Errorf("after a navigation:\n%s", out)
 	}
 }
+
+// TestPageToolsActOnTargets is PROJ-123 on a real browser: role and text
+// targets, with no snapshot first, as Chromium computes roles and names.
+func TestPageToolsActOnTargets(t *testing.T) {
+	a := newRealAPI(t)
+	site := browsertest.NewPageSite(t, browsertest.SiteHost(t))
+	s := a.startAPIBrowser(t, "g")
+	waitEvent := func(e string) bool {
+		deadline := time.Now().Add(5 * time.Second)
+		for !site.HasEvent(e) && time.Now().Before(deadline) {
+			time.Sleep(50 * time.Millisecond)
+		}
+		return site.HasEvent(e)
+	}
+	refs := regexp.MustCompile(`\[ref=([a-z][a-z0-9]e[0-9]+)\]`)
+
+	// Sign in by role and label, straight after navigate: no snapshot.
+	a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/login"})
+	out := a.mustTool(s.ID, "act", steps(
+		map[string]any{"action": "fill", "target": `role=textbox[name="email"]`, "text": "ana@example.com"},
+		map[string]any{"action": "fill", "target": `role=textbox[name="password"]`, "text": "PASSWORD-hunter2"},
+		map[string]any{"action": "check", "target": `role=checkbox[name="remember"]`},
+		map[string]any{"action": "click", "target": `role=button[name="sign in"]`},
+	))
+	for _, want := range []string{`textbox "Email" (typed 15 characters)`, `textbox "Password" (typed 16 characters)`, `checkbox "Remember me"`, `button "Sign in"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("login: missing %q in\n%s", want, out)
+		}
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for len(site.Logins()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if got := site.Logins(); len(got) != 1 || got[0] != "ana@example.com:PASSWORD-hunter2" {
+		t.Fatalf("the site got %v", got)
+	}
+	if strings.Contains(out, "PASSWORD") {
+		t.Errorf("the password is in the result:\n%s", out)
+	}
+	// The page navigated: a target still works where a ref would be stale.
+	out = a.mustTool(s.ID, "wait", map[string]any{"target": `role=heading[name="Signed in"]`})
+	if !strings.Contains(out, `role=heading[name="Signed in"] is visible (it is `) && !strings.Contains(out, `role=heading[name="Signed in"] to be visible (it is `) {
+		t.Errorf("wait for the heading: %s", out)
+	}
+
+	// Two visible Delete buttons (and a hidden third): the error lists
+	// both with refs, and one of them works; so does >> nth.
+	a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/two-deletes"})
+	code, msg := a.tool(s.ID, "act", steps(map[string]any{"action": "click", "target": `role=button[name="Delete"]`}))
+	found := refs.FindAllStringSubmatch(msg, -1)
+	if code != http.StatusConflict || !strings.Contains(msg, `role=button[name="Delete"] matches 2 visible elements:`) || len(found) != 2 ||
+		!strings.Contains(msg, "<untrusted-content-") || !strings.Contains(msg, ">> nth=0") {
+		t.Fatalf("ambiguous: %d %s", code, msg)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if len(site.Events()) != 0 {
+		t.Errorf("something was clicked: %v", site.Events())
+	}
+	a.mustTool(s.ID, "act", steps(map[string]any{"action": "click", "ref": found[0][1]}))
+	if !waitEvent("delete 1") {
+		t.Errorf("the first candidate's ref: %v", site.Events())
+	}
+	out = a.mustTool(s.ID, "act", steps(map[string]any{"action": "click", "target": `role=button[name="Delete"] >> nth=1`}))
+	if !strings.Contains(out, `clicked `+found[1][1]+` button "Delete"`) || !waitEvent("delete 2") {
+		t.Errorf("nth=1: %s %v", out, site.Events())
+	}
+	// No match lists the page's visible buttons.
+	code, msg = a.tool(s.ID, "act", steps(map[string]any{"action": "click", "target": `role=button[name="Publish"]`}))
+	if code != http.StatusConflict || !strings.Contains(msg, "the page's visible button elements:") || !strings.Contains(msg, `button "Offer a way back" [ref=`) || site.HasEvent("delete hidden") {
+		t.Errorf("no match: %d %s", code, msg)
+	}
+	// Text: the link inside the paragraph, and the paragraph for a
+	// phrase across the link.
+	a.mustTool(s.ID, "act", steps(map[string]any{"action": "click", "target": `text=open the bin`}))
+	if !waitEvent("bin") {
+		t.Errorf("text target on the link: %v", site.Events())
+	}
+	code, msg = a.tool(s.ID, "act", steps(map[string]any{"action": "click", "target": `text="Delete"`}))
+	if code != http.StatusConflict || !strings.Contains(msg, `matches 2 visible elements:`) {
+		t.Errorf("exact text, twice: %d %s", code, msg)
+	}
+	out = a.mustTool(s.ID, "act", steps(map[string]any{"action": "hover", "target": `text=30 days; open the bin`}))
+	if !strings.Contains(out, "hovered over ") || !strings.Contains(out, "paragraph") {
+		t.Errorf("text across the link: %s", out)
+	}
+	// wait_for a target that a script adds, then act on its ref.
+	a.mustTool(s.ID, "act", steps(map[string]any{"action": "click", "target": `role=button[name="Offer a way back"]`}))
+	out = a.mustTool(s.ID, "wait", map[string]any{"target": `role=button[name="Undo"]`, "timeout_ms": 5000})
+	m := regexp.MustCompile(`^waited [0-9.]+ s for role=button\[name="Undo"\] to be visible \(it is ([a-z][a-z0-9]e[0-9]+)\)$`).FindStringSubmatch(out)
+	if m == nil {
+		t.Fatalf("wait for Undo: %s", out)
+	}
+	a.mustTool(s.ID, "act", steps(map[string]any{"action": "click", "ref": m[1]}))
+	if !waitEvent("undo") {
+		t.Errorf("Undo's ref: %v", site.Events())
+	}
+	// Several for more than a second: the wait fails with the candidates.
+	code, msg = a.tool(s.ID, "wait", map[string]any{"target": `role=button[name="Delete"]`, "timeout_ms": 5000})
+	if code != http.StatusConflict || len(refs.FindAllStringSubmatch(msg, -1)) != 2 {
+		t.Errorf("ambiguous wait: %d %s", code, msg)
+	}
+	// CSS is refused.
+	if code, msg := a.tool(s.ID, "act", steps(map[string]any{"action": "click", "target": "button.delete"})); code != http.StatusBadRequest || !strings.Contains(msg, "CSS selectors aren't accepted") {
+		t.Errorf("CSS: %d %s", code, msg)
+	}
+}
