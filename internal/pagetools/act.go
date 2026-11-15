@@ -221,9 +221,9 @@ func (t *Tools) Act(ctx context.Context, s sessions.Session, who Caller, in ActI
 	// it holds up no other call.
 	var mark *files.Mark
 	if t.files != nil {
-		mark = t.files.Mark(s.Profile)
+		mark = t.files.Mark(s.Profile, s.ID)
 	}
-	out, err := t.act(ctx, s, who, in)
+	out, err := t.act(ctx, s, who, in, mark)
 	var e *Error
 	if mark == nil || (err != nil && !errors.As(err, &e)) {
 		return out, err // no files store, or the caller went away
@@ -256,8 +256,9 @@ func (t *Tools) downloads(ctx context.Context, s sessions.Session, who Caller, m
 	return "### Downloads\n" + fence.Wrap("downloads", strings.Join(files.Lines(ds), "\n"))
 }
 
-// act runs act's steps, once they have been checked.
-func (t *Tools) act(ctx context.Context, s sessions.Session, who Caller, in ActIn) (string, error) {
+// act runs act's steps, once they have been checked, and tells mark when
+// they have ended.
+func (t *Tools) act(ctx context.Context, s sessions.Session, who Caller, in ActIn, mark *files.Mark) (string, error) {
 	return t.run(ctx, s, who, func(c *call) (string, error) {
 		ctx := c.lease.Ctx
 		changes := in.Changes != nil && *in.Changes
@@ -286,6 +287,9 @@ func (t *Tools) act(ctx context.Context, s sessions.Session, who Caller, in ActI
 			}
 			done = append(done, line)
 		}
+		// The steps are done: the download notice's grace runs while the
+		// changes or the snapshot are read.
+		mark.Ended()
 		// A step may have opened a tab.
 		_, _ = c.listTabs(ctx)
 		out := c.result("page actions", strings.Join(done, "\n"), "")
