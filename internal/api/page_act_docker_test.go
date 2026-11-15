@@ -225,3 +225,63 @@ func TestPageToolsAct(t *testing.T) {
 		}
 	}
 }
+
+// TestActInputLooksHuman is PROJ-113's check for act in API mode: what a
+// page's own script records of act's clicks and typing looks like a hand.
+// (CDP's input events are trusted too, but that isn't the point here.)
+func TestActInputLooksHuman(t *testing.T) {
+	a := newRealAPI(t)
+	det := browsertest.NewDetector(t, browsertest.SiteHost(t))
+	s := a.startAPIBrowser(t, "m")
+	a.mustTool(s.ID, "navigate", map[string]string{"url": det.InputURL()})
+	snap := a.mustTool(s.ID, "snapshot", nil)
+	btnA, btnB, text := refFor(t, snap, `button "Button A"`), refFor(t, snap, `button "Button B"`), refFor(t, snap, `textbox "Text"`)
+	ups := func(n int) func([]browsertest.InputEvent) bool {
+		return func(ev []browsertest.InputEvent) bool { return len(ofType(ev, "mouseup")) >= n }
+	}
+	settle := func() []browsertest.InputEvent {
+		time.Sleep(300 * time.Millisecond)
+		ev := det.Events()
+		det.ResetEvents()
+		return ev
+	}
+
+	// The buttons are 400 px apart: a glide from one to the other.
+	a.mustTool(s.ID, "act", steps(map[string]any{"action": "click", "ref": btnA}))
+	det.WaitEvents(t, "the first click", ups(1))
+	settle()
+	a.mustTool(s.ID, "act", steps(map[string]any{"action": "click", "ref": btnB}))
+	det.WaitEvents(t, "the 400 px click", ups(1))
+	looksLikeAHandsClick(t, settle())
+
+	// Ten clicks on one button land on more than one pixel, all on it.
+	var ten []map[string]any
+	for range 10 {
+		ten = append(ten, map[string]any{"action": "click", "ref": btnB})
+	}
+	a.mustTool(s.ID, "act", steps(ten...))
+	ev := det.WaitEvents(t, "ten clicks", ups(10))
+	seen := map[[2]float64]bool{}
+	for _, d := range ofType(ev, "mousedown") {
+		seen[[2]float64{d.X, d.Y}] = true
+		if d.Target != "b" {
+			t.Errorf("a click on button B landed on %q at (%v, %v)", d.Target, d.X, d.Y)
+		}
+	}
+	if len(seen) < 2 {
+		t.Errorf("ten clicks on a button all landed on %v", seen)
+	}
+	holdsLikeAHand(t, settle())
+
+	// Typing 30 characters: a typist's uneven rhythm.
+	const typed = "the quick brown fox jumps over"
+	a.mustTool(s.ID, "act", steps(map[string]any{"action": "type", "ref": text, "text": typed}))
+	ev = det.WaitEvents(t, "30 keystrokes", func(ev []browsertest.InputEvent) bool { return len(ofType(ev, "keyup")) >= len(typed) })
+	typesLikeATypist(t, ev, typed)
+
+	for _, tg := range targets(t, a.m.Layout().ControlSocket(s.Profile)) {
+		if tg.Attached {
+			t.Errorf("%s is still attached", tg.URL)
+		}
+	}
+}
