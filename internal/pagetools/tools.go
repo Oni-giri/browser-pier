@@ -256,6 +256,11 @@ type call struct {
 	instant bool
 	keyAt   time.Time
 	keyDue  time.Duration
+	// slotWait, if set and shorter than the tools' readWait, is how long
+	// this call's whole-page reads wait for a read slot: a read the call
+	// can do without (act's changes) or one bounded by a deadline (a
+	// target wait's look) doesn't hold the session for the full wait.
+	slotWait time.Duration
 }
 
 // begin starts a call on a session the caller may use, sending only

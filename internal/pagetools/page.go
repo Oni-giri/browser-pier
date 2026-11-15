@@ -508,10 +508,15 @@ var errBusy = &Error{Status: http.StatusServiceUnavailable, Msg: "BrowserPier is
 
 // readSlot takes one of the whole-page read slots (maxReads), shared by
 // every session's snapshots, finds and content calls, waiting at most
-// readWait; release gives it back. Hold it for as long as the page's
-// answer is held in memory, rendering included.
+// readWait (or the call's shorter slotWait); release gives it back. Hold
+// it for as long as the page's answer is held in memory, rendering
+// included.
 func (c *call) readSlot(ctx context.Context) (release func(), err error) {
-	wait := time.NewTimer(c.t.readWait)
+	d := c.t.readWait
+	if c.slotWait > 0 {
+		d = min(d, c.slotWait)
+	}
+	wait := time.NewTimer(d)
 	defer wait.Stop()
 	select {
 	case c.t.reads <- struct{}{}:

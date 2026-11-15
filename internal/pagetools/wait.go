@@ -119,8 +119,11 @@ type waitCheck struct {
 	// note qualifies a met condition, in BrowserPier's words.
 	note string
 	// fail, if set, is the wait's error should it time out now: a target
-	// that matches several elements (PROJ-123).
-	fail func() error
+	// that matches several elements (PROJ-123), or a browser that
+	// refused its last read; failNote says which in the activity log
+	// ("several matches" if empty).
+	fail     func() error
+	failNote string
 }
 
 // waiter is one wait's state between looks.
@@ -134,14 +137,20 @@ type waiter struct {
 	count     int
 	quietFrom time.Time
 	// tgt is the target awaited, and ambiguous since when it has matched
-	// several elements.
+	// several elements. seen is what its last look that read the page
+	// found, for an answer when the looks after it couldn't read.
 	tgt       target
 	ambiguous time.Time
+	seen      string
+	// deadline is when the wait ends: a look waits no longer for a read
+	// slot.
+	deadline time.Time
 }
 
 // WaitFor waits for one condition on the active tab, polling every 250 ms
-// (no events, nothing enabled), for up to timeout_ms (10 s by default,
-// 30 s at most). A handoff, a hold or a stop ends it at once. It answers
+// (no events, nothing enabled; a target, whose look is a whole-page read,
+// backs off to 500 ms, then 1 s), for up to timeout_ms (10 s by default,
+// 30 s at most), its last look at the deadline. A handoff, a hold or a stop ends it at once. It answers
 // "already true when wait started: …" when the first look, before any
 // sleep, finds it so (the agent waited for what was already there, often
 // its own text echoed), else "waited 1.4 s for …", or "timed out after
@@ -206,6 +215,8 @@ func (t *Tools) WaitFor(ctx context.Context, s sessions.Session, who Caller, in 
 		is, awaited := waitCond(in)
 		start := time.Now()
 		deadline := start.Add(timeout)
+		w.deadline = deadline
+		interval := c.t.poll
 		for first := true; ; first = false {
 			ck, err := c.check1(ctx, w, first)
 			if err != nil {
@@ -224,7 +235,7 @@ func (t *Tools) WaitFor(ctx context.Context, s sessions.Session, who Caller, in 
 				c.note(what + ": gone after " + took)
 				return c.result("page", "", "gave up after "+took+" waiting for "+awaited+"; now: "+ck.now), nil
 			case time.Now().After(deadline) && ck.fail != nil:
-				c.note(what + ": several matches")
+				c.note(what + ": " + cmp.Or(ck.failNote, "several matches"))
 				return "", ck.fail()
 			case time.Now().After(deadline):
 				c.note(what + ": timed out")
@@ -234,10 +245,17 @@ func (t *Tools) WaitFor(ctx context.Context, s sessions.Session, who Caller, in 
 				}
 				return c.result("page", "", out), nil
 			}
+			// The last look is at the deadline, not up to a poll after it.
+			pause := min(interval, max(time.Until(deadline), time.Millisecond))
 			select {
 			case <-ctx.Done():
 				return "", ctx.Err()
-			case <-time.After(c.t.poll):
+			case <-time.After(pause):
+			}
+			if in.Target != "" {
+				// Each look reads the whole page and takes a read slot
+				// that every session shares: back off, to four polls.
+				interval = min(2*interval, 4*c.t.poll)
 			}
 		}
 	})
@@ -353,15 +371,32 @@ func (c *call) checkLoad(ctx context.Context, w *waiter) (waitCheck, error) {
 // with act's error and its candidates. Hidden: no visible match.
 func (c *call) checkTarget(ctx context.Context, w *waiter) (waitCheck, error) {
 	t := w.tgt
+	// A look waits for a read slot no later than the deadline, and a
+	// little at the deadline itself.
+	c.slotWait = max(time.Until(w.deadline), c.t.poll)
 	r, err := c.readTarget(ctx, t)
-	if errors.Is(err, cdp.ErrWorldGone) {
+	c.slotWait = 0
+	var ce *cdp.Error
+	switch {
+	case errors.Is(err, cdp.ErrWorldGone):
 		return waitCheck{now: "the next page is still coming"}, nil
-	}
-	if errors.Is(err, errTargetMoved) || errors.Is(err, errNoDocument) {
+	case errors.Is(err, errTargetMoved) || errors.Is(err, errNoDocument):
 		// Navigated while it was read, or between documents: look again.
 		return waitCheck{now: "the page is changing"}, nil
-	}
-	if err != nil {
+	case errors.Is(err, errBusy):
+		// Other sessions' large pages hold the read slots: look again,
+		// and say so if this was the last look.
+		now := "BrowserPier was too busy reading other large pages to look"
+		if w.seen != "" {
+			now = w.seen + " (at the last look BrowserPier could make; it was too busy reading other large pages to look again)"
+		}
+		return waitCheck{now: now}, nil
+	case errors.As(err, &ce) && !errors.As(err, new(*Error)):
+		// The browser refused part of the read, as it can while a
+		// navigation is under way: look again. A refusal that lasts to
+		// the deadline is the wait's answer.
+		return waitCheck{now: "the page is changing", fail: func() error { return err }, failNote: "the browser refused to read the page"}, nil
+	case err != nil:
 		return waitCheck{}, err
 	}
 	n := len(r.matches)
@@ -381,6 +416,7 @@ func (c *call) checkTarget(ctx context.Context, w *waiter) (waitCheck, error) {
 			now += "es"
 		}
 	}
+	w.seen = now
 	if w.in.State == "hidden" {
 		if picked < 0 && (t.hasNth || n == 0) {
 			return waitCheck{ok: true}, nil

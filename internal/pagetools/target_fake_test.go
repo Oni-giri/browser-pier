@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Oni-giri/browser-pier/internal/cdp/cdptest"
 )
 
 // targetPage is a page for role and text targets: buttons, two of them
@@ -408,5 +410,98 @@ func TestTargetsTakeAReadSlot(t *testing.T) {
 	}
 	if !isStatus(err, 503) || len(p.clicked()) != 0 {
 		t.Errorf("no read slot: %v %v", err, p.clicked())
+	}
+}
+
+// TestTargetWaitBacksOff: each look of a target wait reads the whole page
+// and takes a shared read slot, so the looks back off from a poll to four
+// (250 ms to 1 s), the last of them at the deadline (PROJ-123).
+func TestTargetWaitBacksOff(t *testing.T) {
+	f := newFixture(t)
+	p := newTargetPage(f.fb)
+	f.fb.addTab("https://example.com/", p.doc, true)
+	reads := func() int {
+		n := 0
+		for _, m := range f.fb.Received() {
+			if m.Method == "DOMSnapshot.captureSnapshot" {
+				n++
+			}
+		}
+		return n
+	}
+	f.tools.poll = 20 * time.Millisecond
+	before := reads()
+	start := time.Now()
+	out, err := f.waitIn(WaitIn{Target: `role=button[name="Publish"]`, TimeoutMS: 400})
+	took := time.Since(start)
+	// Looks at 0, 20, 60, 140, 220, 300, 380 and 400 ms: 8, where a
+	// steady poll would make 21.
+	if n := reads() - before; err != nil || !strings.HasPrefix(out, "timed out after 0.4 s") || n < 5 || n > 11 {
+		t.Errorf("%d looks in %s: %v %q", n, took, err, out)
+	}
+	if took > 600*time.Millisecond {
+		t.Errorf("the last look came %s after the start of a 400 ms wait", took)
+	}
+}
+
+// TestTargetWaitOutlastsBusyAndRefusals: a look that finds the read slots
+// all taken, or that the browser refuses part of (as mid-navigation), is
+// looked at again until the deadline (PROJ-123), whose answer says why.
+func TestTargetWaitOutlastsBusyAndRefusals(t *testing.T) {
+	f := newFixture(t)
+	p := newTargetPage(f.fb)
+	f.fb.addTab("https://example.com/", p.doc, true)
+	// Other sessions hold both slots for the whole wait: no 503, a
+	// timeout that says why, well before readWait.
+	f.tools.readWait = 10 * time.Second
+	for range maxReads {
+		f.tools.reads <- struct{}{}
+	}
+	start := time.Now()
+	out, err := f.waitIn(WaitIn{Target: `role=button[name="Save"]`, TimeoutMS: 100})
+	if err != nil || out != `timed out after 0.1 s waiting for role=button[name="Save"] to be visible; now: BrowserPier was too busy reading other large pages to look` || time.Since(start) > 2*time.Second {
+		t.Errorf("busy throughout: %v %q after %s", err, out, time.Since(start))
+	}
+	// A slot frees during the wait: it looks then (its first look waits
+	// for one up to the deadline).
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		<-f.tools.reads
+	}()
+	out, err = f.waitIn(WaitIn{Target: `role=button[name="Save"]`, TimeoutMS: 3000})
+	if err != nil || !strings.Contains(out, `role=button[name="Save"] is visible (it is `) {
+		t.Errorf("a slot frees: %v %q", err, out)
+	}
+	<-f.tools.reads
+	// The browser refuses one read: looked at again.
+	var mu sync.Mutex
+	refusals := 0
+	f.fb.mu.Lock()
+	f.fb.intercept = func(tb *ftab, m cdptest.Message) (any, bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if m.Method == "DOMSnapshot.captureSnapshot" && refusals > 0 {
+			refusals--
+			return nil, true, cdptest.Error{Message: "Document is being replaced"}
+		}
+		return nil, false, nil
+	}
+	f.fb.mu.Unlock()
+	mu.Lock()
+	refusals = 1
+	mu.Unlock()
+	out, err = f.waitIn(WaitIn{Target: `role=button[name="Save"]`, TimeoutMS: 3000})
+	if err != nil || !strings.HasPrefix(out, "waited ") {
+		t.Errorf("one refusal: %v %q", err, out)
+	}
+	// It refuses every read: that is the answer at the deadline.
+	mu.Lock()
+	refusals = 1 << 30
+	mu.Unlock()
+	if _, err := f.waitIn(WaitIn{Target: `role=button[name="Save"]`, TimeoutMS: 60}); !isStatus(err, 502) || !strings.Contains(err.Error(), "the browser refused") {
+		t.Errorf("refused throughout: %v", err)
+	}
+	if acts := f.m.Activity(f.sess.ID); acts[0].What != "Waited for a role target to be visible: the browser refused to read the page" {
+		t.Errorf("activity: %v", acts[0])
 	}
 }

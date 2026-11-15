@@ -110,6 +110,9 @@ type fakeBrowser struct {
 	// challenge is what jsPageInfo reports of a Cloudflare challenge
 	// widget on a page, by URL (PROJ-120); none: null.
 	challenge map[string]map[string]any
+	// intercept, if set, answers any method on a tab before the fake does
+	// (an injected refusal, say), when it says it handled it.
+	intercept func(tab *ftab, m cdptest.Message) (res any, handled bool, err error)
 	// call answers methods the fake doesn't know (phase 2's DOM and Input).
 	call func(tab *ftab, m cdptest.Message) (res any, handled bool, err error)
 	// maxNodes makes the DOM snapshot claim this many nodes, if set.
@@ -202,6 +205,11 @@ func (fb *fakeBrowser) handle(m cdptest.Message) (any, error) {
 	tb := fb.bySession(m.SessionID)
 	if tb != nil && tb.stuck && rendererMethod(m.Method) {
 		return nil, cdptest.NoReply
+	}
+	if fb.intercept != nil && tb != nil {
+		if res, ok, err := fb.intercept(tb, m); ok {
+			return res, err
+		}
 	}
 	switch m.Method {
 	case "Target.getTargets":
