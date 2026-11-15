@@ -178,3 +178,48 @@ func TestPageToolsStayQuiet(t *testing.T) {
 		t.Log("each hit above must be listed in images/chromium/ANTI-BOT.md with a decision")
 	}
 }
+
+// TestRestoredTabsAfterAStop is PROJ-112's check on the page tools: with
+// "continue where you left off", a browser starts again with the tabs it
+// had. tabs lists them all, and snapshot reads the one in front.
+func TestRestoredTabsAfterAStop(t *testing.T) {
+	a := newRealAPI(t)
+	site := browsertest.NewPageSite(t, browsertest.SiteHost(t))
+	s := a.startAPIBrowser(t, "r")
+	a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/nav"})
+	a.mustTool(s.ID, "tabs", map[string]string{"action": "new", "url": site.URL + "/login"})
+	if code := a.do(http.MethodDelete, "/api/sessions/"+s.ID, "", nil); code != http.StatusOK {
+		t.Fatalf("stop: %d", code)
+	}
+
+	var again sessionJSON
+	if code := a.do(http.MethodPost, "/api/sessions", fmt.Sprintf(`{"profile": %q}`, s.Profile), &again); code != http.StatusCreated {
+		t.Fatalf("start again: %d %+v", code, again)
+	}
+	// Chromium reopens the tabs as it starts; give it a moment.
+	var list string
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		list = a.mustTool(again.ID, "tabs", nil)
+		if strings.Contains(list, "/nav") && strings.Contains(list, "/login") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after a stop and start the tabs aren't both back:\n%s", list)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	var front string
+	for _, l := range strings.Split(list, "\n") {
+		if strings.HasSuffix(l, "(active)") {
+			front = l
+		}
+	}
+	if !strings.Contains(front, "/login") {
+		t.Errorf("the tab in front before the stop (/login) isn't the active one after it:\n%s", list)
+	}
+	snap := a.mustTool(again.ID, "snapshot", nil)
+	if !strings.Contains(snap, site.URL+"/login") || !strings.Contains(snap, "Sign in") {
+		t.Errorf("snapshot doesn't read the tab in front (/login):\n%s", snap)
+	}
+}

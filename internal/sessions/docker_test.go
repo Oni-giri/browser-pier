@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -168,13 +169,55 @@ func TestLoginSurvivesStopAndStart(t *testing.T) {
 	stopCleanly(t, m, next.ID)
 }
 
+// TestSessionCookieLoginSurvivesIdleAutoStop is PROJ-112 through the
+// orchestrator: a login kept in a session-only cookie survives the idle
+// auto-stop, not only a stop someone asked for.
+func TestSessionCookieLoginSurvivesIdleAutoStop(t *testing.T) {
+	f := newRealFixture(t)
+	m := f.manager(f.layout)
+	// The idle check reads the manager's clock; this test moves it on.
+	var ahead atomic.Int64
+	m.now = func() time.Time { return time.Now().Add(time.Duration(ahead.Load())) }
+	name := f.profile(m)
+	site := browsertest.NewSite(t, browsertest.SiteHost(t))
+	site.SessionCookie()
+
+	s := startRunning(t, m, name)
+	control := browsertest.ControlClient(f.layout.ControlSocket(name))
+	p := browsertest.Page(t, control)
+	token := site.Login(t, p)
+	p.Close()
+
+	ahead.Store(int64(time.Hour)) // past the profile's 15-minute auto-stop
+	m.stopIdle(context.Background())
+	if got, err := m.Get(context.Background(), s.ID); err != nil || got.State != Stopped {
+		t.Fatalf("after the idle check the session is %+v (%v), want it stopped", got, err)
+	}
+	ahead.Store(0)
+
+	next := startRunning(t, m, name)
+	if got := site.Account(t, browsertest.Page(t, control)); got != token {
+		t.Fatalf("after the idle auto-stop the site saw session %q, want %q: the session-only cookie was lost", got, token)
+	}
+	stopCleanly(t, m, next.ID)
+}
+
 // TestLoginSurvivesExportAndImport: a profile exported and imported under
-// another name is still logged in.
+// another name is still logged in, whether its login is a persistent or a
+// session-only cookie.
 func TestLoginSurvivesExportAndImport(t *testing.T) {
+	t.Run("persistent cookie", func(t *testing.T) { loginSurvivesExportAndImport(t, false) })
+	t.Run("session cookie", func(t *testing.T) { loginSurvivesExportAndImport(t, true) })
+}
+
+func loginSurvivesExportAndImport(t *testing.T, sessionOnly bool) {
 	f := newRealFixture(t)
 	m := f.manager(f.layout)
 	name := f.profile(m)
 	site := browsertest.NewSite(t, browsertest.SiteHost(t))
+	if sessionOnly {
+		site.SessionCookie()
+	}
 
 	s := startRunning(t, m, name)
 	p := browsertest.Page(t, browsertest.ControlClient(f.layout.ControlSocket(name)))

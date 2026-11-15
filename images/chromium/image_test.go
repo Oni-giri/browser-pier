@@ -360,6 +360,34 @@ func TestSessionStorageSurvivesStopStart(t *testing.T) {
 	b.stop()
 }
 
+// TestRestoredPostPageIsNotResubmitted: with "continue where you left off",
+// a tab left on the answer to a form POST (a login, a payment) comes back
+// after a stop, and Chromium must not send the form again by itself.
+func TestRestoredPostPageIsNotResubmitted(t *testing.T) {
+	image := testImage(t)
+	s := browsertest.NewSite(t, browsertest.SiteHost(t))
+	vol := newVolume(t)
+
+	b := startBrowser(t, image, vol)
+	p := b.page()
+	token := s.Login(t, p) // the tab stays on POST /login's answer
+	p.Close()
+	if code := b.stop(); code != "0" {
+		t.Fatalf("exit code after stop = %s, want 0\n%s", code, b.logs())
+	}
+	posts := s.Requests()
+
+	b = startBrowser(t, image, vol)
+	b.page().Close()
+	// Long enough for a restored tab to load, or post, several times over.
+	time.Sleep(5 * time.Second)
+	if got := s.Issued(); got != token {
+		t.Fatalf("after the restart the login form was posted again: a new session %q was issued (was %q)", got, token)
+	}
+	t.Logf("requests during the restart: %d", s.Requests()-posts)
+	b.stop()
+}
+
 func TestBrowserEnvironment(t *testing.T) {
 	image := testImage(t)
 	s := browsertest.NewSite(t, browsertest.SiteHost(t))
