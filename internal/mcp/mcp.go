@@ -47,12 +47,29 @@ type Server struct {
 
 	// secrets scrubs tool results (SetSecrets); nil scrubs nothing.
 	secrets SecretsFunc
+
+	// large holds a place for each request whose body may be over
+	// smallBody, so only a couple of near-cap messages are in memory at
+	// once (see gateLarge).
+	large chan struct{}
 }
+
+// smallBody is the SDK's default body limit: a request known to be no
+// larger goes through freely; a larger one, or one of unknown length,
+// waits for a place in Server.large.
+const smallBody = 4 << 20
+
+// largeAtOnce is how many large requests are served at once. An
+// upload_file near its cap holds several copies of its message (the
+// SDK's read, the raw arguments, the decoded string and bytes): over
+// 100 MiB each.
+const largeAtOnce = 2
 
 // New makes the MCP endpoint over api, the mux the agent API is registered on.
 func New(api http.Handler, web *auth.Web, log *slog.Logger, version string) *Server {
 	return &Server{api: api, web: web, log: log, version: version,
-		handlers: map[string]*sdk.StreamableHTTPHandler{}, screens: map[string]screen{}, maxUpload: MaxUpload}
+		handlers: map[string]*sdk.StreamableHTTPHandler{}, screens: map[string]screen{}, maxUpload: MaxUpload,
+		large: make(chan struct{}, largeAtOnce)}
 }
 
 // Register adds /mcp, for agents with a token.
@@ -70,7 +87,47 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	r.Header.Del(hostHeader)
 	r.Header.Set(peerHeader, r.RemoteAddr)
 	r.Header.Set(hostHeader, r.Host)
-	s.handler(tok).ServeHTTP(w, r)
+	gateLarge(s.large, s.handler(tok)).ServeHTTP(w, r)
+}
+
+// gateLarge serves a request whose body is over smallBody only while it
+// holds a place in sem, so the raised body limit (room for one
+// upload_file) can't be multiplied by many requests at once. A body of
+// unknown length (chunked) is read up to smallBody first, as the SDK's
+// default limit allows any request: one that ends by then goes on like a
+// small one, and a longer one waits for a place. The handler's own limit
+// still caps every body.
+func gateLarge(sem chan struct{}, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body == nil || r.Body == http.NoBody || (r.ContentLength >= 0 && r.ContentLength <= smallBody) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.ContentLength < 0 {
+			head, err := io.ReadAll(io.LimitReader(r.Body, smallBody+1))
+			if err != nil {
+				http.Error(w, "couldn't read the request", http.StatusBadRequest)
+				return
+			}
+			if len(head) <= smallBody {
+				r.Body = io.NopCloser(bytes.NewReader(head))
+				r.ContentLength = int64(len(head))
+				next.ServeHTTP(w, r)
+				return
+			}
+			r.Body = struct {
+				io.Reader
+				io.Closer
+			}{io.MultiReader(bytes.NewReader(head), r.Body), r.Body}
+		}
+		select {
+		case sem <- struct{}{}:
+		case <-r.Context().Done():
+			return
+		}
+		defer func() { <-sem }()
+		next.ServeHTTP(w, r)
+	})
 }
 
 // handler is a token's own MCP handler: an MCP session belongs to the
