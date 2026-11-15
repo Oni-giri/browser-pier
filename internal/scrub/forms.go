@@ -12,7 +12,7 @@ import (
 func forms(s string) []string {
 	out := []string{s}
 	// JSON string contents, as JSON.stringify writes them, with "/"
-	// escaped (PHP), HTML-safe (Go's encoding/json: <, &…) and
+	// escaped (PHP), HTML-safe (Go's encoding/json: \u003c, \u0026…) and
 	// ASCII-only (Python's json.dumps, PHP, the X-Downloads header);
 	// once, and twice for JSON inside a JSON string.
 	for _, o := range []jsonOpts{
@@ -51,12 +51,12 @@ func forms(s string) []string {
 
 type jsonOpts struct {
 	slash bool // "/" as "\/"
-	html  bool // <, >, & as <, >, &
+	html  bool // <, >, & as \u003c, \u003e, \u0026
 	ascii bool // everything past ASCII as \uXXXX
 }
 
 // jsonEscape is s as the inside of a JSON string. U+2028 and U+2029 are
-// escaped in the HTML-safe form, as encoding/json does.
+// escaped (\u2028) in the HTML-safe form, as encoding/json does.
 func jsonEscape(s string, o jsonOpts) string {
 	var b strings.Builder
 	for _, r := range s {

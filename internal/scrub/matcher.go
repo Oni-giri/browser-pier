@@ -21,7 +21,7 @@ func newMatcher(pats []string) *matcher {
 		for i := 0; i < len(p); i++ {
 			if m.class[p[i]] == 0 {
 				m.classes++
-				m.class[p[i]] = uint16(m.classes)
+				m.class[p[i]] = uint16(m.classes) //nolint:gosec // at most 256 distinct bytes
 			}
 		}
 	}
@@ -37,11 +37,11 @@ func newMatcher(pats []string) *matcher {
 			if m.next[int(st)*nc+c] == 0 {
 				m.next = append(m.next, make([]int32, nc)...)
 				m.longest = append(m.longest, 0)
-				m.next[int(st)*nc+c] = int32(len(m.longest) - 1)
+				m.next[int(st)*nc+c] = int32(len(m.longest) - 1) //nolint:gosec // states ≤ the patterns' bytes; the table would fill memory long before 2³¹
 			}
 			st = m.next[int(st)*nc+c]
 		}
-		m.longest[st] = max(m.longest[st], int32(len(p)))
+		m.longest[st] = max(m.longest[st], int32(len(p))) //nolint:gosec // as above
 	}
 	// Failure links, breadth first, folded into the table so scanning
 	// never follows them; each state also ends the longest pattern its
@@ -81,8 +81,8 @@ func newMatcher(pats []string) *matcher {
 // find returns the spans of text to hide, sorted and merged, or nil
 // (without allocating) when no pattern occurs.
 func (m *matcher) find(text string) []span {
-	nc := int32(m.classes)
-	class := m.class // on the stack: the hot loop reads it once a byte
+	nc := int32(m.classes) //nolint:gosec // at most 257
+	class := m.class       // on the stack: the hot loop reads it once a byte
 	next := m.next
 	st := int32(0)
 	var spans []span

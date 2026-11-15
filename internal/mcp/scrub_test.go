@@ -190,7 +190,7 @@ func leaks(t *testing.T, scrubbing bool) (leaked []string) {
 				t.Errorf("%s didn't call the API: %s", name, out)
 				continue
 			}
-			bad := strings.Contains(out, "Vault Value") || strings.Contains(out, `é`)
+			bad := strings.Contains(out, "Vault Value") || strings.Contains(out, `\u00e9`)
 			if !ok && !strings.Contains(out, scrub.Hidden) {
 				bad = true // the API's error said it: it must show hidden
 			}

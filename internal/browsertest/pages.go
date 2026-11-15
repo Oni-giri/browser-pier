@@ -517,7 +517,7 @@ func NewPageSite(t *testing.T, host string) *PageSite {
 	// site echoes a password it got in its URL; /bounce redirects there.
 	mux.HandleFunc("GET /echo", func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Query().Get("p")
-		fmt.Fprintf(w, `<!doctype html><title>Welcome %s</title><h1>Signed in</h1><p>You said: %s</p><p><a href="/echo?p=%s">Again</a></p>`,
+		_, _ = fmt.Fprintf(w, `<!doctype html><title>Welcome %s</title><h1>Signed in</h1><p>You said: %s</p><p><a href="/echo?p=%s">Again</a></p>`,
 			html.EscapeString(p), html.EscapeString(p), url.QueryEscape(p))
 	})
 	mux.HandleFunc("GET /bounce", func(w http.ResponseWriter, r *http.Request) {

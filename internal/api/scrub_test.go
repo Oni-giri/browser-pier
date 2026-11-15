@@ -100,7 +100,8 @@ func (f *fixture) scrubServer(h http.HandlerFunc) *httptest.Server {
 	return srv
 }
 
-func get(t *testing.T, srv *httptest.Server, token string) (*http.Response, string) {
+// get fetches /x with a token: the status, the headers and the body.
+func get(t *testing.T, srv *httptest.Server, token string) (int, http.Header, string) {
 	t.Helper()
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/x", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -110,7 +111,7 @@ func get(t *testing.T, srv *httptest.Server, token string) (*http.Response, stri
 	}
 	defer func() { _ = resp.Body.Close() }()
 	b, _ := io.ReadAll(resp.Body)
-	return resp, string(b)
+	return resp.StatusCode, resp.Header, string(b)
 }
 
 func TestAgentRoutesScrubWhatTheyWrite(t *testing.T) {
@@ -148,18 +149,18 @@ func TestAgentRoutesScrubWhatTheyWrite(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			resp, body := get(t, srv[c.name], f.all)
-			all := body + " " + resp.Header.Get(DownloadsHeader)
-			for _, leak := range []string{filledSecret, query, "Vault Value", `Vault Value+\"`, `é\ud83d`} {
+			code, h, body := get(t, srv[c.name], f.all)
+			all := body + " " + h.Get(DownloadsHeader)
+			for _, leak := range []string{filledSecret, query, "Vault Value", `Vault Value+\"`, "\\u00e9\\ud83d"} {
 				if strings.Contains(all, leak) {
-					t.Errorf("%q leaked: %d %s", leak, resp.StatusCode, all)
+					t.Errorf("%q leaked: %d %s", leak, code, all)
 				}
 			}
 			if !strings.Contains(all, "hidden") {
 				t.Errorf("nothing hidden: %s", all)
 			}
-			if c.name == "JSON" && resp.Header.Get("Content-Type") != "application/json" {
-				t.Errorf("content type %q", resp.Header.Get("Content-Type"))
+			if c.name == "JSON" && h.Get("Content-Type") != "application/json" {
+				t.Errorf("content type %q", h.Get("Content-Type"))
 			}
 		})
 	}
@@ -170,7 +171,7 @@ func TestAgentRoutesScrubWhatTheyWrite(t *testing.T) {
 			w.Header().Set("Content-Type", ct)
 			_, _ = io.WriteString(w, "bytes "+filledSecret)
 		})
-		if _, body := get(t, srv, f.all); body != "bytes "+filledSecret {
+		if _, _, body := get(t, srv, f.all); body != "bytes "+filledSecret {
 			t.Errorf("%s was changed: %q", ct, body)
 		}
 	}
@@ -183,10 +184,10 @@ func TestAgentRoutesScrubWhatTheyWrite(t *testing.T) {
 	other := f.scrubServer(func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"text": "github-only-secret"})
 	})
-	if _, body := get(t, other, f.scoped); !strings.Contains(body, "github-only-secret") {
+	if _, _, body := get(t, other, f.scoped); !strings.Contains(body, "github-only-secret") {
 		t.Errorf("a token scoped to google had github's secret hidden: %s", body)
 	}
-	if _, body := get(t, other, f.all); strings.Contains(body, "github-only-secret") {
+	if _, _, body := get(t, other, f.all); strings.Contains(body, "github-only-secret") {
 		t.Errorf("github's secret leaked: %s", body)
 	}
 
@@ -195,7 +196,7 @@ func TestAgentRoutesScrubWhatTheyWrite(t *testing.T) {
 		_ = f.m.RegisterSecret(s.ID, "filled-just-now")
 		writeJSON(w, http.StatusOK, map[string]string{"text": "filled-just-now"})
 	})
-	if _, body := get(t, during, f.all); strings.Contains(body, "filled-just-now") {
+	if _, _, body := get(t, during, f.all); strings.Contains(body, "filled-just-now") {
 		t.Errorf("a secret filled during the call leaked: %s", body)
 	}
 }
@@ -208,7 +209,7 @@ func TestScopedTokenSeesItsOwnProfileScrubbed(t *testing.T) {
 	srv := f.scrubServer(func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"text": filledSecret})
 	})
-	if _, body := get(t, srv, f.scoped); strings.Contains(body, "Vault Value") {
+	if _, _, body := get(t, srv, f.scoped); strings.Contains(body, "Vault Value") {
 		t.Errorf("google's scoped token read google's secret: %s", body)
 	}
 }

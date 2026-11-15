@@ -37,7 +37,7 @@ func TestEveryEncodingIsHidden(t *testing.T) {
 		"JSON twice":            goJSON(once, false),
 		`JSON twice with \/`:    strings.ReplaceAll(goJSON(strings.ReplaceAll(once, "/", `\/`), false), "/", `\/`),
 		"JSON twice, HTML-safe": goJSON(goJSON(secret, true), true),
-		"JSON, ASCII only":      `p@ss w/rd\"&+%'<é🙂x`,
+		"JSON, ASCII only":      `p@ss w/rd\"&+%'<\u00e9\ud83d\ude42x`,
 		"encodeURIComponent":    `p%40ss%20w%2Frd%22%26%2B%25'%3C%C3%A9%F0%9F%99%82x`,
 		"form-urlencoded":       `p%40ss+w%2Frd%22%26%2B%25%27%3C%C3%A9%F0%9F%99%82x`,
 		"Go QueryEscape":        url.QueryEscape(secret),
