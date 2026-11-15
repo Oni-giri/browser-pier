@@ -22,6 +22,7 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/api"
 	"github.com/Oni-giri/browser-pier/internal/auth"
+	"github.com/Oni-giri/browser-pier/internal/cdp/cdptest"
 	"github.com/Oni-giri/browser-pier/internal/db"
 	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/handoff"
@@ -44,6 +45,9 @@ type fixture struct {
 	clicks []string // what the fake browser was asked to click
 	// onClick, if set, runs as the fake browser clicks: a download, say.
 	onClick func()
+	// pageURL is the one tab's address, as Target.getTargets answers it
+	// (a handoff's until_url watch).
+	pageURL string
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -62,7 +66,7 @@ func newFixture(t *testing.T) *fixture {
 	log := slog.New(slog.DiscardHandler)
 	f := &fixture{t: t, tokens: auth.NewTokens(d)}
 	rt := sessionstest.New(dir)
-	rt.Control = f.browser()
+	rt.Control = cdptest.New(f.targets).Handler(f.browser())
 	f.m, err = sessions.NewManager(d, rt, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)
 	if err != nil {
 		t.Fatal(err)
@@ -99,6 +103,16 @@ func newFixture(t *testing.T) *fixture {
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	return f
+}
+
+// targets answers the fake browser's CDP: Target.getTargets only.
+func (f *fixture) targets(m cdptest.Message) (any, error) {
+	if m.Method != "Target.getTargets" {
+		return nil, cdptest.Error{Message: "not in the fake: " + m.Method}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return map[string]any{"targetInfos": []map[string]any{{"targetId": "p1", "type": "page", "url": f.pageURL}}}, nil
 }
 
 // browser is a fake browser's control socket: a 1440×900 screen.
@@ -403,5 +417,39 @@ func TestFailedElicitationStillGivesTheLink(t *testing.T) {
 	}
 	if _, out := call(t, cs, "cancel_handoff", map[string]any{"handoff_id": open[0].ID}); !strings.Contains(out, "Withdrawn") {
 		t.Fatalf("cancel_handoff: %s", out)
+	}
+}
+
+// request_handoff passes until_url, and wait_for_handoff says the handoff
+// ended by itself when the page got there, without quoting the address.
+func TestHandoffUntilURLOverMCP(t *testing.T) {
+	f := newFixture(t)
+	f.mu.Lock()
+	f.pageURL = "https://site.example/login"
+	f.mu.Unlock()
+	cs := f.connect(f.all, versions[0], nil)
+	s, _, _ := f.m.Start(context.Background(), "google", "")
+	res, out := call(t, cs, "request_handoff", map[string]any{"session_id": s.ID, "reason": "sensitive_input", "detail": "Sign in", "until_url": "/account?x"})
+	if !res.IsError || !strings.Contains(out, "until_url") {
+		t.Fatalf("request_handoff with a query in until_url: %s", out)
+	}
+	_, out = call(t, cs, "request_handoff", map[string]any{"session_id": s.ID, "reason": "sensitive_input", "detail": "Sign in", "until_url": "site.example/account"})
+	open, _ := f.handoffs.Pending(context.Background())
+	if len(open) != 1 || open[0].UntilURL != "site.example/account" || !strings.Contains(out, "wait_for_handoff") {
+		t.Fatalf("request_handoff: %s (pending %+v)", out, open)
+	}
+	go func() {
+		time.Sleep(time.Second)
+		f.mu.Lock()
+		f.pageURL = "https://site.example/account/overview?session=s3cr3t"
+		f.mu.Unlock()
+	}()
+	_, out = call(t, cs, "wait_for_handoff", map[string]any{"handoff_id": open[0].ID, "seconds": 20})
+	if !strings.Contains(out, "Handoff done") || !strings.Contains(out, "until_url") || strings.Contains(out, "s3cr3t") || strings.Contains(out, "overview") ||
+		strings.Contains(out, "The person's note") {
+		t.Fatalf("wait_for_handoff: %s", out)
+	}
+	if live, _ := f.m.Live("google"); live.State != sessions.Running {
+		t.Fatalf("browser not given back: %s", live.State)
 	}
 }
