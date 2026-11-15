@@ -24,9 +24,8 @@ import (
 // hide text from a person reading a transcript that renders HTML or
 // Markdown either. That holds for "<!--" only: other markup a renderer
 // may hide, such as "<!x …>", "<?…?>" and "<![CDATA[…]]>", is left as it
-// is, a follow-up tracked as "Fence: defuse other markup that can hide
-// text in a rendered transcript". A caller that ever fences raw HTML must drop its comments itself, by
-// parsing it.
+// is, a follow-up tracked in PROJ-129. A caller that ever fences raw HTML
+// must drop its comments itself, by parsing it.
 func Clean(s string) string {
 	s = strings.Map(func(r rune) rune {
 		if invisible(r) {
