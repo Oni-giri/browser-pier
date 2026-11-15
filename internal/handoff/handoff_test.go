@@ -22,6 +22,7 @@ import (
 	pionwebrtc "github.com/pion/webrtc/v4"
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
+	"github.com/Oni-giri/browser-pier/internal/cdp/cdptest"
 	"github.com/Oni-giri/browser-pier/internal/db"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
@@ -36,6 +37,10 @@ type fixture struct {
 	svc   *Service
 	admin *auth.Admin
 	srv   *httptest.Server
+	// cdp is the browser's CDP, which an until_url watch asks for its
+	// tabs; tabs is what its Target.getTargets answers (watch_test.go).
+	cdp  *cdptest.Browser
+	tabs *fakeTabs
 }
 
 func newFixture(t *testing.T, policy profiles.HandoffPolicy, opts auth.WebOptions) *fixture {
@@ -58,7 +63,10 @@ func newFixture(t *testing.T, policy profiles.HandoffPolicy, opts auth.WebOption
 	mux.HandleFunc("GET /cdp/json/list", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `[{"type":"page","url":"https://accounts.google.com/signin/v2?continue=https%3A%2F%2Fevil.example%2Fpay+now"}]`)
 	})
-	rt.Control = mux
+	tabs := &fakeTabs{}
+	tabs.set(tab{ID: "T1", Typ: "page", URL: "https://accounts.google.com/signin/v2?continue=https%3A%2F%2Fevil.example%2Fpay+now"})
+	b := cdptest.New(tabs.handle)
+	rt.Control = b.Handler(mux)
 	m, err := sessions.NewManager(d, rt, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +101,8 @@ func newFixture(t *testing.T, policy profiles.HandoffPolicy, opts auth.WebOption
 	// As in production, form posts from other origins are refused.
 	srv := httptest.NewServer(new(http.CrossOriginProtection).Handler(hmux))
 	t.Cleanup(srv.Close)
-	return &fixture{t: t, m: m, svc: svc, admin: admin, srv: srv}
+	t.Cleanup(svc.Close)
+	return &fixture{t: t, m: m, svc: svc, admin: admin, srv: srv, cdp: b, tabs: tabs}
 }
 
 func (f *fixture) running() sessions.Session {

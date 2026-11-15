@@ -36,33 +36,40 @@ type handoffJSON struct {
 	URL       string    `json:"url,omitempty"` // only when created
 	ExpiresAt time.Time `json:"expires_at"`
 	ExpiresIn int       `json:"expires_in,omitempty"` // seconds, only when created
-	Note      string    `json:"note,omitempty"`       // the person's
+	Note      string    `json:"note,omitempty"`       // the person's, or AutoNote
+	// UntilURL is the agent's own pattern; Reached says the handoff ended
+	// because a tab got there, not because the person tapped Done.
+	UntilURL string `json:"until_url,omitempty"`
+	Reached  bool   `json:"until_url_reached,omitempty"`
 	// Message says what to do next.
 	Message string `json:"message"`
 }
 
 func handoffOut(h handoff.Handoff) handoffJSON {
 	out := handoffJSON{ID: h.ID, Session: h.SessionID, Profile: h.Profile, Status: string(h.Status), Reason: string(h.Reason),
-		Policy: string(h.Policy), Origin: h.Origin, ExpiresAt: h.ExpiresAt, Note: h.Note}
-	switch h.Status {
-	case handoff.Pending:
+		Policy: string(h.Policy), Origin: h.Origin, ExpiresAt: h.ExpiresAt, Note: h.Note, UntilURL: h.UntilURL, Reached: h.Auto}
+	switch {
+	case h.Status == handoff.Done && h.Auto:
+		out.Message = "A tab reached the address you gave in until_url, so the handoff ended without the person tapping Done. The page may have changed: re-read it before acting."
+	case h.Status == handoff.Pending:
 		out.Message = "Send the URL to the person through your own channel, then wait on GET /api/handoffs/{id}?wait=900. You are paused until they hand back."
-	case handoff.Done:
+	case h.Status == handoff.Done:
 		out.Message = "The person handed back. The page may have changed: re-read it before acting."
-	case handoff.Cant:
+	case h.Status == handoff.Cant:
 		out.Message = "The person couldn't do it. Stop this task cleanly and report back. The page may have changed."
-	case handoff.Cancelled:
+	case h.Status == handoff.Cancelled:
 		out.Message = "The handoff was cancelled (" + h.Note + "). You have the browser back; re-read the page before acting."
-	case handoff.Expired:
+	case h.Status == handoff.Expired:
 		out.Message = "Nobody took the handoff within 15 minutes. You have the browser back; re-read the page before acting."
 	}
 	return out
 }
 
 type createHandoffJSON struct {
-	Reason  string `json:"reason"`
-	Detail  string `json:"detail"`
-	Require string `json:"require"`
+	Reason   string `json:"reason"`
+	Detail   string `json:"detail"`
+	Require  string `json:"require"`
+	UntilURL string `json:"until_url"`
 }
 
 func (a *API) createHandoff(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +79,10 @@ func (a *API) createHandoff(w http.ResponseWriter, r *http.Request) {
 	}
 	var in createHandoffJSON
 	if !readJSON(w, r, &in) {
+		return
+	}
+	if _, err := handoff.CheckUntilURL(in.UntilURL); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	// A PIN link with no PIN set can't be opened: say so now, rather than
@@ -93,7 +104,8 @@ func (a *API) createHandoff(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	tok, _ := auth.TokenFromContext(r.Context())
-	h, token, err := a.handoffs.Create(r.Context(), s.ID, tok.Name, handoff.Reason(in.Reason), in.Detail, profiles.HandoffPolicy(in.Require))
+	h, token, err := a.handoffs.Open(r.Context(), handoff.Request{SessionID: s.ID, Agent: tok.Name, Reason: handoff.Reason(in.Reason),
+		Detail: in.Detail, Require: profiles.HandoffPolicy(in.Require), UntilURL: in.UntilURL})
 	switch {
 	case errors.Is(err, handoff.ErrOpen):
 		msg := "a handoff is already open for this browser"
@@ -109,7 +121,7 @@ func (a *API) createHandoff(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, handoff.ErrNotRunning), errors.Is(err, sessions.ErrNotRunning):
 		writeError(w, http.StatusConflict, "the session isn't running")
 		return
-	case errors.Is(err, handoff.ErrBadReason), errors.Is(err, handoff.ErrBadRequire):
+	case errors.Is(err, handoff.ErrBadReason), errors.Is(err, handoff.ErrBadRequire), errors.Is(err, handoff.ErrBadUntilURL):
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	case err != nil:

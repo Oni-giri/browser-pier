@@ -203,6 +203,7 @@ func run(log *slog.Logger) error {
 	defer func() { _ = relay.Close() }()
 	live := webrtc.NewHandler(relay, mgr, web, log)
 	handoffs := handoff.New(database, mgr, log)
+	defer handoffs.Close() // its until_url watches; the next start's sweep resumes them
 	go handoffs.Sweep(ctx, 15*time.Second)
 	agentAPI.SetHandoffs(handoffs)
 	app := ui.New(mgr, web, handoffs, prefs, log, ui.Options{

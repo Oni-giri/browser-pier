@@ -74,6 +74,8 @@ var (
 	ErrOpen         = errors.New("this browser already has a handoff open")
 	ErrOtherBrowser = errors.New("this link was opened in another browser")
 	ErrInUse        = errors.New("a person has opened this link; wait for them to hand back")
+	// ErrBadUntilURL wraps why an until_url pattern was refused.
+	ErrBadUntilURL = errors.New("until_url")
 )
 
 // Handoff is one request for help.
@@ -84,10 +86,14 @@ type Handoff struct {
 	Detail                 string
 	// Origin is the page's scheme and host, never its path or query,
 	// which the page controls and could word a phishing message with.
-	Origin      string
-	Policy      profiles.HandoffPolicy
-	Status      Status
-	Note        string // the person's, for the agent
+	Origin string
+	Policy profiles.HandoffPolicy
+	Status Status
+	Note   string // the person's, for the agent
+	// UntilURL, if set, ends the handoff as done once a tab reaches an
+	// address it is part of (see watch.go); Auto says it ended that way.
+	UntilURL    string
+	Auto        bool
 	PINFailures int
 	CreatedAt   time.Time
 	ExpiresAt   time.Time
@@ -104,14 +110,33 @@ type Service struct {
 	// registering to be woken (tests).
 	beforeListen func()
 
+	// base ends every address watch when the service closes; watchPoll is
+	// how often a watch looks at the tabs (watchEvery; tests shorten it).
+	base      context.Context
+	closeBase context.CancelFunc
+	watchPoll time.Duration
+	watchWG   sync.WaitGroup
+
 	mu       sync.Mutex
 	waiters  map[string][]chan struct{}
 	viewers  map[string][]*webrtc.Viewer // live views opened through a handoff
 	checking map[string]int              // PIN checks under way, per handoff
+	watching map[string]*watch           // address watches, per handoff (watch.go)
 }
 
 func New(db *sql.DB, m *sessions.Manager, log *slog.Logger) *Service {
-	return &Service{db: db, m: m, log: log, now: time.Now, waiters: map[string][]chan struct{}{}, viewers: map[string][]*webrtc.Viewer{}, checking: map[string]int{}}
+	base, closeBase := context.WithCancel(context.Background())
+	return &Service{db: db, m: m, log: log, now: time.Now, base: base, closeBase: closeBase, watchPoll: watchEvery,
+		waiters: map[string][]chan struct{}{}, viewers: map[string][]*webrtc.Viewer{}, checking: map[string]int{}, watching: map[string]*watch{}}
+}
+
+// Close stops every address watch and waits for them. Open handoffs stay
+// open; the next start's sweep watches them again.
+func (s *Service) Close() {
+	s.mu.Lock() // so watch, which checks base under it, adds no watch after
+	s.closeBase()
+	s.mu.Unlock()
+	s.watchWG.Wait()
 }
 
 var rank = map[profiles.HandoffPolicy]int{profiles.PolicyLink: 0, profiles.PolicyPIN: 1, profiles.PolicySignIn: 2}
@@ -137,10 +162,28 @@ func hash(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Create opens a handoff for a running session and pauses the agent
+// Request is what an agent asks for when it opens a handoff.
+type Request struct {
+	SessionID string
+	Agent     string // the token's name
+	Reason    Reason
+	Detail    string
+	Require   profiles.HandoffPolicy // stricter than the profile's, or ignored
+	// UntilURL, if not empty, ends the handoff by itself once a tab
+	// reaches an address with it in its origin and path (CheckUntilURL).
+	UntilURL string
+}
+
+// Create opens a handoff with no until_url; see Open.
+func (s *Service) Create(ctx context.Context, sessionID, agent string, reason Reason, detail string, require profiles.HandoffPolicy) (Handoff, string, error) {
+	return s.Open(ctx, Request{SessionID: sessionID, Agent: agent, Reason: reason, Detail: detail, Require: require})
+}
+
+// Open opens a handoff for a running session and pauses the agent
 // (Needs help closes its connections). It returns the handoff and the
 // link's token, which is not stored.
-func (s *Service) Create(ctx context.Context, sessionID, agent string, reason Reason, detail string, require profiles.HandoffPolicy) (Handoff, string, error) {
+func (s *Service) Open(ctx context.Context, r Request) (Handoff, string, error) {
+	sessionID, agent, reason, detail, require := r.SessionID, r.Agent, r.Reason, r.Detail, r.Require
 	if _, ok := reasons[reason]; !ok {
 		return Handoff{}, "", ErrBadReason
 	}
@@ -148,6 +191,10 @@ func (s *Service) Create(ctx context.Context, sessionID, agent string, reason Re
 		if _, ok := rank[require]; !ok {
 			return Handoff{}, "", ErrBadRequire
 		}
+	}
+	until, err := CheckUntilURL(r.UntilURL)
+	if err != nil {
+		return Handoff{}, "", err
 	}
 	detail = strings.TrimSpace(detail)
 	if len(detail) > 500 {
@@ -171,13 +218,13 @@ func (s *Service) Create(ctx context.Context, sessionID, agent string, reason Re
 	h := Handoff{
 		ID: "h_" + randomToken()[:16], SessionID: sessionID, Profile: sess.Profile, Agent: agent,
 		Reason: reason, Detail: detail, Origin: s.pageOrigin(ctx, sess.Profile),
-		Policy: Stricter(p.HandoffPolicy, require), Status: Pending, CreatedAt: now, ExpiresAt: now.Add(Lifetime),
+		Policy: Stricter(p.HandoffPolicy, require), Status: Pending, UntilURL: until, CreatedAt: now, ExpiresAt: now.Add(Lifetime),
 	}
 	token := randomToken()
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO handoffs (id, session_id, profile, agent, reason, detail, origin, policy, status, token_hash, created_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO handoffs (id, session_id, profile, agent, reason, detail, origin, policy, status, token_hash, created_at, expires_at, until_url)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		h.ID, h.SessionID, h.Profile, h.Agent, h.Reason, h.Detail, h.Origin, h.Policy, h.Status, hash(token),
-		h.CreatedAt.UnixMilli(), h.ExpiresAt.UnixMilli()); err != nil {
+		h.CreatedAt.UnixMilli(), h.ExpiresAt.UnixMilli(), h.UntilURL); err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed: handoffs.session_id") {
 			return Handoff{}, "", ErrOpen // another Create got in first
 		}
@@ -188,7 +235,8 @@ func (s *Service) Create(ctx context.Context, sessionID, agent string, reason Re
 		return Handoff{}, "", err
 	}
 	s.m.NoteAttention(sessionID, agent, "Paused, waiting for you: "+reason.Label())
-	s.log.Info("handoff opened", "handoff", h.ID, "profile", h.Profile, "agent", agent, "reason", reason, "policy", h.Policy)
+	s.log.Info("handoff opened", "handoff", h.ID, "profile", h.Profile, "agent", agent, "reason", reason, "policy", h.Policy, "until_url", h.UntilURL != "")
+	s.watch(h)
 	return h, token, nil
 }
 
@@ -231,14 +279,14 @@ func Origin(raw string) string {
 	return u.Scheme + "://" + u.Host
 }
 
-const columns = `id, session_id, profile, agent, reason, detail, origin, policy, status, note, pin_failures, created_at, expires_at, browser_hash`
+const columns = `id, session_id, profile, agent, reason, detail, origin, policy, status, note, pin_failures, created_at, expires_at, browser_hash, until_url, auto_done`
 
 func scan(row interface{ Scan(...any) error }) (Handoff, error) {
 	var h Handoff
 	var created, expires int64
 	var browser string
 	err := row.Scan(&h.ID, &h.SessionID, &h.Profile, &h.Agent, &h.Reason, &h.Detail, &h.Origin, &h.Policy, &h.Status, &h.Note,
-		&h.PINFailures, &created, &expires, &browser)
+		&h.PINFailures, &created, &expires, &browser, &h.UntilURL, &h.Auto)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Handoff{}, ErrNotFound
 	}
@@ -459,22 +507,36 @@ func (s *Service) Withdraw(ctx context.Context, h Handoff, note string) (Handoff
 	if len(note) > 300 {
 		note = note[:300]
 	}
-	return s.end(ctx, h, Cancelled, note, true)
+	return s.end(ctx, h, Cancelled, note, endUnopened)
 }
 
 // finish ends a pending handoff, gives the browser back to the agent and
 // wakes anyone waiting.
 func (s *Service) finish(ctx context.Context, h Handoff, status Status, note string) (Handoff, error) {
-	return s.end(ctx, h, status, note, false)
+	return s.end(ctx, h, status, note, endAny)
 }
 
-// end is finish; with unopened, only if no person has opened the link.
-func (s *Service) end(ctx context.Context, h Handoff, status Status, note string, unopened bool) (Handoff, error) {
-	query := `UPDATE handoffs SET status = ?, note = ?, finished_at = ? WHERE id = ? AND status = 'pending'`
-	if unopened {
-		query = `UPDATE handoffs SET status = ?, note = ?, finished_at = ? WHERE id = ? AND status = 'pending' AND browser_hash = ''`
+// How end may end a handoff.
+type endHow int
+
+const (
+	endAny      endHow = iota // whatever stage it is at
+	endUnopened               // only if no person has opened the link
+	endAuto                   // as done, by its until_url, only before it expires
+)
+
+// end is finish, as how says.
+func (s *Service) end(ctx context.Context, h Handoff, status Status, note string, how endHow) (Handoff, error) {
+	now := s.now()
+	query, args := `UPDATE handoffs SET status = ?, note = ?, finished_at = ? WHERE id = ? AND status = 'pending'`, []any{status, note, now.UnixMilli(), h.ID}
+	switch how {
+	case endUnopened:
+		query += ` AND browser_hash = ''`
+	case endAuto:
+		query = `UPDATE handoffs SET status = ?, note = ?, finished_at = ?, auto_done = 1 WHERE id = ? AND status = 'pending' AND expires_at > ?`
+		args = append(args, now.UnixMilli())
 	}
-	res, err := s.db.ExecContext(ctx, query, status, note, s.now().UnixMilli(), h.ID)
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return h, err
 	}
@@ -486,16 +548,27 @@ func (s *Service) end(ctx context.Context, h Handoff, status Status, note string
 		}
 		return cur, err
 	}
-	h.Status, h.Note = status, note
+	h.Status, h.Note, h.Auto = status, note, how == endAuto
 	s.m.ReleaseControl(h.SessionID)
 	if _, err := s.m.SetNeedsHelp(h.SessionID, false); err != nil && !errors.Is(err, sessions.ErrNotRunning) {
 		s.log.Warn("handing the browser back", "handoff", h.ID, "err", err)
 	}
-	s.m.Note(h.SessionID, "", finishedNotes[status])
-	s.log.Info("handoff finished", "handoff", h.ID, "profile", h.Profile, "status", status)
+	logNote := finishedNotes[status]
+	if h.Auto {
+		logNote = autoDoneLog
+	}
+	s.m.Note(h.SessionID, "", logNote)
+	s.log.Info("handoff finished", "handoff", h.ID, "profile", h.Profile, "status", status, "until_url_reached", h.Auto)
 	s.wake(h.ID)
 	return h, nil
 }
+
+// AutoNote is the note of a handoff its until_url ended. It is fixed, so
+// it never quotes the address the person was on.
+const AutoNote = "the page reached a matching address"
+
+// autoDoneLog is what the agent log says then, without the address too.
+const autoDoneLog = "Handed back when the page reached the expected address"
 
 // finishedNotes are what the agent log says when a handoff ends.
 var finishedNotes = map[Status]string{
@@ -518,6 +591,10 @@ func (s *Service) wake(id string) {
 	}
 	delete(s.viewers, id)
 	delete(s.checking, id)
+	// And so is its address watch, if it has one.
+	if w := s.watching[id]; w != nil {
+		w.cancel()
+	}
 }
 
 // track remembers a live view opened through a handoff, to close it when
@@ -657,8 +734,13 @@ func (s *Service) sweep(ctx context.Context) {
 	}
 	_ = rows.Close()
 	for _, id := range ids {
-		if _, err := s.Get(ctx, id); err != nil { // Get ends it if it should
+		h, err := s.Get(ctx, id) // Get ends it if it should
+		if err != nil {
 			s.log.Warn("checking a handoff", "handoff", id, "err", fmt.Sprint(err))
+			continue
 		}
+		// An open handoff with an until_url and no watch (the orchestrator
+		// restarted) is watched again.
+		s.watch(h)
 	}
 }

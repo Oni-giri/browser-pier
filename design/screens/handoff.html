@@ -111,7 +111,7 @@ input:focus,textarea:focus{outline:none;box-shadow:0 0 0 1px #2F6BFF,0 0 0 4px r
   </sc-if>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"start":{"editor":"enum","options":["pin","control","done","cancelled","expired"],"default":"pin"},"pinError":{"editor":"boolean","default":false},"$preview":{"width":390,"height":844}}'>
+<script type="text/x-dc" data-dc-script data-props='{"start":{"editor":"enum","options":["pin","control","done","auto","cancelled","expired"],"default":"pin"},"pinError":{"editor":"boolean","default":false},"$preview":{"width":390,"height":844}}'>
 class Component extends DCLogic {
   constructor(props) {
     super(props);
@@ -121,6 +121,7 @@ class Component extends DCLogic {
     const step = this.state.step || this.props.start || 'pin';
     const END = {
       done: { t: 'Handed back', b: 'research-bot has your note and is carrying on. This link no longer works.', fg: '#15803D', i: 'M5 12l5 5L20 7' },
+      auto: { t: 'Done: handed back automatically', b: 'The page reached the address research-bot was waiting for, so it is carrying on. This link no longer works.', fg: '#15803D', i: 'M5 12l5 5L20 7' },
       cancelled: { t: 'Told the agent you couldn’t', b: 'research-bot will stop this task and report back. This link no longer works.', fg: '#475569', i: 'M6 6l12 12M18 6L6 18' },
       expired: { t: 'This link has expired', b: 'Handoff links last 15 minutes and work once. You can still help from the full app.', fg: '#B91C1C', i: 'M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z' }
     };
@@ -133,7 +134,7 @@ class Component extends DCLogic {
     }));
     return {
       isPin: step === 'pin', isControl: step === 'control',
-      isFinished: step === 'done' || step === 'cancelled' || step === 'expired',
+      isFinished: step === 'done' || step === 'auto' || step === 'cancelled' || step === 'expired',
       isExpired: step === 'expired',
       showTimer: step === 'pin' || step === 'control',
       pinWrong: wrong, pinOk: !wrong, cells,

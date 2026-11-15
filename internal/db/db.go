@@ -120,6 +120,11 @@ var migrations = []string{
 	ALTER TABLE profiles ADD COLUMN site_inferred TEXT NOT NULL DEFAULT '';
 	ALTER TABLE profiles ADD COLUMN icon_glyph TEXT NOT NULL DEFAULT '';
 	ALTER TABLE profiles ADD COLUMN icon_color TEXT NOT NULL DEFAULT '';`,
+
+	// A handoff can end by itself when the page reaches an address the
+	// agent gave (PROJ-118): the pattern, and whether it ended that way.
+	`ALTER TABLE handoffs ADD COLUMN until_url TEXT NOT NULL DEFAULT '';
+	ALTER TABLE handoffs ADD COLUMN auto_done INTEGER NOT NULL DEFAULT 0;`,
 }
 
 // Open opens (creating if needed) the database at path and migrates it.

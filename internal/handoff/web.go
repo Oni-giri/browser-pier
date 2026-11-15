@@ -94,7 +94,7 @@ type view struct {
 	Reason    string
 	Error     string
 	TriesLeft int
-	Ended     string // done, cant, cancelled, expired, missing, insecure
+	Ended     string // done, auto, cant, cancelled, expired, missing, insecure
 	ExpiresMs int64
 	// Width and Height are the browser's screen, which the live view
 	// takes the shape of.
@@ -132,10 +132,19 @@ func (w *Web) load(rw http.ResponseWriter, r *http.Request) (Handoff, string, bo
 		return h, token, false
 	}
 	if h.Status.Final() {
-		w.render(rw, r, http.StatusGone, view{Step: "ended", Ended: string(h.Status), H: h})
+		w.render(rw, r, http.StatusGone, view{Step: "ended", Ended: ended(h), H: h})
 		return h, token, false
 	}
 	return h, token, true
+}
+
+// ended is how the page names the way a handoff ended: auto when the page
+// reached the agent's until_url.
+func ended(h Handoff) string {
+	if h.Status == Done && h.Auto {
+		return "auto"
+	}
+	return string(h.Status)
 }
 
 func (w *Web) holder(r *http.Request, h Handoff) bool {
@@ -265,7 +274,7 @@ func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 		case err != nil:
 			http.Error(rw, "something went wrong", http.StatusInternalServerError)
 		case h.Status.Final():
-			w.render(rw, r, http.StatusGone, view{Step: "ended", Ended: string(h.Status), H: h})
+			w.render(rw, r, http.StatusGone, view{Step: "ended", Ended: ended(h), H: h})
 		default:
 			w.render(rw, r, http.StatusTooManyRequests, view{Step: "pin", H: h, Token: token, TriesLeft: MaxPINFailures - h.PINFailures, Error: "Wait for your other attempts to finish."})
 		}
@@ -377,7 +386,7 @@ func (w *Web) finish(rw http.ResponseWriter, r *http.Request) {
 		http.Error(rw, "something went wrong", http.StatusInternalServerError)
 		return
 	}
-	w.render(rw, r, http.StatusOK, view{Step: "ended", Ended: string(h.Status), H: h})
+	w.render(rw, r, http.StatusOK, view{Step: "ended", Ended: ended(h), H: h})
 }
 
 // attempts ends several lockout attempts the same way.
