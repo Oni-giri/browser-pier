@@ -196,7 +196,7 @@ func TestDownloadNamesCleanedAndLinksIgnored(t *testing.T) {
 	m := s.Mark("google")
 	// Bidi override (an "exe" that reads as "txt"), zero-width space, a
 	// tag character and a line break.
-	write(t, filepath.Join(dl, "inv‮oice​\U000E0041\nnext.csv"), "x", 0)
+	write(t, filepath.Join(dl, "inv\u202eoice\u200b\U000E0041\nnext.csv"), "x", 0)
 	if err := os.Symlink(filepath.Join(dir, "secret"), filepath.Join(dl, "planted.txt")); err != nil {
 		t.Fatal(err)
 	}
