@@ -272,3 +272,27 @@ func TestBaselineNotKeptOnceTheLeaseEnded(t *testing.T) {
 		t.Error("a live call's list wasn't kept")
 	}
 }
+
+// TestBaselinesRememberTooLarge: a tab whose last read was too large to
+// keep is remembered as such, for its document (PROJ-114), until a list
+// is kept or the session ends.
+func TestBaselinesRememberTooLarge(t *testing.T) {
+	tl := New(nil, nil)
+	defer func(n int) { maxBaseline = n }(maxBaseline)
+	maxBaseline = 2000
+	big := []item{txtItem(1, strings.Repeat("x", 600), 0), txtItem(2, strings.Repeat("y", 600), 0), txtItem(3, strings.Repeat("z", 600), 0)}
+	ctx := context.Background()
+	tl.setBaseline(ctx, "s", "t1", "f", "l1", big)
+	if tl.baseline("s", "t1") != nil || !tl.tooLargeToKeep("s", "t1", "f", "l1") || tl.tooLargeToKeep("s", "t1", "f", "l2") || !tl.anyUnkept("s", "t1") {
+		t.Error("too large: not remembered for its document")
+	}
+	tl.setBaseline(ctx, "s", "t1", "f", "l2", big[:1])
+	if tl.baseline("s", "t1") == nil || tl.anyUnkept("s", "t1") {
+		t.Error("a list kept since: still marked too large")
+	}
+	tl.setBaseline(ctx, "s", "t2", "f", "l1", big)
+	tl.forgetSession("s")
+	if len(tl.unkept) != 0 || len(tl.bases) != 0 {
+		t.Errorf("kept after the session ended: %v %v", tl.unkept, tl.bases)
+	}
+}

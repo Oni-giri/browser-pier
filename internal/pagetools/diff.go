@@ -23,18 +23,23 @@ const (
 	// maxIndent caps how deep a diff line is indented, and how far up its
 	// enclosing items are looked for.
 	maxIndent = 8
-	// maxBaseline caps one stored item list, as baseSize counts it, and
-	// maxBaselines all of them together, across sessions: past it, the
-	// least recently stored go first.
-	maxBaseline  = 4 << 20
+	// maxBaselines caps all stored item lists together, across sessions,
+	// as baseSize counts them: past it, the least recently stored go first.
 	maxBaselines = 32 << 20
 )
+
+// maxBaseline caps one stored item list, as baseSize counts it; tests
+// lower it.
+var maxBaseline = 4 << 20
 
 // Messages of a diff that aren't from the page.
 const (
 	diffNoBaseline = "no earlier snapshot of this page; take one"
 	diffNoChanges  = "no changes since the last snapshot"
 	diffNavigated  = "take a snapshot of the new page"
+	// diffTooLarge: the tab's last snapshot was of a page whose list is
+	// past maxBaseline, so none was kept to compare with.
+	diffTooLarge = "this page is too large for BrowserPier to keep its last snapshot to compare with (over 4 MB); take a snapshot to see it"
 	// diffChangedPast ends an added line that reads as its removed one.
 	diffChangedPast = " (changed past what this line shows)"
 )
@@ -368,10 +373,11 @@ func (t *Tools) baseline(session, target string) *baseline {
 }
 
 // setBaseline keeps items (compacted) as a tab's list for its document,
-// in place of any before. A list past maxBaseline isn't kept; past
-// maxBaselines in all, the oldest lists go. Nothing is kept once ctx (the
-// call's lease) has ended: the session may have ended with it, and its
-// lists been dropped already.
+// in place of any before. A list past maxBaseline isn't kept, and the tab
+// is marked as having one too large for its document; past maxBaselines
+// in all, the oldest lists go. Nothing is kept once ctx (the call's
+// lease) has ended: the session may have ended with it, and its lists
+// been dropped already.
 func (t *Tools) setBaseline(ctx context.Context, session, target, frame, loader string, items []item) {
 	t.keepBaseline(ctx, session, target, frame, loader, compact(items))
 }
@@ -389,6 +395,7 @@ func (t *Tools) keepBaseline(ctx context.Context, session, target, frame, loader
 	k := baseKey{session, target}
 	t.dropBaseLocked(k)
 	if size > maxBaseline {
+		t.unkept[k] = baseDoc{frame, loader}
 		return
 	}
 	t.baseSeq++
@@ -411,6 +418,27 @@ func (t *Tools) dropBaseLocked(k baseKey) {
 		t.baseBytes -= b.size
 		delete(t.bases, k)
 	}
+	delete(t.unkept, k)
+}
+
+// baseDoc names a tab's document: its top frame and loader.
+type baseDoc struct{ frame, loader string }
+
+// anyUnkept says whether the tab's last read, of whichever document, was
+// too large to keep.
+func (t *Tools) anyUnkept(session, target string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	_, ok := t.unkept[baseKey{session, target}]
+	return ok
+}
+
+// tooLargeToKeep says whether the tab's last read of its current document
+// (frame and loader) was past maxBaseline, so no list was kept of it.
+func (t *Tools) tooLargeToKeep(session, target, frame, loader string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.unkept[baseKey{session, target}] == baseDoc{frame, loader}
 }
 
 // dropBaseline forgets a tab's kept list.
@@ -425,6 +453,11 @@ func (t *Tools) dropBaselinesLocked(session string) {
 	for k := range t.bases {
 		if k.session == session {
 			t.dropBaseLocked(k)
+		}
+	}
+	for k := range t.unkept {
+		if k.session == session {
+			delete(t.unkept, k)
 		}
 	}
 }
@@ -445,6 +478,7 @@ const (
 	diffFirst                      // no earlier snapshot of this document
 	diffOtherDoc                   // the tab is on another document now
 	diffMovedUnder                 // the document changed while it was read
+	diffUnkept                     // no earlier snapshot kept: the page's list is too large
 )
 
 // diffResult is a diff's answer: body from the page, for the fence, and
@@ -478,6 +512,9 @@ func (c *call) changes(ctx context.Context, keepWhole bool) (*page, diffResult, 
 	switch {
 	case b == nil:
 		c.t.setBaseline(c.lease.Ctx, sid, target, p.frame, p.loader, p.items)
+		if c.t.tooLargeToKeep(sid, target, p.frame, p.loader) {
+			return p, diffResult{kind: diffUnkept, trailer: diffTooLarge}, nil
+		}
 		return p, diffResult{kind: diffFirst, trailer: diffNoBaseline}, nil
 	case b.loader != p.loader || b.frame != p.frame:
 		if keepWhole {

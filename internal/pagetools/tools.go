@@ -108,6 +108,9 @@ type Tools struct {
 	bases     map[baseKey]*baseline
 	baseBytes int
 	baseSeq   uint64
+	// unkept marks the tabs whose last read was too large to keep
+	// (maxBaseline), with the document it was of. Guarded by mu.
+	unkept map[baseKey]baseDoc
 
 	// quick and slow are quickTimeout and slowTimeout; tests shorten them.
 	quick, slow time.Duration
@@ -140,7 +143,7 @@ type Tools struct {
 }
 
 func New(m *sessions.Manager, log *slog.Logger) *Tools {
-	t := &Tools{m: m, log: log, pages: map[string]*state{}, bases: map[baseKey]*baseline{}, quick: quickTimeout, slow: slowTimeout,
+	t := &Tools{m: m, log: log, pages: map[string]*state{}, bases: map[baseKey]*baseline{}, unkept: map[baseKey]baseDoc{}, quick: quickTimeout, slow: slowTimeout,
 		settle: 100 * time.Millisecond, coverWait: defaultCoverWait, coverPoll: 100 * time.Millisecond, poll: 250 * time.Millisecond, ambiguousFor: time.Second,
 		chainQuiet: chainQuiet, chainPoll: chainPoll, chainCap: chainCap, navWait: navigateTimeout, reads: make(chan struct{}, maxReads), readWait: 10 * time.Second,
 		newMotion: motion.NewRandom, pause: sleep}

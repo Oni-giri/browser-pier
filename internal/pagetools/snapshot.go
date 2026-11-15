@@ -59,7 +59,11 @@ func (t *Tools) Snapshot(ctx context.Context, s sessions.Session, who Caller, in
 			// Nothing to compare with: the whole page, which is now the
 			// one diffs compare with (unless it changed while it was read).
 			lead := "No earlier snapshot of this page to compare with; the whole page follows."
-			if r.kind != diffFirst {
+			switch r.kind {
+			case diffFirst:
+			case diffUnkept:
+				lead = "This page is too large for BrowserPier to keep a snapshot of to compare with (over 4 MB); the whole page follows."
+			default:
 				lead = "The page navigated since the last snapshot; the whole page follows."
 			}
 			body, marker := c.render(p, budget)

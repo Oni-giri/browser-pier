@@ -277,6 +277,9 @@ func (t *Tools) act(ctx context.Context, s sessions.Session, who Caller, in ActI
 	return t.run(ctx, s, who, func(c *call) (string, error) {
 		ctx := c.lease.Ctx
 		changes := in.Changes != nil && *in.Changes
+		// unkept: the agent's last snapshot of this document was too large
+		// to keep, so there is nothing to compare with; act says so.
+		unkept := false
 		if in.Changes == nil && !in.Snapshot {
 			// On by default once the agent has a snapshot of this document.
 			if b := c.t.baseline(c.sess.ID, c.tgt.ID); b != nil {
@@ -284,6 +287,9 @@ func (t *Tools) act(ctx context.Context, s sessions.Session, who Caller, in ActI
 					return "", err
 				}
 				changes = b.loader == c.loader && b.frame == c.frame
+			} else if c.t.anyUnkept(c.sess.ID, c.tgt.ID) && c.refresh(ctx) == nil {
+				// (A refresh that fails here fails the first step too.)
+				unkept = c.t.tooLargeToKeep(c.sess.ID, c.tgt.ID, c.frame, c.loader)
 			}
 		}
 		var done []string
@@ -323,6 +329,12 @@ func (t *Tools) act(ctx context.Context, s sessions.Session, who Caller, in ActI
 			c.notices = nil
 			body, marker := c.render(p, DefaultMaxChars)
 			out += "\n" + c.result("page snapshot", body, marker)
+		case unkept:
+			// Still that document (a step that navigated has nothing to
+			// say): no read, which would be too large to keep again.
+			if f, err := c.topFrame(ctx, c.tgt); err == nil && c.t.tooLargeToKeep(c.sess.ID, c.tgt.ID, f.ID, f.LoaderID) {
+				out += "\n### Changes\n" + diffTooLarge
+			}
 		case changes:
 			// The steps ran: whatever happens to the read, their result
 			// stands.

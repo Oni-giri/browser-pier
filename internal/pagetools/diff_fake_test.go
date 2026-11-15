@@ -379,3 +379,32 @@ func TestKeptListsGo(t *testing.T) {
 		t.Error("the stopped session's state is kept")
 	}
 }
+
+// TestChangesOnAPageTooLargeToKeep: a snapshot of a page whose list is
+// too large to keep leaves nothing to compare with; act, by default or
+// asked, and snapshot's diff say so rather than "take one" (PROJ-114).
+func TestChangesOnAPageTooLargeToKeep(t *testing.T) {
+	f := newFixture(t)
+	p := newMenuPage(f.fb)
+	f.fb.addTab("https://example.com/", p.doc, true)
+	defer func(n int) { maxBaseline = n }(maxBaseline)
+	maxBaseline = 100
+	r := f.refs()
+	out, err := f.act(Step{Action: "click", Ref: r["Menu"], Pace: paceInstant})
+	if err != nil || changesOf(out) != diffTooLarge {
+		t.Errorf("by default: %v\n%s", err, out)
+	}
+	out, err = f.actIn(ActIn{Steps: []Step{{Action: "press", Keys: "Tab"}}, Changes: on()})
+	if err != nil || changesOf(out) != diffTooLarge {
+		t.Errorf("asked for: %v\n%s", err, out)
+	}
+	out, err = f.tools.Snapshot(context.Background(), f.session(), f.who, SnapshotIn{Diff: true})
+	f.closedAfter()
+	if err != nil || !strings.HasPrefix(out, "This page is too large for BrowserPier to keep a snapshot of to compare with") {
+		t.Errorf("snapshot's diff: %v\n%s", err, out)
+	}
+	// Turned off, nothing is said.
+	if out, err := f.actIn(ActIn{Steps: []Step{{Action: "press", Keys: "Tab"}}, Changes: off()}); err != nil || strings.Contains(out, "### Changes") {
+		t.Errorf("off: %v\n%s", err, out)
+	}
+}
