@@ -37,6 +37,12 @@ type browser struct {
 	// onInput, if set, runs as each input action does, with its path:
 	// a click that starts a download, say.
 	onInput func(path string)
+	// pageURL is the one tab's address, as Target.getTargets answers it
+	// on the browser's WebSocket (a handoff's until_url watch); other
+	// messages are echoed.
+	pageURL string
+	// methods are the CDP methods sent on the browser's WebSocket.
+	methods []string
 }
 
 func (b *browser) handler() http.Handler {
@@ -59,6 +65,21 @@ func (b *browser) handler() http.Handler {
 			typ, msg, err := conn.Read(r.Context())
 			if err != nil {
 				return
+			}
+			var call struct {
+				ID     int64  `json:"id"`
+				Method string `json:"method"`
+			}
+			if json.Unmarshal(msg, &call) == nil && call.Method != "" {
+				b.mu.Lock()
+				b.methods = append(b.methods, call.Method)
+				page := b.pageURL
+				b.mu.Unlock()
+				if call.Method == "Target.getTargets" {
+					out, _ := json.Marshal(map[string]any{"id": call.ID, "result": map[string]any{"targetInfos": []map[string]any{{"targetId": "p1", "type": "page", "url": page}}}})
+					_ = conn.Write(r.Context(), typ, out)
+					continue
+				}
 			}
 			_ = conn.Write(r.Context(), typ, append([]byte("echo:"), msg...))
 		}
