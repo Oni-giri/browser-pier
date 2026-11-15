@@ -356,7 +356,9 @@ func newHandler(web *auth.Web, agentAPI *api.API, live *webrtc.Handler, handoffs
 	// MCP tools call the agent API in-process, through routes of their own.
 	apiRoutes := http.NewServeMux()
 	agentAPI.Register(apiRoutes)
-	mcp.New(apiRoutes, web, log, version).Register(mux)
+	mcpServer := mcp.New(apiRoutes, web, log, version)
+	mcpServer.SetSecrets(agentAPI.Scrubber) // filled secrets out of tool results (PROJ-125)
+	mcpServer.Register(mux)
 	if live != nil {
 		live.Register(mux)
 	}

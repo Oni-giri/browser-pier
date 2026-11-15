@@ -134,3 +134,7 @@ func jsonType(ct string) bool {
 	mt, _, _ := mime.ParseMediaType(ct)
 	return mt == "application/json" || strings.HasSuffix(mt, "+json")
 }
+
+// Scrubber hides the secrets of the live browsers of the profiles allow
+// accepts: what the MCP tools' results are scrubbed with.
+func (a *API) Scrubber(allow func(profile string) bool) *scrub.Scrubber { return a.m.Scrubber(allow) }
