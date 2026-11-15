@@ -1,6 +1,7 @@
 package pagetools
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -182,13 +183,13 @@ func TestBaselinesStayBounded(t *testing.T) {
 	for len(big) < 30000 {
 		big = append(big, txtItem(int64(len(big)+1), strings.Repeat("y", 600), 0))
 	}
-	tl.setBaseline("s", "t1", "f", "l", big)
+	tl.setBaseline(context.Background(), "s", "t1", "f", "l", big)
 	if tl.baseline("s", "t1") != nil || tl.baseBytes != 0 {
 		t.Errorf("a list past maxBaseline was kept (%d bytes)", tl.baseBytes)
 	}
 	mid := big[:3000] // about 2.4 MB kept
 	for i := range 40 {
-		tl.setBaseline(fmt.Sprint("s", i%4), fmt.Sprint("t", i), "f", "l", mid)
+		tl.setBaseline(context.Background(), fmt.Sprint("s", i%4), fmt.Sprint("t", i), "f", "l", mid)
 		if tl.baseBytes > maxBaselines {
 			t.Fatalf("%d bytes kept, more than %d", tl.baseBytes, maxBaselines)
 		}
@@ -252,5 +253,22 @@ func TestDiffSaysAChangePastTheLine(t *testing.T) {
 	body, _ = renderDiff([]item{ctl(2, "button", "Menu", 0, "collapsed")}, []item{ctl(2, "button", "Menu", 0, "expanded")})
 	if strings.Contains(body, diffChangedPast) {
 		t.Errorf("got\n%s", body)
+	}
+}
+
+// TestBaselineNotKeptOnceTheLeaseEnded: a call whose lease has ended (its
+// session's may have, and OnEnd dropped its lists) keeps nothing, so no
+// list outlives its session (PROJ-114).
+func TestBaselineNotKeptOnceTheLeaseEnded(t *testing.T) {
+	tl := New(nil, nil)
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	tl.setBaseline(ended, "s", "t1", "f", "l1", []item{txtItem(1, "a", 0)})
+	if tl.baseline("s", "t1") != nil || tl.baseBytes != 0 {
+		t.Error("a call whose lease ended kept a list")
+	}
+	tl.setBaseline(context.Background(), "s", "t1", "f", "l1", []item{txtItem(1, "a", 0)})
+	if tl.baseline("s", "t1") == nil {
+		t.Error("a live call's list wasn't kept")
 	}
 }

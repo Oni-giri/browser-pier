@@ -318,7 +318,7 @@ func (t *Tools) act(ctx context.Context, s sessions.Session, who Caller, in ActI
 			if moved {
 				c.t.dropBaseline(c.sess.ID, c.tgt.ID)
 			} else {
-				c.t.setBaseline(c.sess.ID, c.tgt.ID, p.frame, p.loader, p.items)
+				c.t.setBaseline(c.lease.Ctx, c.sess.ID, c.tgt.ID, p.frame, p.loader, p.items)
 			}
 			c.notices = nil
 			body, marker := c.render(p, DefaultMaxChars)

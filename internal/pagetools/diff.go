@@ -369,16 +369,23 @@ func (t *Tools) baseline(session, target string) *baseline {
 
 // setBaseline keeps items (compacted) as a tab's list for its document,
 // in place of any before. A list past maxBaseline isn't kept; past
-// maxBaselines in all, the oldest lists go.
-func (t *Tools) setBaseline(session, target, frame, loader string, items []item) {
-	t.keepBaseline(session, target, frame, loader, compact(items))
+// maxBaselines in all, the oldest lists go. Nothing is kept once ctx (the
+// call's lease) has ended: the session may have ended with it, and its
+// lists been dropped already.
+func (t *Tools) setBaseline(ctx context.Context, session, target, frame, loader string, items []item) {
+	t.keepBaseline(ctx, session, target, frame, loader, compact(items))
 }
 
 // keepBaseline is setBaseline with items already compacted.
-func (t *Tools) keepBaseline(session, target, frame, loader string, kept []item) {
+func (t *Tools) keepBaseline(ctx context.Context, session, target, frame, loader string, kept []item) {
 	size := baseSize(kept)
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if ctx.Err() != nil {
+		// A session's lease ends before its OnEnd drops its lists, both
+		// under t.mu here, so a list kept now would outlive it.
+		return
+	}
 	k := baseKey{session, target}
 	t.dropBaseLocked(k)
 	if size > maxBaseline {
@@ -470,11 +477,11 @@ func (c *call) changes(ctx context.Context, keepWhole bool) (*page, diffResult, 
 	b := c.t.baseline(sid, target)
 	switch {
 	case b == nil:
-		c.t.setBaseline(sid, target, p.frame, p.loader, p.items)
+		c.t.setBaseline(c.lease.Ctx, sid, target, p.frame, p.loader, p.items)
 		return p, diffResult{kind: diffFirst, trailer: diffNoBaseline}, nil
 	case b.loader != p.loader || b.frame != p.frame:
 		if keepWhole {
-			c.t.setBaseline(sid, target, p.frame, p.loader, p.items)
+			c.t.setBaseline(c.lease.Ctx, sid, target, p.frame, p.loader, p.items)
 		} else {
 			c.t.dropBaseline(sid, target)
 		}
@@ -491,7 +498,7 @@ func (c *call) changes(ctx context.Context, keepWhole bool) (*page, diffResult, 
 		}
 		return c.line(p, it)
 	})
-	c.t.keepBaseline(sid, target, p.frame, p.loader, cur)
+	c.t.keepBaseline(c.lease.Ctx, sid, target, p.frame, p.loader, cur)
 	return p, diffResult{kind: diffDone, body: body, trailer: trailer}, nil
 }
 
