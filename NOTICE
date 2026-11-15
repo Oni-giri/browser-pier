@@ -28,6 +28,7 @@ adapted, with copies in umbrel/yakitori-browserpier/apparmor/)
 
 agweb's Motion model (internal/motion, ported to Go from
 Sources/AgwebCore/Motion.swift)
+  https://github.com/paul-nameless/agweb
   Copyright (c) 2026 Paul Nameless
   Licensed under the MIT License:
   Permission is hereby granted, free of charge, to any person obtaining a

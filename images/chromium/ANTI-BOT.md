@@ -68,6 +68,26 @@ So the taskbar hint is gone, and the 0×0 at load is unchanged (see Signals that
 
 Chromium runs with `RestoreOnStartup: 1`, so it keeps session-only cookies across a stop and reopens its tabs as it starts. That's a common setting in people's browsers. A page sees nothing new: a restored tab loads as it would after a person reopens their browser, and a tab left on a form's answer isn't posted again (`TestRestoredPostPageIsNotResubmitted`). `TestVisualModeLooksLikeAPerson` and `TestPageToolsStayQuiet` pass unchanged with it.
 
+## Input that moves like a hand (PROJ-113)
+
+Before PROJ-113, Visual mode's pointer jumped (`mousemove X Y click`), pressed and released at once, and typed every key 12 ms apart (about 83 characters a second); act moved once to the element's exact centre and pressed with no hold. Pages that score behaviour read exactly that. Now, at human pace (the default; `pace: "instant"` keeps the old input), both modes follow `internal/motion`, a Go port of agweb's Motion model (MIT, see NOTICE):
+
+- **The pointer** glides from where it is (read from X in Visual mode; where act last left it in API mode, or in from an edge of the window at first) along a bowed cubic Bézier with a wobble of about a pixel, at 60 Hz, on minimum-jerk timing whose speed peaks early, in a Fitts's-law time (0.2–1.15 s); hard throws fall short (or now and then overshoot) and correct.
+- **The aim** is scattered around the target's middle (SD a sixth of its size, never past 40% of it): 44 px in Visual mode, which sees only a point; the element's own box for act, whose chosen point goes through the same hit test as the centre, and again just before the press.
+- **Buttons and keys** go down after a pause (median 0.16 s) and are held about 116 ms. **Typing** has log-normal gaps (median 0.2 s), longer after spaces and punctuation, shorter when the hands alternate, with a hesitation now and then. **Scrolling** turns the wheel in notches that come faster mid-turn.
+
+What a page's own script records (`browsertest.Detector`'s input recorder, `InputURL`), in `TestVisualInputLooksHuman` and `TestActInputLooksHuman`, 2026-11-15, Chromium 156:
+
+| | Visual mode | act (API mode) |
+|---|---|---|
+| A 400 px click: moves before the press | 45, up to 11 px off the straight line | 43, up to 18 px off it |
+| Button held | 60–200 ms | 60–200 ms |
+| Ten clicks at one point | scattered, within 18 px | scattered, all on the button |
+| Key-down gaps, 30 characters | mean 0.28 s, CV 0.41 | mean 0.20 s, CV 0.44 |
+| `isTrusted` | true for every event | (not checked; CDP's are trusted too) |
+
+None of this is fingerprint spoofing: the browser reports nothing different about itself. `TestVisualModeLooksLikeAPerson` and `TestPageToolsStayQuiet` pass unchanged with it. Not done: typing mistakes and corrections, and a check against a public behaviour-scoring page (to be done by hand).
+
 ## Fixed along the way
 
 - **`Intl` contradicted the browser's languages.** The image had only Chromium's `en-US` interface, so whatever `LANGUAGE` said, `Intl` reported `en-US` while `navigator.languages` and Accept-Language followed the exit location (`fr-FR`). The image now installs `chromium-l10n` (about 120 MB), and its build fails if the locales are missing. `Intl` now follows the interface language: `de` for a German exit, as Chromium on a German Linux desktop reports.
