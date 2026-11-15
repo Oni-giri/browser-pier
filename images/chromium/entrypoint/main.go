@@ -68,6 +68,17 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	if cfg.BlockAds {
+		// Blocking is a convenience, not a boundary: without a usable
+		// list the browser starts anyway, blocking nothing.
+		set, err := readBlockFile(cfg.BlockFile)
+		if err != nil {
+			log.Warn("no ad and tracker list: nothing is blocked", "err", err)
+		} else {
+			log.Info("blocking ads and trackers", "names", set.Len())
+		}
+		fwd.block = newBlocker(set)
+	}
 	fln, err := net.Listen("tcp", forwarderAddr)
 	if err != nil {
 		return fmt.Errorf("start the proxy forwarder: %w", err)

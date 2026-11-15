@@ -21,7 +21,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := config{Width: 1920, Height: 1080, ProfileDir: "/profile", ControlSocket: "/run/browserpier/control.sock", StopTimeout: 20 * time.Second, ProxyFile: "/run/browserpier/proxy.json"}
+	want := config{Width: 1920, Height: 1080, ProfileDir: "/profile", ControlSocket: "/run/browserpier/control.sock", StopTimeout: 20 * time.Second, ProxyFile: "/run/browserpier/proxy.json", BlockFile: "/run/browserpier/blocklist.txt"}
 	if !reflect.DeepEqual(c, want) {
 		t.Fatalf("got %+v, want %+v", c, want)
 	}
@@ -36,11 +36,13 @@ func TestLoadConfigFromEnv(t *testing.T) {
 		"BROWSERPIER_MOUNT_CHECK":    "s1",
 		"BROWSERPIER_LOCAL_NETWORK":  "true",
 		"BROWSERPIER_HOST_IPS":       "203.0.113.4, 2001:db8::4",
+		"BROWSERPIER_BLOCK_ADS":      "true",
+		"BROWSERPIER_BLOCKLIST_FILE": "/s/list.txt",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := config{Width: 1280, Height: 800, ProfileDir: "/p", ControlSocket: "/s/c.sock", StopTimeout: 45 * time.Second, MountCheck: "s1", ProxyFile: "/run/browserpier/proxy.json", LocalNetwork: true,
+	want := config{Width: 1280, Height: 800, ProfileDir: "/p", ControlSocket: "/s/c.sock", StopTimeout: 45 * time.Second, MountCheck: "s1", ProxyFile: "/run/browserpier/proxy.json", LocalNetwork: true, BlockAds: true, BlockFile: "/s/list.txt",
 		HostIPs: []netip.Addr{netip.MustParseAddr("203.0.113.4"), netip.MustParseAddr("2001:db8::4")}}
 	if !reflect.DeepEqual(c, want) {
 		t.Fatalf("got %+v, want %+v", c, want)
@@ -58,6 +60,7 @@ func TestLoadConfigRejectsBadValues(t *testing.T) {
 		{"BROWSERPIER_PROFILE_DIR": ""},
 		{"BROWSERPIER_CONTROL_SOCKET": ""},
 		{"BROWSERPIER_LOCAL_NETWORK": "lan"},
+		{"BROWSERPIER_BLOCK_ADS": "some"},
 		{"BROWSERPIER_HOST_IPS": "example.com"},
 	} {
 		if _, err := loadConfig(env(vars)); err == nil {

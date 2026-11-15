@@ -41,6 +41,10 @@ type config struct {
 	// HostIPs (BROWSERPIER_HOST_IPS, comma separated) are the Docker
 	// host's own addresses, which count as the local network.
 	HostIPs []netip.Addr
+	// BlockAds (BROWSERPIER_BLOCK_ADS) turns on the ad and tracker list,
+	// read from BlockFile (BROWSERPIER_BLOCKLIST_FILE). Off by default.
+	BlockAds  bool
+	BlockFile string
 }
 
 func loadConfig(lookup func(string) (string, bool)) (config, error) {
@@ -55,6 +59,7 @@ func loadConfig(lookup func(string) (string, bool)) (config, error) {
 		ControlSocket:  get("BROWSERPIER_CONTROL_SOCKET", "/run/browserpier/control.sock"),
 		MountCheck:     get("BROWSERPIER_MOUNT_CHECK", ""),
 		ProxyFile:      get("BROWSERPIER_PROXY_FILE", "/run/browserpier/proxy.json"),
+		BlockFile:      get("BROWSERPIER_BLOCKLIST_FILE", "/run/browserpier/blocklist.txt"),
 		GeoURL:         get("BROWSERPIER_GEOIP_URL", ""),
 		StoredCountry:  get("BROWSERPIER_GEO_COUNTRY", ""),
 		StoredTZ:       get("BROWSERPIER_GEO_TZ", ""),
@@ -74,6 +79,9 @@ func loadConfig(lookup func(string) (string, bool)) (config, error) {
 	var err error
 	if c.LocalNetwork, err = strconv.ParseBool(get("BROWSERPIER_LOCAL_NETWORK", "false")); err != nil {
 		return config{}, fmt.Errorf("BROWSERPIER_LOCAL_NETWORK: want true or false, got %q", get("BROWSERPIER_LOCAL_NETWORK", ""))
+	}
+	if c.BlockAds, err = strconv.ParseBool(get("BROWSERPIER_BLOCK_ADS", "false")); err != nil {
+		return config{}, fmt.Errorf("BROWSERPIER_BLOCK_ADS: want true or false, got %q", get("BROWSERPIER_BLOCK_ADS", ""))
 	}
 	for _, s := range strings.Split(get("BROWSERPIER_HOST_IPS", ""), ",") {
 		if s = strings.TrimSpace(s); s == "" {
