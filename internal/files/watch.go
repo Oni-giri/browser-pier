@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -16,10 +17,15 @@ import (
 // Download notices (PROJ-116): an action that may start a download (act,
 // a click, a key press) lists the downloads folder before it runs, and
 // again after, and says what appeared. No CDP is involved, so it works the
-// same in both modes: Chrome writes a download as name.crdownload (or
-// "Unconfirmed N.crdownload" until it knows the name) and renames it once
-// it is finished, so a new .crdownload is a download under way, and a new
+// same in both modes: Chrome writes a download as "Unconfirmed
+// N.crdownload" (or name.crdownload) and renames it to its name once it
+// is finished, so a new .crdownload is a download under way, and a new
 // file without the suffix one that finished.
+//
+// Chrome creates the file only once the server has answered, which can be
+// after the action has returned: a notice looks for StartGrace after the
+// action for a download to start, and whatever finished between one
+// action of a session and the next is told with the next (Earlier).
 
 const (
 	// DefaultDownloadWait is how long an action waits for a download it
@@ -29,9 +35,20 @@ const (
 	MaxDownloadWait     = 30 * time.Second
 	// MaxNotices caps the files a notice names; the rest are counted.
 	MaxNotices = 5
-	// downloadPoll is how often a download under way is looked at.
+	// StartGrace is how long after an action its notice keeps looking
+	// for a download to start, so that an action that downloads nothing
+	// is held up by no more than this; a download that starts later is
+	// told with the session's next action.
+	StartGrace = 40 * time.Millisecond
+	// downloadPoll is how often a download under way is looked at, and
+	// gracePoll how often one is looked for during StartGrace.
 	downloadPoll = 200 * time.Millisecond
+	gracePoll    = 10 * time.Millisecond
 )
+
+// unconfirmed is how Chrome names a download until it is finished, when
+// it gets its name.
+var unconfirmed = regexp.MustCompile(`^Unconfirmed [0-9]+$`)
 
 // DownloadState is what became of a file that appeared during an action.
 type DownloadState string
@@ -53,9 +70,15 @@ const (
 // that offered the download: it is cleaned of invisible characters, but
 // still page text, to be fenced for an agent and escaped for a person.
 type Download struct {
+	// Name is "" for a download in progress whose name Chrome hasn't
+	// given it yet.
 	Name  string        `json:"name"`
 	Size  int64         `json:"size"` // bytes: so far, for one in progress
 	State DownloadState `json:"state"`
+	// Earlier marks a file that finished after the session's last action
+	// had answered, before this one: a download that started late, or
+	// one the last action said was in progress.
+	Earlier bool `json:"earlier,omitempty"`
 }
 
 // seen is a regular file in the downloads folder, with what os.SameFile
@@ -69,21 +92,70 @@ func (e seen) partial() bool { return strings.HasSuffix(e.Name, partial) }
 
 // Mark is the downloads folder as it was before an action.
 type Mark struct {
-	s       *Store
-	profile string
-	before  map[string]seen // by name; nil if the folder couldn't be read
-	poll    time.Duration
+	s                *Store
+	profile, session string
+	before           map[string]seen // by name; nil if the folder couldn't be read
+	earlier          []Download      // finished since the session's last notice
+	ended            time.Time       // when the action ended (Ended)
+	poll, gracePoll  time.Duration
+	grace            time.Duration
 }
 
-// Mark lists the profile's downloads folder before an action. It never
-// fails: a folder that can't be read is reported as nothing new, since an
-// action must not fail over its notice.
-func (s *Store) Mark(profile string) *Mark {
-	m := &Mark{s: s, profile: profile, poll: downloadPoll}
-	if list, err := s.downloads(profile); err == nil {
-		m.before = list
+// Mark lists the profile's downloads folder before an action of the
+// session. It never fails: a folder that can't be read is reported as
+// nothing new, since an action must not fail over its notice.
+func (s *Store) Mark(profile, session string) *Mark {
+	m := &Mark{s: s, profile: profile, session: session, poll: downloadPoll, gracePoll: gracePoll, grace: StartGrace}
+	list, err := s.downloads(profile)
+	if err != nil {
+		return m
 	}
+	m.before = list
+	s.mu.Lock()
+	prev := s.seen[session]
+	s.mu.Unlock()
+	if prev == nil {
+		return m // the session's first: nothing to tell from before it
+	}
+	var at []time.Time
+	for name, e := range list {
+		if !e.partial() && fresh(prev, e) {
+			m.earlier = append(m.earlier, Download{Name: cleanName(name), Size: e.Size, State: Downloaded, Earlier: true})
+			at = append(at, e.Modified)
+		}
+	}
+	sort.Sort(byTime{m.earlier, at})
 	return m
+}
+
+// Ended records that the action has ended: StartGrace counts from here.
+// Without it, it counts from Downloads.
+func (m *Mark) Ended() {
+	if m != nil {
+		m.ended = time.Now()
+	}
+}
+
+// Forget drops what the store keeps about a session's downloads folder,
+// once the session has ended.
+func (s *Store) Forget(session string) {
+	s.mu.Lock()
+	delete(s.seen, session)
+	s.mu.Unlock()
+}
+
+// remember keeps the listing a session's notice ended with, for the next
+// action's Earlier.
+func (s *Store) remember(session string, list map[string]seen) {
+	if session == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.seen == nil {
+		s.seen = map[string]map[string]seen{}
+	}
+	s.seen[session] = list
 }
 
 // downloads lists every regular file in the downloads folder, partial
@@ -120,16 +192,15 @@ func (s *Store) downloads(profile string) (map[string]seen, error) {
 	return out, nil
 }
 
-// fresh reports whether e wasn't in the folder before: a new name, or the
-// same name for another file or a rewritten one.
-func (m *Mark) fresh(e seen) bool {
-	b, ok := m.before[e.Name]
+// fresh reports whether e wasn't in the before listing: a new name, or
+// the same name for another file or a rewritten one.
+func fresh(before map[string]seen, e seen) bool {
+	b, ok := before[e.Name]
 	if !ok {
-		// A partial download that was there before, renamed (Chrome
-		// names it "Unconfirmed N.crdownload" until it knows the name),
-		// is still the same download.
+		// A partial download that was there before, renamed, is still
+		// the same download.
 		if e.partial() {
-			for _, b := range m.before {
+			for _, b := range before {
 				if b.partial() && os.SameFile(b.info, e.info) {
 					return false
 				}
@@ -144,17 +215,25 @@ func (m *Mark) fresh(e seen) bool {
 }
 
 // Downloads lists the folder again after the action and reports what
-// appeared: finished files, and downloads under way. Only when a new
-// partial download is there does it wait, looking every 200 ms for up to
-// wait for it to finish, so an action that downloads nothing returns at
-// once. A download that was already under way before the action isn't
-// waited for or reported, unless it finished during it. It never fails:
-// a folder it can't read, or ctx ending, reports what it has.
+// appeared: first what finished since the session's last notice, then
+// finished files, and downloads under way. If nothing has appeared it
+// keeps looking until StartGrace after the action ended; only when a new
+// partial download is there does it wait longer, looking every 200 ms for
+// up to wait for it to finish. A download that was already under way
+// before the action isn't waited for or reported, unless it finished
+// during it. It never fails: a folder it can't read, or ctx ending,
+// reports what it has.
 func (m *Mark) Downloads(ctx context.Context, wait time.Duration) []Download {
 	if m == nil || m.before == nil {
 		return nil
 	}
-	deadline := time.Now().Add(wait)
+	now := time.Now()
+	deadline := now.Add(wait)
+	graceEnd := m.ended
+	if graceEnd.IsZero() {
+		graceEnd = now
+	}
+	graceEnd = graceEnd.Add(m.grace)
 	finished := map[string]seen{} // new finished files, as last seen
 	started := map[string]seen{}  // new partial downloads ever seen
 	var last map[string]seen
@@ -166,7 +245,7 @@ func (m *Mark) Downloads(ctx context.Context, wait time.Duration) []Download {
 		last = cur
 		active := 0
 		for name, e := range cur {
-			if !m.fresh(e) {
+			if !fresh(m.before, e) {
 				continue
 			}
 			if e.partial() {
@@ -176,10 +255,18 @@ func (m *Mark) Downloads(ctx context.Context, wait time.Duration) []Download {
 				finished[name] = e
 			}
 		}
-		if active == 0 || !time.Now().Add(m.poll).Before(deadline) {
+		poll := m.poll
+		switch {
+		case active > 0 && time.Now().Add(m.poll).Before(deadline):
+		case len(finished) == 0 && len(started) == 0 && time.Now().Before(graceEnd):
+			poll = m.gracePoll
+		default:
+			poll = 0
+		}
+		if poll == 0 {
 			break
 		}
-		t := time.NewTimer(m.poll)
+		t := time.NewTimer(poll)
 		select {
 		case <-ctx.Done():
 			t.Stop()
@@ -190,9 +277,10 @@ func (m *Mark) Downloads(ctx context.Context, wait time.Duration) []Download {
 		}
 	}
 	if last == nil {
-		return nil
+		return m.earlier
 	}
-	return report(last, finished, started)
+	m.s.remember(m.session, last)
+	return append(m.earlier, report(last, finished, started)...)
 }
 
 // report sorts what was seen into a notice: finished files (oldest
@@ -212,13 +300,13 @@ func report(last, finished, started map[string]seen) []Download {
 	sort.Sort(byTime{done, doneAt})
 	for name, e := range started {
 		if now, ok := last[name]; ok && os.SameFile(now.info, e.info) {
-			running = append(running, Download{Name: cleanName(strings.TrimSuffix(name, partial)), Size: now.Size, State: InProgress})
+			running = append(running, Download{Name: partialName(name), Size: now.Size, State: InProgress})
 			continue
 		}
 		if becameFile(e, last, finished) {
 			continue // renamed: finished, or under another partial name
 		}
-		gone = append(gone, Download{Name: cleanName(strings.TrimSuffix(name, partial)), Size: e.Size, State: Vanished})
+		gone = append(gone, Download{Name: partialName(name), Size: e.Size, State: Vanished})
 	}
 	sort.Slice(running, func(i, j int) bool { return running[i].Name < running[j].Name })
 	sort.Slice(gone, func(i, j int) bool { return gone[i].Name < gone[j].Name })
@@ -261,6 +349,16 @@ func (b byTime) Swap(i, j int) {
 	b.at[i], b.at[j] = b.at[j], b.at[i]
 }
 
+// partialName is the name a partial download will have, or "" while
+// Chrome calls it "Unconfirmed N".
+func partialName(name string) string {
+	name = strings.TrimSuffix(name, partial)
+	if unconfirmed.MatchString(name) {
+		return ""
+	}
+	return cleanName(name)
+}
+
 // cleanName strips what a reader wouldn't see (fence.Clean: zero-width
 // and bidi characters among them) and puts any line break or tab left as
 // a space, so a name is one line of a notice.
@@ -278,11 +376,17 @@ func cleanName(name string) string {
 func (d Download) Line() string {
 	switch d.State {
 	case InProgress:
+		if d.Name == "" {
+			return fmt.Sprintf("download in progress (%s so far; it gets its name when it finishes); list_files to check later", Size(d.Size))
+		}
 		return fmt.Sprintf("download in progress: %s (%s so far); list_files to check later", d.Name, Size(d.Size))
 	case Vanished:
 		return "a download vanished before it finished"
 	case Removed:
 		return fmt.Sprintf("downloaded %s (%s), then removed (the files cap evicts the oldest files)", d.Name, Size(d.Size))
+	}
+	if d.Earlier {
+		return fmt.Sprintf("downloaded %s (%s), after the last action's answer", d.Name, Size(d.Size))
 	}
 	return fmt.Sprintf("downloaded %s (%s)", d.Name, Size(d.Size))
 }

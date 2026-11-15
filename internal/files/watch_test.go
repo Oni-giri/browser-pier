@@ -27,7 +27,7 @@ func TestDownloadsNewFinishedFile(t *testing.T) {
 	s, dir := setup(t, 0)
 	dl := filepath.Join(dir, Downloads)
 	write(t, filepath.Join(dl, "old.csv"), "old", time.Hour)
-	m := s.Mark("google")
+	m := s.Mark("google", "")
 	write(t, filepath.Join(dl, "report.csv"), strings.Repeat("x", 12345), 0)
 	start := time.Now()
 	got := m.Downloads(context.Background(), 3*time.Second)
@@ -52,7 +52,7 @@ func TestDownloadsNoChangeDoesntWait(t *testing.T) {
 	// A download left under way before the action isn't this action's:
 	// it is neither waited for nor reported.
 	write(t, filepath.Join(dl, "stale.zip.crdownload"), "partial", time.Hour)
-	m := s.Mark("google")
+	m := s.Mark("google", "")
 	start := time.Now()
 	if got := m.Downloads(context.Background(), 3*time.Second); len(got) != 0 {
 		t.Fatalf("Downloads = %+v, want nothing", got)
@@ -65,7 +65,7 @@ func TestDownloadsNoChangeDoesntWait(t *testing.T) {
 func TestDownloadsPartialFinishesWithinTheWait(t *testing.T) {
 	s, dir := setup(t, 0)
 	dl := filepath.Join(dir, Downloads)
-	m := s.Mark("google")
+	m := s.Mark("google", "")
 	m.poll = 20 * time.Millisecond
 	// Chrome's way: "Unconfirmed N.crdownload", renamed once it knows the
 	// name, then renamed again once it is finished.
@@ -92,7 +92,7 @@ func TestDownloadsPartialFinishesWithinTheWait(t *testing.T) {
 func TestDownloadsStillGrowingAtTheDeadline(t *testing.T) {
 	s, dir := setup(t, 0)
 	dl := filepath.Join(dir, Downloads)
-	m := s.Mark("google")
+	m := s.Mark("google", "")
 	m.poll = 20 * time.Millisecond
 	part := filepath.Join(dl, "big.bin.crdownload")
 	write(t, part, strings.Repeat("x", 4100000), 0)
@@ -129,7 +129,7 @@ func TestDownloadsStillGrowingAtTheDeadline(t *testing.T) {
 func TestDownloadsPartialRemoved(t *testing.T) {
 	s, dir := setup(t, 0)
 	dl := filepath.Join(dir, Downloads)
-	m := s.Mark("google")
+	m := s.Mark("google", "")
 	m.poll = 20 * time.Millisecond
 	write(t, filepath.Join(dl, "cancelled.zip.crdownload"), "part", 0)
 	later(t, 100*time.Millisecond, func() { _ = os.Remove(filepath.Join(dl, "cancelled.zip.crdownload")) })
@@ -151,7 +151,7 @@ func TestDownloadsPartialRemoved(t *testing.T) {
 func TestDownloadsFinishedThenEvicted(t *testing.T) {
 	s, dir := setup(t, 0)
 	dl := filepath.Join(dir, Downloads)
-	m := s.Mark("google")
+	m := s.Mark("google", "")
 	m.poll = 20 * time.Millisecond
 	write(t, filepath.Join(dl, "a.csv"), "aaa", 0)
 	write(t, filepath.Join(dl, "b.zip.crdownload"), "b", 0)
@@ -179,7 +179,7 @@ func TestDownloadsEarlierPartialFinishes(t *testing.T) {
 	s, dir := setup(t, 0)
 	dl := filepath.Join(dir, Downloads)
 	write(t, filepath.Join(dl, "slow.iso.crdownload"), "12345", 0)
-	m := s.Mark("google")
+	m := s.Mark("google", "")
 	if err := os.Rename(filepath.Join(dl, "slow.iso.crdownload"), filepath.Join(dl, "slow.iso")); err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestDownloadNamesCleanedAndLinksIgnored(t *testing.T) {
 	s, dir := setup(t, 0)
 	dl := filepath.Join(dir, Downloads)
 	write(t, filepath.Join(dir, "secret"), "outside", 0)
-	m := s.Mark("google")
+	m := s.Mark("google", "")
 	// Bidi override (an "exe" that reads as "txt"), zero-width space, a
 	// tag character and a line break.
 	write(t, filepath.Join(dl, "inv\u202eoice\u200b\U000E0041\nnext.csv"), "x", 0)
@@ -228,7 +228,7 @@ func TestDownloadsFolderLinkRefused(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(dir, Downloads)); err != nil {
 		t.Fatal(err)
 	}
-	m := s.Mark("google")
+	m := s.Mark("google", "")
 	write(t, filepath.Join(outside, "new.txt"), "new", 0)
 	if got := m.Downloads(context.Background(), time.Second); len(got) != 0 {
 		t.Fatalf("Downloads through a link = %+v", got)
@@ -241,7 +241,7 @@ func TestDownloadsFolderLinkRefused(t *testing.T) {
 
 func TestDownloadsCallerGoneStopsTheWait(t *testing.T) {
 	s, dir := setup(t, 0)
-	m := s.Mark("google")
+	m := s.Mark("google", "")
 	m.poll = 20 * time.Millisecond
 	write(t, filepath.Join(dir, Downloads, "x.bin.crdownload"), "x", 0)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -285,6 +285,79 @@ func TestDownloadWait(t *testing.T) {
 		got, err := DownloadWait(c.in)
 		if (err == nil) != c.ok || got != c.want {
 			t.Errorf("DownloadWait(%v) = %v, %v", c.in, got, err)
+		}
+	}
+}
+
+// Chrome creates the file only once the server has answered, which can
+// be just after the action: the notice keeps looking for StartGrace.
+func TestDownloadsLookForALateStart(t *testing.T) {
+	s, dir := setup(t, 0)
+	dl := filepath.Join(dir, Downloads)
+	m := s.Mark("google", "")
+	m.grace = 300 * time.Millisecond
+	m.Ended()
+	later(t, 100*time.Millisecond, func() { write(t, filepath.Join(dl, "late.csv"), "late", 0) })
+	got := m.Downloads(context.Background(), 3*time.Second)
+	if want := []Download{{Name: "late.csv", Size: 4, State: Downloaded}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Downloads = %+v, want %+v", got, want)
+	}
+	// Nothing at all: it looks for StartGrace from the end of the action,
+	// no longer.
+	m = s.Mark("google", "")
+	m.Ended()
+	time.Sleep(StartGrace)
+	start := time.Now()
+	if got := m.Downloads(context.Background(), 3*time.Second); len(got) != 0 {
+		t.Fatalf("Downloads = %+v", got)
+	}
+	if d := time.Since(start); d > 20*time.Millisecond {
+		t.Errorf("the grace was over, yet it looked for %v", d)
+	}
+}
+
+// What finished after a session's notice, before its next action, is
+// told with that action, once; a new session starts afresh.
+func TestDownloadsEarlierTold(t *testing.T) {
+	s, dir := setup(t, 0)
+	dl := filepath.Join(dir, Downloads)
+	m := s.Mark("google", "s1")
+	write(t, filepath.Join(dl, "Unconfirmed 99.crdownload"), "part", 0)
+	got := m.Downloads(context.Background(), 0)
+	if want := []Download{{Name: "", Size: 4, State: InProgress}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Downloads = %+v, want %+v", got, want)
+	}
+	if l := got[0].Line(); l != "download in progress (4 B so far; it gets its name when it finishes); list_files to check later" {
+		t.Errorf("line %q", l)
+	}
+	// Then it finishes, and something else arrives, between actions.
+	if err := os.Rename(filepath.Join(dl, "Unconfirmed 99.crdownload"), filepath.Join(dl, "big.bin")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dl, "page.pdf"), "pdf!!", 0)
+	m = s.Mark("google", "s1")
+	write(t, filepath.Join(dl, "now.csv"), "now", 0)
+	got = m.Downloads(context.Background(), time.Second)
+	if len(got) != 3 || !got[0].Earlier || !got[1].Earlier || got[2] != (Download{Name: "now.csv", Size: 3, State: Downloaded}) {
+		t.Fatalf("Downloads = %+v", got)
+	}
+	names := got[0].Name + "," + got[1].Name
+	if names != "big.bin,page.pdf" && names != "page.pdf,big.bin" {
+		t.Errorf("earlier %s", names)
+	}
+	if l := got[0].Line(); !strings.HasSuffix(l, "), after the last action's answer") {
+		t.Errorf("line %q", l)
+	}
+	// Told once.
+	if got := s.Mark("google", "s1").Downloads(context.Background(), time.Second); len(got) != 0 {
+		t.Fatalf("told again: %+v", got)
+	}
+	// Another session, or the same one forgotten, has nothing from before.
+	write(t, filepath.Join(dl, "x.csv"), "x", 0)
+	s.Forget("s1")
+	for _, id := range []string{"s1", "s2"} {
+		if got := s.Mark("google", id).Downloads(context.Background(), time.Second); len(got) != 0 {
+			t.Errorf("%s: %+v", id, got)
 		}
 	}
 }

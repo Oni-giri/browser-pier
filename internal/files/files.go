@@ -15,6 +15,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode"
@@ -53,6 +54,9 @@ type Store struct {
 	dir      func(profile string) string // the profile's files folder
 	limit    int64                       // bytes per profile, both folders together; 0 is no limit
 	uid, gid int                         // the browser's user, who must be able to read uploads
+
+	mu   sync.Mutex
+	seen map[string]map[string]seen // by session: its downloads folder at its last notice
 }
 
 // New makes a Store. dir gives a profile's files folder; limit caps the
