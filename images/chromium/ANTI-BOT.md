@@ -68,6 +68,12 @@ So the taskbar hint is gone, and the 0×0 at load is unchanged (see Signals that
 
 Chromium runs with `RestoreOnStartup: 1`, so it keeps session-only cookies across a stop and reopens its tabs as it starts. That's a common setting in people's browsers. A page sees nothing new: a restored tab loads as it would after a person reopens their browser, and a tab left on a form's answer isn't posted again (`TestRestoredPostPageIsNotResubmitted`). `TestVisualModeLooksLikeAPerson` and `TestPageToolsStayQuiet` pass unchanged with it.
 
+## Ad and tracker blocking (PROJ-119)
+
+Blocking happens in the container's SOCKS forwarder, by host name, before anything leaves the container: Chromium gets SOCKS code 2 for a listed host, and the request fails as any unreachable host's does (`net::ERR_SOCKS_CONNECTION_FAILED` in the network log). Nothing is injected into pages, no extension is installed, and no CDP is attached, so Visual mode stays clean and the fingerprint is unchanged. What a page can see is what it sees with any DNS-level blocker (Pi-hole, NextDNS, a hosts file), which many people run: its ad and analytics scripts don't load. Sites that check for that ("please disable your ad blocker") may say so; challenge and CAPTCHA providers are on a built-in allowlist, so blocking never removes a challenge's own scripts, and a site that insists can be opened with `block_ads: false` for the session.
+
+`TestVisualModeLooksLikeAPerson` and `TestPageToolsStayQuiet` pass with blocking on (2026-11-15, `localhost/bp-agweb-chromium:proj119`): every real-API Docker test's browser now blocks, with a small list of real ad domains, and both tests check their session does. The detector reports the same as before. **Decision: nothing to accept.**
+
 ## Input that moves like a hand (PROJ-113)
 
 Before PROJ-113, Visual mode's pointer jumped (`mousemove X Y click`), pressed and released at once, and typed every key 12 ms apart (about 83 characters a second); act moved once to the element's exact centre and pressed with no hold. Pages that score behaviour read exactly that. Now, at human pace (the default; `pace: "instant"` keeps the old input), both modes follow `internal/motion`, a Go port of agweb's Motion model (MIT, see NOTICE):
