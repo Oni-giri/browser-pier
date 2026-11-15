@@ -267,7 +267,8 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 		path, body := "/input/events", []byte(m.Events)
 		if m.Type == "text" {
 			path = "/input/type"
-			body, _ = json.Marshal(map[string]string{"text": m.Text})
+			// A person pasting: at once, not at an agent's human pace.
+			body, _ = json.Marshal(map[string]string{"text": m.Text, "pace": "instant"})
 		}
 		if err := v.post(path, body); err != nil {
 			say(map[string]any{"type": "error", "msg": err.Error()})
