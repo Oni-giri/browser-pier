@@ -16,8 +16,8 @@ import (
 // The API-mode page tools (internal/pagetools), one endpoint each. They
 // take the same JSON as the MCP tools, and answer {"text": "..."}, the
 // same text the MCP tools return, with page content fenced.
-func (a *API) registerPageTools(mux *http.ServeMux) {
-	t := func(h http.HandlerFunc) http.Handler { return a.web.RequireToken(h) }
+func (a *API) registerPageTools(mux Router) {
+	t := a.agent
 	mux.Handle("POST /api/sessions/{id}/snapshot", t(pageTool(a, (*pagetools.Tools).Snapshot)))
 	mux.Handle("POST /api/sessions/{id}/find", t(pageTool(a, (*pagetools.Tools).Find)))
 	mux.Handle("POST /api/sessions/{id}/navigate", t(pageTool(a, (*pagetools.Tools).Navigate)))

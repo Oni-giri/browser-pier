@@ -53,9 +53,10 @@ func New(m *sessions.Manager, web *auth.Web, fs *files.Store, log *slog.Logger, 
 // admin's defaults instead of the built-in ones.
 func (a *API) SetSettings(s *settings.Store) { a.settings = s }
 
-// Register adds the API's routes to mux.
-func (a *API) Register(mux *http.ServeMux) {
-	t := func(h http.HandlerFunc) http.Handler { return a.web.RequireToken(h) }
+// Register adds the API's routes to mux. Each is an agent route (scrub.go)
+// but the CDP proxy's.
+func (a *API) Register(mux Router) {
+	t := a.agent
 	mux.Handle("GET /api/profiles", t(a.listProfiles))
 	mux.Handle("POST /api/profiles", t(a.createProfile))
 	mux.Handle("POST /api/sessions", t(a.startSession))
@@ -77,6 +78,8 @@ func (a *API) Register(mux *http.ServeMux) {
 	}
 	// Many CDP clients can't set headers, so the CDP proxy also takes a
 	// ticket as ?ticket=; never the token, which a proxy in front could log.
+	// It isn't scrubbed: raw CDP is full control of the browser, which can
+	// read any field's value (SPEC §11).
 	c := func(h http.HandlerFunc) http.Handler { return a.web.RequireTokenOrCDPTicket(h) }
 	mux.Handle("GET /cdp/{profile}", c(a.cdp))
 	mux.Handle("GET /cdp/{profile}/{path...}", c(a.cdp))

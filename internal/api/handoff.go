@@ -18,8 +18,8 @@ import (
 // SetHandoffs enables the handoff routes.
 func (a *API) SetHandoffs(svc *handoff.Service) { a.handoffs = svc }
 
-func (a *API) registerHandoffs(mux *http.ServeMux) {
-	t := func(h http.HandlerFunc) http.Handler { return a.web.RequireToken(h) }
+func (a *API) registerHandoffs(mux Router) {
+	t := a.agent
 	mux.Handle("POST /api/sessions/{id}/handoff", t(a.createHandoff))
 	mux.Handle("GET /api/handoffs/{id}", t(a.getHandoff))
 	mux.Handle("DELETE /api/handoffs/{id}", t(a.withdrawHandoff))
