@@ -244,6 +244,16 @@ func TestActAimsAgainWhenCoveredOnTheWay(t *testing.T) {
 			f.fb.behave[p.signin].cover = p.overlay
 		}
 	}
+	describes := func() int {
+		n := 0
+		for _, m := range f.fb.Received() {
+			if m.Method == "DOM.describeNode" {
+				n++
+			}
+		}
+		return n
+	}
+	before := describes()
 	if _, err := f.act(Step{Action: "click", Ref: r["Sign in"]}); err != nil {
 		t.Fatal(err)
 	}
@@ -252,6 +262,10 @@ func TestActAimsAgainWhenCoveredOnTheWay(t *testing.T) {
 	}
 	if b := f.behaviourOf(p.signin); b.hits != 6 || b.centred != 0 {
 		t.Errorf("%d hit tests, %d centre scrolls; want 6 and 0", b.hits, b.centred)
+	}
+	// The cover it aimed past isn't described: only a refusal needs that.
+	if n := describes() - before; n != 0 {
+		t.Errorf("described %d covers for a click that went ahead", n)
 	}
 
 	// Covered on the way and still after the wait: refused, scrolled to

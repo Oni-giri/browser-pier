@@ -1066,16 +1066,21 @@ func (c *call) click(ctx context.Context, n *node, ct *coverTry, x, y float64, b
 		// for it to go, within what is left of the step's cover wait) and
 		// go there, once.
 		cover, err := c.stillThere(ctx, n, px, py, px != x || py != y)
-		if err == nil {
-			x, y = px, py
-			break
-		}
 		if errors.Is(err, errNested) {
 			exact = true
 			continue
 		}
-		if cover == "" || again {
+		if err != nil {
 			return err
+		}
+		if cover == "" {
+			x, y = px, py
+			break
+		}
+		if again {
+			// Described only now, for the refusal: a cover aimed past
+			// needs none of it.
+			return c.coveredError(ctx, n, cover)
 		}
 		again, exact = true, false
 		c.releaseCover(ctx, hitResult{cover: cover})
@@ -1211,7 +1216,8 @@ var errNested = errors.New("a control inside the element is under the point")
 // stillThere checks nothing covers n at (x, y) (jsHitTest), as aim does
 // before a pointer step; strict, for a scattered point, also that no
 // control inside n is there (errNested). When something covers it, it
-// returns it (an object in the isolated world) along with the refusal.
+// returns it (an object in the isolated world), and no error: the caller
+// aims again, or describes it for its refusal (coveredError).
 func (c *call) stillThere(ctx context.Context, n *node, x, y float64, strict bool) (cover string, err error) {
 	r, err := c.callOnObject(ctx, n.obj, jsHitTest, []any{x, y, strict}, false)
 	if err != nil {
@@ -1223,7 +1229,7 @@ func (c *call) stillThere(ctx context.Context, n *node, x, y float64, strict boo
 	case r.Type == "string" && string(r.Value) == `"nested"`:
 		return "", errNested
 	case r.Type == "object" && r.ObjectID != "":
-		return r.ObjectID, c.coveredError(ctx, n, r.ObjectID)
+		return r.ObjectID, nil
 	}
 	return "", &Error{Status: http.StatusConflict, Msg: n.ref + " moved while the pointer went to it; take a new snapshot"}
 }
