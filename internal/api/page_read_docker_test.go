@@ -455,7 +455,8 @@ func TestCloudflareChallengeNote(t *testing.T) {
 		t.Fatalf("unzoom: %d", code)
 	}
 
-	// A site's own Turnstile isn't a challenge page.
+	// A site's own Turnstile, shaped as Turnstile renders it, isn't a
+	// challenge page; nor is one whose widget has been answered.
 	for _, out := range []string{
 		a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/turnstile-login"}),
 		a.mustTool(s.ID, "snapshot", nil),
@@ -464,6 +465,9 @@ func TestCloudflareChallengeNote(t *testing.T) {
 		if strings.Contains(out, "Cloudflare") {
 			t.Errorf("a Turnstile in a form has the note:\n%s", out)
 		}
+	}
+	if out := a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/cf-challenge-passed"}); strings.Contains(out, "Cloudflare") {
+		t.Errorf("an answered challenge has the note:\n%s", out)
 	}
 }
 

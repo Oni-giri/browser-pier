@@ -16,11 +16,17 @@ import (
 // handoff. BrowserPier never clicks it by itself.
 //
 // The page is told by the challenge widget's hidden response input,
-// whose id starts with cf-chl-widget-, inside a laid-out box: the widget.
-// A Turnstile on a site's own form, known by its cf-turnstile-response
-// name, isn't a challenge page and doesn't count. The look is part of
-// jsPageInfo, the isolated-world read the tools already make: no domain,
-// no script in the page's own world.
+// whose id starts with cf-chl-widget-, inside a laid-out box: the widget,
+// on a page with a mark of Cloudflare's challenge page (a #challenge-form
+// or #challenge-stage element, a script or iframe from its
+// /cdn-cgi/challenge-platform/, not the JavaScript-detections script
+// Cloudflare adds to ordinary pages, or a title starting "Just a moment").
+// A Turnstile on a site's own form has the same id shape: its input,
+// named cf-turnstile-response, counts only inside the challenge page's
+// #challenge-stage or #challenge-form, and a widget already answered (its
+// input has a value) never counts. The look is part of jsPageInfo, the
+// isolated-world read the tools already make: no domain, no script in
+// the page's own world.
 
 // The checkbox's place in the widget: 21 px from its left edge, halfway
 // down its first 65 px (the widget is 65 px tall; a taller one has its
@@ -61,8 +67,23 @@ type cfInfo struct {
 }
 
 // jsChallenge finds the challenge widget, as part of jsPageInfo: null
-// when there is none, or it isn't laid out.
-const jsChallenge = `(() => { const i = document.querySelector('input[id^="cf-chl-widget-"]'), p = i && i.parentElement; if (!p) return null; const r = p.getBoundingClientRect(); return r.width > 0 && r.height > 0 ? {l: r.left, t: r.top, w: r.width, h: r.height, dpr: devicePixelRatio, iw: innerWidth, ih: innerHeight, ow: outerWidth, oh: outerHeight, sw: screen.width, sh: screen.height} : null; })()`
+// when there is none, it isn't laid out, or the page has no mark of a
+// challenge page.
+const jsChallenge = `(() => {
+  const d = document;
+  const mark = d.querySelector('#challenge-form, #challenge-stage, script[src*="/cdn-cgi/challenge-platform/"]:not([src*="/scripts/jsd/"]), iframe[src*="/cdn-cgi/challenge-platform/"]') ||
+    /^just a moment/i.test(d.title);
+  if (!mark) return null;
+  let p = null;
+  for (const i of d.querySelectorAll('input[id^="cf-chl-widget-"]')) {
+    if (i.value || (i.name === 'cf-turnstile-response' && !i.closest('#challenge-stage, #challenge-form'))) continue;
+    p = i.parentElement;
+    break;
+  }
+  if (!p) return null;
+  const r = p.getBoundingClientRect();
+  return r.width > 0 && r.height > 0 ? {l: r.left, t: r.top, w: r.width, h: r.height, dpr: devicePixelRatio, iw: innerWidth, ih: innerHeight, ow: outerWidth, oh: outerHeight, sw: screen.width, sh: screen.height} : null;
+})()`
 
 // viewGeom is where the page's viewport sits on the screen, in screen
 // pixels.

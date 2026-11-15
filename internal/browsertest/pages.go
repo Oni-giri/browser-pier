@@ -424,14 +424,15 @@ root.innerHTML = '<button onclick="report(\'shadow free clicked\')">Free in shad
   '<span aria-label="Shadow cover" role="img" style="position:absolute;inset:0"></span></span>';
 </script>`,
 	// A Cloudflare challenge page, as far as BrowserPier looks (PROJ-120):
-	// its title, and a 300×65 widget holding the hidden response input.
-	// A trusted click reports where it landed and where the checkbox's
-	// middle is (21 px in, halfway down the first 65 px), in CSS pixels.
+	// its title and #challenge-stage, and in it a 300×65 widget holding
+	// the hidden response input, shaped as Turnstile shapes it. A trusted
+	// click reports where it landed and where the checkbox's middle is
+	// (21 px in, halfway down the first 65 px), in CSS pixels.
 	"/cf-challenge": `<!doctype html><title>Just a moment...</title>` + report + `
 <style>body{margin:0;font-family:sans-serif} #w{position:absolute;left:240px;top:260px;width:300px;height:65px;box-sizing:border-box;border:1px solid #d9d9d9;background:#fafafa}
 #box{position:absolute;left:9px;top:21px;width:21px;height:21px;box-sizing:border-box;border:2px solid #666;background:#fff}</style>
 <h1>shop.example</h1><p>Verify you are human by completing the action below.</p>
-<div id="w"><input type="hidden" id="cf-chl-widget-abc"><div id="box"></div></div>
+<div id="challenge-stage"><div id="w"><input type="hidden" name="cf-turnstile-response" id="cf-chl-widget-abc12_response"><div id="box"></div></div></div>
 <script>
 document.addEventListener('click', e => {
   if (!e.isTrusted) return;
@@ -439,16 +440,25 @@ document.addEventListener('click', e => {
   report('cf-click ' + [e.clientX, e.clientY, r.left + 21, r.top + Math.min(r.height, 65) / 2].join(' '));
 });
 </script>`,
-	// A site's own sign-in with a Turnstile in its form: not a challenge
-	// page, so no Cloudflare note (PROJ-120).
+	// A site's own sign-in with a Turnstile in its form, as Turnstile
+	// renders it (the same id shape as the challenge page's widget, in a
+	// laid-out box where its iframe would be), on a
+	// page that also has the JavaScript-detections script Cloudflare adds
+	// to ordinary pages: not a challenge page, so no Cloudflare note
+	// (PROJ-120).
 	"/turnstile-login": `<!doctype html><title>Sign in</title>
+<script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>
 <main><h1>Sign in</h1>
 <form method="post" action="/login">
 <label for="email">Email</label> <input id="email" name="email" autocomplete="username">
 <label for="password">Password</label> <input id="password" name="password" type="password" autocomplete="current-password">
-<div class="cf-turnstile" style="width:300px;height:65px;border:1px solid #d9d9d9"><input type="hidden" name="cf-turnstile-response" id="cf-turnstile-response-1"></div>
+<div class="cf-turnstile"><div style="width:300px;height:65px;border:1px solid #d9d9d9"><input type="hidden" name="cf-turnstile-response" id="cf-chl-widget-xk3q9_response"></div></div>
 <button>Sign in</button>
 </form></main>`,
+	// A challenge page whose widget has been answered (its input has a
+	// value), unnamed as an older challenge page's: no note either.
+	"/cf-challenge-passed": `<!doctype html><title>Just a moment...</title>
+<div id="challenge-form"><div style="width:300px;height:65px"><input type="hidden" id="cf-chl-widget-def34" value="0.token"></div></div>`,
 }
 
 func longForm() string {
