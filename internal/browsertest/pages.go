@@ -137,7 +137,26 @@ var pageSitePages = map[string]string{ //nolint:gosec // test pages, not credent
 <p id="status">Working…</p><div id="spinner">Loading spinner</div>
 <script>setTimeout(() => { document.getElementById('status').textContent = 'Payment confirmed'; document.getElementById('spinner').style.display = 'none'; }, 2000)</script>`,
 	// A page with an iframe.
-	"/frame": `<!doctype html><title>Frame</title><p>Outside the frame.</p><iframe src="/login" width="400" height="300"></iframe>`,
+	// A news page under a consent banner: an iframe (from ?frame=, another
+	// site in tests) fixed on top of the page's own consent button
+	// (PROJ-110). Around it, what no iframe covers: a button clear of the
+	// banner, one in the page's own layer on top of an iframe behind it (a
+	// negative z-index, which Chromium numbers after that layer), one under
+	// an ad iframe that clicks go through.
+	"/consent": `<!doctype html><title>News</title>` + report + `
+<style>body{margin:0} iframe{border:0}</style>
+<button style="position:absolute;left:10px;top:10px;width:100px;height:30px">Menu</button>
+<div style="margin-top:60px;height:150px">
+<iframe id="video" title="Video" style="position:absolute;left:0;top:60px;width:600px;height:150px;z-index:-1"></iframe>
+<button style="margin:50px">Watch</button></div>
+<button style="position:absolute;left:300px;top:310px">Behind the ad</button>
+<div style="position:fixed;left:0;top:300px;width:100%;height:60px;pointer-events:none"><iframe title="Ad" style="width:100%;height:60px"></iframe></div>
+<button onclick="report('page agree')" style="position:absolute;left:500px;top:450px;width:150px;height:40px">Yes, I agree</button>
+<iframe id="consent" title="SP Consent Message" style="position:fixed;left:0;top:400px;width:100%;height:400px;z-index:2147483647;background:#fff"></iframe>
+<script>document.getElementById('consent').src = new URLSearchParams(location.search).get('frame') || '/consent-frame';
+document.getElementById('video').src = '/consent-frame';</script>`,
+	"/consent-frame": `<!doctype html><title>Consent</title><p>We value your privacy.</p><button>Accept</button>`,
+	"/frame":         `<!doctype html><title>Frame</title><p>Outside the frame.</p><iframe src="/login" width="400" height="300"></iframe>`,
 	// A field that takes focus away from itself as you type.
 	"/thief": `<!doctype html><title>Thief</title><input id="a" aria-label="First" oninput="document.getElementById('b').focus()"><input id="b" aria-label="Second">`,
 	// A select and a date input.

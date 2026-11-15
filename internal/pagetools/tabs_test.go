@@ -155,3 +155,18 @@ func TestClosingAPopupBringsBackItsOpener(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out)
 	}
 }
+
+func TestTabAddress(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://accounts.example/signin?client=x#f":      "https://accounts.example/signin",
+		"https://example.com/":                            "https://example.com",
+		"https://example.com":                             "https://example.com",
+		"about:blank":                                     "about:blank",
+		"https://example.com/a b/\"q\"":                   "https://example.com/a%20b/%22q%22",
+		"https://example.com/" + strings.Repeat("p", 200): "https://example.com/" + strings.Repeat("p", maxField-len("https://example.com/")-1) + "…",
+	} {
+		if got := tabAddress(raw); got != want {
+			t.Errorf("tabAddress(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}

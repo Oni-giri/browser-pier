@@ -48,7 +48,7 @@ func (c *call) listTabs(ctx context.Context) ([]targetInfo, error) {
 		c.st.tabs[ti.TargetID] = tb
 		c.st.order = append(c.st.order, ti.TargetID)
 		if c.st.listed {
-			c.notices = append(c.notices, "a new tab opened: "+tb.id+" ("+origin(ti.URL)+")")
+			c.notices = append(c.notices, "a new tab opened: "+tb.id+" ("+tabAddress(ti.URL)+")")
 		}
 	}
 	for id := range c.st.tabs {
@@ -199,4 +199,22 @@ func (c *call) visibility(ctx context.Context, tgt *cdp.Target, timeout time.Dur
 		return "", errUnresponsive
 	}
 	return v, err
+}
+
+// tabAddress is how a new-tab notice names the tab's page: its origin and
+// path, capped, without the query or fragment (PROJ-110). The path tells
+// one page of a site from another (a sign-in popup from a help page) for
+// a few tokens; a sign-in popup's query is long OAuth state that says
+// little, and tabs lists the whole address. The path stays escaped, so
+// it can't hold a space, a quote or a line break.
+func tabAddress(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return origin(raw)
+	}
+	path := u.EscapedPath()
+	if path == "/" {
+		path = ""
+	}
+	return capText(u.Scheme+"://"+u.Host+path, maxField)
 }
