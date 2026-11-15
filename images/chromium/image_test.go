@@ -9,6 +9,7 @@ package chromium
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"image/color"
 	"image/png"
@@ -273,6 +274,88 @@ func TestKillLosesFreshLogin(t *testing.T) {
 	b = startBrowser(t, image, vol)
 	if got := s.Account(t, b.page()); got == token {
 		t.Fatal("a cookie set just before docker kill survived; the graceful-stop test can't tell graceful from not")
+	}
+	b.stop()
+}
+
+// TestSessionCookieLoginSurvivesStopStart is PROJ-112's check: a login kept
+// in a session-only cookie (no Expires or Max-Age, as when "remember me" is
+// left unticked) survives a graceful stop and start, as SPEC §5 promises for
+// every login. TestLoginSurvivesStopStartAndRebuild can't tell: its cookie
+// is persistent.
+func TestSessionCookieLoginSurvivesStopStart(t *testing.T) {
+	image := testImage(t)
+	s := browsertest.NewSite(t, browsertest.SiteHost(t))
+	s.SessionCookie()
+	vol := newVolume(t)
+
+	b := startBrowser(t, image, vol)
+	p := b.page()
+	token := s.Login(t, p)
+	// The premise: the browser holds the login as a session cookie.
+	var got struct {
+		Cookies []struct {
+			Name    string
+			Session bool
+		}
+	}
+	if err := json.Unmarshal(p.Call("Network.getCookies", map[string]any{"urls": []string{s.URL}}), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Cookies) != 1 || got.Cookies[0].Name != "session" || !got.Cookies[0].Session {
+		t.Fatalf("want one session-only cookie named session, got %+v", got.Cookies)
+	}
+	if seen := s.Account(t, p); seen != token {
+		t.Fatalf("before the stop the site saw session %q, want %q", seen, token)
+	}
+	p.Close()
+	if code := b.stop(); code != "0" {
+		t.Fatalf("exit code after stop = %s, want 0\n%s", code, b.logs())
+	}
+	if logs := b.logs(); !strings.Contains(logs, "Chromium closed") || strings.Contains(logs, "SIGTERM instead") {
+		t.Fatalf("Chromium wasn't closed through CDP\n%s", logs)
+	}
+
+	b = startBrowser(t, image, vol)
+	if seen := s.Account(t, b.page()); seen != token {
+		t.Fatalf("after a graceful stop and start the site saw session %q, want %q: the session-only cookie was lost", seen, token)
+	}
+	b.stop()
+}
+
+// TestSessionStorageSurvivesStopStart is PROJ-112's second check: a token an
+// app keeps in sessionStorage (OAuth implicit flows do) is still in its tab
+// after a graceful stop and start. sessionStorage belongs to a tab, so this
+// needs the tab back.
+func TestSessionStorageSurvivesStopStart(t *testing.T) {
+	image := testImage(t)
+	s := browsertest.NewSite(t, browsertest.SiteHost(t))
+	vol := newVolume(t)
+
+	b := startBrowser(t, image, vol)
+	p := b.page()
+	p.Navigate(s.URL + "/account")
+	p.Eval(`sessionStorage.setItem('token', 'kept-in-session-storage')`)
+	p.Close()
+	if code := b.stop(); code != "0" {
+		t.Fatalf("exit code after stop = %s, want 0\n%s", code, b.logs())
+	}
+
+	b = startBrowser(t, image, vol)
+	p = b.page()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		href, _ := p.Eval("location.href").(string)
+		if strings.HasPrefix(href, s.URL) && p.Eval("document.readyState") == "complete" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after a graceful stop and start the first tab is at %q, not the site's page: no tab was restored, so its sessionStorage is gone", href)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if v := p.Eval(`sessionStorage.getItem('token')`); v != "kept-in-session-storage" {
+		t.Fatalf("the restored tab's sessionStorage token is %v, want kept-in-session-storage", v)
 	}
 	b.stop()
 }
