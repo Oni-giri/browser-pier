@@ -121,7 +121,7 @@ func checkStep(s Step) error {
 		}
 		for i, name := range s.Files {
 			if err := checkUploadName(name); err != nil {
-				return fmt.Errorf("upload: file %d: %v", i+1, err)
+				return fmt.Errorf("upload: file %d: %w", i+1, err)
 			}
 		}
 		return needRef()
@@ -143,7 +143,7 @@ func checkUploadName(name string) error {
 	case len(name) > 255:
 		return errors.New("a name is at most 255 bytes")
 	case strings.ContainsAny(name, `/\`) || strings.Contains(name, ".."):
-		return errors.New("give the file's bare name, as upload_file returned it, without folders or ..")
+		return errors.New("give the file's bare name, as upload_file returned it, without folders or \"..\"")
 	case strings.ContainsRune(name, 0):
 		return errors.New("a name can't hold a NUL")
 	case !files.ValidName(name):
