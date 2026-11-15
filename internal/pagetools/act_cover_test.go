@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -310,4 +311,89 @@ func TestAHandoffEndsACoverWaitAtOnce(t *testing.T) {
 		t.Errorf("clicked %v", got)
 	}
 	f.closedAfter()
+}
+
+// rowPage is a list row (a link) with a Delete button of its own, over its right
+// third, as mail and file lists have.
+type rowPage struct {
+	doc, row, del *fnode
+	mu            sync.Mutex
+	clicks        []string
+}
+
+func newRowPage(fb *fakeBrowser) *rowPage {
+	p := &rowPage{}
+	p.del = el("button", "button", "Delete", box(270, 500, 140, 40))
+	p.row = el("div", "link", "Message from Ann", box(10, 500, 400, 40), txt("Message from Ann", box(20, 510, 200, 20)), p.del)
+	for _, n := range []*fnode{p.row, p.del} {
+		fb.behave[n] = &behaviour{onClick: func() { p.mu.Lock(); p.clicks = append(p.clicks, n.name); p.mu.Unlock() }}
+	}
+	p.doc = el("#document", "RootWebArea", "", box(0, 0, 1280, 800), p.row)
+	return p
+}
+
+// A human-paced click on a row never lands on the row's own Delete
+// button: a scattered point there is dropped for the row's centre.
+func TestActScatterAvoidsAControlInside(t *testing.T) {
+	f := newFixture(t)
+	p := newRowPage(f.fb)
+	tb := f.fb.addTab("https://mail.example/", p.doc, true)
+	r := f.refs()
+	if r["Message from Ann"] == "" {
+		t.Fatalf("no ref for the row: %v", r)
+	}
+	presses := map[[2]float64]bool{}
+	for range 40 {
+		f.fb.mu.Lock()
+		f.fb.input(tb).mouse = nil
+		f.fb.mu.Unlock()
+		if _, err := f.act(Step{Action: "click", Ref: r["Message from Ann"]}); err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range f.inputOf(tb).mouse {
+			if e.typ != "mousePressed" {
+				continue
+			}
+			presses[[2]float64{e.x, e.y}] = true
+			if e.x >= 270 {
+				t.Errorf("pressed at (%v, %v), on the row's Delete button", e.x, e.y)
+			}
+		}
+	}
+	if len(presses) < 10 {
+		t.Errorf("40 clicks pressed at only %d points: the scatter is off", len(presses))
+	}
+}
+
+// A control inside the element that shows up under the scattered point
+// while the pointer goes there (a Delete button shown on hover) moves the
+// press to the element's centre.
+func TestActScatterLeavesAControlShownOnHover(t *testing.T) {
+	f := newFixture(t)
+	p := newRowPage(f.fb)
+	tb := f.fb.addTab("https://mail.example/", p.doc, true)
+	r := f.refs()
+	// Hit tests: 1 aim, 2 the scattered point, 3 the check before the
+	// press, by which the hover has shown the button over the whole row.
+	p.del.box = nil
+	f.fb.behave[p.row].onHit = func(hits int) {
+		if hits == 3 {
+			p.del.box = box(10, 500, 400, 40)
+		}
+	}
+	if _, err := f.act(Step{Action: "click", Ref: r["Message from Ann"]}); err != nil {
+		t.Fatal(err)
+	}
+	var pressed []mouseEvent
+	for _, e := range f.inputOf(tb).mouse {
+		if e.typ == "mousePressed" {
+			pressed = append(pressed, e)
+		}
+	}
+	if len(pressed) != 1 || pressed[0].x != 210 || pressed[0].y != 520 {
+		t.Errorf("pressed %v, want once at the row's centre (210, 520)", pressed)
+	}
+	if b := f.behaviourOf(p.row); b.hits != 4 {
+		t.Errorf("%d hit tests, want 4", b.hits)
+	}
 }

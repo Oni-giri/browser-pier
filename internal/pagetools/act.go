@@ -580,9 +580,20 @@ const (
 	// from the element's own up to the document, the topmost element there
 	// must be the element (or, a level up, its shadow host), something
 	// inside it, or one of its labels. It returns true, false if nothing
-	// is there, or what covers it.
-	jsHitTest = `/*bp:hittest*/ function(x, y) {
+	// is there, or what covers it. strict, for a scattered point rather
+	// than the element's centre, also refuses something inside the element
+	// that is a control of its own (a row's Delete button, a tab's close
+	// ×): it returns "nested" then, so the hand keeps to the centre.
+	jsHitTest = `/*bp:hittest*/ function(x, y, strict) {
   const labels = this.labels ? Array.from(this.labels) : [];
+  const own = 'a,button,input,select,textarea,summary,[role=button],[role=link],[role=menuitem],' +
+    '[role=menuitemcheckbox],[role=menuitemradio],[role=tab],[role=checkbox],[role=radio],[role=switch],' +
+    '[role=option],[role=combobox],[role=textbox],[role=slider],[role=spinbutton],[onclick],' +
+    '[tabindex]:not([tabindex^="-"]),[contenteditable=""],[contenteditable=true]';
+  const nested = h => {
+    for (let n = h; n && n !== this; n = n.parentElement) if (n.matches(own)) return true;
+    return false;
+  };
   let el = this;
   let root = el.getRootNode();
   for (;;) {
@@ -591,6 +602,7 @@ const (
     const ok = hit === el || el.contains(hit) || (root.host && hit === root.host) ||
       labels.some(l => l === hit || l.contains(hit));
     if (!ok) return hit;
+    if (strict && el === this && hit !== this && nested(hit)) return 'nested';
     if (!(root instanceof ShadowRoot)) return true;
     el = root.host;
     root = el.getRootNode();
@@ -752,7 +764,7 @@ func (c *call) step(ctx context.Context, st Step) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if _, _, err := c.glide(ctx, n, x, y); err != nil {
+		if _, _, err := c.glide(ctx, n, x, y, false); err != nil {
 			return "", err
 		}
 		c.note("Hovered over " + n.ref)
@@ -984,28 +996,38 @@ func (c *call) mouse(ctx context.Context, typ string, x, y float64, button strin
 // always followed by its release, even if the call is cancelled in
 // between.
 func (c *call) click(ctx context.Context, n *node, ct *coverTry, x, y float64, button string, double bool) error {
-	for again := false; ; again = true {
-		var err error
-		if x, y, err = c.glide(ctx, n, x, y); err != nil {
+	exact := false // go to (x, y) itself, not a point scattered around it
+	for again := false; ; {
+		px, py, err := c.glide(ctx, n, x, y, exact)
+		if err != nil {
 			return err
 		}
 		if c.instant {
+			x, y = px, py
 			break
 		}
 		if err := c.t.pause(ctx, c.st.mot.Dwell()); err != nil {
 			return err
 		}
 		// The pointer took a while to get there: check nothing has
-		// moved over the point meanwhile. If something covers it now,
-		// aim again (waiting for it to go, within what is left of the
-		// step's cover wait) and go there, once.
-		cover, err := c.stillThere(ctx, n, x, y)
+		// moved over the point meanwhile. If a control inside n now is
+		// under a scattered point (a row's Delete button shown on hover),
+		// move on to (x, y). If something covers it, aim again (waiting
+		// for it to go, within what is left of the step's cover wait) and
+		// go there, once.
+		cover, err := c.stillThere(ctx, n, px, py, px != x || py != y)
 		if err == nil {
+			x, y = px, py
 			break
+		}
+		if errors.Is(err, errNested) {
+			exact = true
+			continue
 		}
 		if cover == "" || again {
 			return err
 		}
+		again, exact = true, false
 		c.releaseCover(ctx, hitResult{cover: cover})
 		if x, y, err = c.aim(ctx, n, ct); err != nil {
 			return err
@@ -1050,16 +1072,19 @@ func (c *call) click(ctx context.Context, n *node, ct *coverTry, x, y float64, b
 // glide moves the pointer to n's point (x, y). At instant pace that is
 // one move to it. At human pace, the pointer travels a hand's path
 // (internal/motion) from where it last stopped, or in from an edge of
-// the viewport, to a point scattered around (x, y) within n's box; it
-// returns the point it reached.
-func (c *call) glide(ctx context.Context, n *node, x, y float64) (float64, float64, error) {
+// the viewport, to a point scattered around (x, y) within n's box, or to
+// (x, y) itself when exact; it returns the point it reached.
+func (c *call) glide(ctx context.Context, n *node, x, y float64, exact bool) (float64, float64, error) {
 	if c.instant {
 		c.st.pointer = &motion.Point{X: x, Y: y}
 		return x, y, c.mouse(ctx, "mouseMoved", x, y, "", 0)
 	}
-	to, size, err := c.scatter(ctx, n, x, y)
-	if err != nil {
-		return 0, 0, err
+	to, size := motion.Point{X: x, Y: y}, 0.0
+	if !exact {
+		var err error
+		if to, size, err = c.scatter(ctx, n, x, y); err != nil {
+			return 0, 0, err
+		}
 	}
 	from := c.st.pointer
 	if from == nil {
@@ -1088,7 +1113,8 @@ func (c *call) glide(ctx context.Context, n *node, x, y float64) (float64, float
 
 // scatter is where a hand aiming at n's point (x, y) lands: normally
 // scattered around it within the box aim took it from (motion.Aim), if
-// nothing covers n there; else (x, y) itself, which aim checked. size is
+// nothing covers n there and it isn't on a control inside n (jsHitTest's
+// strict test); else (x, y) itself, which aim checked. size is
 // the box's smaller side, for Fitts's law.
 func (c *call) scatter(ctx context.Context, n *node, x, y float64) (motion.Point, float64, error) {
 	at := motion.Point{X: x, Y: y}
@@ -1114,29 +1140,38 @@ func (c *call) scatter(ctx context.Context, n *node, x, y float64) (motion.Point
 		loy, hiy := min(quad[1], quad[3], quad[5], quad[7]), max(quad[1], quad[3], quad[5], quad[7])
 		w, h := hix-lox, hiy-loy
 		p := c.st.mot.Aim(at, motion.Size{W: w, H: h})
-		r, err := c.callOnObject(ctx, n.obj, jsHitTest, []any{p.X, p.Y}, false)
+		r, err := c.callOnObject(ctx, n.obj, jsHitTest, []any{p.X, p.Y, true}, false)
 		if err != nil {
 			return at, 0, err
 		}
 		if r.Type != "boolean" || string(r.Value) != "true" {
-			return at, min(w, h), nil // a rounded corner, a cut-out: keep to the middle
+			// A rounded corner, a cut-out, a control inside it (a row's
+			// Delete button): keep to the middle.
+			return at, min(w, h), nil
 		}
 		return p, min(w, h), nil
 	}
 	return at, 0, nil
 }
 
+// errNested is stillThere's answer when a scattered point is now on a
+// control inside the element (jsHitTest's strict test).
+var errNested = errors.New("a control inside the element is under the point")
+
 // stillThere checks nothing covers n at (x, y) (jsHitTest), as aim does
-// before a pointer step. When something does, it returns it (an object
-// in the isolated world) along with the refusal.
-func (c *call) stillThere(ctx context.Context, n *node, x, y float64) (cover string, err error) {
-	r, err := c.callOnObject(ctx, n.obj, jsHitTest, []any{x, y}, false)
+// before a pointer step; strict, for a scattered point, also that no
+// control inside n is there (errNested). When something covers it, it
+// returns it (an object in the isolated world) along with the refusal.
+func (c *call) stillThere(ctx context.Context, n *node, x, y float64, strict bool) (cover string, err error) {
+	r, err := c.callOnObject(ctx, n.obj, jsHitTest, []any{x, y, strict}, false)
 	if err != nil {
 		return "", err
 	}
 	switch {
 	case r.Type == "boolean" && string(r.Value) == "true":
 		return "", nil
+	case r.Type == "string" && string(r.Value) == `"nested"`:
+		return "", errNested
 	case r.Type == "object" && r.ObjectID != "":
 		return r.ObjectID, c.coveredError(ctx, n, r.ObjectID)
 	}

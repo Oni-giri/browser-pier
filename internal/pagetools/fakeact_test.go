@@ -70,6 +70,31 @@ func objBackend(id string) int64 {
 	b, _ := strconv.ParseInt(strings.TrimPrefix(id, "obj-"), 10, 64)
 	return b
 }
+
+// topmostIn is the last-drawn node in n's subtree (n included) whose box
+// holds (x, y), nil if none does.
+func topmostIn(n *fnode, x, y float64) *fnode {
+	var hit *fnode
+	if b := n.box; !strings.HasPrefix(n.tag, "#") && b != nil && x >= b[0] && x < b[0]+b[2] && y >= b[1] && y < b[1]+b[3] {
+		hit = n
+	}
+	for _, k := range n.kids {
+		if h := topmostIn(k, x, y); h != nil {
+			hit = h
+		}
+	}
+	return hit
+}
+
+// ownControl is the fake's version of jsHitTest's control test.
+func ownControl(n *fnode) bool {
+	switch n.tag {
+	case "a", "button", "input", "select", "textarea", "summary":
+		return true
+	}
+	return n.role == "button" || n.role == "link"
+}
+
 func value(v any) map[string]any {
 	return map[string]any{"result": map[string]any{"type": "object", "value": v}}
 }
@@ -289,6 +314,13 @@ func (fb *fakeBrowser) function(tb *ftab, n *fnode, p map[string]any) (any, bool
 		}
 		if bh.cover != nil {
 			return nodeObj(bh.cover), true, nil
+		}
+		// The strict test, for a scattered point: a control inside the
+		// element, topmost there, is "nested".
+		if len(args) == 3 && args[2] == true {
+			if hit := topmostIn(n, args[0].(float64), args[1].(float64)); hit != nil && hit != n && ownControl(hit) {
+				return map[string]any{"result": map[string]any{"type": "string", "value": "nested"}}, true, nil
+			}
 		}
 		return map[string]any{"result": map[string]any{"type": "boolean", "value": true}}, true, nil
 	case "centre":
