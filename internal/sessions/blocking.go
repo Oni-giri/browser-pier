@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/Oni-giri/browser-pier/internal/domainset"
 )
 
 // blockFile is where the ad and tracker list waits for the entrypoint,
@@ -82,8 +84,30 @@ func (m *Manager) ExemptHost(ctx context.Context, id, host string) error {
 	if !s.BlockAds || !s.State.Live() {
 		return nil
 	}
-	return m.control(ctx, s.Profile, http.MethodPost, "/proxy/exempt", map[string]string{"host": host}, nil)
+	// The browser checks these too; a public suffix (co.uk, github.io)
+	// would let through every site under it.
+	h, ok := domainset.Normalize(host)
+	if !ok {
+		return fmt.Errorf("%q isn't a host name the list could hold", host)
+	}
+	if domainset.PublicSuffix(h) {
+		return fmt.Errorf("%q is a public suffix: not exempted", h)
+	}
+	err := m.control(ctx, s.Profile, http.MethodPost, "/proxy/exempt", map[string]string{"host": h}, nil)
+	var ce *controlError
+	if errors.As(err, &ce) && ce.status == http.StatusConflict && !l.exemptFull.Swap(true) {
+		m.log.Warn("the browser exempts no more hosts from the ad and tracker list: a listed page the agent opens stays blocked", "session", s.ID, "err", err)
+	}
+	return err
 }
+
+// controlError is a browser's refusal on its control socket.
+type controlError struct {
+	status int
+	msg    string
+}
+
+func (e *controlError) Error() string { return e.msg }
 
 // Blocked is how many connections the profile's running browser refused
 // for the ad and tracker list. ok is false when it can't be read.
@@ -123,7 +147,7 @@ func (m *Manager) control(ctx context.Context, profile, method, path string, in,
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		return fmt.Errorf("the browser answered %s: %s", resp.Status, bytes.TrimSpace(msg))
+		return &controlError{resp.StatusCode, fmt.Sprintf("the browser answered %s: %s", resp.Status, bytes.TrimSpace(msg))}
 	}
 	if out != nil {
 		return json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(out)

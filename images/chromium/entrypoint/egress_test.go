@@ -228,7 +228,7 @@ func TestForwarderBlocksListedHosts(t *testing.T) {
 }
 
 func TestBlockerControls(t *testing.T) {
-	b := newBlocker(domainset.Build([]string{"ads.example.com"}))
+	b := newBlocker(domainset.Build([]string{"ads.example.com", "tracker.example.org"}))
 	mux := http.NewServeMux()
 	b.register(mux)
 	post := func(path, body string) int {
@@ -242,11 +242,43 @@ func TestBlockerControls(t *testing.T) {
 	if code := post("/proxy/exempt", `{"host": "x.ads.example.com"}`); code != http.StatusNoContent || b.blocks("x.ads.example.com") || !b.blocks("ads.example.com") {
 		t.Errorf("exempt: %d", code)
 	}
-	for i := range maxExempt {
-		_ = b.exemptHost("h" + strconv.Itoa(i) + ".example.org")
+	// A public suffix would let every site under it through; a single
+	// label isn't a host name the list could hold.
+	for _, host := range []string{"co.uk", "github.io", "com", "localhost"} {
+		if code := post("/proxy/exempt", `{"host": "`+host+`"}`); code != http.StatusBadRequest {
+			t.Errorf("exempting %s: %d", host, code)
+		}
 	}
-	if code := post("/proxy/exempt", `{"host": "one-more.example.org"}`); code != http.StatusBadRequest {
+	// Hosts the list doesn't block take no place: many of them, then
+	// listed ones up to the cap still go in.
+	for i := range 2 * maxExempt {
+		if err := b.exemptHost("h" + strconv.Itoa(i) + ".example.net"); err != nil {
+			t.Fatalf("an unlisted host: %v", err)
+		}
+	}
+	if code := post("/proxy/exempt", `{"host": "challenges.cloudflare.com"}`); code != http.StatusNoContent {
+		t.Errorf("an allowlisted host: %d", code)
+	}
+	b.mu.Lock()
+	n := len(b.exempt)
+	b.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("%d hosts exempted, want only the listed x.ads.example.com", n)
+	}
+	for i := range maxExempt - 1 {
+		if err := b.exemptHost("h" + strconv.Itoa(i) + ".tracker.example.org"); err != nil {
+			t.Fatalf("listed host %d: %v", i, err)
+		}
+	}
+	if b.blocks("h3.tracker.example.org") || !b.blocks("tracker.example.org") {
+		t.Error("the exemptions don't hold")
+	}
+	if code := post("/proxy/exempt", `{"host": "one-more.tracker.example.org"}`); code != http.StatusConflict || !b.blocks("one-more.tracker.example.org") {
 		t.Errorf("past the cap: %d", code)
+	}
+	// Past the cap, an unlisted host still needs nothing.
+	if code := post("/proxy/exempt", `{"host": "fine.example.net"}`); code != http.StatusNoContent {
+		t.Errorf("an unlisted host past the cap: %d", code)
 	}
 	if code := post("/proxy/blocking/off", ""); code != http.StatusNoContent || b.blocks("ads.example.com") {
 		t.Errorf("off: %d", code)

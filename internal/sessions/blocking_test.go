@@ -1,8 +1,10 @@
 package sessions
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,6 +20,7 @@ type fakeBlocker struct {
 	mu     sync.Mutex
 	off    int
 	exempt []string
+	full   bool // answer exemptions as past the cap
 }
 
 func (b *fakeBlocker) mux() *http.ServeMux {
@@ -33,8 +36,12 @@ func (b *fakeBlocker) mux() *http.ServeMux {
 		var in struct{ Host string }
 		_ = json.NewDecoder(r.Body).Decode(&in)
 		b.mu.Lock()
+		defer b.mu.Unlock()
+		if b.full {
+			http.Error(w, "the session exempts no more hosts from the ad and tracker list", http.StatusConflict)
+			return
+		}
 		b.exempt = append(b.exempt, in.Host)
-		b.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /proxy/stats", func(w http.ResponseWriter, _ *http.Request) {
@@ -138,5 +145,43 @@ func TestBlockListHandover(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("a list for a profile that doesn't block")
+	}
+}
+
+// ExemptHost never asks the browser to exempt a public suffix, which
+// would let every site under it through, and logs a warning, once, when
+// the browser's exemptions are full.
+func TestExemptHostRefusesPublicSuffixesAndWarnsWhenFull(t *testing.T) {
+	f := newFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	f.m.SetBlocklist(func() []byte { return []byte("# browserpier domain set 1\nads.example.com\n") })
+	fb := &fakeBlocker{}
+	f.rt.Control = fb.mux()
+	var logs bytes.Buffer
+	f.m.log = slog.New(slog.NewTextHandler(&logs, nil))
+	s := f.start(f.m)
+	for _, host := range []string{"co.uk", "github.io", "localhost", "1.2.3.4"} {
+		if err := f.m.ExemptHost(ctx, s.ID, host); err == nil {
+			t.Errorf("%s exempted", host)
+		}
+	}
+	if err := f.m.ExemptHost(ctx, s.ID, "Ads.Example.COM."); err != nil {
+		t.Fatal(err)
+	}
+	fb.mu.Lock()
+	got := slices.Clone(fb.exempt)
+	fb.full = true
+	fb.mu.Unlock()
+	if !slices.Equal(got, []string{"ads.example.com"}) {
+		t.Fatalf("the browser was asked to exempt %q", got)
+	}
+	for range 3 {
+		if err := f.m.ExemptHost(ctx, s.ID, "more.example.com"); err == nil {
+			t.Error("an exemption past the cap succeeded")
+		}
+	}
+	if n := strings.Count(logs.String(), "level=WARN"); n != 1 || !strings.Contains(logs.String(), "exempts no more hosts") {
+		t.Errorf("%d warnings, want 1:\n%s", n, logs.String())
 	}
 }

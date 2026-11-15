@@ -178,6 +178,9 @@ type live struct {
 	human bool
 	// viewers counts open live views.
 	viewers int
+	// exemptFull is set once the browser refused an exemption from the ad
+	// and tracker list for its cap (logged once).
+	exemptFull atomic.Bool
 	// activity is what agents did, oldest first; it goes with the session.
 	activity []Activity
 }

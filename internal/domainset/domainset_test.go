@@ -183,3 +183,11 @@ func FuzzNormalize(f *testing.F) {
 		}
 	})
 }
+
+func TestPublicSuffix(t *testing.T) {
+	for host, want := range map[string]bool{"co.uk": true, "com": true, "github.io": true, "example.co.uk": false, "example.com": false, "user.github.io": false, "ads.example.com": false, "foo.unknowntld": false} {
+		if got := PublicSuffix(host); got != want {
+			t.Errorf("PublicSuffix(%q) = %v, want %v", host, got, want)
+		}
+	}
+}

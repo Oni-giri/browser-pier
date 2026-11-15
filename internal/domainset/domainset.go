@@ -22,6 +22,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"golang.org/x/net/publicsuffix"
 )
 
 // Caps on a set, so a list from the internet can't make a browser
@@ -265,6 +267,14 @@ var allow = []string{
 // subdomain of a name on it. host must be normalised.
 func Allowed(host string) bool {
 	return matches(host, func(n string) bool { return slices.Contains(allow, n) })
+}
+
+// PublicSuffix reports whether host is a public suffix, such as co.uk or
+// github.io, under which anyone can register a name: exempting one would
+// let through every site below it. host must be normalised.
+func PublicSuffix(host string) bool {
+	suffix, _ := publicsuffix.PublicSuffix(host)
+	return suffix == host
 }
 
 // Allowlist returns the built-in allowlist, for documentation and tests.

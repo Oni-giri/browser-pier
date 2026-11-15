@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"slices"
@@ -16,7 +17,11 @@ import (
 // errBlocked is a host on the profile's ad and tracker list (PROJ-119).
 var errBlocked = errors.New("host on the ad and tracker list")
 
-// maxExempt caps the hosts a session can exempt from the list.
+// errExemptFull is an exemption past maxExempt.
+var errExemptFull = errors.New("the session exempts no more hosts from the ad and tracker list")
+
+// maxExempt caps the hosts a session can exempt from the list. Only hosts
+// the list blocks take a place.
 const maxExempt = 256
 
 // blocker refuses connections to hosts on the ad and tracker list, unless
@@ -30,6 +35,9 @@ type blocker struct {
 
 	mu     sync.Mutex
 	exempt []string // hosts the agent opened directly, normalised
+	full   bool     // an exemption was refused for the cap (logged once)
+
+	log *slog.Logger // nil: slog.Default()
 }
 
 // readBlockFile loads the list the orchestrator left in the control
@@ -75,11 +83,21 @@ func (b *blocker) exempted(h string) bool {
 }
 
 // exemptHost lets host and its subdomains through for the rest of the
-// container's life: the agent opened a page there directly.
+// container's life: the agent opened a page there directly. A host the
+// list doesn't block (or the allowlist lets through, or with blocking
+// off) needs nothing and takes none of the maxExempt places. A public
+// suffix (co.uk, github.io) is refused: it would let through every site
+// under it. Past the cap it answers errExemptFull, logged once.
 func (b *blocker) exemptHost(host string) error {
 	h, ok := domainset.Normalize(host)
 	if !ok {
 		return fmt.Errorf("%q isn't a host name", host)
+	}
+	if domainset.PublicSuffix(h) {
+		return fmt.Errorf("%q is a public suffix", h)
+	}
+	if !b.on.Load() || domainset.Allowed(h) || !b.set.Matches(h) {
+		return nil
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -87,7 +105,15 @@ func (b *blocker) exemptHost(host string) error {
 		return nil
 	}
 	if len(b.exempt) >= maxExempt {
-		return fmt.Errorf("over %d exempt hosts", maxExempt)
+		if !b.full {
+			b.full = true
+			log := b.log
+			if log == nil {
+				log = slog.Default()
+			}
+			log.Warn("an agent opened more listed hosts than can be exempted from the ad and tracker list; the rest stay blocked", "max", maxExempt)
+		}
+		return errExemptFull
 	}
 	b.exempt = append(b.exempt, h)
 	return nil
@@ -97,7 +123,7 @@ func (b *blocker) exemptHost(host string) error {
 // only the orchestrator reaches:
 //
 //	POST /proxy/blocking/off   stop blocking for the rest of the container's life; it can't be turned back on
-//	POST /proxy/exempt         {"host": "..."}: let that host and its subdomains through
+//	POST /proxy/exempt         {"host": "..."}: let that host and its subdomains through (400 for a public suffix, 409 past the cap)
 func (b *blocker) register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /proxy/blocking/off", func(w http.ResponseWriter, _ *http.Request) {
 		b.on.Store(false)
@@ -111,7 +137,10 @@ func (b *blocker) register(mux *http.ServeMux) {
 			http.Error(w, "want {\"host\": \"...\"}", http.StatusBadRequest)
 			return
 		}
-		if err := b.exemptHost(in.Host); err != nil {
+		if err := b.exemptHost(in.Host); errors.Is(err, errExemptFull) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		} else if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}

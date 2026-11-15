@@ -83,6 +83,7 @@ func run(log *slog.Logger) error {
 		}
 	}
 	fwd.block = newBlocker(set)
+	fwd.block.log = log
 	fln, err := net.Listen("tcp", forwarderAddr)
 	if err != nil {
 		return fmt.Errorf("start the proxy forwarder: %w", err)
