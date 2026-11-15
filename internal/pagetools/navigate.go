@@ -138,7 +138,7 @@ func (t *Tools) Navigate(ctx context.Context, s sessions.Session, who Caller, in
 		// Page.navigate gives no loader for a move within the document
 		// (only the fragment changed): nothing to load or wait out.
 		newDoc := target == "" || want != ""
-		deadline := time.Now().Add(navigateTimeout)
+		deadline := time.Now().Add(c.t.navWait)
 		pi, loaded, err := c.waitLoad(ctx, before, beforeURL, want, newDoc, deadline)
 		if err != nil {
 			return "", err
@@ -150,18 +150,21 @@ func (t *Tools) Navigate(ctx context.Context, s sessions.Session, who Caller, in
 			}
 		}
 		c.st.refs.dropStale(c.tgt.ID, c.loader)
-		if c.unreachable != "" {
+		if c.unreachable != "" && c.loader != before {
+			// The tab moved to the browser's error page. (Still on the
+			// error page it was on, its address is no news of this one.)
+			c.note(what + ", but the page couldn't be loaded")
 			return "", failedAt(target, c.unreachable, "")
 		}
 		c.note(what)
 		trailer := ""
 		switch {
 		case !loaded:
-			trailer = "The page was still loading after 30 s."
+			trailer = "The page was still loading after " + seconds(c.t.navWait, true) + "."
 		case end == chainCapped:
 			trailer = fmt.Sprintf("The page was still redirecting after %d s.", int(c.t.chainCap.Seconds()))
 		case end == chainTimedOut:
-			trailer = "The page was still redirecting after 30 s."
+			trailer = "The page was still redirecting after " + seconds(c.t.navWait, true) + "."
 		}
 		if pi.URL == "" {
 			pi.URL = c.url // a document still on its way
@@ -411,8 +414,14 @@ func (c *call) staysPut(ctx context.Context, deadline time.Time) (pi pageInfo, m
 
 // openFailed is the error for a Page.navigate that failed. When the
 // browser's error page names another address than the one asked for (a
-// redirect led there), it says which.
+// redirect led there), it says which. net::ERR_ABORTED (a download, a 204)
+// leaves the tab where it was, with no error page to wait for.
 func (c *call) openFailed(ctx context.Context, before, target, errorText string) error {
+	if errorText == "net::ERR_ABORTED" {
+		e := failedAt(target, "", errorText)
+		e.Msg += " The address gave no page to show (a download or an empty response, most likely); the tab stayed on its page."
+		return e
+	}
 	end := time.Now().Add(failedPageWait)
 	for time.Now().Before(end) {
 		f, err := c.topFrame(ctx, c.tgt)
@@ -434,7 +443,7 @@ func (c *call) openFailed(ctx context.Context, before, target, errorText string)
 // failedAt says a navigation failed: with the browser's error, if known,
 // and the address that failed, when it isn't the one asked for. Both are
 // fenced: the address may be a redirect's, which the page chose.
-func failedAt(target, failed, errorText string) error {
+func failedAt(target, failed, errorText string) *Error {
 	var lines []string
 	if errorText != "" {
 		lines = append(lines, errorText)

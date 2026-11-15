@@ -126,6 +126,8 @@ type Tools struct {
 	// put, how often it is looked at meanwhile, and the longest the chain
 	// is followed. Tests shorten them.
 	chainQuiet, chainPoll, chainCap time.Duration
+	// navWait is navigateTimeout; tests shorten it.
+	navWait time.Duration
 	// reads holds a slot per whole-page read under way (maxReads);
 	// readWait is how long a call waits for one before answering busy.
 	reads    chan struct{}
@@ -140,7 +142,7 @@ type Tools struct {
 func New(m *sessions.Manager, log *slog.Logger) *Tools {
 	t := &Tools{m: m, log: log, pages: map[string]*state{}, bases: map[baseKey]*baseline{}, quick: quickTimeout, slow: slowTimeout,
 		settle: 100 * time.Millisecond, coverWait: defaultCoverWait, coverPoll: 100 * time.Millisecond, poll: 250 * time.Millisecond, ambiguousFor: time.Second,
-		chainQuiet: chainQuiet, chainPoll: chainPoll, chainCap: chainCap, reads: make(chan struct{}, maxReads), readWait: 10 * time.Second,
+		chainQuiet: chainQuiet, chainPoll: chainPoll, chainCap: chainCap, navWait: navigateTimeout, reads: make(chan struct{}, maxReads), readWait: 10 * time.Second,
 		newMotion: motion.NewRandom, pause: sleep}
 	if m != nil {
 		// A session's refs and kept lists go as it ends.
