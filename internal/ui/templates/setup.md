@@ -155,7 +155,7 @@ curl -s "{{.Base}}/api/handoffs/HANDOFF_ID?wait=900" -H "$H"
 curl -s -X POST {{.Base}}/api/sessions/ID/navigate -H "$H" -d '{"url": "https://example.com/login"}'
 curl -s -X POST {{.Base}}/api/sessions/ID/snapshot -H "$H"
 curl -s -X POST {{.Base}}/api/sessions/ID/act -H "$H" -d '{"steps": [{"action": "fill", "ref": "a7e12", "text": "ana@example.com"}, {"action": "click", "ref": "a7e14"}]}'
-#   also /find {"text"}, /wait {"text"} or {"ref", "state"} or {"url_change": true}, /tabs {"action": "list|switch|close|new"}
+#   also /find {"text"}, /wait {"text"} or {"ref", "state"} or {"url_change": true} or {"load": true}, /tabs {"action": "list|switch|close|new"}
 # the whole page as Markdown (or "readability": its main text only), 20,000 characters at a time; read on with "offset"
 curl -s -X POST {{.Base}}/api/sessions/ID/content -H "$H" -d '{"format": "markdown"}'
 curl -s -X POST {{.Base}}/api/sessions/ID/content -H "$H" -d '{"format": "pdf"}' -o page.pdf

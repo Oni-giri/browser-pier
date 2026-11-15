@@ -94,7 +94,8 @@ func TestActStepsMatchREST(t *testing.T) {
 	if m, r := names(stepArgs{}), names(pagetools.Step{}); !slices.Equal(m, r) {
 		t.Errorf("MCP step fields %v, REST step fields %v", m, r)
 	}
-	// So do act's and snapshot's own options (PROJ-114), but session_id.
+	// So do act's and snapshot's own options (PROJ-114), and wait_for's
+	// (PROJ-122), but session_id.
 	without := func(v any) []string {
 		return slices.DeleteFunc(names(v), func(n string) bool { return n == "session_id" })
 	}
@@ -103,6 +104,9 @@ func TestActStepsMatchREST(t *testing.T) {
 	}
 	if m, r := without(snapshotArgs{}), names(pagetools.SnapshotIn{}); !slices.Equal(m, r) {
 		t.Errorf("MCP snapshot fields %v, REST snapshot fields %v", m, r)
+	}
+	if m, r := without(waitForArgs{}), names(pagetools.WaitIn{}); !slices.Equal(m, r) {
+		t.Errorf("MCP wait_for fields %v, REST wait fields %v", m, r)
 	}
 	// changes: false gets through, unlike an unset one.
 	no := false
