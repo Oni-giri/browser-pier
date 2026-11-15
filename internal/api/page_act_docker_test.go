@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -390,5 +391,116 @@ func TestPageToolsUpload(t *testing.T) {
 	}
 	if snap := a.mustTool(s.ID, "snapshot", nil); !strings.Contains(snap, "sha256 "+hash(report)) {
 		t.Errorf("the echo page:\n%s", snap)
+	}
+}
+
+// TestActCoveredClicks is PROJ-115 on a real browser: a sticky header, an
+// overlay fading out and a wrapped link no longer make act refuse or miss;
+// a dialog that stays is named in the refusal.
+func TestActCoveredClicks(t *testing.T) {
+	a := newRealAPI(t)
+	site := browsertest.NewPageSite(t, browsertest.SiteHost(t))
+	s := a.startAPIBrowser(t, "c")
+	open := func(path string) string {
+		t.Helper()
+		a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + path})
+		return a.mustTool(s.ID, "snapshot", nil)
+	}
+	count := func(e string) int {
+		n := 0
+		for _, got := range site.Events() {
+			if got == e {
+				n++
+			}
+		}
+		return n
+	}
+	waitEvent := func(e string) bool {
+		deadline := time.Now().Add(5 * time.Second)
+		for !site.HasEvent(e) && time.Now().Before(deadline) {
+			time.Sleep(50 * time.Millisecond)
+		}
+		return site.HasEvent(e)
+	}
+
+	// A. Scrolling just into view leaves the button under a sticky
+	// header: act scrolls it to the middle and clicks it, once.
+	snap := open("/sticky")
+	out := a.mustTool(s.ID, "act", steps(map[string]any{"action": "click", "ref": refFor(t, snap, `button "Under the header"`)}))
+	if !strings.Contains(out, `clicked`) || !waitEvent("sticky clicked") {
+		t.Errorf("sticky header: %s %v", out, site.Events())
+	}
+	time.Sleep(300 * time.Millisecond)
+	if n := count("sticky clicked"); n != 1 || site.HasEvent("header clicked") {
+		t.Errorf("sticky header: the button's handler ran %d times; events %v", n, site.Events())
+	}
+
+	// B. A backdrop fading out after load: a click right after waits it
+	// out (instant pace, to time the wait alone)...
+	snap = open("/fading")
+	start := time.Now()
+	code, msg := a.tool(s.ID, "act", steps(map[string]any{"action": "click", "ref": refFor(t, snap, `button "Behind the backdrop"`), "pace": "instant"}))
+	if d := time.Since(start); code != http.StatusOK || d > 1500*time.Millisecond {
+		t.Errorf("fading backdrop: %d after %s: %s", code, d, msg)
+	}
+	if !waitEvent("fading clicked") || site.HasEvent("backdrop clicked") {
+		t.Errorf("fading backdrop: %v", site.Events())
+	}
+	// ...and with cover_wait_ms 0 it is refused, naming the backdrop.
+	snap = open("/fading")
+	code, msg = a.tool(s.ID, "act", steps(map[string]any{"action": "click", "ref": refFor(t, snap, `button "Behind the backdrop"`), "pace": "instant", "cover_wait_ms": 0}))
+	if code != http.StatusConflict || !strings.Contains(msg, "is covered by <untrusted-content-") || !strings.Contains(msg, `region "Fading backdrop"`) {
+		t.Errorf("fading backdrop, cover_wait_ms 0: %d %s", code, msg)
+	}
+	time.Sleep(time.Second)
+	if n := count("fading clicked"); n != 1 || site.HasEvent("backdrop clicked") {
+		t.Errorf("fading backdrop, cover_wait_ms 0: clicked %d times in all; events %v", n, site.Events())
+	}
+
+	// C. A cookie dialog that stays: refused after the wait, naming the
+	// dialog by its title, fenced.
+	snap = open("/cookie-dialog")
+	start = time.Now()
+	code, msg = a.tool(s.ID, "act", steps(map[string]any{"action": "click", "ref": refFor(t, snap, `button "Behind the cookie dialog"`)}))
+	if d := time.Since(start); code != http.StatusConflict || d > 1300*time.Millisecond {
+		t.Errorf("cookie dialog: %d after %s: %s", code, d, msg)
+	}
+	i := strings.Index(msg, `dialog "Cookie settings" is open`)
+	if i < 0 || strings.LastIndex(msg[:i], "<untrusted-content-") <= strings.LastIndex(msg[:i], "</untrusted-content-") {
+		t.Errorf("cookie dialog: the title isn't named, fenced: %s", msg)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if site.HasEvent("behind cookie clicked") || site.HasEvent("cookie backdrop clicked") {
+		t.Errorf("cookie dialog: something was clicked: %v", site.Events())
+	}
+
+	// D. A wrapped link whose first line is a 3 px sliver: the click
+	// lands in its long second line.
+	snap = open("/wrapped")
+	a.mustTool(s.ID, "act", steps(map[string]any{"action": "click", "ref": refFor(t, snap, `link "Read the whole article about wrapped links here"`)}))
+	var got string
+	deadline := time.Now().Add(5 * time.Second)
+	for got == "" && time.Now().Before(deadline) {
+		for _, e := range site.Events() {
+			if strings.HasPrefix(e, "wrapped click ") {
+				got = e
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	target, raw, _ := strings.Cut(strings.TrimPrefix(got, "wrapped click "), " ")
+	var click []json.RawMessage
+	var x, y float64
+	var rects [][4]float64
+	if err := json.Unmarshal([]byte(raw), &click); err != nil || len(click) != 3 ||
+		json.Unmarshal(click[0], &x) != nil || json.Unmarshal(click[1], &y) != nil || json.Unmarshal(click[2], &rects) != nil {
+		t.Fatalf("wrapped link: no click recorded (%q): %v", got, site.Events())
+	}
+	if len(rects) != 2 || rects[0][2] > 10 {
+		t.Fatalf("wrapped link: the page didn't wrap as meant: line boxes %v", rects)
+	}
+	r := rects[1]
+	if target != "link" || x < r[0] || x > r[0]+r[2] || y < r[1] || y > r[1]+r[3] {
+		t.Errorf("wrapped link: the click hit %s at (%v, %v), not inside the second line %v", target, x, y, r)
 	}
 }

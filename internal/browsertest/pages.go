@@ -89,6 +89,41 @@ var pageSitePages = map[string]string{ //nolint:gosec // test pages, not credent
 <main><h1>Article</h1><p>Some article text behind the dialog.</p><button>Behind the dialog</button></main>
 <dialog id="d"><h2>Before you go</h2><p>Confirm your choice.</p><button onclick="report('confirmed')">Confirm</button> <button onclick="this.closest('dialog').close()">Cancel</button></dialog>
 <script>document.getElementById('d').showModal()</script>`,
+	// PROJ-115 A: a 60 px sticky header, and a button the page scrolls
+	// under it on load, where scrolling it just into view leaves it.
+	"/sticky": `<!doctype html><title>Sticky header</title>` + report + `
+<body style="margin:0">
+<header aria-label="Site header" style="position:sticky;top:0;height:60px;background:#ccd;z-index:1" onclick="report('header clicked')">Site header</header>
+<div style="height:440px"></div>
+<button onclick="report('sticky clicked')" style="display:block;height:30px">Under the header</button>
+<div style="height:2000px"></div>
+<script>window.scrollTo(0, 480)</script></body>`,
+	// PROJ-115 B: a full-screen backdrop over a button that starts fading
+	// 400 ms after load and is gone 500 ms later, at 900 ms: still there
+	// when a call made right after navigate looks, gone within its wait.
+	"/fading": `<!doctype html><title>Fading backdrop</title>` + report + `
+<button onclick="report('fading clicked')" style="position:absolute;left:50px;top:50px;width:200px;height:60px">Behind the backdrop</button>
+<div id="backdrop" role="region" aria-label="Fading backdrop" style="position:fixed;inset:0;background:rgba(0,0,0,.5);transition:opacity .5s linear" onclick="report('backdrop clicked')"></div>
+<script>addEventListener('load', () => setTimeout(() => {
+  const b = document.getElementById('backdrop');
+  b.style.opacity = '0';
+  setTimeout(() => b.remove(), 500);
+}, 400))</script>`,
+	// PROJ-115 C: a cookie dialog that stays, over a button.
+	"/cookie-dialog": `<!doctype html><title>Cookie dialog</title>` + report + `
+<button onclick="report('behind cookie clicked')" style="position:absolute;left:50px;top:50px;width:200px;height:60px">Behind the cookie dialog</button>
+<div style="position:fixed;inset:0;background:rgba(0,0,0,.4)" onclick="report('cookie backdrop clicked')"></div>
+<div role="dialog" aria-labelledby="cookie-title" style="position:fixed;left:40%;top:40%;background:#fff;padding:20px">
+<h2 id="cookie-title">Cookie settings</h2><p>Choose which cookies we may use.</p><button>Save choices</button></div>`,
+	// PROJ-115 D: a link that wraps: its first line is a 3 px sliver at
+	// the end of the line, its second is long. A click reports what it
+	// hit, where, and the link's line boxes then.
+	"/wrapped": `<!doctype html><title>Wrapped link</title>` + report + `
+<body style="margin:0"><div style="width:600px;font:16px/20px sans-serif;margin:20px 0 0 0"><span style="display:inline-block;width:597px;height:10px"></span><a id="wrapped" href="#" onclick="event.preventDefault()"><span style="display:inline-block;width:3px;height:10px"></span> Read the whole article about wrapped links here</a></div>
+<script>document.addEventListener('click', e => {
+  const rects = Array.from(document.getElementById('wrapped').getClientRects()).map(r => [r.left, r.top, r.width, r.height]);
+  report('wrapped click ' + (e.target.closest('a') ? 'link' : e.target.localName) + ' ' + JSON.stringify([e.clientX, e.clientY, rects]));
+})</script></body>`,
 	// A transparent overlay covering a button.
 	"/overlay": `<!doctype html><title>Overlay</title>` + report + `
 <button id="buy" onclick="report('buy clicked')" style="position:absolute;left:50px;top:50px;width:200px;height:60px">Buy now</button>
