@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -13,8 +14,10 @@ import (
 // Reconcile matches the database against the containers Docker has, once,
 // before the manager is used. Browsers that kept running while the
 // orchestrator was down are picked up where they were, unless an older
-// BrowserPier started them (docker.Spec), in which case they are stopped
-// the usual way, logins kept; sessions whose container is gone are failed;
+// BrowserPier started them (docker.Spec) or BrowserPier had typed a secret
+// into their page (Session.HadFills: the values were in memory only, so
+// answers would no longer hide them), in which case they are stopped the
+// usual way, logins kept; sessions whose container is gone are failed;
 // containers with no live session are stopped.
 func (m *Manager) Reconcile(ctx context.Context) error {
 	m.removeTombstones()
@@ -34,7 +37,12 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	// Browsers an older BrowserPier started (docker.Spec) are stopped
 	// before anything attaches to them: running ones by session, starting
 	// and already stopping ones by container.
-	var outdated, outdatedStopping []string
+	var outdatedStopping []string
+	type stop struct {
+		id, why string
+		level   slog.Level
+	}
+	var outdated []stop
 	type starting struct {
 		l   *live
 		cid string
@@ -64,7 +72,9 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			outdatedStarting = append(outdatedStarting, starting{l, c.ID})
 			continue
 		case m.rt.Outdated(c.Spec) && (s.State == Running || s.State == NeedsHelp):
-			outdated = append(outdated, s.ID)
+			outdated = append(outdated, stop{s.ID, "an older BrowserPier started", slog.LevelInfo})
+		case s.HadFills && (s.State == Running || s.State == NeedsHelp):
+			outdated = append(outdated, stop{s.ID, "had secrets typed into it, which went with the restart", slog.LevelWarn})
 		}
 		l.lastActivity = m.now() // idle time restarts with the orchestrator
 		m.live[s.Profile] = l
@@ -93,13 +103,15 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	// BrowserPier doesn't start either; the next start tries again.
 	errs := make([]error, len(outdated)+len(outdatedStarting)+len(outdatedStopping))
 	var old sync.WaitGroup
-	for i, id := range outdated {
-		m.log.Info("stopping a browser an older BrowserPier started", "session", id)
+	// A browser with secrets typed into it is stopped for the same reason:
+	// its answers can no longer hide them (PROJ-125).
+	for i, o := range outdated {
+		m.log.Log(m.ctx, o.level, "stopping a browser that "+o.why+"; its logins are kept", "session", o.id)
 		old.Go(func() {
 			ctx, cancel := context.WithTimeout(m.ctx, stopTimeout+30*time.Second)
 			defer cancel()
-			if _, err := m.Stop(ctx, id); err != nil {
-				errs[i] = fmt.Errorf("stopping session %s, which an older BrowserPier started: %w", id, err)
+			if _, err := m.Stop(ctx, o.id); err != nil {
+				errs[i] = fmt.Errorf("stopping session %s, which %s: %w", o.id, o.why, err)
 			}
 		})
 	}

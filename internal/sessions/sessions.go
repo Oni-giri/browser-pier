@@ -61,7 +61,11 @@ type Session struct {
 	// BlockAds is whether the browser blocks ad and tracker domains: the
 	// profile's setting when it started, unless an agent turned it off for
 	// this session (StartOptions.AllowAds).
-	BlockAds  bool
+	BlockAds bool
+	// HadFills is set once BrowserPier has typed a secret into the page
+	// (RegisterSecret), and never cleared. Stored on its own (markHadFills),
+	// never by updateSession, so an older copy can't clear it.
+	HadFills  bool
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	// InUseBy names the agents connected to the browser right now, by
@@ -82,6 +86,9 @@ func newID() string {
 
 const sessionColumns = `id, profile, state, mode, container_id, last_log, error, created_at, updated_at, block_ads`
 
+// selectColumns are sessionColumns and what is stored on its own.
+const selectColumns = sessionColumns + `, had_fills`
+
 func insertSession(ctx context.Context, db *sql.DB, s Session) error {
 	_, err := db.ExecContext(ctx, `INSERT INTO sessions (`+sessionColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		s.ID, s.Profile, s.State, s.Mode, s.ContainerID, s.LastLog, s.Error, s.CreatedAt.UnixMilli(), s.UpdatedAt.UnixMilli(), s.BlockAds)
@@ -94,8 +101,14 @@ func updateSession(ctx context.Context, db *sql.DB, s Session) error {
 	return err
 }
 
+// markHadFills records that a secret was typed into session id's page.
+func markHadFills(ctx context.Context, db *sql.DB, id string) error {
+	_, err := db.ExecContext(ctx, `UPDATE sessions SET had_fills = 1 WHERE id = ?`, id)
+	return err
+}
+
 func getSession(ctx context.Context, db *sql.DB, id string) (Session, error) {
-	s, err := scanSession(db.QueryRowContext(ctx, `SELECT `+sessionColumns+` FROM sessions WHERE id = ?`, id))
+	s, err := scanSession(db.QueryRowContext(ctx, `SELECT `+selectColumns+` FROM sessions WHERE id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Session{}, ErrNotFound
 	}
@@ -103,7 +116,7 @@ func getSession(ctx context.Context, db *sql.DB, id string) (Session, error) {
 }
 
 func liveSessions(ctx context.Context, db *sql.DB) ([]Session, error) {
-	rows, err := db.QueryContext(ctx, `SELECT `+sessionColumns+` FROM sessions
+	rows, err := db.QueryContext(ctx, `SELECT `+selectColumns+` FROM sessions
 		WHERE state IN ('starting', 'running', 'needs_help', 'stopping') ORDER BY created_at`)
 	if err != nil {
 		return nil, err
@@ -123,7 +136,7 @@ func liveSessions(ctx context.Context, db *sql.DB) ([]Session, error) {
 func scanSession(row interface{ Scan(...any) error }) (Session, error) {
 	var s Session
 	var created, updated int64
-	err := row.Scan(&s.ID, &s.Profile, &s.State, &s.Mode, &s.ContainerID, &s.LastLog, &s.Error, &created, &updated, &s.BlockAds)
+	err := row.Scan(&s.ID, &s.Profile, &s.State, &s.Mode, &s.ContainerID, &s.LastLog, &s.Error, &created, &updated, &s.BlockAds, &s.HadFills)
 	s.CreatedAt, s.UpdatedAt = time.UnixMilli(created), time.UnixMilli(updated)
 	return s, err
 }

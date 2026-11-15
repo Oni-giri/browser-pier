@@ -115,3 +115,62 @@ func assertNotStored(t *testing.T, d *sql.DB, s string) {
 		}
 	}
 }
+
+// The values are in memory only: a browser that outlives the orchestrator
+// with secrets typed into it is stopped when picked up (logins kept, the
+// usual stop), not answered for unscrubbed. Only the mark is stored.
+func TestReconcileStopsABrowserWhoseSecretsWereLost(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	if _, err := f.m.Profiles().Create(ctx, profiles.New("github")); err != nil {
+		t.Fatal(err)
+	}
+	filled := f.start(f.m)
+	if err := f.m.RegisterSecret(filled.ID, testSecret); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.RegisterSecret(filled.ID, "another-"+testSecret); err != nil {
+		t.Fatal(err)
+	}
+	clean, _, err := f.m.Start(ctx, "github", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.stored(filled.ID); !got.HadFills {
+		t.Fatal("the session's mark wasn't stored")
+	}
+	if got := f.stored(clean.ID); got.HadFills {
+		t.Fatal("a session without secrets is marked")
+	}
+	f.m.Close() // the orchestrator goes down; browsers keep running
+
+	m := f.manager()
+	var logs bytes.Buffer
+	m.log = slog.New(slog.NewTextHandler(&logs, nil))
+	if err := m.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if s, ok := m.Live("google"); ok {
+		t.Fatalf("a browser whose secrets were lost was picked up: %+v", s)
+	}
+	if got := f.stored(filled.ID); got.State != Stopped {
+		t.Fatalf("filled session: %+v", got)
+	}
+	if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), filled.ID) {
+		t.Errorf("no warning names the session:\n%s", logs.String())
+	}
+	if strings.Contains(logs.String(), testSecret) {
+		t.Error("the log holds the secret")
+	}
+	if s, ok := m.Live("github"); !ok || s.ID != clean.ID {
+		t.Fatalf("the browser without secrets wasn't picked up: %+v, %t", s, ok)
+	}
+	// Started again, it begins unmarked.
+	s, attached, err := m.Start(ctx, "google", "")
+	if err != nil || attached {
+		t.Fatalf("restart: %+v, %t, %v", s, attached, err)
+	}
+	if got := f.stored(s.ID); got.HadFills {
+		t.Fatal("the new session starts marked")
+	}
+}

@@ -138,6 +138,9 @@ type Manager struct {
 	// page, by session ID (RegisterSecret); in memory only. Its lock
 	// nests inside mu.
 	secrets *scrub.Registry
+	// markMu makes RegisterSecret's first secret wait until the session's
+	// mark is stored, so no second caller types before it is.
+	markMu sync.Mutex
 
 	// admit is held from checking there is room for a new browser to
 	// recording its session, so two starts can't both squeeze in.

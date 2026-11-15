@@ -132,6 +132,12 @@ var migrations = []string{
 	// can turn it off for one session.
 	`ALTER TABLE profiles ADD COLUMN block_ads INTEGER NOT NULL DEFAULT 0;
 	ALTER TABLE sessions ADD COLUMN block_ads INTEGER NOT NULL DEFAULT 0;`,
+
+	// Whether BrowserPier typed a secret into a session's page (PROJ-125):
+	// the values live in memory only, so a browser that outlives the
+	// orchestrator with one is stopped when it is picked up, not answered
+	// for unscrubbed. Only the flag is stored, never a value.
+	`ALTER TABLE sessions ADD COLUMN had_fills INTEGER NOT NULL DEFAULT 0;`,
 }
 
 // Open opens (creating if needed) the database at path and migrates it.
