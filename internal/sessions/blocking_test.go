@@ -80,6 +80,10 @@ func TestBlockListHandover(t *testing.T) {
 	if f.stored(s.ID).BlockAds {
 		t.Fatal("stored as blocking without a list")
 	}
+	// An agent attaching with AllowAds: off by its choice now.
+	if s2, _, err := f.m.StartWith(ctx, "google", StartOptions{AllowAds: true}); err != nil || s2.BlockAds || s2.AdListMissing || fb.off != 0 {
+		t.Fatalf("attach with AllowAds without a list: %+v, %v, off called %d times", s2, err, fb.off)
+	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("a list file without a list")
 	}

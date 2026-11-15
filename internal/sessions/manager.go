@@ -325,6 +325,11 @@ func (m *Manager) StartWith(ctx context.Context, profile string, opts StartOptio
 			s, attached, err := m.awaitStart(ctx, l, true)
 			if err == nil && opts.AllowAds && s.BlockAds {
 				s = m.allowAds(ctx, l)
+			} else if err == nil && opts.AllowAds && s.AdListMissing {
+				// Nothing to turn off, but it is off now by the agent's
+				// choice, not for want of a list.
+				_ = m.update(l, func(s *Session) { s.AdListMissing = false })
+				s = m.snapshot(l)
 			}
 			return s, attached, err
 		}
