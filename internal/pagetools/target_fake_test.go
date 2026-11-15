@@ -505,3 +505,29 @@ func TestTargetWaitOutlastsBusyAndRefusals(t *testing.T) {
 		t.Errorf("activity: %v", acts[0])
 	}
 }
+
+// TestTextTargetsSkipFieldText: a field the page gives another role (a
+// password input with role=button) is walked into, and a text node the
+// DOM snapshot carries inside it (its value, as an input's own shadow
+// tree holds it) is never matched nor printed (PROJ-123).
+func TestTextTargetsSkipFieldText(t *testing.T) {
+	f := newFixture(t)
+	b := box(10, 50, 200, 30)
+	pw := el("input", "button", "Show", b, txt("hunter2-SECRET", b)).attr("type", "password")
+	area := el("textarea", "button", "Notes", box(10, 90, 200, 30), txt("draft-SECRET", box(10, 90, 200, 30)))
+	doc := el("#document", "RootWebArea", "", box(0, 0, 1280, 800), pw, area, el("p", "paragraph", "", box(10, 130, 200, 20), txt("Visible words", box(10, 130, 200, 20))))
+	f.fb.addTab("https://example.com/", doc, true)
+	for _, target := range []string{`text=hunter2`, `text="hunter2-SECRET"`, `text=draft`} {
+		_, err := f.act(Step{Action: "click", Target: target})
+		if !isStatus(err, 409) || !strings.Contains(err.Error(), "no visible element matches") || strings.Contains(strings.ReplaceAll(err.Error(), target, ""), "SECRET") {
+			t.Errorf("%s: %v", target, err)
+		}
+	}
+	// A text near one that matches lists candidates: none shows a value.
+	if _, err := f.act(Step{Action: "click", Target: `text=Visible words`}); err != nil {
+		t.Errorf("the page's own text: %v", err)
+	}
+	if _, err := f.act(Step{Action: "click", Target: `role=button`}); err == nil || strings.Contains(err.Error(), "SECRET") {
+		t.Errorf("candidates: %v", err)
+	}
+}

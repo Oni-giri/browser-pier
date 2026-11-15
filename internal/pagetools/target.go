@@ -277,6 +277,23 @@ type targetRead struct {
 	near          []candidate
 }
 
+// inField says whether a node is inside an input or a textarea, a few
+// levels up at most (a textarea's text node, the text of an input's own
+// shadow tree): whatever text it has is the field's value, whatever role
+// the page gave the field. Bounded, so a deep page costs no more.
+func (d *dom) inField(i int) bool {
+	for range 4 {
+		if i = d.parent(i); i < 0 {
+			return false
+		}
+		switch d.name(i) {
+		case "INPUT", "TEXTAREA":
+			return true
+		}
+	}
+	return false
+}
+
 // editableRoles are the fields whose text is their value, which a text
 // target never reads (a password is never matched nor printed).
 var editableRoles = map[string]bool{"textbox": true, "searchbox": true, "combobox": true, "spinbutton": true, "slider": true}
@@ -542,6 +559,11 @@ func matchText(ctx context.Context, t target, nodes []axNode, d *dom, gs *generi
 				return false
 			}
 			if _, shown := d.shown(ni); !shown {
+				return false
+			}
+			if d.inField(ni) {
+				// A field's own text (a textarea's, or the inside of an
+				// input with a role of another kind) is its value.
 				return false
 			}
 			if o := gs.prunedOwner(ni); o != prunedNode {
