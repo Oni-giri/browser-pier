@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -228,5 +230,34 @@ func TestNoUploadsWithoutAFilesStore(t *testing.T) {
 	r := f.refs()
 	if _, err := f.act(Step{Action: "upload", Ref: r["Attach"], Files: []string{"report.pdf"}}); !isStatus(err, 422) {
 		t.Errorf("got %v", err)
+	}
+}
+
+// TestSpecListsTheAllowList: SPEC §8's list of the tools' CDP methods is
+// AllowedMethods(), no more and no less.
+func TestSpecListsTheAllowList(t *testing.T) {
+	spec, err := os.ReadFile("../../SPEC.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var line string
+	for _, l := range strings.Split(string(spec), "\n") {
+		if strings.HasPrefix(l, "- **The tools' allow-list**") {
+			line = l
+		}
+	}
+	if line == "" {
+		t.Fatal("SPEC.md has no line starting with - **The tools' allow-list**")
+	}
+	var listed []string
+	for _, m := range regexp.MustCompile("`([A-Z][A-Za-z]+\\.[a-z][A-Za-z]+)`").FindAllStringSubmatch(line, -1) {
+		listed = append(listed, m[1])
+	}
+	slices.Sort(listed)
+	if got := AllowedMethods(); !slices.Equal(listed, got) {
+		t.Errorf("SPEC.md lists %v\nAllowedMethods() is %v", listed, got)
+	}
+	if !slices.Contains(AllowedMethods(), "DOM.setFileInputFiles") || slices.Contains(ContentAllowedMethods(), "DOM.setFileInputFiles") {
+		t.Error("DOM.setFileInputFiles belongs to the tools' allow-list only")
 	}
 }
