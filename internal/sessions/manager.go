@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -127,6 +128,8 @@ type Manager struct {
 	draining bool
 	// inputsDone is signalled, with mu, when an agent input action ends.
 	inputsDone *sync.Cond
+	// onEnd is called with a session's ID once it has ended (OnEnd).
+	onEnd []func(id string)
 
 	// admit is held from checking there is room for a new browser to
 	// recording its session, so two starts can't both squeeze in.
@@ -206,6 +209,15 @@ func NewManager(db *sql.DB, rt Runtime, layout Layout, log *slog.Logger) (*Manag
 	}
 	m.inputsDone = sync.NewCond(&m.mu)
 	return m, nil
+}
+
+// OnEnd registers f to be called, without the manager's lock, with each
+// session's ID once the session has ended (stopped or failed), so what
+// others keep about it can go.
+func (m *Manager) OnEnd(f func(id string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onEnd = append(m.onEnd, f)
 }
 
 // Close stops tracking sessions. Browsers keep running; Reconcile picks them
@@ -819,7 +831,11 @@ func (m *Manager) end(l *live, lastLog string, final func(*Session)) {
 	}
 	l.disconnectLocked()
 	l.cancelAllLocked(ErrStopping)
+	hooks := slices.Clone(m.onEnd)
 	m.mu.Unlock()
+	for _, f := range hooks {
+		f(s.ID)
+	}
 	if s.State == Failed {
 		m.log.Warn("session failed", "session", s.ID, "profile", s.Profile, "err", s.Error, "last_log", s.LastLog)
 	} else {

@@ -169,3 +169,26 @@ func TestWatchedBrowserIsNeverIdle(t *testing.T) {
 		t.Fatal("not stopped once the viewer left and the auto-stop passed")
 	}
 }
+
+func TestOnEndHearsEachEnd(t *testing.T) {
+	f := newFixture(t)
+	ended := make(chan string, 4)
+	f.m.OnEnd(func(id string) { ended <- id })
+	s := f.start(f.m)
+	select {
+	case id := <-ended:
+		t.Fatalf("%s ended before the stop", id)
+	default:
+	}
+	if _, err := f.m.Stop(context.Background(), s.ID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case id := <-ended:
+		if id != s.ID {
+			t.Fatalf("OnEnd got %q, want %q", id, s.ID)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("OnEnd wasn't called after the stop")
+	}
+}
