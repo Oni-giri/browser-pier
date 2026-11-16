@@ -149,10 +149,10 @@ codex mcp add browserpier --url {{.Base}}/mcp \
       {{with .Error}}<p class="errors" role="alert">{{.}}</p>{{end}}
       <label class="field"><span class="label">Name</span><input class="input" name="name" value="{{.Name}}" maxlength="64" placeholder="research-bot" autocomplete="off" required><span class="hint">Shown as the agent on Profiles and in the agent log.</span></label>
       <fieldset class="field" style="border:0;padding:0;margin:0">
-        <legend class="label" style="font-weight:500;margin-bottom:8px">Can use</legend>
+        <legend class="label" style="font-weight:500;margin-bottom:8px;padding:0">Can use</legend>
         <label class="radio-card"><input type="radio" name="scope" value="all"{{if .All}} checked{{end}}><span><b>All profiles</b><small>Including ones created later. Needed to create profiles.</small></span></label>
-        <label class="radio-card" style="margin-bottom:0"><input type="radio" name="scope" value="some" id="scope-some"{{if not .All}} checked{{end}}><span><b>Only these profiles</b>{{if not .Profiles}}<small>No profiles yet.</small>{{end}}</span></label>
-        {{if .Profiles}}<div class="choices" style="margin:8px 0 0 40px">{{range .Profiles}}<label><input type="checkbox" name="profile" value="{{.}}" data-select="#scope-some"{{if index $.Chosen .}} checked{{end}}><span>{{.}}</span></label>{{end}}</div>{{end}}
+        <div class="radio-card with-choices" style="margin-bottom:0"><label><input type="radio" name="scope" value="some" id="scope-some"{{if not .All}} checked{{end}}><span><b>Only these profiles</b>{{if not .Profiles}}<small>No profiles yet.</small>{{end}}</span></label>
+        {{if .Profiles}}<div class="choices">{{range .Profiles}}<label><input type="checkbox" name="profile" value="{{.}}" data-select="#scope-some"{{if index $.Chosen .}} checked{{end}}><span>{{.}}</span></label>{{end}}</div>{{end}}</div>
       </fieldset>
     </div>
     <div class="dlg-foot"><button class="btn" type="button" data-close>Cancel</button><button class="btn primary" type="submit">Create token</button></div>
