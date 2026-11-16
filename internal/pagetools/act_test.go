@@ -118,8 +118,15 @@ func TestActLogsIn(t *testing.T) {
 			t.Errorf("activity: %q", a.What)
 		}
 	}
-	if strings.Contains(out, "SECRET") || strings.Contains(out, "ana@") {
+	// The steps never echo it. The changes after them (on by default
+	// after a snapshot, PROJ-114) show a field's value as a snapshot does,
+	// a secret one only as [filled].
+	steps, changes, _ := strings.Cut(out, "### Changes")
+	if strings.Contains(out, "SECRET") || strings.Contains(steps, "ana@") {
 		t.Errorf("typed text echoed:\n%s", out)
+	}
+	if !strings.Contains(changes, `+ `+r["Password"]+` textbox "Password" = [filled]`) {
+		t.Errorf("the changes don't show the password field filled:\n%s", out)
 	}
 	ev := strings.Join(f.fb.input(f.fb.tabs[0]).events, "|")
 	if !strings.Contains(ev, "mouseMoved Sign in|mousePressed Sign in|mouseReleased Sign in") {
@@ -191,7 +198,7 @@ func TestActRefusesUnsupportedInputs(t *testing.T) {
 	p := newActPage(f.fb)
 	f.fb.addTab("https://example.com/", p.doc, true)
 	r := f.refs()
-	for name, want := range map[string]string{"Birthday": "a date input", "Upload": "files"} {
+	for name, want := range map[string]string{"Birthday": "a date input", "Upload": "upload step"} {
 		if _, err := f.act(Step{Action: "fill", Ref: r[name], Text: text("x")}); !isStatus(err, 422) || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v", name, err)
 		}
@@ -495,7 +502,7 @@ func TestWaitFor(t *testing.T) {
 		f.closedAfter()
 		return out, err
 	}
-	for _, bad := range []WaitIn{{}, {Text: "a", URLChange: true}, {Text: "a", TimeoutMS: 30001}, {Text: "a", TimeoutMS: -1}, {Ref: r["Email"], State: "gone"}, {Text: "a", State: "hidden"}} {
+	for _, bad := range []WaitIn{{}, {Text: "a", URLChange: true}, {Load: true, Ref: r["Email"]}, {Text: "a", TimeoutMS: 30001}, {Text: "a", TimeoutMS: -1}, {Ref: r["Email"], State: "gone"}, {Text: "a", State: "hidden"}} {
 		if _, err := wait(bad); !isStatus(err, 400) {
 			t.Errorf("%+v: %v", bad, err)
 		}
@@ -507,10 +514,10 @@ func TestWaitFor(t *testing.T) {
 		p.doc.kids = append(p.doc.kids, txt("Payment confirmed", box(0, 500, 100, 20)))
 		f.fb.mu.Unlock()
 	}()
-	if out, err := wait(WaitIn{Text: "payment CONFIRMED"}); err != nil || out != "ok" {
+	if out, err := wait(WaitIn{Text: "payment CONFIRMED"}); err != nil || !strings.HasPrefix(out, "waited ") || !strings.HasSuffix(out, ` s for text "payment CONFIRMED" to appear`) {
 		t.Errorf("text: %v %q", err, out)
 	}
-	if out, err := wait(WaitIn{Text: "never", TimeoutMS: 150}); err != nil || out != "timed out after 150ms" {
+	if out, err := wait(WaitIn{Text: "never", TimeoutMS: 150}); err != nil || out != `timed out after 0.15 s waiting for text "never" to appear` {
 		t.Errorf("timeout: %v %q", err, out)
 	}
 	// An element hidden later; then one removed.
@@ -520,10 +527,10 @@ func TestWaitFor(t *testing.T) {
 		p.signin.box = nil
 		f.fb.mu.Unlock()
 	}()
-	if out, err := wait(WaitIn{Ref: r["Sign in"], State: "hidden"}); err != nil || out != "ok" {
+	if out, err := wait(WaitIn{Ref: r["Sign in"], State: "hidden"}); err != nil || !strings.HasSuffix(out, " s for "+r["Sign in"]+" to be hidden") {
 		t.Errorf("hidden: %v %q", err, out)
 	}
-	if out, err := wait(WaitIn{Ref: r["Email"]}); err != nil || out != "ok" {
+	if out, err := wait(WaitIn{Ref: r["Email"]}); err != nil || out != "already true when wait started: "+r["Email"]+" is visible" {
 		t.Errorf("visible: %v %q", err, out)
 	}
 	// The URL changes: a new document, so the isolated world is made again.
@@ -534,7 +541,7 @@ func TestWaitFor(t *testing.T) {
 		f.fb.go_(tb, "https://example.com/done")
 		f.fb.mu.Unlock()
 	}()
-	if out, err := wait(WaitIn{URLChange: true}); err != nil || out != "ok" {
+	if out, err := wait(WaitIn{URLChange: true}); err != nil || !strings.HasSuffix(out, " s for the URL to change") {
 		t.Errorf("url_change: %v %q", err, out)
 	}
 	for _, m := range f.fb.Received() {
@@ -546,7 +553,7 @@ func TestWaitFor(t *testing.T) {
 		t.Errorf("%d isolated worlds made", worlds)
 	}
 	// The removed element's ref counts as hidden.
-	if out, err := wait(WaitIn{Ref: r["Email"], State: "hidden"}); err != nil || out != "ok" {
+	if out, err := wait(WaitIn{Ref: r["Email"], State: "hidden"}); err != nil || out != "already true when wait started: "+r["Email"]+" is hidden" {
 		t.Errorf("hidden after navigation: %v %q", err, out)
 	}
 	checkSent(t, f.fb)

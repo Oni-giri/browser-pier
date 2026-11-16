@@ -277,3 +277,58 @@ func TestPageCallsKeepABrowserFromIdling(t *testing.T) {
 		t.Fatal("still running 6 minutes after its last call")
 	}
 }
+
+// A person can take control from a page call marked Breakable (act) once
+// it has run for takeOverAfter, as from a long input action: it breaks
+// off and they get the browser once it has ended. Before that, and for a
+// call never marked (a read), Take control is refused.
+func TestTakeControlBreaksOffABreakablePageCall(t *testing.T) {
+	f := newFixture(t)
+	advance := f.clock()
+	s := f.start(f.m)
+
+	// A read, however long it runs, is never broken off.
+	read, err := f.m.PageLease(context.Background(), s.ID, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	advance(time.Minute)
+	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrAgentDriving) {
+		t.Fatalf("take control during a long read = %v", err)
+	}
+	read.Release()
+
+	act, err := f.m.PageLease(context.Background(), s.ID, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	act.Breakable()
+	advance(takeOverAfter - time.Millisecond)
+	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrAgentDriving) {
+		t.Fatalf("take control in act's first %s = %v", takeOverAfter, err)
+	}
+	advance(time.Millisecond)
+	took := make(chan error, 1)
+	go func() { took <- f.m.TakeControl(s.ID) }()
+	if err := leaseEnds(t, act); !errors.Is(err, ErrTookControl) {
+		t.Fatalf("act's lease ended for %v", err)
+	}
+	// The person gets the browser only once act has let go.
+	select {
+	case err := <-took:
+		t.Fatalf("Take control returned (%v) while act was still under way", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	act.Release()
+	select {
+	case err := <-took:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Take control never returned after act ended")
+	}
+	if _, err := f.m.PageLease(context.Background(), s.ID, "tok"); !errors.Is(err, ErrHumanDriving) {
+		t.Fatalf("a page call after Take control = %v", err)
+	}
+}

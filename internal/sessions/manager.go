@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/docker"
 	"github.com/Oni-giri/browser-pier/internal/fence"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
+	"github.com/Oni-giri/browser-pier/internal/scrub"
 )
 
 // Runtime runs browser containers; *docker.Client is the real one.
@@ -108,6 +110,9 @@ type Manager struct {
 	now          func() time.Time
 	geoURL       string // where browsers look up their exit location; "" for nowhere
 	hostIPs      string // the Docker host's own addresses, comma separated
+	// blocklist returns the ad and tracker list's file for a browser
+	// container, nil for none (SetBlocklist).
+	blocklist func() []byte
 	// mem is the memory cap, set by SetMemoryLimit; nil for none.
 	mem atomic.Pointer[memLimits]
 	// hostFree reads what the host has free, set by SetHostFree; nil to
@@ -127,6 +132,15 @@ type Manager struct {
 	draining bool
 	// inputsDone is signalled, with mu, when an agent input action ends.
 	inputsDone *sync.Cond
+	// onEnd is called with a session's ID once it has ended (OnEnd).
+	onEnd []func(id string)
+	// secrets are the values BrowserPier typed into each live session's
+	// page, by session ID (RegisterSecret); in memory only. Its lock
+	// nests inside mu.
+	secrets *scrub.Registry
+	// markMu makes RegisterSecret's first secret wait until the session's
+	// mark is stored, so no second caller types before it is.
+	markMu sync.Mutex
 
 	// admit is held from checking there is room for a new browser to
 	// recording its session, so two starts can't both squeeze in.
@@ -150,8 +164,8 @@ type live struct {
 	lastActivity time.Time
 	// lastAgentInput is when an agent last clicked or typed.
 	lastAgentInput time.Time
-	// inputs counts agent input actions under way (AgentInput leases).
-	inputs int
+	// inputs are agent input actions under way (AgentInput leases).
+	inputs map[*lease]struct{}
 	// leases are BrowserPier's own calls into the page under way
 	// (PageLease); turn lets one run at a time.
 	leases map[*lease]struct{}
@@ -164,6 +178,9 @@ type live struct {
 	human bool
 	// viewers counts open live views.
 	viewers int
+	// exemptFull is set once the browser refused an exemption from the ad
+	// and tracker list for its cap (logged once).
+	exemptFull atomic.Bool
 	// activity is what agents did, oldest first; it goes with the session.
 	activity []Activity
 }
@@ -203,9 +220,19 @@ func NewManager(db *sql.DB, rt Runtime, layout Layout, log *slog.Logger) (*Manag
 		cancel:       cancel,
 		live:         map[string]*live{},
 		held:         map[string]bool{},
+		secrets:      scrub.NewRegistry(),
 	}
 	m.inputsDone = sync.NewCond(&m.mu)
 	return m, nil
+}
+
+// OnEnd registers f to be called, without the manager's lock, with each
+// session's ID once the session has ended (stopped or failed), so what
+// others keep about it can go.
+func (m *Manager) OnEnd(f func(id string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onEnd = append(m.onEnd, f)
 }
 
 // Close stops tracking sessions. Browsers keep running; Reconcile picks them
@@ -261,10 +288,26 @@ func (m *Manager) Layout() Layout { return m.layout }
 
 func containerName(profile string) string { return "browserpier-" + profile }
 
+// StartOptions are what a start may ask beyond the profile's settings.
+type StartOptions struct {
+	// Mode is the session's mode; "" means the profile's default.
+	Mode profiles.Mode
+	// AllowAds turns the profile's ad and tracker blocking off for this
+	// session, a running one included. Blocking can only be turned off
+	// this way, never on, and the profile's setting doesn't change.
+	AllowAds bool
+}
+
 // Start starts the profile's browser, or attaches to it if it is already
 // starting or running (attached is then true). It returns once the browser
 // is ready or has failed. mode "" means the profile's default.
 func (m *Manager) Start(ctx context.Context, profile string, mode profiles.Mode) (s Session, attached bool, err error) {
+	return m.StartWith(ctx, profile, StartOptions{Mode: mode})
+}
+
+// StartWith is Start with options.
+func (m *Manager) StartWith(ctx context.Context, profile string, opts StartOptions) (s Session, attached bool, err error) {
+	mode := opts.Mode
 	if m.ctx.Err() != nil {
 		return Session{}, false, ErrClosed
 	}
@@ -279,9 +322,18 @@ func (m *Manager) Start(ctx context.Context, profile string, mode profiles.Mode)
 				}
 				continue
 			}
-			return m.awaitStart(ctx, l, true)
+			s, attached, err := m.awaitStart(ctx, l, true)
+			if err == nil && opts.AllowAds && s.BlockAds {
+				s = m.allowAds(ctx, l)
+			} else if err == nil && opts.AllowAds && s.AdListMissing {
+				// Nothing to turn off, but it is off now by the agent's
+				// choice, not for want of a list.
+				_ = m.update(l, func(s *Session) { s.AdListMissing = false })
+				s = m.snapshot(l)
+			}
+			return s, attached, err
 		}
-		l, p, again, err := m.admitAndBegin(ctx, profile, mode)
+		l, p, again, err := m.admitAndBegin(ctx, profile, mode, opts.AllowAds)
 		if err != nil {
 			return Session{}, false, err
 		}
@@ -300,7 +352,7 @@ func (m *Manager) Start(ctx context.Context, profile string, mode profiles.Mode)
 // start at a time: the admission lock is held from the memory check until
 // the session counts towards memory. again is true if a session for the
 // profile appeared meanwhile, to attach to instead.
-func (m *Manager) admitAndBegin(ctx context.Context, profile string, mode profiles.Mode) (l *live, p profiles.Profile, again bool, err error) {
+func (m *Manager) admitAndBegin(ctx context.Context, profile string, mode profiles.Mode, allowAds bool) (l *live, p profiles.Profile, again bool, err error) {
 	// Check the request before stopping anyone's browser for it.
 	if _, err := m.profiles.Get(ctx, profile); err != nil {
 		return nil, p, false, err
@@ -321,7 +373,7 @@ func (m *Manager) admitAndBegin(ctx context.Context, profile string, mode profil
 	if _, ok := m.live[profile]; ok {
 		return nil, p, true, nil
 	}
-	l, p, err = m.begin(ctx, profile, mode)
+	l, p, err = m.begin(ctx, profile, mode, allowAds)
 	return l, p, false, err
 }
 
@@ -333,7 +385,7 @@ func (m *Manager) hasLive(profile string) bool {
 }
 
 // begin records a new Starting session. m.mu must be held.
-func (m *Manager) begin(ctx context.Context, profile string, mode profiles.Mode) (*live, profiles.Profile, error) {
+func (m *Manager) begin(ctx context.Context, profile string, mode profiles.Mode, allowAds bool) (*live, profiles.Profile, error) {
 	if m.draining {
 		return nil, profiles.Profile{}, ErrClosed
 	}
@@ -357,7 +409,7 @@ func (m *Manager) begin(ctx context.Context, profile string, mode profiles.Mode)
 		WHERE profile = ? AND state IN ('starting', 'running', 'needs_help', 'stopping')`, now.UnixMilli(), profile); err != nil {
 		return nil, p, err
 	}
-	s := Session{ID: newID(), Profile: profile, Mode: mode, State: Starting, CreatedAt: now, UpdatedAt: now}
+	s := Session{ID: newID(), Profile: profile, Mode: mode, State: Starting, CreatedAt: now, UpdatedAt: now, BlockAds: p.BlockAds && !allowAds}
 	if err := insertSession(ctx, m.db, s); err != nil {
 		return nil, p, err
 	}
@@ -388,9 +440,27 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 		m.abort(l, "", fmt.Sprintf("preparing the profile folder: %v", err))
 		return
 	}
+	if err := m.forgetTabsIfFilled(ctx, p.Name, id); err != nil {
+		m.abort(l, "", fmt.Sprintf("closing the tabs of a session a secret was typed into: %v", err))
+		return
+	}
 	if err := m.writeProxyFile(p); err != nil {
 		m.abort(l, "", fmt.Sprintf("handing over the proxy: %v", err))
 		return
+	}
+	wantBlocking := m.snapshot(l).BlockAds
+	blocking, err := m.writeBlockFile(p.Name, wantBlocking)
+	if err != nil {
+		m.abort(l, "", fmt.Sprintf("handing over the ad and tracker list: %v", err))
+		return
+	}
+	if wantBlocking && !blocking {
+		// No list yet: the session says what the browser does, which is
+		// block nothing, and why.
+		if err := m.update(l, func(s *Session) { s.BlockAds, s.AdListMissing = false, true }); err != nil {
+			m.abort(l, "", fmt.Sprintf("saving the session: %v", err))
+			return
+		}
 	}
 	// A container left behind by a crash would hold the name.
 	if err := m.rt.RemoveStale(ctx, containerName(p.Name), p.Name); err != nil {
@@ -415,6 +485,7 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 			"BROWSERPIER_LOCALE_OVERRIDE=" + p.Locale,
 			"BROWSERPIER_LOCAL_NETWORK=" + strconv.FormatBool(p.LocalNetwork),
 			"BROWSERPIER_HOST_IPS=" + m.hostIPs,
+			"BROWSERPIER_BLOCK_ADS=" + strconv.FormatBool(blocking),
 		},
 	}
 	var cid string
@@ -798,9 +869,12 @@ func (m *Manager) cleanup(cid string) string {
 // state can't be saved after a few tries, the profile is released anyway:
 // the next Start for it, or the next Reconcile, clears the stale row.
 func (m *Manager) end(l *live, lastLog string, final func(*Session)) {
-	m.mu.Lock()
+	// The container's words are kept and shown after the session, when
+	// its secrets are gone: scrubbed now (PROJ-125).
+	sc := m.lockScrubber(l.sess.ID)
 	final(&l.sess)
-	l.sess.LastLog = lastLog
+	l.sess.LastLog = sc.String(lastLog)
+	l.sess.Error = sc.String(l.sess.Error)
 	l.sess.UpdatedAt = m.now()
 	s := l.sess
 	m.mu.Unlock()
@@ -817,9 +891,14 @@ func (m *Manager) end(l *live, lastLog string, final func(*Session)) {
 	if m.live[s.Profile] == l {
 		delete(m.live, s.Profile)
 	}
+	m.secrets.Forget(s.ID)
 	l.disconnectLocked()
-	l.cancelLeasesLocked(ErrStopping)
+	l.cancelAllLocked(ErrStopping)
+	hooks := slices.Clone(m.onEnd)
 	m.mu.Unlock()
+	for _, f := range hooks {
+		f(s.ID)
+	}
 	if s.State == Failed {
 		m.log.Warn("session failed", "session", s.ID, "profile", s.Profile, "err", s.Error, "last_log", s.LastLog)
 	} else {
@@ -1007,7 +1086,7 @@ func (m *Manager) stopIf(ctx context.Context, id string, cond func(*live) bool) 
 		l.stop = attempt
 		// Page calls under way stop first (an act lets go of what it
 		// pressed), then the browser closes.
-		l.cancelLeasesLocked(ErrStopping)
+		l.cancelAllLocked(ErrStopping)
 		for len(l.leases) > 0 {
 			m.inputsDone.Wait()
 		}
@@ -1107,10 +1186,11 @@ func (m *Manager) SetNeedsHelp(id string, needsHelp bool) (Session, error) {
 			// connections close, and new ones are refused until hand-back.
 			l.disconnectLocked()
 			l.generation++
-			// Page calls under way are cancelled; they and input already
-			// on its way finish before the person gets the browser. New
-			// ones are refused from now on.
-			l.cancelLeasesLocked(ErrHandedOver)
+			// Page calls and agent input under way are cancelled (a long
+			// human-paced type breaks off at once); they finish before
+			// the person gets the browser. New ones are refused from now
+			// on.
+			l.cancelAllLocked(ErrHandedOver)
 			m.waitLeasesLocked(l)
 		}
 		if to == Running {

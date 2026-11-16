@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -18,7 +19,9 @@ const inCallWait = 4 * time.Minute
 func (s *Server) addHandoffTools(srv *sdk.Server) {
 	sdk.AddTool(srv, &sdk.Tool{Name: "request_handoff", Description: "Ask a person to take over the browser: for a login, 2FA, a CAPTCHA, a payment, a file upload or a check. " +
 		"They get a one-time link; you're paused until they hand back. Clients that can open links show it to the user and wait; " +
-		"otherwise send the link yourself and call wait_for_handoff."}, s.requestHandoff)
+		"otherwise send the link yourself and call wait_for_handoff. " +
+		"If you know where the task ends (the account page after a sign-in), give until_url: the handoff then also ends by itself, as done, " +
+		"once the tab in front navigates to an address with that text in its origin and path, after the person opened the link, so you don't wait for a person who forgot to tap Done."}, s.requestHandoff)
 	sdk.AddTool(srv, &sdk.Tool{Name: "wait_for_handoff", Description: "Wait for the person to hand back. Returns at once if they have; call it again while it says pending."}, s.waitForHandoff)
 	sdk.AddTool(srv, &sdk.Tool{Name: "cancel_handoff", Description: "Withdraw a handoff nobody will take: the link stops working and you get the browser back."}, s.cancelHandoff)
 }
@@ -28,6 +31,7 @@ type handoffArgs struct {
 	Reason    string `json:"reason" jsonschema:"sensitive_input (login, 2FA, payment), captcha, file_upload, review or manual_step"`
 	Detail    string `json:"detail" jsonschema:"what the person should do, in one sentence: Enter the 2FA code Google sent to your phone"`
 	Require   string `json:"require,omitempty" jsonschema:"ask for a stricter check than the profile's: pin or signin"`
+	UntilURL  string `json:"until_url,omitempty" jsonschema:"optional: end the handoff by itself when the tab in front navigates to an address whose origin and path contain this text, such as example.com/account or /dashboard; never the query or fragment, so no ? or #; 4 to 200 characters, naming a page (not just / or https://). A page already there when the person opens the link doesn't count"`
 }
 
 type handoffOut struct {
@@ -38,6 +42,7 @@ type handoffOut struct {
 	ExpiresAt time.Time `json:"expires_at"`
 	Note      string    `json:"note"`
 	Message   string    `json:"message"`
+	Reached   bool      `json:"until_url_reached"`
 }
 
 // requestHandoff opens a handoff. A client that can open URLs for its user
@@ -46,7 +51,7 @@ type handoffOut struct {
 // link to pass on itself.
 func (s *Server) requestHandoff(ctx context.Context, req *sdk.CallToolRequest, in handoffArgs) (*sdk.CallToolResult, any, error) {
 	var h handoffOut
-	body := map[string]string{"reason": in.Reason, "detail": in.Detail, "require": in.Require}
+	body := map[string]string{"reason": in.Reason, "detail": in.Detail, "require": in.Require, "until_url": in.UntilURL}
 	if err := s.callJSON(ctx, req.Extra, "POST", "/api/sessions/"+url.PathEscape(in.SessionID)+"/handoff", body, &h); err != nil {
 		return nil, nil, err
 	}
@@ -132,8 +137,11 @@ func (s *Server) waitAndReport(ctx context.Context, req *sdk.CallToolRequest, id
 			if req.Session != nil {
 				_ = req.Session.NotifyElicitationComplete(ctx, &sdk.ElicitationCompleteParams{ElicitationID: id})
 			}
-			out := fmt.Sprintf("Handoff %s: %s.", h.Status, h.Message)
-			if h.Note != "" {
+			out := fmt.Sprintf("Handoff %s: %s", h.Status, h.Message)
+			if !strings.HasSuffix(out, ".") {
+				out += "."
+			}
+			if h.Note != "" && !h.Reached { // a reached until_url's note is BrowserPier's, said in the message
 				out += " The person's note: " + h.Note
 			}
 			return text("%s", out), nil, nil

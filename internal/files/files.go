@@ -15,6 +15,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode"
@@ -53,6 +54,9 @@ type Store struct {
 	dir      func(profile string) string // the profile's files folder
 	limit    int64                       // bytes per profile, both folders together; 0 is no limit
 	uid, gid int                         // the browser's user, who must be able to read uploads
+
+	mu   sync.Mutex
+	seen map[string]map[string]seen // by session: its downloads folder at its last notice
 }
 
 // New makes a Store. dir gives a profile's files folder; limit caps the
@@ -102,7 +106,9 @@ func (s *Store) List(profile string) ([]File, error) {
 	}
 	out := make([]File, 0, len(all))
 	for _, f := range all {
-		if !strings.HasSuffix(f.Name, partial) {
+		// Not a download under way, nor one of Chrome's hidden temporary
+		// files on the way to one.
+		if !strings.HasSuffix(f.Name, partial) && !strings.HasPrefix(f.Name, ".") {
 			out = append(out, f)
 		}
 	}
@@ -230,6 +236,41 @@ func (s *Store) Upload(profile, name string, r io.Reader, max int64) (File, stri
 		}
 	}
 	return File{Name: final, Size: n, Modified: time.Now()}, path.Join(MountPoint, Uploads, final), nil
+}
+
+// Uploaded checks that uploads/name is a file the browser can be given
+// (PROJ-117): a plain name (ValidName), opened inside the uploads
+// folder's root without following a link, and a regular file. It returns
+// the file and its path in the browser, /files/uploads/<name>, the only
+// kind of path act's upload step hands to DOM.setFileInputFiles. A
+// symlink, a folder, a FIFO or a missing file is ErrNotFound.
+func (s *Store) Uploaded(profile, name string) (File, string, error) {
+	if !ValidName(name) {
+		return File{}, "", ErrBadName
+	}
+	root, err := s.open(profile, Uploads)
+	if err != nil {
+		return File{}, "", err
+	}
+	defer func() { _ = root.Close() }()
+	// os.Root follows a link that stays inside the folder, but the
+	// browser resolves the path in its own filesystem: the name itself
+	// must be a regular file, not a link of any kind (Lstat), and what is
+	// opened must be that same file.
+	link, err := root.Lstat(name)
+	if err != nil || !link.Mode().IsRegular() {
+		return File{}, "", ErrNotFound
+	}
+	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return File{}, "", ErrNotFound
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() || !os.SameFile(link, info) {
+		return File{}, "", ErrNotFound
+	}
+	return File{Name: name, Size: info.Size(), Modified: info.ModTime()}, path.Join(MountPoint, Uploads, name), nil
 }
 
 // publish links tmp in as name, or name with " (2)", " (3)"… before its

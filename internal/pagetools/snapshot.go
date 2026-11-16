@@ -22,6 +22,10 @@ type SnapshotIn struct {
 	// MaxChars is the budget for the page's controls and text; 0 gives
 	// only the URL and title. nil is DefaultMaxChars.
 	MaxChars *int `json:"max_chars,omitempty"`
+	// Diff answers with what changed since the last snapshot of this
+	// document, as act's changes do, instead of the whole page; with no
+	// earlier snapshot of it, the whole page (PROJ-114).
+	Diff bool `json:"diff,omitempty"`
 }
 
 // Snapshot reads the active tab: its URL and title, then, within the
@@ -36,24 +40,58 @@ func (t *Tools) Snapshot(ctx context.Context, s sessions.Session, who Caller, in
 	if budget < 0 || budget > MaxMaxChars {
 		return "", &Error{Status: 400, Msg: fmt.Sprintf("max_chars: want 0 to %d", MaxMaxChars)}
 	}
+	if in.Diff && budget == 0 {
+		return "", &Error{Status: 400, Msg: "diff: want a max_chars above 0, for when there is no earlier snapshot to compare with"}
+	}
 	return t.run(ctx, s, who, func(c *call) (string, error) {
 		ctx := c.lease.Ctx
 		var p *page
+		if in.Diff {
+			p, r, err := c.changes(ctx, true)
+			if err != nil {
+				return "", err
+			}
+			c.note("Read the page")
+			c.noteChallenge(p.cf)
+			if r.kind == diffDone {
+				return c.result("page changes", r.body, r.trailer), nil
+			}
+			// Nothing to compare with: the whole page, which is now the
+			// one diffs compare with (unless it changed while it was read).
+			lead := "No earlier snapshot of this page to compare with; the whole page follows."
+			switch r.kind {
+			case diffFirst:
+			case diffUnkept:
+				lead = "This page is too large for BrowserPier to keep a snapshot of to compare with (over 4 MB); the whole page follows."
+			default:
+				lead = "The page navigated since the last snapshot; the whole page follows."
+			}
+			body, marker := c.render(p, budget)
+			return lead + "\n" + c.result("page snapshot", body, marker), nil
+		}
 		if budget == 0 {
 			pi, err := c.info(ctx)
 			if err != nil {
 				return "", err
 			}
-			p = &page{url: pi.URL, title: pi.Title}
+			p = &page{url: pi.URL, title: pi.Title, cf: pi.CF}
 		} else {
 			var err error
-			if p, err = c.read(ctx, true); err != nil {
+			var moved bool
+			if p, moved, err = c.readDoc(ctx); err != nil {
 				return "", err
 			}
-			c.st.refs.dropStale(c.tgt.ID, c.loader)
+			c.st.refs.dropStale(c.tgt.ID, p.loader)
+			if moved {
+				c.t.dropBaseline(c.sess.ID, c.tgt.ID)
+			} else {
+				// What diffs compare against (PROJ-114).
+				c.t.setBaseline(c.lease.Ctx, c.sess.ID, c.tgt.ID, p.frame, p.loader, p.items)
+			}
 		}
 		body, marker := c.render(p, budget)
 		c.note("Read the page")
+		c.noteChallenge(p.cf)
 		return c.result("page snapshot", body, marker), nil
 	})
 }

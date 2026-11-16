@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
 	"time"
@@ -17,6 +18,31 @@ type profilePageData struct {
 	// log in; it starts the browser itself.
 	StartNow bool
 	Mem      int64
+	// Blocked is how many connections the running browser refused for
+	// the ad and tracker list; BlockedRead whether it could be read.
+	Blocked     int64
+	BlockedRead bool
+}
+
+// AdsLabel says what the ad and tracker blocking is doing: the live
+// session's count, or the profile's setting.
+func (d profilePageData) AdsLabel() string {
+	switch {
+	case d.Live() && d.Session.AdListMissing:
+		return "No list yet"
+	case d.Live() && !d.Session.BlockAds && d.BlockAds:
+		return "Off this session"
+	case d.Live() && d.Session.BlockAds && d.BlockedRead:
+		return fmt.Sprintf("%d blocked", d.Blocked)
+	case d.Live():
+		if d.Session.BlockAds {
+			return "On"
+		}
+		return "Off"
+	case d.BlockAds:
+		return "On"
+	}
+	return "Off"
 }
 
 // UpFor is how long the browser has been running.
@@ -51,6 +77,9 @@ func (u *UI) profileData(ctx context.Context, r *http.Request, name string) (pro
 	d := profilePageData{profileView: u.view(r, p, last, asks, mem)}
 	if d.Live() {
 		d.Log = u.m.Activity(d.Session.ID)
+		if d.Session.BlockAds {
+			d.Blocked, d.BlockedRead = u.m.Blocked(ctx, name)
+		}
 	}
 	return d, true
 }

@@ -247,7 +247,7 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 			v.control = true
 			say(map[string]any{"type": "control", "on": true})
 		case errors.Is(err, sessions.ErrAgentDriving):
-			say(map[string]any{"type": "error", "msg": "The agent is driving. You can take control when it pauses or asks for help."})
+			say(map[string]any{"type": "error", "msg": "The agent is driving. Try again in a few seconds, or when it asks for help."})
 		default:
 			say(map[string]any{"type": "error", "msg": "The browser isn't running."})
 		}
@@ -267,7 +267,8 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 		path, body := "/input/events", []byte(m.Events)
 		if m.Type == "text" {
 			path = "/input/type"
-			body, _ = json.Marshal(map[string]string{"text": m.Text})
+			// A person pasting: at once, not at an agent's human pace.
+			body, _ = json.Marshal(map[string]string{"text": m.Text, "pace": "instant"})
 		}
 		if err := v.post(path, body); err != nil {
 			say(map[string]any{"type": "error", "msg": err.Error()})

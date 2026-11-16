@@ -32,10 +32,13 @@ const forwarderAddr = "127.0.0.1:1080"
 // Chromium sends host names over SOCKS5, and the upstream proxy resolves
 // them: nothing resolves DNS locally, so lookups don't leak around it.
 // Without one, the forwarder resolves names itself, checks every address
-// and connects to the ones it checked.
+// and connects to the ones it checked. With the profile's ad and tracker
+// list on, it also refuses names on the list (block.go), before any lookup
+// or upstream dial.
 type forwarder struct {
 	upstream *url.URL // nil: connect directly
 	policy   egressPolicy
+	block    *blocker // nil: no list
 	dialer   net.Dialer
 	lookup   func(ctx context.Context, host string) ([]netip.Addr, error)
 	up, down atomic.Int64 // bytes sent and received
@@ -117,6 +120,9 @@ func (f *forwarder) handle(client net.Conn) {
 			code = 0x02 // not allowed by ruleset
 			f.refused.Add(1)
 			f.log.Info("refused a connection to the local network", "to", addr)
+		case errors.Is(err, errBlocked):
+			code = 0x02
+			f.block.blocked.Add(1)
 		case f.upstream != nil:
 			f.log.Warn("proxy: upstream refused a connection", "err", err)
 		}
@@ -218,6 +224,12 @@ func (f *forwarder) dial(ctx context.Context, addr string) (net.Conn, error) {
 	}
 	if localhostName(host) {
 		return nil, fmt.Errorf("%w: %s", errRefused, host)
+	}
+	// Names only: an address was judged above, by the policy alone. The
+	// list is checked before the name is looked up or sent upstream, so a
+	// blocked name doesn't even leave the container.
+	if f.block.blocks(host) {
+		return nil, fmt.Errorf("%w: %s", errBlocked, host)
 	}
 	if f.upstream != nil {
 		// The upstream resolves the name, on its own network, which is
@@ -415,5 +427,9 @@ func (c counter) Write(p []byte) (int, error) {
 // stats serves the counters on the control socket.
 func (f *forwarder) stats(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]int64{"bytes_sent": f.up.Load(), "bytes_received": f.down.Load(), "refused": f.refused.Load()})
+	out := map[string]int64{"bytes_sent": f.up.Load(), "bytes_received": f.down.Load(), "refused": f.refused.Load(), "blocked": 0, "block_list": 0}
+	if f.block != nil {
+		out["blocked"], out["block_list"] = f.block.blocked.Load(), int64(f.block.set.Len())
+	}
+	_ = json.NewEncoder(w).Encode(out)
 }

@@ -24,6 +24,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/Oni-giri/browser-pier/internal/domainset"
 )
 
 func main() {
@@ -68,6 +70,20 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	// The blocker is there even when off, so its controls answer the
+	// same either way.
+	var set *domainset.Set
+	if cfg.BlockAds {
+		// Blocking is a convenience, not a boundary: without a usable
+		// list the browser starts anyway, blocking nothing.
+		if set, err = readBlockFile(cfg.BlockFile); err != nil {
+			log.Warn("no ad and tracker list: nothing is blocked", "err", err)
+		} else {
+			log.Info("blocking ads and trackers", "names", set.Len())
+		}
+	}
+	fwd.block = newBlocker(set)
+	fwd.block.log = log
 	fln, err := net.Listen("tcp", forwarderAddr)
 	if err != nil {
 		return fmt.Errorf("start the proxy forwarder: %w", err)

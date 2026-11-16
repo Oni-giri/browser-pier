@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/browsertest"
+	"github.com/Oni-giri/browser-pier/internal/domainset"
 )
 
 // socksGet does what Chromium does: a SOCKS5 CONNECT to the forwarder by
@@ -111,6 +112,50 @@ func TestForwarderThroughUpstreams(t *testing.T) {
 				t.Fatal("the upstream never saw the wrong credentials")
 			}
 		})
+	}
+}
+
+// TestForwarderBlocksBeforeTheUpstream: with an upstream proxy, a blocked
+// name never reaches it; others still go to it by name.
+func TestForwarderBlocksBeforeTheUpstream(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "hello") }))
+	defer origin.Close()
+	port, _ := strconv.Atoi(strings.Split(origin.Listener.Addr().String(), ":")[1])
+	up := browsertest.NewSOCKS5Proxy(t, "user", "pw")
+	up.Alias("origin.test", "127.0.0.1")
+	up.Alias("ads.origin.test", "127.0.0.1")
+	f := startForwarder(t, "socks5://user:pw@"+up.Addr, egressPolicy{})
+	f.block = newBlocker(domainset.Build([]string{"ads.origin.test"}))
+	if _, err := socksGet(t, fwdAddrs[f], "ads.origin.test", port); err == nil {
+		t.Fatal("a blocked name got through the upstream")
+	}
+	if body, err := socksGet(t, fwdAddrs[f], "origin.test", port); err != nil || body != "hello" {
+		t.Fatalf("an unlisted name: %q, %v", body, err)
+	}
+	if got := up.Targets(); len(got) != 1 || got[0] != "origin.test:"+strconv.Itoa(port) {
+		t.Fatalf("upstream saw %v; the blocked name must not reach it", got)
+	}
+	if f.block.blocked.Load() != 1 {
+		t.Errorf("blocked %d, want 1", f.block.blocked.Load())
+	}
+}
+
+func TestReadBlockFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "blocklist.txt")
+	if _, err := readBlockFile(path); err == nil {
+		t.Error("read a missing file")
+	}
+	var buf strings.Builder
+	_, _ = domainset.Build([]string{"ads.example.com"}).WriteTo(&buf)
+	if err := os.WriteFile(path, []byte(buf.String()), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	s, err := readBlockFile(path)
+	if err != nil || !s.Matches("x.ads.example.com") {
+		t.Fatalf("read: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Error("the list file went: it is kept, unlike the proxy's")
 	}
 }
 

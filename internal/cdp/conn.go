@@ -597,7 +597,7 @@ func (t *Target) IsolatedWorld(ctx context.Context, frameID string) (int64, erro
 		Result RemoteObject `json:"result"`
 	}
 	if err := t.Call(ctx, "Runtime.evaluate", map[string]any{"expression": bootstrap, "contextId": w.ExecutionContextID}, &g); err != nil {
-		return 0, worldGone(err)
+		return 0, WorldGone(err)
 	}
 	after, err := t.frameLoader(ctx, frameID)
 	if err != nil {
@@ -623,9 +623,11 @@ func (t *Target) global(world int64) (string, error) {
 	return g, nil
 }
 
-// worldGone turns the browser's "that object or context is no more" into
-// ErrWorldGone.
-func worldGone(err error) error {
+// WorldGone turns the browser's "that object or context is no more" into
+// ErrWorldGone, still wrapping the browser's *Error. Callers that run
+// code on an isolated-world object of their own (Runtime.callFunctionOn)
+// use it too: an object whose document went is ErrWorldGone, not a refusal.
+func WorldGone(err error) error {
 	var ce *Error
 	if errors.As(err, &ce) && (strings.Contains(ce.Message, "find object") || strings.Contains(ce.Message, "find context") ||
 		strings.Contains(ce.Message, "Inspected target navigated or closed") ||
@@ -651,7 +653,7 @@ func (t *Target) Eval(ctx context.Context, world int64, expression string, out a
 	if err := t.Call(ctx, "Runtime.callFunctionOn", map[string]any{"objectId": g,
 		"functionDeclaration": "function() { return (\n" + expression + "\n); }",
 		"returnByValue":       true, "awaitPromise": true, "silent": true}, &r); err != nil {
-		return worldGone(err)
+		return WorldGone(err)
 	}
 	if r.ExceptionDetails != nil {
 		return fmt.Errorf("script error: %s", r.ExceptionDetails.Text)
@@ -676,7 +678,7 @@ func (t *Target) EvalObject(ctx context.Context, world int64, expression string)
 	}
 	if err := t.Call(ctx, "Runtime.callFunctionOn", map[string]any{"objectId": g,
 		"functionDeclaration": "function() { return (\n" + expression + "\n); }", "silent": true}, &r); err != nil {
-		return RemoteObject{}, worldGone(err)
+		return RemoteObject{}, WorldGone(err)
 	}
 	if r.ExceptionDetails != nil {
 		return RemoteObject{}, fmt.Errorf("script error: %s", r.ExceptionDetails.Text)
@@ -705,7 +707,7 @@ func (t *Target) ResolveNode(ctx context.Context, world, backendNodeID int64) (s
 	}
 	if err := t.Call(ctx, "Runtime.callFunctionOn", map[string]any{"objectId": r.Object.ObjectID, "functionDeclaration": verifyFn,
 		"arguments": []map[string]any{{"objectId": g}}, "returnByValue": true, "silent": true}, &v); err != nil {
-		return "", worldGone(err)
+		return "", WorldGone(err)
 	}
 	if string(v.Result.Value) != "true" {
 		return "", ErrWorldGone

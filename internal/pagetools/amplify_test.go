@@ -127,6 +127,33 @@ func TestSharedLongStringsCostLittle(t *testing.T) {
 			}
 			return manyNodes(1, func(int) *fnode { return root })
 		}, nil},
+		{"generic controls sharing a megabyte of spaces as text", func() *fnode {
+			return manyNodes(n, func(int) *fnode {
+				d := el("div", "generic", "", box(0, 0, 10, 10), &fnode{tag: "#text", text: spaces, role: "StaticText", name: "x", box: box(0, 0, 10, 10), display: "inline", visib: "visible"})
+				d.cursor = "pointer"
+				return d
+			})
+		}, func(t *testing.T, items []item, textOnly bool) {
+			if !textOnly && (len(items) != n || items[0].role != "generic" || items[0].name != "x") {
+				t.Errorf("%d items, the first %s %q", len(items), items[0].role, items[0].name)
+			}
+		}},
+		{"5,000 nested pointer spans the AX tree leaves out", func() *fnode {
+			root := el("span", "", "", box(0, 0, 10, 10))
+			root.display, root.cursor = "inline", "pointer"
+			leaf := root
+			for i := range 5000 {
+				s := el("span", "", "", box(0, 0, 10, 10), txt("w", box(0, 0, 10, 10)))
+				s.display, s.cursor = "inline", []string{"auto", "pointer"}[i%2]
+				leaf.kids = append(leaf.kids, s)
+				leaf = s
+			}
+			return manyNodes(1, func(int) *fnode { return root })
+		}, func(t *testing.T, items []item, textOnly bool) {
+			if !textOnly && (len(items) != 2 || items[0].role != "generic" || len(items[0].name) > maxName || !strings.HasPrefix(items[1].text, "w w")) {
+				t.Errorf("%d items, the first %s of %d bytes", len(items), items[0].role, len(items[0].name))
+			}
+		}},
 		{"more text than a page read keeps", func() *fnode {
 			return manyNodes(600, func(i int) *fnode {
 				return el("p", "", "", box(0, 0, 10, 10), &fnode{tag: "#text", text: strings.Repeat("y", 10<<10) + string(rune('a'+i%26)), role: "StaticText", name: strings.Repeat("y", 10<<10), box: box(0, 0, 10, 10), display: "inline", visib: "visible"})

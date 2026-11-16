@@ -120,6 +120,24 @@ var migrations = []string{
 	ALTER TABLE profiles ADD COLUMN site_inferred TEXT NOT NULL DEFAULT '';
 	ALTER TABLE profiles ADD COLUMN icon_glyph TEXT NOT NULL DEFAULT '';
 	ALTER TABLE profiles ADD COLUMN icon_color TEXT NOT NULL DEFAULT '';`,
+
+	// A handoff can end by itself when the page reaches an address the
+	// agent gave (PROJ-118): the pattern, and whether it ended that way.
+	`ALTER TABLE handoffs ADD COLUMN until_url TEXT NOT NULL DEFAULT '';
+	ALTER TABLE handoffs ADD COLUMN auto_done INTEGER NOT NULL DEFAULT 0;`,
+
+	// Whether a profile's browser blocks ad and tracker domains (PROJ-119):
+	// off for the profiles that exist, which ran without it; new ones get
+	// the admin's default. And whether each session did, since an agent
+	// can turn it off for one session.
+	`ALTER TABLE profiles ADD COLUMN block_ads INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE sessions ADD COLUMN block_ads INTEGER NOT NULL DEFAULT 0;`,
+
+	// Whether BrowserPier typed a secret into a session's page (PROJ-125):
+	// the values live in memory only, so a browser that outlives the
+	// orchestrator with one is stopped when it is picked up, not answered
+	// for unscrubbed. Only the flag is stored, never a value.
+	`ALTER TABLE sessions ADD COLUMN had_fills INTEGER NOT NULL DEFAULT 0;`,
 }
 
 // Open opens (creating if needed) the database at path and migrates it.

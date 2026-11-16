@@ -54,10 +54,13 @@ type Profile struct {
 	TimeZone        string `json:"time_zone,omitempty"`
 	Locale          string `json:"locale,omitempty"`
 	LocalNetwork    bool   `json:"local_network,omitempty"`
-	Site            string `json:"site,omitempty"`
-	SiteInferred    string `json:"site_inferred,omitempty"`
-	IconGlyph       string `json:"icon_glyph,omitempty"`
-	IconColor       string `json:"icon_color,omitempty"`
+	// BlockAds is absent from archives made before PROJ-119, whose
+	// profiles didn't block: they import with it off.
+	BlockAds     bool   `json:"block_ads,omitempty"`
+	Site         string `json:"site,omitempty"`
+	SiteInferred string `json:"site_inferred,omitempty"`
+	IconGlyph    string `json:"icon_glyph,omitempty"`
+	IconColor    string `json:"icon_color,omitempty"`
 	// Icon is the cached icon (favicon.FileName), a PNG. Export reads it
 	// from the folder and Import writes it back, drawn again: Export's
 	// caller needn't set it.

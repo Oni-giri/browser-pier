@@ -248,8 +248,12 @@ select.input{appearance:none;background-image:linear-gradient(45deg,transparent 
 .check{display:flex;align-items:center;gap:10px;cursor:pointer}
 .check input{width:16px;height:16px;accent-color:var(--ink);margin:0}
 .radio-card{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;border-radius:10px;box-shadow:0 0 0 1px var(--line);background:var(--surface);cursor:pointer;margin-bottom:8px}
-.radio-card input{margin:3px 0 0;width:16px;height:16px;accent-color:var(--blue)}
-.radio-card:has(input:checked){box-shadow:0 0 0 1.5px var(--blue);background:var(--radio-on-bg)}
+.radio-card input[type=radio]{margin:3px 0 0;width:16px;height:16px;accent-color:var(--blue)}
+.radio-card.with-choices{display:block;cursor:default}
+.radio-card.with-choices>label{display:flex;gap:12px;align-items:flex-start;cursor:pointer}
+.radio-card.with-choices .choices{margin:10px 0 2px 28px}
+.radio-card.with-choices .choices span{min-height:30px;font-size:13px;padding:0 10px}
+.radio-card:has(input[type=radio]:checked){box-shadow:0 0 0 1.5px var(--blue);background:var(--radio-on-bg)}
 .radio-card b{font-weight:500}
 .radio-card .rec{margin-left:8px;font-size:11px;font-weight:500;color:var(--blue-text);background:var(--blue-tint);padding:1px 6px;border-radius:999px}
 .radio-card small{display:block;color:var(--ink-2);font-size:13px}
@@ -518,6 +522,7 @@ body.handoff{background:radial-gradient(280px 190px at 50% -10px,rgba(47,107,255
 .ho-who h1{margin:0;font-size:15px;font-weight:500;letter-spacing:0}
 .ho-who .caption{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ho-detail{margin:12px 0 0;font-size:20px;line-height:1.35;font-weight:500;letter-spacing:-.3px;overflow-wrap:anywhere}
+.ho-until{margin:8px 0 0;overflow-wrap:anywhere}
 .ho-form{margin-top:22px}
 .ho-form label,.ho-label{display:block;font-weight:500;margin:14px 0 8px}
 .ho-form label:first-child{margin-top:0}

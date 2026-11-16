@@ -10,6 +10,7 @@ package sessions
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -168,13 +170,107 @@ func TestLoginSurvivesStopAndStart(t *testing.T) {
 	stopCleanly(t, m, next.ID)
 }
 
-// TestLoginSurvivesExportAndImport: a profile exported and imported under
-// another name is still logged in.
-func TestLoginSurvivesExportAndImport(t *testing.T) {
+// TestSessionCookieLoginSurvivesIdleAutoStop is PROJ-112 through the
+// orchestrator: a login kept in a session-only cookie survives the idle
+// auto-stop, not only a stop someone asked for.
+func TestSessionCookieLoginSurvivesIdleAutoStop(t *testing.T) {
+	f := newRealFixture(t)
+	m := f.manager(f.layout)
+	// The idle check reads the manager's clock; this test moves it on.
+	var ahead atomic.Int64
+	m.now = func() time.Time { return time.Now().Add(time.Duration(ahead.Load())) }
+	name := f.profile(m)
+	site := browsertest.NewSite(t, browsertest.SiteHost(t))
+	site.SessionCookie()
+
+	s := startRunning(t, m, name)
+	control := browsertest.ControlClient(f.layout.ControlSocket(name))
+	p := browsertest.Page(t, control)
+	token := site.Login(t, p)
+	p.Close()
+
+	ahead.Store(int64(time.Hour)) // past the profile's 15-minute auto-stop
+	m.stopIdle(context.Background())
+	if got, err := m.Get(context.Background(), s.ID); err != nil || got.State != Stopped {
+		t.Fatalf("after the idle check the session is %+v (%v), want it stopped", got, err)
+	}
+	ahead.Store(0)
+
+	next := startRunning(t, m, name)
+	if got := site.Account(t, browsertest.Page(t, control)); got != token {
+		t.Fatalf("after the idle auto-stop the site saw session %q, want %q: the session-only cookie was lost", got, token)
+	}
+	stopCleanly(t, m, next.ID)
+}
+
+// TestTabsWithASecretArentReopened is PROJ-125's guard on PROJ-112: a
+// tab that showed a secret typed into the last session isn't reopened by
+// the next start (its scrubber wouldn't know the value), while the login,
+// a session-only cookie, survives. It also checks that this Chromium
+// keeps its tabs where forgetTabs looks (Default/Sessions).
+func TestTabsWithASecretArentReopened(t *testing.T) {
 	f := newRealFixture(t)
 	m := f.manager(f.layout)
 	name := f.profile(m)
 	site := browsertest.NewSite(t, browsertest.SiteHost(t))
+	site.SessionCookie()
+
+	s := startRunning(t, m, name)
+	control := browsertest.ControlClient(f.layout.ControlSocket(name))
+	p := browsertest.Page(t, control)
+	token := site.Login(t, p)
+	const secret = "s3cret-Fill-77"
+	p.Navigate(site.URL + "/login?code=" + secret)
+	p.Close()
+	if err := m.RegisterSecret(s.ID, secret); err != nil {
+		t.Fatal(err)
+	}
+	stopCleanly(t, m, s.ID)
+	saved, err := os.ReadDir(filepath.Join(f.dir, "profiles", name, "chrome", "Default", "Sessions"))
+	if err != nil || len(saved) == 0 {
+		t.Fatalf("Chromium kept its tabs somewhere else than Default/Sessions (%d files, %v)", len(saved), err)
+	}
+
+	next := startRunning(t, m, name)
+	// Chromium would have reopened the tab by now.
+	time.Sleep(3 * time.Second)
+	resp, err := control.Get("http://control/cdp/json/list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var targets []struct{ Type, URL string }
+	err = json.NewDecoder(resp.Body).Decode(&targets)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tg := range targets {
+		if strings.Contains(tg.URL, secret) {
+			t.Fatalf("the tab with the secret was reopened: %+v", targets)
+		}
+	}
+	if got := site.Account(t, browsertest.Page(t, control)); got != token {
+		t.Fatalf("after the start the site saw session %q, want %q: the session-only login was lost", got, token)
+	}
+	stopCleanly(t, m, next.ID)
+}
+
+// TestLoginSurvivesExportAndImport: a profile exported and imported under
+// another name is still logged in, whether its login is a persistent or a
+// session-only cookie.
+func TestLoginSurvivesExportAndImport(t *testing.T) {
+	t.Run("persistent cookie", func(t *testing.T) { loginSurvivesExportAndImport(t, false) })
+	t.Run("session cookie", func(t *testing.T) { loginSurvivesExportAndImport(t, true) })
+}
+
+func loginSurvivesExportAndImport(t *testing.T, sessionOnly bool) {
+	f := newRealFixture(t)
+	m := f.manager(f.layout)
+	name := f.profile(m)
+	site := browsertest.NewSite(t, browsertest.SiteHost(t))
+	if sessionOnly {
+		site.SessionCookie()
+	}
 
 	s := startRunning(t, m, name)
 	p := browsertest.Page(t, browsertest.ControlClient(f.layout.ControlSocket(name)))

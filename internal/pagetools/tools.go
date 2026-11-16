@@ -28,6 +28,8 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/cdp"
 	"github.com/Oni-giri/browser-pier/internal/fence"
+	"github.com/Oni-giri/browser-pier/internal/files"
+	"github.com/Oni-giri/browser-pier/internal/motion"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
@@ -35,13 +37,15 @@ import (
 // toolsAllowList is every CDP method the page tools send, and no more
 // (PROJ-21 §1). It is unexported: no other caller of internal/cdp, such
 // as PROJ-57's checker, can borrow a list that allows input and DOM
-// writes. Accessibility.getPartialAXTree is the one addition to the
-// design's list: it echoes what a step hit without reading the whole tree.
+// writes. Accessibility.getPartialAXTree is an addition to the design's
+// list: it echoes what a step hit without reading the whole tree; so is
+// DOM.setFileInputFiles, act's upload step (PROJ-117), which only ever
+// gets /files/uploads/<name> paths. SPEC §8 lists the same methods.
 var toolsAllowList = cdp.NewAllowList("page tools",
 	"Target.getTargets", "Target.attachToTarget", "Target.detachFromTarget", "Target.activateTarget", "Target.createTarget", "Target.closeTarget",
 	"Page.getFrameTree", "Page.createIsolatedWorld", "Page.navigate", "Page.navigateToHistoryEntry", "Page.getNavigationHistory", "Page.reload",
 	"Runtime.evaluate", "Runtime.callFunctionOn", "Runtime.releaseObject",
-	"DOM.resolveNode", "DOM.describeNode", "DOM.getContentQuads", "DOM.scrollIntoViewIfNeeded", "DOM.focus",
+	"DOM.resolveNode", "DOM.describeNode", "DOM.getContentQuads", "DOM.scrollIntoViewIfNeeded", "DOM.focus", "DOM.setFileInputFiles",
 	"Accessibility.getFullAXTree", "Accessibility.getPartialAXTree",
 	"DOMSnapshot.captureSnapshot",
 	"Input.dispatchMouseEvent", "Input.dispatchKeyEvent", "Input.insertText",
@@ -71,6 +75,9 @@ const (
 type Error struct {
 	Status int
 	Msg    string
+	// final: the answer already says why the lease ended (act broken
+	// off by Take control), so fail keeps it.
+	final bool
 }
 
 func (e *Error) Error() string { return e.Msg }
@@ -90,25 +97,82 @@ type Caller struct {
 type Tools struct {
 	m   *sessions.Manager
 	log *slog.Logger
+	// files is the profiles' files folders, where act's upload step
+	// finds what it sets on a file input; nil: no uploads.
+	files *files.Store
 
 	mu    sync.Mutex
 	pages map[string]*state // by session ID
+	// bases are the item lists diffs compare against (PROJ-114), by
+	// session and tab, in memory only; baseBytes is about what they take
+	// together (at most maxBaselines), baseSeq orders them by when they
+	// were stored. Guarded by mu, since dropping the oldest reaches into
+	// other sessions'.
+	bases     map[baseKey]*baseline
+	baseBytes int
+	baseSeq   uint64
+	// unkept marks the tabs whose last read was too large to keep
+	// (maxBaseline), with the document it was of. Guarded by mu.
+	unkept map[baseKey]baseDoc
 
 	// quick and slow are quickTimeout and slowTimeout; tests shorten them.
 	quick, slow time.Duration
 	// settle is how long act waits after a step for the page to react.
 	settle time.Duration
+	// coverWait is how long a pointer step waits for what covers its
+	// element to go, unless it says; coverPoll how often it looks.
+	coverWait, coverPoll time.Duration
 	// poll is how often wait_for and navigate look at the page.
 	poll time.Duration
+	// ambiguousFor is how long wait_for lets a target match several
+	// elements before it fails (PROJ-123).
+	ambiguousFor time.Duration
+	// chainQuiet, chainPoll and chainCap are navigate's watch for script
+	// redirects after a load (PROJ-121): how long a document must stay
+	// put, how often it is looked at meanwhile, and the longest the chain
+	// is followed. Tests shorten them.
+	chainQuiet, chainPoll, chainCap time.Duration
+	// navWait is navigateTimeout; tests shorten it.
+	navWait time.Duration
 	// reads holds a slot per whole-page read under way (maxReads);
 	// readWait is how long a call waits for one before answering busy.
 	reads    chan struct{}
 	readWait time.Duration
+	// newMotion makes a session's source of human pacing (PROJ-113), and
+	// pause waits out one of its pauses; tests fix the one and skip the
+	// other.
+	newMotion func() *motion.Motion
+	pause     func(ctx context.Context, d time.Duration) error
 }
 
 func New(m *sessions.Manager, log *slog.Logger) *Tools {
-	return &Tools{m: m, log: log, pages: map[string]*state{}, quick: quickTimeout, slow: slowTimeout,
-		settle: 100 * time.Millisecond, poll: 250 * time.Millisecond, reads: make(chan struct{}, maxReads), readWait: 10 * time.Second}
+	t := &Tools{m: m, log: log, pages: map[string]*state{}, bases: map[baseKey]*baseline{}, unkept: map[baseKey]baseDoc{}, quick: quickTimeout, slow: slowTimeout,
+		settle: 100 * time.Millisecond, coverWait: defaultCoverWait, coverPoll: 100 * time.Millisecond, poll: 250 * time.Millisecond, ambiguousFor: time.Second,
+		chainQuiet: chainQuiet, chainPoll: chainPoll, chainCap: chainCap, navWait: navigateTimeout, reads: make(chan struct{}, maxReads), readWait: 10 * time.Second,
+		newMotion: motion.NewRandom, pause: sleep}
+	if m != nil {
+		// A session's refs and kept lists go as it ends.
+		m.OnEnd(t.forgetSession)
+	}
+	return t
+}
+
+// SetFiles gives act's upload step the profiles' files folders.
+func (t *Tools) SetFiles(fs *files.Store) { t.files = fs }
+
+// sleep waits for d, or until ctx ends.
+func sleep(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return ctx.Err()
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 // state is what the tools remember about one session between calls.
@@ -123,6 +187,12 @@ type state struct {
 	// active is the target the last call found in front.
 	active string
 	listed bool // tabs have been listed once: new ones are news
+	// mot paces act like a hand: one source per session, never shared.
+	// pointer is where act's pointer last stopped, in the viewport's
+	// CSS pixels; nil before its first move, or once a person has had
+	// the browser.
+	mot     *motion.Motion
+	pointer *motion.Point
 }
 
 type tabState struct {
@@ -146,17 +216,23 @@ func (t *Tools) state(sessionID string, gen uint64) *state {
 			for id := range t.pages {
 				if !live[id] {
 					delete(t.pages, id)
+					t.dropBaselinesLocked(id)
 				}
 			}
 		}
-		st = &state{refs: newRefs(), gen: gen, tabs: map[string]*tabState{}}
+		st = &state{refs: newRefs(), gen: gen, tabs: map[string]*tabState{}, mot: t.newMotion()}
 		t.pages[sessionID] = st
+		// A new ref epoch: lists kept with the old refs' items go.
+		t.dropBaselinesLocked(sessionID)
 	}
 	if st.gen != gen {
 		// A person had the browser since: whatever the refs named may
-		// have changed under them.
+		// have changed under them, and so may the page since the last
+		// snapshot.
 		st.refs.dropAll()
 		st.gen = gen
+		st.pointer = nil
+		t.dropBaselinesLocked(sessionID)
 	}
 	return st
 }
@@ -172,13 +248,31 @@ type call struct {
 	conn  *cdp.Conn
 	// tgt is a session on the active tab, frame and loader its top
 	// frame's current document, world its isolated world there.
-	tgt     *cdp.Target
-	tab     *tabState
-	frame   string
-	loader  string
-	url     string // the frame's URL, without its fragment
-	world   int64
-	notices []string
+	tgt    *cdp.Target
+	tab    *tabState
+	frame  string
+	loader string
+	url    string // the frame's URL, without its fragment
+	// unreachable is the address the browser couldn't load, when the
+	// document is its error page.
+	unreachable string
+	world       int64
+	notices     []string
+	// notes are BrowserPier's own lines for the result, which go after
+	// the fence, not in it: the Cloudflare note, whose only part from the
+	// page is a clamped point.
+	notes []string
+	// instant: the step under way is at instant pace, not a hand's.
+	// keyAt is when act last pressed a key at human pace, and keyDue how
+	// long after it the next key goes down.
+	instant bool
+	keyAt   time.Time
+	keyDue  time.Duration
+	// slotWait, if set and shorter than the tools' readWait, is how long
+	// this call's whole-page reads wait for a read slot: a read the call
+	// can do without (act's changes) or one bounded by a deadline (a
+	// target wait's look) doesn't hold the session for the full wait.
+	slotWait time.Duration
 }
 
 // begin starts a call on a session the caller may use, sending only
@@ -225,7 +319,7 @@ func leaseError(err error) error {
 	switch {
 	case errors.Is(err, sessions.ErrHumanDriving):
 		return &Error{Status: http.StatusConflict, Msg: "a person is driving this browser from the live view; wait until they hand it back"}
-	case errors.Is(err, sessions.ErrHandedOver), errors.Is(err, sessions.ErrSessionHeld):
+	case errors.Is(err, sessions.ErrHandedOver), errors.Is(err, sessions.ErrSessionHeld), errors.Is(err, sessions.ErrTookControl):
 		return &Error{Status: http.StatusConflict, Msg: err.Error()}
 	case errors.Is(err, sessions.ErrNotRunning), errors.Is(err, sessions.ErrStopping):
 		return &Error{Status: http.StatusConflict, Msg: "the session isn't running"}
@@ -242,6 +336,8 @@ func (c *call) fail(err error) error {
 	switch {
 	case err == nil:
 		return nil
+	case errors.As(err, &e) && e.final:
+		return e
 	case c.lease.Ctx.Err() != nil && c.ctx.Err() == nil:
 		return leaseError(context.Cause(c.lease.Ctx))
 	case c.ctx.Err() != nil:
@@ -250,6 +346,10 @@ func (c *call) fail(err error) error {
 		return e
 	case errors.Is(err, cdp.ErrTooLarge):
 		return &Error{Status: http.StatusUnprocessableEntity, Msg: "the browser's answer was too large"}
+	case errors.Is(err, cdp.ErrWorldGone):
+		// An element or the isolated world died with its document under
+		// the call: the page navigated, which is no refusal.
+		return &Error{Status: http.StatusConflict, Msg: "the page changed while BrowserPier was working on it (it navigated); take a new snapshot and try again"}
 	}
 	var ce *cdp.Error
 	if errors.As(err, &ce) {
@@ -308,20 +408,30 @@ func (c *call) rendererOn(ctx context.Context, tgt *cdp.Target, timeout time.Dur
 
 // frameTree reads a tab's top frame: its ID, its document and its URL.
 func (c *call) frameTree(ctx context.Context, tgt *cdp.Target) (id, loader, url string, err error) {
+	f, err := c.topFrame(ctx, tgt)
+	return f.ID, f.LoaderID, f.URL, err
+}
+
+// topFrame is a target's top frame, as Page.getFrameTree describes it.
+type topFrame struct {
+	ID       string `json:"id"`
+	LoaderID string `json:"loaderId"`
+	URL      string `json:"url"`
+	// UnreachableURL is set when the document is the browser's error
+	// page: the address that couldn't be loaded.
+	UnreachableURL string `json:"unreachableUrl"`
+}
+
+func (c *call) topFrame(ctx context.Context, tgt *cdp.Target) (topFrame, error) {
 	var r struct {
 		FrameTree struct {
-			Frame struct {
-				ID       string `json:"id"`
-				LoaderID string `json:"loaderId"`
-				URL      string `json:"url"`
-			} `json:"frame"`
+			Frame topFrame `json:"frame"`
 		} `json:"frameTree"`
 	}
 	if err := c.rendererOn(ctx, tgt, c.t.quick, "Page.getFrameTree", nil, &r); err != nil {
-		return "", "", "", err
+		return topFrame{}, err
 	}
-	f := r.FrameTree.Frame
-	return f.ID, f.LoaderID, f.URL, nil
+	return r.FrameTree.Frame, nil
 }
 
 // refresh reads the active tab's current document and isolated world.
@@ -331,11 +441,12 @@ func (c *call) frameTree(ctx context.Context, tgt *cdp.Target) (id, loader, url 
 // the frame again, a few times, before giving up.
 func (c *call) refresh(ctx context.Context) error {
 	for try := 0; ; try++ {
-		frame, loader, u, err := c.frameTree(ctx, c.tgt)
+		f, err := c.topFrame(ctx, c.tgt)
 		if err != nil {
 			return err
 		}
-		c.url = u
+		frame, loader := f.ID, f.LoaderID
+		c.url, c.unreachable = f.URL, f.UnreachableURL
 		if loader == c.loader && frame == c.frame && c.world != 0 {
 			return nil
 		}
@@ -409,6 +520,13 @@ func (c *call) result(source, body, trailer string) string {
 	case trailer != "":
 		out += "\n" + trailer
 	}
+	for _, n := range c.notes {
+		if out != "" {
+			out += "\n"
+		}
+		out += n
+	}
+	c.notes = nil // said once
 	return out
 }
 

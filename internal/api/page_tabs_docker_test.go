@@ -119,6 +119,9 @@ func TestPageToolsTabs(t *testing.T) {
 	}
 }
 
+// inTurn is a batch's bodies, sent one after the other.
+type inTurn []any
+
 // TestPageToolsStayQuiet is scenario 14: 20 runs of each page tool, with
 // nothing else attached, against the continuous detector, which must
 // catch its positive control. Hits are listed in
@@ -136,27 +139,64 @@ func TestPageToolsStayQuiet(t *testing.T) {
 	}
 	snap := a.mustTool(s.ID, "snapshot", nil)
 	email, pw, goBtn := refFor(t, snap, `textbox "Email"`), refFor(t, snap, `textbox "Password"`), refFor(t, snap, `button "Continue"`)
+	doc := refFor(t, snap, `"Document"`)
+	// Two files, set in turn: setting the file the input already holds
+	// may fire no events, and each run should.
+	var up, up2 struct{ Name string }
+	if code := a.do(http.MethodPost, "/api/sessions/"+s.ID+"/files?name=quiet.txt", "a file to upload", &up); code != http.StatusCreated {
+		t.Fatalf("upload: %d", code)
+	}
+	if code := a.do(http.MethodPost, "/api/sessions/"+s.ID+"/files?name=quiet2.txt", "another file to upload", &up2); code != http.StatusCreated {
+		t.Fatalf("upload: %d", code)
+	}
 	runs := []struct {
 		tool string
 		body any
+		// allowed are hits the batch may cause, with a decision in
+		// images/chromium/ANTI-BOT.md.
+		allowed []string
 	}{
-		{"snapshot", nil},
-		{"find", map[string]any{"text": "account"}},
-		{"act", steps(map[string]any{"action": "click", "ref": goBtn})},
-		{"act", steps(map[string]any{"action": "fill", "ref": email, "text": "ana@example.com"})},
-		{"act", steps(map[string]any{"action": "type", "ref": pw, "text": "pw"})},
-		{"act", steps(map[string]any{"action": "press", "keys": "Tab"})},
-		{"act", steps(map[string]any{"action": "hover", "ref": goBtn})},
-		{"wait", map[string]any{"text": "Account"}},
-		{"wait", map[string]any{"ref": goBtn}},
-		{"tabs", map[string]any{}},
+		{"snapshot", nil, nil},
+		{"find", map[string]any{"text": "account"}, nil},
+		{"act", steps(map[string]any{"action": "click", "ref": goBtn}), nil},
+		{"act", steps(map[string]any{"action": "fill", "ref": email, "text": "ana@example.com"}), nil},
+		{"act", steps(map[string]any{"action": "type", "ref": pw, "text": "pw"}), nil},
+		{"act", steps(map[string]any{"action": "press", "keys": "Tab"}), nil},
+		{"act", steps(map[string]any{"action": "hover", "ref": goBtn}), nil},
+		// What changed, explicitly (it is on by default after the
+		// snapshot above, PROJ-114), and the snapshot diff.
+		{"act", map[string]any{"steps": []any{map[string]any{"action": "hover", "ref": goBtn}}, "changes": true}, nil},
+		{"snapshot", map[string]any{"diff": true}, nil},
+		// Files set without a click to open the chooser (PROJ-117).
+		{"act", inTurn{steps(map[string]any{"action": "upload", "ref": doc, "files": []string{up.Name}}),
+			steps(map[string]any{"action": "upload", "ref": doc, "files": []string{up2.Name}})}, []string{"file-without-click@main"}},
+		{"wait", map[string]any{"text": "Account"}, nil},
+		{"wait", map[string]any{"ref": goBtn}, nil},
+		// Targets read the AX tree, as snapshot does (PROJ-123).
+		{"act", steps(map[string]any{"action": "hover", "target": `role=button[name="Continue"]`}), nil},
+		{"act", steps(map[string]any{"action": "click", "target": `role=button[name="continue"]`}), nil},
+		{"wait", map[string]any{"target": `role=button[name="Continue"]`}, nil},
+		// The page polls every 200 ms, so load times out: what counts
+		// is that reading its Resource Timing entries isn't seen
+		// (PROJ-122).
+		{"wait", map[string]any{"load": true, "timeout_ms": 300}, nil},
+		{"tabs", map[string]any{}, nil},
 	}
 	// Each batch goes through w.Quiet, which tells a busy machine's
 	// console-slow from one the calls cause with a control batch.
 	quiet := true
 	for _, r := range runs {
 		raw, _ := json.Marshal(r.body)
-		if _, ok := w.Quiet(t, fmt.Sprintf("20 × %s %s", r.tool, raw), 20, func() { a.mustTool(s.ID, r.tool, r.body) }); !ok {
+		n := 0
+		call := func() {
+			body := r.body
+			if bodies, ok := body.(inTurn); ok {
+				body = bodies[n%len(bodies)]
+			}
+			n++
+			a.mustTool(s.ID, r.tool, body)
+		}
+		if _, ok := w.Quiet(t, fmt.Sprintf("20 × %s %s", r.tool, raw), 20, call, r.allowed...); !ok {
 			quiet = false
 		}
 	}
@@ -176,5 +216,50 @@ func TestPageToolsStayQuiet(t *testing.T) {
 	}
 	if !quiet {
 		t.Log("each hit above must be listed in images/chromium/ANTI-BOT.md with a decision")
+	}
+}
+
+// TestRestoredTabsAfterAStop is PROJ-112's check on the page tools: with
+// "continue where you left off", a browser starts again with the tabs it
+// had. tabs lists them all, and snapshot reads the one in front.
+func TestRestoredTabsAfterAStop(t *testing.T) {
+	a := newRealAPI(t)
+	site := browsertest.NewPageSite(t, browsertest.SiteHost(t))
+	s := a.startAPIBrowser(t, "r")
+	a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/nav"})
+	a.mustTool(s.ID, "tabs", map[string]string{"action": "new", "url": site.URL + "/login"})
+	if code := a.do(http.MethodDelete, "/api/sessions/"+s.ID, "", nil); code != http.StatusOK {
+		t.Fatalf("stop: %d", code)
+	}
+
+	var again sessionJSON
+	if code := a.do(http.MethodPost, "/api/sessions", fmt.Sprintf(`{"profile": %q}`, s.Profile), &again); code != http.StatusCreated {
+		t.Fatalf("start again: %d %+v", code, again)
+	}
+	// Chromium reopens the tabs as it starts; give it a moment.
+	var list string
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		list = a.mustTool(again.ID, "tabs", nil)
+		if strings.Contains(list, "/nav") && strings.Contains(list, "/login") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after a stop and start the tabs aren't both back:\n%s", list)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	var front string
+	for _, l := range strings.Split(list, "\n") {
+		if strings.HasSuffix(l, "(active)") {
+			front = l
+		}
+	}
+	if !strings.Contains(front, "/login") {
+		t.Errorf("the tab in front before the stop (/login) isn't the active one after it:\n%s", list)
+	}
+	snap := a.mustTool(again.ID, "snapshot", nil)
+	if !strings.Contains(snap, site.URL+"/login") || !strings.Contains(snap, "Sign in") {
+		t.Errorf("snapshot doesn't read the tab in front (/login):\n%s", snap)
 	}
 }

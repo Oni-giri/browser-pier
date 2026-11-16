@@ -3,6 +3,7 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"image"
 	"image/png"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/api"
 	"github.com/Oni-giri/browser-pier/internal/auth"
+	"github.com/Oni-giri/browser-pier/internal/cdp/cdptest"
 	"github.com/Oni-giri/browser-pier/internal/db"
 	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/handoff"
@@ -35,12 +37,19 @@ type fixture struct {
 	m        *sessions.Manager
 	tokens   *auth.Tokens
 	handoffs *handoff.Service
+	mcp      *Server
 	srv      *httptest.Server
 	all      string // a token for every profile
 	scoped   string // a token for google only
 
 	mu     sync.Mutex
 	clicks []string // what the fake browser was asked to click
+	types  []string // and to type
+	// onClick, if set, runs as the fake browser clicks: a download, say.
+	onClick func()
+	// pageURL is the one tab's address, as /json/list answers it (a
+	// handoff's until_url watch); "" for a sign-in page.
+	pageURL string
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -59,7 +68,7 @@ func newFixture(t *testing.T) *fixture {
 	log := slog.New(slog.DiscardHandler)
 	f := &fixture{t: t, tokens: auth.NewTokens(d)}
 	rt := sessionstest.New(dir)
-	rt.Control = f.browser()
+	rt.Control = cdptest.New(f.targets).Handler(f.browser())
 	f.m, err = sessions.NewManager(d, rt, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)
 	if err != nil {
 		t.Fatal(err)
@@ -91,10 +100,21 @@ func newFixture(t *testing.T) *fixture {
 	a.Register(routes)
 	mux := http.NewServeMux()
 	a.Register(mux)
-	New(routes, web, log, "test").Register(mux)
+	f.mcp = New(routes, web, log, "test")
+	f.mcp.Register(mux)
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	return f
+}
+
+// targets answers the fake browser's CDP: Target.getTargets only.
+func (f *fixture) targets(m cdptest.Message) (any, error) {
+	if m.Method != "Target.getTargets" {
+		return nil, cdptest.Error{Message: "not in the fake: " + m.Method}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return map[string]any{"targetInfos": []map[string]any{{"targetId": "p1", "type": "page", "url": f.pageURL}}}, nil
 }
 
 // browser is a fake browser's control socket: a 1440×900 screen.
@@ -102,7 +122,13 @@ func (f *fixture) browser() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok\n") })
 	mux.HandleFunc("GET /cdp/json/list", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, `[{"type":"page","url":"https://accounts.example.com/signin?x=1"}]`)
+		f.mu.Lock()
+		page := f.pageURL
+		f.mu.Unlock()
+		if page == "" {
+			page = "https://accounts.example.com/signin?x=1"
+		}
+		_ = json.NewEncoder(w).Encode([]map[string]string{{"id": "p1", "type": "page", "url": page}})
 	})
 	mux.HandleFunc("GET /screenshot", func(w http.ResponseWriter, r *http.Request) {
 		width, height := 1440, 900
@@ -116,11 +142,22 @@ func (f *fixture) browser() http.Handler {
 		w.Header().Set("X-Screen-Height", "900")
 		_, _ = w.Write(b.Bytes())
 	})
+	mux.HandleFunc("POST /input/type", func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		f.mu.Lock()
+		f.types = append(f.types, string(b))
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("POST /input/click", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
 		f.clicks = append(f.clicks, string(b))
+		onClick := f.onClick
 		f.mu.Unlock()
+		if onClick != nil {
+			onClick()
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 	return mux
@@ -339,31 +376,6 @@ func TestHandoffWithoutElicitationGivesTheLink(t *testing.T) {
 	}
 }
 
-func TestScreenToScreenshotScaling(t *testing.T) {
-	sc := screen{1440, 900}
-	if w, h := sc.shot(); w != 1152 || h != 720 {
-		t.Fatalf("shot %dx%d", w, h)
-	}
-	if x, y := sc.toScreen(576, 360); x != 720 || y != 450 {
-		t.Fatalf("centre maps to %d,%d", x, y)
-	}
-	if x, y := sc.toScreen(5000, 5000); x != 1439 || y != 899 {
-		t.Fatalf("off the edge maps to %d,%d", x, y)
-	}
-	if w, h := (screen{1280, 720}).shot(); w != 1280 || h != 720 {
-		t.Fatalf("a small screen is scaled: %dx%d", w, h)
-	}
-	// A tall screen: the height comes out as the browser computes it.
-	tall := screen{640, 728}
-	if w, h := tall.shot(); w != 632 || h != 728*632/640 {
-		t.Fatalf("tall shot %dx%d", w, h)
-	}
-	// A region's far edge can reach the screen's.
-	if x, y := sc.scale(1152, 720); x != 1440 || y != 900 {
-		t.Fatalf("far edge maps to %d,%d", x, y)
-	}
-}
-
 func TestClickIsScaledToTheScreen(t *testing.T) {
 	f := newFixture(t)
 	cs := f.connect(f.all, versions[0], nil)
@@ -377,6 +389,55 @@ func TestClickIsScaledToTheScreen(t *testing.T) {
 	defer f.mu.Unlock()
 	if len(f.clicks) != 1 || !strings.Contains(f.clicks[0], `"x":720`) || !strings.Contains(f.clicks[0], `"y":450`) || !strings.Contains(f.clicks[0], `"double":true`) {
 		t.Fatalf("the browser was asked to click %v", f.clicks)
+	}
+}
+
+// Human-paced typing through MCP stops at 150 characters a call, so the
+// call ends (about 40 s) before a client's request timeout; instant pace,
+// and act's instant type steps, aren't held to it.
+func TestHumanTypingThroughMCPIsCapped(t *testing.T) {
+	f := newFixture(t)
+	cs := f.connect(f.all, versions[0], nil)
+	s, _, _ := f.m.Start(context.Background(), "google", "")
+	try := func(name string, args map[string]any) (bool, string) {
+		t.Helper()
+		args["session_id"] = s.ID
+		res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: name, Arguments: args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.IsError, res.Content[0].(*sdk.TextContent).Text
+	}
+	long, most := strings.Repeat("é", 151), strings.Repeat("a", 150)
+	if isErr, out := try("type_text", map[string]any{"text": long}); !isErr || !strings.Contains(out, "151 characters at human pace, at most 150") || !strings.Contains(out, "pace instant") {
+		t.Errorf("151 characters at human pace: %v %s", isErr, out)
+	}
+	if isErr, out := try("type_text", map[string]any{"text": long, "pace": "human"}); !isErr || !strings.Contains(out, "at most 150") {
+		t.Errorf("151 characters at pace human: %v %s", isErr, out)
+	}
+	if isErr, out := try("type_text", map[string]any{"text": most}); isErr {
+		t.Errorf("150 characters: %s", out)
+	}
+	if isErr, out := try("type_text", map[string]any{"text": long, "pace": "instant"}); isErr {
+		t.Errorf("151 characters at instant pace: %s", out)
+	}
+	f.mu.Lock()
+	if len(f.types) != 2 {
+		t.Errorf("the browser was asked to type %d times, want 2", len(f.types))
+	}
+	f.mu.Unlock()
+
+	step := func(text, pace string) map[string]any {
+		return map[string]any{"action": "type", "ref": "e1", "text": text, "pace": pace}
+	}
+	isErr, out := try("act", map[string]any{"steps": []any{step(strings.Repeat("a", 100), ""), step(strings.Repeat("b", 60), "human")}})
+	if !isErr || !strings.Contains(out, "type steps: 160 characters at human pace, at most 150") || !strings.Contains(out, "use fill") {
+		t.Errorf("act, 160 characters at human pace: %v %s", isErr, out)
+	}
+	// With one step instant, the call passes the cap (and this fixture's
+	// Visual-mode browser refuses it for what it is).
+	if _, out := try("act", map[string]any{"steps": []any{step(strings.Repeat("a", 100), ""), step(strings.Repeat("b", 60), "instant")}}); strings.Contains(out, "at most 150") {
+		t.Errorf("act, 100 characters at human pace: %s", out)
 	}
 }
 
@@ -395,5 +456,63 @@ func TestFailedElicitationStillGivesTheLink(t *testing.T) {
 	}
 	if _, out := call(t, cs, "cancel_handoff", map[string]any{"handoff_id": open[0].ID}); !strings.Contains(out, "Withdrawn") {
 		t.Fatalf("cancel_handoff: %s", out)
+	}
+}
+
+// request_handoff passes until_url, and wait_for_handoff says the handoff
+// ended by itself when the page got there, without quoting the address.
+func TestHandoffUntilURLOverMCP(t *testing.T) {
+	f := newFixture(t)
+	f.mu.Lock()
+	f.pageURL = "https://site.example/login"
+	f.mu.Unlock()
+	cs := f.connect(f.all, versions[0], nil)
+	s, _, _ := f.m.Start(context.Background(), "google", "")
+	res, out := call(t, cs, "request_handoff", map[string]any{"session_id": s.ID, "reason": "sensitive_input", "detail": "Sign in", "until_url": "/account?x"})
+	if !res.IsError || !strings.Contains(out, "until_url") {
+		t.Fatalf("request_handoff with a query in until_url: %s", out)
+	}
+	_, out = call(t, cs, "request_handoff", map[string]any{"session_id": s.ID, "reason": "sensitive_input", "detail": "Sign in", "until_url": "site.example/account"})
+	open, _ := f.handoffs.Pending(context.Background())
+	if len(open) != 1 || open[0].UntilURL != "site.example/account" || !strings.Contains(out, "wait_for_handoff") {
+		t.Fatalf("request_handoff: %s (pending %+v)", out, open)
+	}
+	// The person opens the link: the watch looks from then.
+	if err := f.handoffs.Unlock(context.Background(), open[0], "the person's browser"); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(time.Second)
+		f.mu.Lock()
+		f.pageURL = "https://site.example/account/overview?session=s3cr3t"
+		f.mu.Unlock()
+	}()
+	_, out = call(t, cs, "wait_for_handoff", map[string]any{"handoff_id": open[0].ID, "seconds": 20})
+	if !strings.Contains(out, "Handoff done") || !strings.Contains(out, "until_url") || strings.Contains(out, "s3cr3t") || strings.Contains(out, "overview") ||
+		strings.Contains(out, "The person's note") {
+		t.Fatalf("wait_for_handoff: %s", out)
+	}
+	if live, _ := f.m.Live("google"); live.State != sessions.Running {
+		t.Fatalf("browser not given back: %s", live.State)
+	}
+}
+
+// start_browser says whether ads and trackers are blocked: not when the
+// profile blocks but no list has been downloaded yet, which it says.
+func TestStartBrowserSaysWhetherAdsAreBlocked(t *testing.T) {
+	f := newFixture(t)
+	var list []byte
+	f.m.SetBlocklist(func() []byte { return list })
+	cs := f.connect(f.all, versions[0], nil)
+	_, out := call(t, cs, "start_browser", map[string]any{"profile": "google"})
+	if strings.Contains(out, "Ads and trackers are blocked") || !strings.Contains(out, "no list has been downloaded yet, so nothing is blocked") {
+		t.Errorf("start_browser without a list: %s", out)
+	}
+	s, _ := f.m.Live("google")
+	call(t, cs, "stop_browser", map[string]any{"session_id": s.ID})
+	list = []byte("# browserpier domain set 1\nads.example.com\n")
+	_, out = call(t, cs, "start_browser", map[string]any{"profile": "google"})
+	if !strings.Contains(out, "Ads and trackers are blocked") || strings.Contains(out, "no list") {
+		t.Errorf("start_browser with a list: %s", out)
 	}
 }

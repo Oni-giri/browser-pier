@@ -66,7 +66,7 @@ func (u *UI) exportProfile(w http.ResponseWriter, r *http.Request) {
 	m := archive.Manifest{Version: u.o.Version, ExportedAt: time.Now().UTC(), Profile: archive.Profile{
 		Name: p.Name, DefaultMode: string(p.DefaultMode), AutoStopMinutes: int(p.AutoStop / time.Minute),
 		Width: p.Width, Height: p.Height, Proxy: p.Proxy, HandoffPolicy: string(p.HandoffPolicy),
-		TimeZone: p.TimeZone, Locale: p.Locale, LocalNetwork: p.LocalNetwork,
+		TimeZone: p.TimeZone, Locale: p.Locale, LocalNetwork: p.LocalNetwork, BlockAds: p.BlockAds,
 		Site: p.Site, SiteInferred: p.SiteInferred, IconGlyph: p.IconGlyph, IconColor: p.IconColor,
 	}}
 	w.Header().Set("Content-Type", "application/octet-stream")
@@ -177,7 +177,7 @@ func (u *UI) importArchive(r io.Reader, name, pass string) (string, string) {
 	p.Width, p.Height = m.Profile.Width, m.Profile.Height
 	p.Proxy, p.HandoffPolicy = m.Profile.Proxy, profiles.HandoffPolicy(m.Profile.HandoffPolicy)
 	p.TimeZone, p.Locale = m.Profile.TimeZone, m.Profile.Locale
-	p.LocalNetwork = m.Profile.LocalNetwork
+	p.LocalNetwork, p.BlockAds = m.Profile.LocalNetwork, m.Profile.BlockAds
 	// The icon is cosmetic: what this version doesn't know (a glyph added
 	// later, say) falls back to the default rather than failing the import.
 	p.Site, p.SiteInferred = m.Profile.Site, m.Profile.SiteInferred

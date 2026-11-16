@@ -6,6 +6,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 )
@@ -59,11 +61,48 @@ type Signals struct {
 	Voices                 int    `json:"voices"`
 }
 
-// Detector serves a page that collects Signals and posts them back.
+// Detector serves a page that collects Signals and posts them back, and
+// one (InputURL) that records the input events a page sees.
 type Detector struct {
 	URL     string
 	reports chan Signals
+
+	mu     sync.Mutex
+	events []InputEvent
 }
+
+// InputEvent is a mouse or key event as a page's own script records it.
+type InputEvent struct {
+	N    int     `json:"n"`    // the order the page saw it in
+	Type string  `json:"type"` // mousemove, mousedown, mouseup, keydown or keyup
+	T    float64 `json:"t"`    // its timeStamp, in milliseconds
+	X    float64 `json:"x"`    // clientX and clientY, for mouse events
+	Y    float64 `json:"y"`
+	Key  string  `json:"key"`
+	// Target is the id of the element under it, if it has one.
+	Target  string `json:"target"`
+	Trusted bool   `json:"trusted"` // isTrusted
+}
+
+// inputPage records every mouse and key event, in the capture phase, and
+// posts them back in batches. Its textarea (#text) fills the top 40% of
+// the viewport; buttons #a and #b sit 400 px apart, below it.
+const inputPage = `<!doctype html><title>Input recorder</title>
+<style>html, body { margin: 0; height: 100%; } #text { position: fixed; left: 0; top: 0; width: 100%; height: 40%; box-sizing: border-box; font-size: 16px; }
+button { position: fixed; top: 70%; width: 120px; height: 40px; } #a { left: 200px; } #b { left: 600px; }</style>
+<textarea id="text" aria-label="Text"></textarea><button id="a">Button A</button><button id="b">Button B</button>
+<script>
+let n = 0, batch = [];
+for (const type of ['mousemove', 'mousedown', 'mouseup', 'keydown', 'keyup']) {
+  addEventListener(type, e => batch.push({n: n++, type, t: e.timeStamp, x: e.clientX || 0, y: e.clientY || 0,
+    key: e.key || '', target: (e.target && e.target.id) || '', trusted: e.isTrusted}), true);
+}
+setInterval(() => {
+  if (!batch.length) return;
+  const b = batch; batch = [];
+  fetch('/events', {method: 'POST', body: JSON.stringify(b), keepalive: true});
+}, 100);
+</script>`
 
 // detectPage runs its checks on load, waits for the console check to be
 // read, then reports; it also shows the results, for screenshots.
@@ -119,6 +158,21 @@ func NewDetector(t *testing.T, host string) *Detector {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = io.WriteString(w, detectPage)
 	})
+	mux.HandleFunc("GET /input", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, inputPage)
+	})
+	mux.HandleFunc("POST /events", func(w http.ResponseWriter, r *http.Request) {
+		var batch []InputEvent
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&batch); err != nil {
+			t.Errorf("input events: %v", err)
+			return
+		}
+		d.mu.Lock()
+		d.events = append(d.events, batch...)
+		d.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("POST /report", func(w http.ResponseWriter, r *http.Request) {
 		var s Signals
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&s); err != nil {
@@ -140,6 +194,43 @@ func NewDetector(t *testing.T, host string) *Detector {
 	t.Cleanup(func() { _ = srv.Close() })
 	d.URL = fmt.Sprintf("http://%s:%d/", host, ln.Addr().(*net.TCPAddr).Port)
 	return d
+}
+
+// InputURL is the input recorder's page.
+func (d *Detector) InputURL() string { return d.URL + "input" }
+
+// Events returns the input events recorded so far, in the order the page
+// saw them.
+func (d *Detector) Events() []InputEvent {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := slices.Clone(d.events)
+	slices.SortFunc(out, func(a, b InputEvent) int { return a.N - b.N })
+	return out
+}
+
+// ResetEvents forgets the events recorded so far.
+func (d *Detector) ResetEvents() {
+	d.mu.Lock()
+	d.events = nil
+	d.mu.Unlock()
+}
+
+// WaitEvents waits up to 20 s until the events recorded satisfy done, and
+// returns them.
+func (d *Detector) WaitEvents(t *testing.T, what string, done func([]InputEvent) bool) []InputEvent {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		ev := d.Events()
+		if done(ev) {
+			return ev
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the input recorder never saw %s; it has %d events", what, len(ev))
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // Report waits for the page's next report.

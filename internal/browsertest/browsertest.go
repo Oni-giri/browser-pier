@@ -184,10 +184,13 @@ func (c *CDP) Navigate(url string) {
 	}
 }
 
-// Site is a test site with a password login that sets a persistent cookie.
+// Site is a test site with a password login that sets a persistent cookie,
+// or a session-only one after SessionCookie.
 type Site struct {
 	URL string
 	mu  sync.Mutex
+	// sessionOnly makes logins set a cookie with no Expires or Max-Age.
+	sessionOnly bool
 	// issued is the session token from the last login, seen the cookie on the last /account visit.
 	issued, seen string
 	// requests counts every request; acceptLanguage is the last page
@@ -198,6 +201,33 @@ type Site struct {
 	iconServed bool
 	// rejected is what the last refused login sent.
 	rejected string
+	// released lets /later's page go on (ReleaseLater); arrived is set
+	// once it has.
+	released, arrived bool
+}
+
+// ReleaseLater sends the /later page, wherever it is, on to
+// /account-later, which its tab can be told to match without being the
+// account page.
+func (s *Site) ReleaseLater() {
+	s.mu.Lock()
+	s.released = true
+	s.mu.Unlock()
+}
+
+// LaterArrived reports whether the /later page got to /account-later.
+func (s *Site) LaterArrived() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.arrived
+}
+
+// SessionCookie makes later logins set a session-only cookie, with no
+// Expires or Max-Age, as sites do when "remember me" is left unticked.
+func (s *Site) SessionCookie() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessionOnly = true
 }
 
 // IconServed reports whether the browser has fetched the /icon page's
@@ -274,10 +304,35 @@ func NewSite(t *testing.T, host string) *Site {
 		token := fmt.Sprintf("tok-%d", time.Now().UnixNano())
 		s.mu.Lock()
 		s.issued = token
+		sessionOnly := s.sessionOnly
 		s.mu.Unlock()
 		//nolint:gosec // plain-HTTP test site; a Secure cookie wouldn't be sent back
-		http.SetCookie(w, &http.Cookie{Name: "session", Value: token, Path: "/", MaxAge: 86400, HttpOnly: true})
+		c := &http.Cookie{Name: "session", Value: token, Path: "/", MaxAge: 86400, HttpOnly: true}
+		if sessionOnly {
+			c.MaxAge = 0
+		}
+		http.SetCookie(w, c)
 		_, _ = io.WriteString(w, "<p>Signed in</p>")
+	})
+	// A page that navigates by itself once the test says so (ReleaseLater),
+	// as a background tab or popup might.
+	mux.HandleFunc("GET /later", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `<title>Later</title><p>Waiting</p><script>
+setInterval(async () => { if ((await fetch('/later/go')).status === 200) location = '/account-later' }, 250)</script>`)
+	})
+	mux.HandleFunc("GET /later/go", func(w http.ResponseWriter, _ *http.Request) {
+		s.mu.Lock()
+		released := s.released
+		s.mu.Unlock()
+		if !released {
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+	mux.HandleFunc("GET /account-later", func(w http.ResponseWriter, _ *http.Request) {
+		s.mu.Lock()
+		s.arrived = true
+		s.mu.Unlock()
+		_, _ = io.WriteString(w, "<title>Moved</title><p>Moved by itself</p>")
 	})
 	mux.HandleFunc("GET /account", func(w http.ResponseWriter, r *http.Request) {
 		v := ""

@@ -15,6 +15,7 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/cdp/cdptest"
 	"github.com/Oni-giri/browser-pier/internal/db"
+	"github.com/Oni-giri/browser-pier/internal/motion"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/sessions/sessionstest"
@@ -37,6 +38,9 @@ type fnode struct {
 	pointer string
 	zIndex  string
 	paint   int
+	// cursor is the node's own cursor ("" inherits its parent's, as the
+	// computed style does; auto at the top).
+	cursor  string
 	value   *string // the DOM snapshot's inputValue
 	kids    []*fnode
 	backend int64
@@ -73,6 +77,11 @@ type ftab struct {
 	// readyAfter is how many more readyState reads say "loading".
 	readyAfter int
 	scroll     [2]float64
+	// hopIn is how many more frame-tree reads before the document moves
+	// on by script (fakeBrowser.scripted); unreachable is the address
+	// that failed, when the document is the browser's error page.
+	hopIn       int
+	unreachable string
 }
 
 // fakeBrowser is a browser with a few tabs whose pages are fnode trees.
@@ -90,8 +99,20 @@ type fakeBrowser struct {
 	// sends a navigation to one URL on to another.
 	pages     func(url string) *fnode
 	redirects map[string]string
+	// scripted is where a page at url sends itself by script once loaded
+	// ("" for nowhere), hopReads frame-tree reads after it loads; fails
+	// is the browser error of a URL that can't be loaded.
+	scripted func(url string) string
+	hopReads int
+	fails    map[string]string
 	// eval answers isolated-world scripts the fake doesn't know.
 	eval func(tab *ftab, expr string) (any, error)
+	// challenge is what jsPageInfo reports of a Cloudflare challenge
+	// widget on a page, by URL (PROJ-120); none: null.
+	challenge map[string]map[string]any
+	// intercept, if set, answers any method on a tab before the fake does
+	// (an injected refusal, say), when it says it handled it.
+	intercept func(tab *ftab, m cdptest.Message) (res any, handled bool, err error)
 	// call answers methods the fake doesn't know (phase 2's DOM and Input).
 	call func(tab *ftab, m cdptest.Message) (res any, handled bool, err error)
 	// maxNodes makes the DOM snapshot claim this many nodes, if set.
@@ -103,6 +124,10 @@ type fakeBrowser struct {
 	inputs  map[*ftab]*fakeInput
 	// onInput is called (with the fake locked) on each input event.
 	onInput func(typ string)
+	// onFunction is called (with the fake locked) each time one of act's
+	// isolated-world scripts runs on an element, by its marker, before it
+	// answers: a test changes the page at an exact point with it.
+	onFunction func(marker string)
 	// reuseIDs makes navigations start context numbers again, as a new
 	// renderer does; mainRuns counts code that ran in a page's own world.
 	reuseIDs bool
@@ -181,6 +206,11 @@ func (fb *fakeBrowser) handle(m cdptest.Message) (any, error) {
 	if tb != nil && tb.stuck && rendererMethod(m.Method) {
 		return nil, cdptest.NoReply
 	}
+	if fb.intercept != nil && tb != nil {
+		if res, ok, err := fb.intercept(tb, m); ok {
+			return res, err
+		}
+	}
 	switch m.Method {
 	case "Target.getTargets":
 		var infos []map[string]any
@@ -242,7 +272,18 @@ func (fb *fakeBrowser) handle(m cdptest.Message) (any, error) {
 	}
 	switch m.Method {
 	case "Page.getFrameTree":
-		return map[string]any{"frameTree": map[string]any{"frame": map[string]any{"id": "F-" + tb.id, "loaderId": tb.loader, "url": strings.SplitN(tb.url, "#", 2)[0]}}}, nil
+		if tb.hopIn > 0 {
+			if tb.hopIn--; tb.hopIn == 0 && fb.scripted != nil {
+				// location.replace: the entry is replaced.
+				fb.go_(tb, fb.scripted(tb.url))
+				tb.history[tb.at] = tb.url
+			}
+		}
+		frame := map[string]any{"id": "F-" + tb.id, "loaderId": tb.loader, "url": strings.SplitN(tb.url, "#", 2)[0]}
+		if tb.unreachable != "" {
+			frame["unreachableUrl"] = tb.unreachable
+		}
+		return map[string]any{"frameTree": map[string]any{"frame": frame}}, nil
 	case "Page.createIsolatedWorld":
 		fb.nextCtx++
 		for strings.HasSuffix(fb.worlds[fb.nextCtx], "/main") && strings.HasPrefix(fb.worlds[fb.nextCtx], tb.id+"/"+tb.loader) {
@@ -267,9 +308,17 @@ func (fb *fakeBrowser) handle(m cdptest.Message) (any, error) {
 		return map[string]any{"nodes": axTree(tb.doc)}, nil
 	case "Page.navigate":
 		url, _ := p["url"].(string)
-		fb.go_(tb, url)
 		tb.history = append(tb.history[:tb.at+1], url)
 		tb.at = len(tb.history) - 1
+		if doc, frag, ok := strings.Cut(url, "#"); ok && frag != "" && doc == strings.SplitN(tb.url, "#", 2)[0] {
+			// Same document: no loader.
+			tb.url = url
+			return map[string]any{"frameId": "F-" + tb.id}, nil
+		}
+		fb.go_(tb, url)
+		if tb.unreachable != "" {
+			return map[string]any{"frameId": "F-" + tb.id, "loaderId": tb.loader, "errorText": fb.fails[tb.unreachable]}, nil
+		}
 		return map[string]any{"frameId": "F-" + tb.id, "loaderId": tb.loader}, nil
 	case "Page.reload":
 		fb.go_(tb, tb.url)
@@ -309,6 +358,12 @@ func (fb *fakeBrowser) go_(tb *ftab, url string) {
 	tb.url = url
 	tb.title = "Page " + url
 	tb.loader = fmt.Sprintf("L-%d", time.Now().UnixNano())
+	tb.hopIn, tb.unreachable = 0, ""
+	if _, ok := fb.fails[url]; ok {
+		tb.url, tb.title, tb.unreachable = "chrome-error://chromewebdata/", "", url
+	} else if fb.scripted != nil && fb.scripted(url) != "" {
+		tb.hopIn = max(fb.hopReads, 1)
+	}
 	tb.doc = fb.pages(url)
 	number(tb.doc)
 	if fb.reuseIDs {
@@ -356,7 +411,7 @@ func (fb *fakeBrowser) evaluate(tb *ftab, expr string) (any, error) {
 		if fb.front == tb.id {
 			vis = "visible"
 		}
-		return map[string]any{"url": tb.url, "title": tb.title, "ready": ready, "visibility": vis, "w": 1280, "h": 800, "x": tb.scroll[0], "y": tb.scroll[1]}, nil
+		return map[string]any{"url": tb.url, "title": tb.title, "ready": ready, "visibility": vis, "w": 1280, "h": 800, "x": tb.scroll[0], "y": tb.scroll[1], "cf": fb.challenge[tb.url]}, nil
 	case strings.Contains(expr, "/*bp:visibility*/"):
 		if fb.front == tb.id {
 			return "visible", nil
@@ -408,8 +463,11 @@ func (fb *fakeBrowser) snapshot(tb *ftab, p map[string]any) any {
 	var styles [][]int
 	var bounds [][4]float64
 	var paints []int
-	var walk func(n *fnode, p int)
-	walk = func(n *fnode, p int) {
+	var walk func(n *fnode, p int, cursor string)
+	walk = func(n *fnode, p int, cursor string) {
+		if n.cursor != "" {
+			cursor = n.cursor
+		}
 		i := len(parent)
 		parent = append(parent, p)
 		switch n.tag {
@@ -443,7 +501,7 @@ func (fb *fakeBrowser) snapshot(tb *ftab, p map[string]any) any {
 			var st []int
 		styles:
 			for _, name := range names {
-				v := map[string]string{"display": n.display, "visibility": n.visib, "pointer-events": n.pointer, "z-index": n.zIndex}
+				v := map[string]string{"display": n.display, "visibility": n.visib, "pointer-events": n.pointer, "z-index": n.zIndex, "cursor": cursor}
 				val, ok := v[name.(string)]
 				switch {
 				case !ok:
@@ -458,10 +516,10 @@ func (fb *fakeBrowser) snapshot(tb *ftab, p map[string]any) any {
 			paints = append(paints, n.paint)
 		}
 		for _, k := range n.kids {
-			walk(k, i)
+			walk(k, i, cursor)
 		}
 	}
-	walk(tb.doc, -1)
+	walk(tb.doc, -1, "auto")
 	layout := map[string]any{"nodeIndex": lnode, "styles": styles, "bounds": bounds}
 	if inc, _ := p["includePaintOrder"].(bool); inc {
 		layout["paintOrders"] = paints
@@ -527,6 +585,9 @@ type fixture struct {
 	fb    *fakeBrowser
 	sess  sessions.Session
 	who   Caller
+	// pauses are act's human-pace pauses, which the fixture skips.
+	pauseMu sync.Mutex
+	pauses  []time.Duration
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -566,7 +627,18 @@ func newFixture(t *testing.T) *fixture {
 	}
 	tools := New(m, log)
 	tools.quick, tools.slow, tools.poll, tools.settle = 1500*time.Millisecond, 1500*time.Millisecond, 10*time.Millisecond, 0
-	return &fixture{t: t, m: m, tools: tools, fb: fb, sess: s, who: Caller{TokenID: "tok", Agent: "claude"}}
+	tools.coverWait, tools.coverPoll = 30*time.Millisecond, 10*time.Millisecond
+	tools.chainQuiet, tools.chainPoll, tools.chainCap = 20*time.Millisecond, 5*time.Millisecond, time.Second
+	f := &fixture{t: t, m: m, tools: tools, fb: fb, sess: s, who: Caller{TokenID: "tok", Agent: "claude"}}
+	// Human pace with a fixed seed, its pauses noted and skipped.
+	tools.newMotion = func() *motion.Motion { return motion.New(1) }
+	tools.pause = func(ctx context.Context, d time.Duration) error {
+		f.pauseMu.Lock()
+		f.pauses = append(f.pauses, d)
+		f.pauseMu.Unlock()
+		return ctx.Err()
+	}
+	return f
 }
 
 // session is the current state of the fixture's session.

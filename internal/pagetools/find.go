@@ -103,6 +103,7 @@ func (t *Tools) Find(ctx context.Context, s sessions.Session, who Caller, in Fin
 			}
 		}
 		c.note("Searched the page")
+		c.noteChallenge(p.cf)
 		trailer := fmt.Sprintf("%d of %d matches.", len(out), total)
 		switch {
 		case total == 0:

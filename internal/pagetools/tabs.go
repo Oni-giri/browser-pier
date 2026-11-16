@@ -67,6 +67,9 @@ func (t *Tools) Tabs(ctx context.Context, s sessions.Session, who Caller, in Tab
 			var r struct {
 				TargetID string `json:"targetId"`
 			}
+			if url != "about:blank" {
+				t.openingDirectly(ctx, s, url)
+			}
 			if err := c.browser(ctx, "Target.createTarget", map[string]any{"url": url}, &r); err != nil {
 				return "", err
 			}
@@ -81,7 +84,7 @@ func (t *Tools) Tabs(ctx context.Context, s sessions.Session, who Caller, in Tab
 				return "", err
 			}
 			if url != "about:blank" {
-				if _, _, err := c.waitLoad(ctx, "", "", "", false); err != nil {
+				if _, _, err := c.waitLoad(ctx, "", "", "", false, time.Now().Add(navigateTimeout)); err != nil {
 					return "", err
 				}
 			}

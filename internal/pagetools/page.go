@@ -49,6 +49,11 @@ type item struct {
 	group int
 	// label marks the text of a <label>; its ref is the label itself.
 	label bool
+	// parent is the nearest item enclosing this one in the DOM, plus one
+	// (0: none), which a diff shows a changed line under (linkParents).
+	parent int
+	// key is itemKey's, once worked out for a kept list (compact).
+	key uint64
 }
 
 // group is a navigation landmark or a menu.
@@ -73,6 +78,8 @@ type page struct {
 	// axRead is false when the page was too large for the AX tree: items
 	// are text only, from the DOM snapshot.
 	axRead bool
+	// cf is set when the page is a Cloudflare challenge (PROJ-120).
+	cf *cfInfo
 }
 
 // controlRoles are the AX roles shown as controls, with a ref.
@@ -86,8 +93,9 @@ var controlRoles = map[string]bool{
 
 // snapshotStyles are the computed styles asked of DOMSnapshot.captureSnapshot, in order:
 // display and visibility first, as dom.shown expects; pointer-events and
-// z-index tell an iframe that clicks would land on (see markCovered).
-var snapshotStyles = []string{"display", "visibility", "pointer-events", "z-index"}
+// z-index tell an iframe that clicks would land on (see markCovered);
+// cursor tells a control built from a div (styleCursor, findGenerics).
+var snapshotStyles = []string{"display", "visibility", "pointer-events", "z-index", "cursor"}
 
 type rareStrings struct {
 	Index []int `json:"index"`
@@ -500,10 +508,15 @@ var errBusy = &Error{Status: http.StatusServiceUnavailable, Msg: "BrowserPier is
 
 // readSlot takes one of the whole-page read slots (maxReads), shared by
 // every session's snapshots, finds and content calls, waiting at most
-// readWait; release gives it back. Hold it for as long as the page's
-// answer is held in memory, rendering included.
+// readWait (or the call's shorter slotWait); release gives it back. Hold
+// it for as long as the page's answer is held in memory, rendering
+// included.
 func (c *call) readSlot(ctx context.Context) (release func(), err error) {
-	wait := time.NewTimer(c.t.readWait)
+	d := c.t.readWait
+	if c.slotWait > 0 {
+		d = min(d, c.slotWait)
+	}
+	wait := time.NewTimer(d)
 	defer wait.Stop()
 	select {
 	case c.t.reads <- struct{}{}:
@@ -520,6 +533,10 @@ func (c *call) readSlot(ctx context.Context) (release func(), err error) {
 // errTooLarge is snapshot's answer on a page past the size cap.
 var errTooLarge = &Error{Status: 422, Msg: "page too large to snapshot; use find"}
 
+// errNoDocument: the DOM snapshot found no document, as between a
+// navigation's start and its new document.
+var errNoDocument = &Error{Status: 502, Msg: "the page has no document yet; try again"}
+
 // readDOM takes the DOM snapshot of the target's top document.
 func (c *call) readDOM(ctx context.Context) (*dom, error) {
 	var s domSnapshot
@@ -530,7 +547,7 @@ func (c *call) readDOM(ctx context.Context) (*dom, error) {
 		return nil, err
 	}
 	if len(s.Documents) == 0 || len(s.Documents[0].Nodes.BackendNodeID) == 0 {
-		return nil, &Error{Status: 502, Msg: "the page has no document yet; try again"}
+		return nil, errNoDocument
 	}
 	return indexDOM(&s), nil
 }
@@ -559,9 +576,11 @@ type pageInfo struct {
 	H          float64 `json:"h"`
 	X          float64 `json:"x"`
 	Y          float64 `json:"y"`
+	// CF is set on a Cloudflare challenge page (PROJ-120).
+	CF *cfInfo `json:"cf"`
 }
 
-const jsPageInfo = `/*bp:info*/ ({url: location.href, title: document.title, ready: document.readyState, visibility: document.visibilityState, w: innerWidth, h: innerHeight, x: scrollX, y: scrollY})`
+const jsPageInfo = `/*bp:info*/ ({url: location.href, title: document.title, ready: document.readyState, visibility: document.visibilityState, w: innerWidth, h: innerHeight, x: scrollX, y: scrollY, cf: ` + jsChallenge + `})`
 
 func (c *call) info(ctx context.Context) (pageInfo, error) {
 	var pi pageInfo
@@ -585,7 +604,7 @@ func (c *call) read(ctx context.Context, needAX bool) (*page, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &page{url: pi.URL, title: pi.Title, frame: c.frame, loader: c.loader}
+	p := &page{url: pi.URL, title: pi.Title, frame: c.frame, loader: c.loader, cf: pi.CF}
 	view := [4]float64{pi.X, pi.Y, pi.W, pi.H}
 	if len(d.s.Documents[0].Nodes.BackendNodeID) > maxDOMNodes {
 		if needAX {
@@ -613,6 +632,11 @@ func intersects(box, view [4]float64) bool {
 
 // join walks the AX tree in document order and builds the page's items.
 //
+// A generic control (findGenerics) is a control line; the text inside it
+// isn't a line of its own when its name shows it whole, and is kept as
+// text otherwise (a long one's name is cut), so nothing is lost or said
+// twice.
+//
 // Excluded: AX-ignored nodes, nodes that are display:none or
 // visibility:hidden (not laid out, or so by their computed style), and
 // nodes with a zero-size box. Kept: everything else, including text a
@@ -625,15 +649,23 @@ func join(ctx context.Context, nodes []axNode, d *dom, view [4]float64) ([]item,
 	for i := range nodes {
 		byID[nodes[i].NodeID] = &nodes[i]
 	}
+	gs, err := findGenerics(ctx, nodes, d)
+	if err != nil {
+		return nil, nil, false, err
+	}
 	var out []item
-	runs := map[int]*run{}
+	// Runs are keyed by their block (or label), and by the generic
+	// control they are in (its item's index + 1; 0 for none).
+	type runKey struct{ gen, key int }
+	runs := map[runKey]*run{}
 	var all []*run
 	budget := textBudget{left: maxPageText}
 	groups := map[int]*group{}
+	prunedAt := map[int]int{} // a generic the AX tree leaves out: its item's index + 1
 	visited := 0
 	var stop error
-	var walk func(n *axNode, tier int, inMain, inControl bool, grp int, label int64)
-	walk = func(n *axNode, tier int, inMain, inControl bool, grp int, label int64) {
+	var walk func(n *axNode, tier int, inMain, inControl bool, grp int, label int64, gen int)
+	walk = func(n *axNode, tier int, inMain, inControl bool, grp int, label int64, gen int) {
 		if visited++; visited%checkEvery == 0 && stop == nil {
 			stop = ctx.Err()
 		}
@@ -671,6 +703,19 @@ func join(ctx context.Context, nodes []axNode, d *dom, view [4]float64) ([]item,
 			}
 			return tierRest
 		}
+		addGeneric := func(gi int, backend int64) int {
+			box, _ := d.shown(gi)
+			it := item{control: true, backend: backend, role: "generic", name: gs.names[gi], tier: tierOf(box)}
+			if grp != 0 {
+				it.group = grp
+				groups[grp].controls++
+			}
+			out = append(out, it)
+			return len(out)
+		}
+		if _, ok := gs.names[ni]; ok && hasDOM && gen == 0 && !inControl && role != "StaticText" {
+			gen = addGeneric(ni, n.Backend)
+		}
 		switch {
 		case n.Ignored || !hasDOM:
 		case role == "Iframe" || role == "iframe":
@@ -691,6 +736,17 @@ func join(ctx context.Context, nodes []axNode, d *dom, view [4]float64) ([]item,
 			inControl = true
 		case role == "StaticText" && !inControl:
 			box, ok := d.shown(ni)
+			in := gen
+			if ok && in == 0 {
+				if o := gs.prunedOwner(ni); o >= 0 {
+					if _, isGen := gs.names[o]; isGen {
+						if in = prunedAt[o]; in == 0 {
+							in = addGeneric(o, d.s.Documents[0].Nodes.BackendNodeID[o])
+							prunedAt[o] = in
+						}
+					}
+				}
+			}
 			if !ok || budget.left <= 0 {
 				budget.cut = budget.cut || ok
 				break
@@ -709,10 +765,10 @@ func join(ctx context.Context, nodes []axNode, d *dom, view [4]float64) ([]item,
 			} else {
 				ref = d.s.Documents[0].Nodes.BackendNodeID[key]
 			}
-			r := runs[key]
+			r := runs[runKey{in, key}]
 			if r == nil || out[r.at].tier != tierOf(box) {
-				r = &run{at: len(out)}
-				runs[key] = r
+				r = &run{at: len(out), gen: in}
+				runs[runKey{in, key}] = r
 				all = append(all, r)
 				out = append(out, item{backend: ref, tier: tierOf(box), label: label != 0})
 			}
@@ -720,24 +776,29 @@ func join(ctx context.Context, nodes []axNode, d *dom, view [4]float64) ([]item,
 		}
 		for _, id := range n.ChildIDs {
 			if c := byID[id]; c != nil {
-				walk(c, tier, inMain, inControl, grp, label)
+				walk(c, tier, inMain, inControl, grp, label, gen)
 			}
 		}
 	}
 	for i := range nodes {
 		if nodes[i].ParentID == "" {
-			walk(&nodes[i], tierRest, false, false, 0, 0)
+			walk(&nodes[i], tierRest, false, false, 0, 0, 0)
 		}
 	}
 	if stop != nil {
 		return nil, nil, false, stop
 	}
 	for _, r := range all {
+		if r.gen > 0 && fitsLine(out[r.gen-1].name) {
+			continue // the generic's line says it all
+		}
 		out[r.at].text = r.String()
 	}
 	out = slices.DeleteFunc(out, func(it item) bool { return !it.control && !it.iframe && it.text == "" })
 	markCovered(out, d)
-	return dropLabelEchoes(out), groups, budget.cut || d.cut, nil
+	out = dropLabelEchoes(out)
+	linkParents(out, d)
+	return out, groups, budget.cut || d.cut, nil
 }
 
 // underFrame is the state of a control an iframe covers.
@@ -834,19 +895,11 @@ func markCovered(items []item, d *dom) {
 // the DOM snapshot tells: its pointer-events aren't none, and neither it
 // nor an ancestor has a negative z-index (see markCovered).
 func (d *dom) takesClicks(i int) bool {
-	st := d.s.Documents[0].Layout.Styles
-	style := func(ni, k int) string {
-		li, ok := d.layout[ni]
-		if !ok || li >= len(st) || k >= len(st[li]) {
-			return ""
-		}
-		return d.str(st[li][k])
-	}
-	if style(i, 2) == "none" {
+	if d.style(i, 2) == "none" {
 		return false
 	}
 	for p := i; p >= 0; p = d.parent(p) {
-		if strings.HasPrefix(style(p, 3), "-") {
+		if strings.HasPrefix(d.style(p, 3), "-") {
 			return false
 		}
 	}
@@ -856,8 +909,9 @@ func (d *dom) takesClicks(i int) bool {
 // run gathers a block's text, joined once at the end (joining as it grew
 // would cost the square of its length).
 type run struct {
-	at int // index in the items
-	b  strings.Builder
+	at  int // index in the items
+	gen int // the generic control it is in: its index + 1, 0 for none
+	b   strings.Builder
 }
 
 func (r *run) String() string { return r.b.String() }
@@ -888,7 +942,7 @@ func (tb *textBudget) add(r *run, text string) {
 func dropLabelEchoes(items []item) []item {
 	names := map[string]bool{}
 	for _, it := range items {
-		if it.control {
+		if it.control && it.role != "generic" { // a generic has no label
 			names[strings.ToLower(strings.Join(strings.Fields(it.name), " "))] = true
 		}
 	}
@@ -1005,6 +1059,7 @@ func textOnly(ctx context.Context, d *dom, view [4]float64) ([]item, bool, error
 		out[r.at].text = r.String()
 	}
 	out = slices.DeleteFunc(out, func(it item) bool { return it.text == "" })
+	linkParents(out, d)
 	return out, budget.cut || d.cut, nil
 }
 

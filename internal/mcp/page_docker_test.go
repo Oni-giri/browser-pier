@@ -4,6 +4,10 @@ package mcp
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -28,11 +32,17 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
-// TestAgentLogsInWithPageTools is scenario 15: a scripted MCP client
-// signs in to the test site in API mode with only the page tools
-// (navigate, snapshot, act, wait_for, find), then stops the browser,
-// starts it again and is still signed in.
-func TestAgentLogsInWithPageTools(t *testing.T) {
+// pageEnv is a real browser for an API-mode profile, an MCP endpoint in
+// front of it and a client session with a token for every profile.
+type pageEnv struct {
+	m    *sessions.Manager
+	cs   *sdk.ClientSession
+	name string // the profile
+	host string // how the browser reaches this machine
+}
+
+func newPageEnv(t *testing.T, prefix string) pageEnv {
+	t.Helper()
 	image := os.Getenv("BROWSERPIER_TEST_IMAGE")
 	if image == "" {
 		t.Skip("BROWSERPIER_TEST_IMAGE not set; run `make test-docker`")
@@ -69,7 +79,7 @@ func TestAgentLogsInWithPageTools(t *testing.T) {
 		}
 		m.Close()
 	})
-	name := fmt.Sprintf("p%d", time.Now().UnixNano()%1e9)
+	name := fmt.Sprintf("%s%d", prefix, time.Now().UnixNano()%1e9)
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", "browserpier-"+name).Run() })
 	p := profiles.New(name)
 	p.DefaultMode = profiles.ModeAPI
@@ -102,10 +112,18 @@ func TestAgentLogsInWithPageTools(t *testing.T) {
 		}
 		host = strings.TrimSpace(string(out))
 	}
-	site := browsertest.NewSite(t, host)
-
 	f := &fixture{t: t, srv: srv}
-	cs := f.connect(secret, versions[0], nil)
+	return pageEnv{m: m, cs: f.connect(secret, versions[0], nil), name: name, host: host}
+}
+
+// TestAgentLogsInWithPageTools is scenario 15: a scripted MCP client
+// signs in to the test site in API mode with only the page tools
+// (navigate, snapshot, act, wait_for, find), then stops the browser,
+// starts it again and is still signed in.
+func TestAgentLogsInWithPageTools(t *testing.T) {
+	env := newPageEnv(t, "p")
+	m, cs, name := env.m, env.cs, env.name
+	site := browsertest.NewSite(t, env.host)
 	tool := func(name string, args map[string]any) string {
 		t.Helper()
 		res, out := call(t, cs, name, args)
@@ -136,7 +154,7 @@ func TestAgentLogsInWithPageTools(t *testing.T) {
 	if strings.Contains(out, "hunter2") {
 		t.Errorf("the password is in act's result:\n%s", out)
 	}
-	if out := tool("wait_for", map[string]any{"session_id": id, "text": "Signed in"}); out != "ok" {
+	if out := tool("wait_for", map[string]any{"session_id": id, "text": "Signed in"}); !strings.HasPrefix(out, "waited ") && !strings.HasPrefix(out, "already true when wait started: ") {
 		t.Fatalf("wait_for: %s (rejected: %s)", out, site.Rejected())
 	}
 	if site.Issued() == "" {
@@ -178,5 +196,67 @@ func TestAgentLogsInWithPageTools(t *testing.T) {
 	res, out = call(t, cs, "page_content", map[string]any{"session_id": id, "format": "screenshot"})
 	if _, ok := res.Content[len(res.Content)-1].(*sdk.ImageContent); res.IsError || !ok {
 		t.Errorf("screenshot: %s", out)
+	}
+}
+
+// TestAgentUploadsWithPageTools is PROJ-117 end to end over MCP: an agent
+// with no CDP client of its own puts a file in the session with
+// upload_file, sets it on a form's file input with act's upload step and
+// sends the form; the site gets the same bytes.
+func TestAgentUploadsWithPageTools(t *testing.T) {
+	env := newPageEnv(t, "up")
+	site := browsertest.NewPageSite(t, env.host)
+	tool := func(name string, args map[string]any) string {
+		t.Helper()
+		res, out := call(t, env.cs, name, args)
+		if res.IsError {
+			t.Fatalf("%s %v: %s", name, args, out)
+		}
+		return out
+	}
+	tool("start_browser", map[string]any{"profile": env.name})
+	live, _ := env.m.Live(env.name)
+	id := live.ID
+	content := make([]byte, 200<<10)
+	if _, err := rand.Read(content); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(content)
+	out := tool("upload_file", map[string]any{"session_id": id, "name": "invoice..v2.pdf", "content_base64": base64.StdEncoding.EncodeToString(content)})
+	if !strings.Contains(out, "name: invoice..v2.pdf") {
+		t.Fatalf("upload_file: %s", out)
+	}
+	tool("navigate", map[string]any{"session_id": id, "url": site.URL + "/upload"})
+	snap := tool("snapshot", map[string]any{"session_id": id})
+	ref := func(what string) string {
+		t.Helper()
+		m := regexp.MustCompile(`(?m)^([a-z][a-z0-9]e[0-9]+) ` + regexp.QuoteMeta(what)).FindStringSubmatch(snap)
+		if m == nil {
+			t.Fatalf("no %s in\n%s", what, snap)
+		}
+		return m[1]
+	}
+	out = tool("act", map[string]any{"session_id": id, "steps": []any{
+		map[string]any{"action": "upload", "ref": ref(`button "Document"`), "files": []string{"invoice..v2.pdf"}},
+		map[string]any{"action": "click", "ref": ref(`button "Send"`)},
+	}})
+	if !strings.Contains(out, "uploaded 1 file to") {
+		t.Errorf("act: %s", out)
+	}
+	if out := tool("wait_for", map[string]any{"session_id": id, "text": "Uploaded"}); !strings.HasPrefix(out, "waited ") && !strings.HasPrefix(out, "already true when wait started: ") {
+		t.Fatalf("wait_for: %s", out)
+	}
+	got := site.Uploads()
+	if len(got) != 1 || got[0].Field != "doc" || got[0].Name != "invoice..v2.pdf" || got[0].Size != int64(len(content)) || got[0].SHA256 != hex.EncodeToString(sum[:]) {
+		t.Errorf("the site got %+v, want invoice..v2.pdf, %d bytes, sha256 %x", got, len(content), sum)
+	}
+	// A button that opens a chooser itself is refused, saying what to do.
+	tool("navigate", map[string]any{"session_id": id, "url": site.URL + "/upload"})
+	snap = tool("snapshot", map[string]any{"session_id": id})
+	res, msg := call(t, env.cs, "act", map[string]any{"session_id": id, "steps": []any{
+		map[string]any{"action": "upload", "ref": ref(`button "Choose a file"`), "files": []string{"invoice..v2.pdf"}},
+	}})
+	if !res.IsError || !strings.Contains(msg, "file_upload handoff") {
+		t.Errorf("a chooser button: %s", msg)
 	}
 }

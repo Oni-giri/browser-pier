@@ -3,18 +3,37 @@ package pagetools
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/url"
 	"strings"
 	"time"
+
+	"golang.org/x/net/idna"
 
 	"github.com/Oni-giri/browser-pier/internal/cdp"
 	"github.com/Oni-giri/browser-pier/internal/fence"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
-// navigateTimeout is how long navigate waits for the page to load.
+// navigateTimeout is how long navigate waits for the page to load,
+// following a chain of script redirects included.
 const navigateTimeout = 30 * time.Second
+
+// After a load, navigate watches for a script redirect (an SSO check, an
+// identity provider, its callback page's own redirect): every chainPoll
+// for chainQuiet, it looks whether the tab's document changed or went back
+// to loading; if so it waits for that one to load and watches again, for
+// at most chainCap (PROJ-121).
+const (
+	chainQuiet = 300 * time.Millisecond
+	chainPoll  = 100 * time.Millisecond
+	chainCap   = 15 * time.Second
+)
+
+// failedPageWait is how long navigate waits, after Page.navigate failed,
+// for the browser's error page to say which address failed.
+const failedPageWait = time.Second
 
 // NavigateIn is navigate's input: a URL, or an action (back, forward or
 // reload).
@@ -76,11 +95,12 @@ func (t *Tools) Navigate(ctx context.Context, s sessions.Session, who Caller, in
 				LoaderID  string `json:"loaderId"`
 				ErrorText string `json:"errorText"`
 			}
+			t.openingDirectly(ctx, s, target)
 			if err := c.renderer(ctx, c.t.slow, "Page.navigate", map[string]any{"url": target}, &r); err != nil {
 				return "", err
 			}
 			if r.ErrorText != "" {
-				return "", &Error{Status: 502, Msg: "couldn't open the page: " + fence.Wrap("browser error", r.ErrorText)}
+				return "", c.openFailed(ctx, before, target, r.ErrorText)
 			}
 			want = r.LoaderID
 			what = "Opened " + origin(target)
@@ -115,17 +135,42 @@ func (t *Tools) Navigate(ctx context.Context, s sessions.Session, who Caller, in
 				return "", err
 			}
 		}
-		pi, loaded, err := c.waitLoad(ctx, before, beforeURL, want, target == "" || want != "")
+		// Page.navigate gives no loader for a move within the document
+		// (only the fragment changed): nothing to load or wait out.
+		newDoc := target == "" || want != ""
+		deadline := time.Now().Add(c.t.navWait)
+		pi, loaded, err := c.waitLoad(ctx, before, beforeURL, want, newDoc, deadline)
 		if err != nil {
 			return "", err
 		}
+		end := chainSettled
+		if loaded && newDoc {
+			if pi, end, err = c.followChain(ctx, pi, deadline); err != nil {
+				return "", err
+			}
+		}
 		c.st.refs.dropStale(c.tgt.ID, c.loader)
+		if c.unreachable != "" && c.loader != before {
+			// The tab moved to the browser's error page. (Still on the
+			// error page it was on, its address is no news of this one.)
+			c.note(what + ", but the page couldn't be loaded")
+			return "", failedAt(target, c.unreachable, "")
+		}
 		c.note(what)
 		trailer := ""
-		if !loaded {
-			trailer = "The page was still loading after 30 s."
+		switch {
+		case !loaded:
+			trailer = "The page was still loading after " + seconds(c.t.navWait, true) + "."
+		case end == chainCapped:
+			trailer = fmt.Sprintf("The page was still redirecting after %d s.", int(c.t.chainCap.Seconds()))
+		case end == chainTimedOut:
+			trailer = "The page was still redirecting after " + seconds(c.t.navWait, true) + "."
+		}
+		if pi.URL == "" {
+			pi.URL = c.url // a document still on its way
 		}
 		body := header(&page{url: pi.URL, title: pi.Title})
+		c.noteChallenge(pi.CF)
 		if loaded && target != "" && !sameAddress(target, pi.URL) {
 			// Inside the fence: the address is the agent's own, but the
 			// line sits among the page's.
@@ -133,6 +178,29 @@ func (t *Tools) Navigate(ctx context.Context, s sessions.Session, who Caller, in
 		}
 		return c.result("page", body, trailer), nil
 	})
+}
+
+// openingDirectly lets the page an agent opens by its address load even
+// when its host is on the ad and tracker list: the session's forwarder
+// lets that host and its subdomains through from now on (PROJ-119, SPEC
+// §3 Egress). What the page then loads from other listed hosts is still
+// blocked. Failing to tell the browser isn't fatal: the page may be
+// blocked, as it would be without this.
+func (t *Tools) openingDirectly(ctx context.Context, s sessions.Session, raw string) {
+	if !s.BlockAds {
+		return
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return
+	}
+	host := u.Hostname()
+	if a, err := idna.Lookup.ToASCII(host); err == nil {
+		host = a
+	}
+	if err := t.m.ExemptHost(ctx, s.ID, host); err != nil {
+		t.log.Debug("couldn't exempt a host from the ad and tracker list", "session", s.ID, "err", err)
+	}
 }
 
 // sameAddress reports whether the page landed where it was sent: the same
@@ -225,11 +293,13 @@ func addressRest(u *url.URL) string {
 }
 
 // waitLoad polls the active tab until a new document (want, if known;
-// else any but before, or a new URL, when newDoc) has loaded, or
-// navigateTimeout passes. It polls Page.getFrameTree and
-// document.readyState: no events, no enable.
-func (c *call) waitLoad(ctx context.Context, before, beforeURL, want string, newDoc bool) (pageInfo, bool, error) {
-	deadline := time.Now().Add(navigateTimeout)
+// else any but before, or a new URL, when newDoc) has loaded, or the
+// deadline passes. It polls Page.getFrameTree and document.readyState: no
+// events, no enable.
+//
+// A document after want counts too: want already redirected on by
+// script, before it was looked at, and followChain follows the rest.
+func (c *call) waitLoad(ctx context.Context, before, beforeURL, want string, newDoc bool, deadline time.Time) (pageInfo, bool, error) {
 	for {
 		err := c.refresh(ctx)
 		if err != nil {
@@ -237,7 +307,7 @@ func (c *call) waitLoad(ctx context.Context, before, beforeURL, want string, new
 		}
 		changed := !newDoc || c.loader != before || c.url != beforeURL
 		if want != "" {
-			changed = c.loader == want
+			changed = c.loader == want || c.loader != before
 		}
 		var pi pageInfo
 		if changed {
@@ -263,4 +333,130 @@ func (c *call) waitLoad(ctx context.Context, before, beforeURL, want string, new
 		case <-time.After(c.t.poll):
 		}
 	}
+}
+
+// chainEnd is how navigate's watch for script redirects ended.
+type chainEnd int
+
+const (
+	chainSettled  chainEnd = iota // a document stayed put for chainQuiet
+	chainCapped                   // still redirecting after chainCap
+	chainTimedOut                 // still redirecting when navigate's time ran out
+)
+
+// followChain waits out a chain of script redirects after a load: while
+// the tab's document changes (or goes back to loading) within chainQuiet
+// of loading, it waits for the next one to load, until one stays put, for
+// at most chainCap and never past the deadline. It answers with the last
+// document's page info. Like waitLoad, it only polls; the caller's context
+// (a handoff, a stop) ends it at once.
+func (c *call) followChain(ctx context.Context, pi pageInfo, deadline time.Time) (pageInfo, chainEnd, error) {
+	capAt, capped := time.Now().Add(c.t.chainCap), chainCapped
+	if deadline.Before(capAt) {
+		capAt, capped = deadline, chainTimedOut
+	}
+	for {
+		cur, moved, err := c.staysPut(ctx, deadline)
+		if err != nil {
+			return pageInfo{}, 0, err
+		}
+		if !moved {
+			return cur, chainSettled, nil
+		}
+		if cur.URL != "" {
+			pi = cur
+		}
+		if !time.Now().Before(capAt) {
+			return pi, capped, nil
+		}
+		next, loaded, err := c.waitLoad(ctx, "", "", "", false, capAt)
+		if err != nil {
+			return pageInfo{}, 0, err
+		}
+		if next.URL != "" {
+			pi = next
+		}
+		if !loaded {
+			return pi, capped, nil
+		}
+	}
+}
+
+// staysPut looks at the tab every chainPoll for chainQuiet (or until the
+// deadline): moved is true as soon as its document changes or goes back
+// to loading. Otherwise pi is the document's latest page info.
+func (c *call) staysPut(ctx context.Context, deadline time.Time) (pi pageInfo, moved bool, err error) {
+	doc := c.loader
+	quietEnd := time.Now().Add(c.t.chainQuiet)
+	if deadline.Before(quietEnd) {
+		quietEnd = deadline
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return pageInfo{}, false, ctx.Err()
+		case <-time.After(c.t.chainPoll):
+		}
+		pi = pageInfo{}
+		err := c.eval(ctx, jsPageInfo, &pi)
+		switch {
+		case errors.Is(err, cdp.ErrWorldGone):
+			return pageInfo{}, true, nil // the document went as it was read
+		case err != nil:
+			return pageInfo{}, false, err
+		case c.loader != doc || pi.Ready == "loading":
+			return pi, true, nil
+		case !time.Now().Before(quietEnd):
+			return pi, false, nil
+		}
+	}
+}
+
+// openFailed is the error for a Page.navigate that failed. When the
+// browser's error page names another address than the one asked for (a
+// redirect led there), it says which. net::ERR_ABORTED (a download, a 204)
+// leaves the tab where it was, with no error page to wait for.
+func (c *call) openFailed(ctx context.Context, before, target, errorText string) error {
+	if errorText == "net::ERR_ABORTED" {
+		e := failedAt(target, "", errorText)
+		e.Msg += " The address gave no page to show (a download or an empty response, most likely); the tab stayed on its page."
+		return e
+	}
+	end := time.Now().Add(failedPageWait)
+	for time.Now().Before(end) {
+		f, err := c.topFrame(ctx, c.tgt)
+		if err != nil {
+			break
+		}
+		if f.LoaderID != before {
+			return failedAt(target, f.UnreachableURL, errorText)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(c.t.chainPoll):
+		}
+	}
+	return failedAt(target, "", errorText)
+}
+
+// failedAt says a navigation failed: with the browser's error, if known,
+// and the address that failed, when it isn't the one asked for. Both are
+// fenced: the address may be a redirect's, which the page chose.
+func failedAt(target, failed, errorText string) *Error {
+	var lines []string
+	if errorText != "" {
+		lines = append(lines, errorText)
+	}
+	msg := "couldn't open the page: "
+	if failed != "" && (target == "" || !sameAddress(target, failed)) {
+		lines = append(lines, "Failed at: "+capText(failed, maxHeader))
+		if target != "" {
+			msg = "couldn't open the page after a redirect: "
+		}
+	}
+	if len(lines) == 0 {
+		lines = append(lines, "the browser couldn't load the page")
+	}
+	return &Error{Status: 502, Msg: msg + fence.Wrap("browser error", strings.Join(lines, "\n"))}
 }

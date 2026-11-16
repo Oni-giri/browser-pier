@@ -34,6 +34,15 @@ type browser struct {
 	leaks  []string // credentials that reached the browser
 	// noScreen makes screenshots fail.
 	noScreen bool
+	// onInput, if set, runs as each input action does, with its path:
+	// a click that starts a download, say.
+	onInput func(path string)
+	// pageURL is the one tab's address, as /json/list and
+	// Target.getTargets answer it (a handoff's until_url watch reads the
+	// former); other messages on the browser's WebSocket are echoed.
+	pageURL string
+	// methods are the CDP methods sent on the browser's WebSocket.
+	methods []string
 }
 
 func (b *browser) handler() http.Handler {
@@ -43,7 +52,11 @@ func (b *browser) handler() http.Handler {
 		_, _ = io.WriteString(w, `{"Browser":"Chrome/156","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/abc"}`)
 	})
 	mux.HandleFunc("GET /cdp/json/list", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, `[{"id":"p1","type":"page","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/page/p1","devtoolsFrontendUrl":"/devtools/inspector.html?ws=127.0.0.1:9222/devtools/page/p1"}]`)
+		b.mu.Lock()
+		page := b.pageURL
+		b.mu.Unlock()
+		_ = json.NewEncoder(w).Encode([]map[string]string{{"id": "p1", "type": "page", "url": page,
+			"webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/p1", "devtoolsFrontendUrl": "/devtools/inspector.html?ws=127.0.0.1:9222/devtools/page/p1"}})
 	})
 	mux.HandleFunc("GET /cdp/devtools/browser/abc", func(w http.ResponseWriter, r *http.Request) {
 		b.checkLeaks(r)
@@ -56,6 +69,21 @@ func (b *browser) handler() http.Handler {
 			typ, msg, err := conn.Read(r.Context())
 			if err != nil {
 				return
+			}
+			var call struct {
+				ID     int64  `json:"id"`
+				Method string `json:"method"`
+			}
+			if json.Unmarshal(msg, &call) == nil && call.Method != "" {
+				b.mu.Lock()
+				b.methods = append(b.methods, call.Method)
+				page := b.pageURL
+				b.mu.Unlock()
+				if call.Method == "Target.getTargets" {
+					out, _ := json.Marshal(map[string]any{"id": call.ID, "result": map[string]any{"targetInfos": []map[string]any{{"targetId": "p1", "type": "page", "url": page}}}})
+					_ = conn.Write(r.Context(), typ, out)
+					continue
+				}
 			}
 			_ = conn.Write(r.Context(), typ, append([]byte("echo:"), msg...))
 		}
@@ -82,10 +110,24 @@ func (b *browser) handler() http.Handler {
 		body, _ := io.ReadAll(r.Body)
 		b.mu.Lock()
 		b.inputs = append(b.inputs, r.URL.Path+" "+string(body))
+		onInput := b.onInput
 		b.mu.Unlock()
+		if onInput != nil {
+			onInput(r.URL.Path)
+		}
 		if strings.Contains(string(body), "99999") {
 			http.Error(w, "(99999, 1) is outside the 1440x900 screen", http.StatusBadRequest)
 			return
+		}
+		if strings.Contains(string(body), "slowly") {
+			// A long human-paced action: it lasts until it's cut short.
+			select {
+			case <-r.Context().Done():
+				b.mu.Lock()
+				b.inputs = append(b.inputs, "cut short")
+				b.mu.Unlock()
+			case <-time.After(30 * time.Second):
+			}
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
@@ -275,6 +317,17 @@ func TestProfiles(t *testing.T) {
 	}
 	if code := f.call(f.all, http.MethodPost, "/api/profiles", `{"name": "y", "local_network": false}`, &p); code != http.StatusCreated || p.LocalNetwork {
 		t.Fatalf("local network off through the API: %d %+v", code, p)
+	}
+	// Ad and tracker blocking: on for new profiles; an agent may ask for
+	// it, never turn it off for good.
+	if !p.BlockAds {
+		t.Fatalf("a new profile doesn't block ads: %+v", p)
+	}
+	if code := f.call(f.all, http.MethodPost, "/api/profiles", `{"name": "z", "block_ads": false}`, nil); code != http.StatusBadRequest {
+		t.Fatalf("block_ads off through the API: %d", code)
+	}
+	if code := f.call(f.all, http.MethodPost, "/api/profiles", `{"name": "z", "block_ads": true}`, &p); code != http.StatusCreated || !p.BlockAds {
+		t.Fatalf("block_ads on through the API: %d %+v", code, p)
 	}
 	if code := f.call(f.all, http.MethodPost, "/api/profiles", `{"name": "Bad Name"}`, nil); code != http.StatusBadRequest {
 		t.Fatalf("bad name: %d", code)
@@ -620,5 +673,38 @@ func TestStartWhileHeldIsAConflict(t *testing.T) {
 	var e struct{ Error string }
 	if code := f.call(f.all, http.MethodPost, "/api/sessions", `{"profile": "google"}`, &e); code != http.StatusConflict || !strings.Contains(e.Error, "exported") {
 		t.Fatalf("start while held: %d %s", code, e.Error)
+	}
+}
+
+// TestSessionWithoutAdBlocking: an agent turns blocking off for one
+// session; the profile keeps it.
+func TestSessionWithoutAdBlocking(t *testing.T) {
+	f := newFixture(t)
+	var list []byte // none downloaded yet
+	f.m.SetBlocklist(func() []byte { return list })
+	// Without a list, a profile that blocks starts a session that blocks
+	// nothing, and says why.
+	var nl sessionJSON
+	if code := f.call(f.all, http.MethodPost, "/api/sessions", `{"profile": "github"}`, &nl); code != http.StatusCreated || nl.BlockAds || !nl.AdListMissing {
+		t.Fatalf("a start without a list: %d %+v", code, nl)
+	}
+	if code := f.call(f.all, http.MethodDelete, "/api/sessions/"+nl.ID, "", nil); code != http.StatusOK {
+		t.Fatalf("stop: %d", code)
+	}
+	list = []byte("# browserpier domain set 1\nads.example.com\n")
+	var s sessionJSON
+	if code := f.call(f.all, http.MethodPost, "/api/sessions", `{"profile": "google", "block_ads": false}`, &s); code != http.StatusCreated || s.BlockAds {
+		t.Fatalf("start without blocking: %d %+v", code, s)
+	}
+	if p, _ := f.m.Profiles().Get(context.Background(), "google"); !p.BlockAds {
+		t.Fatal("the profile's setting changed")
+	}
+	var again sessionJSON
+	if code := f.call(f.all, http.MethodPost, "/api/sessions", `{"profile": "google", "block_ads": true}`, &again); code != http.StatusOK || again.BlockAds {
+		t.Fatalf("block_ads true turned blocking back on: %d %+v", code, again)
+	}
+	var gh sessionJSON
+	if code := f.call(f.all, http.MethodPost, "/api/sessions", `{"profile": "github"}`, &gh); code != http.StatusCreated || !gh.BlockAds || gh.AdListMissing {
+		t.Fatalf("a plain start doesn't block: %d %+v", code, gh)
 	}
 }

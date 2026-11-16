@@ -58,6 +58,12 @@ func (h Hit) String() string { return h.Kind + "@" + h.Where + " " + h.Detail }
 // (click-without-move), a key event without a code (key-without-code),
 // and text that arrives with no key pressed (input-without-key).
 //
+// And files (PROJ-117): an input or change event on a file input that
+// isn't trusted (untrusted-event), and files set with no click on the
+// input or a label in the minute before (file-without-click), as
+// DOM.setFileInputFiles does; a person clicks to open the chooser, or
+// drops the files on the input.
+//
 // And printing (print): beforeprint, or the print media query matching,
 // which Page.printToPDF causes as a person's ctrl+P does.
 type Watch struct {
@@ -83,6 +89,7 @@ const watchPage = `<!doctype html><title>Watch</title>
 <label for="email">Email</label><input id="email" name="email">
 <label for="pw">Password</label><input id="pw" name="password" type="password">
 <button id="go" type="button">Continue</button>
+<label for="doc">Document</label><input id="doc" name="doc" type="file">
 <p id="out"></p>
 <script>
 (() => {
@@ -173,6 +180,22 @@ const watchPage = `<!doctype html><title>Watch</title>
   addEventListener('beforeinput', e => {
     if (e.inputType === 'insertText' && performance.now() - keyAt > 1000) report('input-without-key', 'main', e.inputType);
   }, true);
+  // Files: a person picks them in the chooser a click on the input (or
+  // its label) opened, or drops them on it; files set with no click
+  // before are file-without-click (DOM.setFileInputFiles, Playwright's
+  // setInputFiles), and the events must be trusted.
+  let fileClickAt = -1e9;
+  addEventListener('click', e => {
+    if (e.target instanceof HTMLInputElement && e.target.type === 'file' || e.target instanceof HTMLLabelElement) fileClickAt = performance.now();
+  }, true);
+  for (const type of ['input', 'change']) {
+    addEventListener(type, e => {
+      const t = e.target;
+      if (!(t instanceof HTMLInputElement) || t.type !== 'file') return;
+      if (!e.isTrusted) report('untrusted-event', 'main', 'file ' + type);
+      if (type === 'change' && performance.now() - fileClickAt > 60000) report('file-without-click', 'main', t.files.length + ' files');
+    }, true);
+  }
 })();
 </script>`
 

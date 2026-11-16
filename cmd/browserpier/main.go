@@ -23,6 +23,7 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/api"
 	"github.com/Oni-giri/browser-pier/internal/auth"
+	"github.com/Oni-giri/browser-pier/internal/blocklist"
 	"github.com/Oni-giri/browser-pier/internal/config"
 	"github.com/Oni-giri/browser-pier/internal/db"
 	"github.com/Oni-giri/browser-pier/internal/docker"
@@ -128,6 +129,18 @@ func run(log *slog.Logger) error {
 	}
 	defer mgr.Close()
 	mgr.SetGeoURL(cfg.GeoIPURL)
+	// The ad and tracker lists: what was downloaded before is read now,
+	// so browsers block from the first start; downloads happen in the
+	// background and never hold a start up.
+	lists, err := blocklist.New(filepath.Join(dataDir, "blocklists"), cfg.BlocklistURLs, log)
+	if err != nil {
+		return err
+	}
+	if err := lists.Load(); err != nil {
+		log.Warn("reading the ad and tracker lists", "err", err)
+	}
+	go lists.Run(ctx, 10*time.Minute)
+	mgr.SetBlocklist(lists.File)
 	// The addresses live viewers reach the host at are the host's own.
 	mgr.SetHostIPs(cfg.WebRTCIPs)
 	prefs := settings.New(database)
@@ -203,6 +216,7 @@ func run(log *slog.Logger) error {
 	defer func() { _ = relay.Close() }()
 	live := webrtc.NewHandler(relay, mgr, web, log)
 	handoffs := handoff.New(database, mgr, log)
+	defer handoffs.Close() // its until_url watches; the next start's sweep resumes them
 	go handoffs.Sweep(ctx, 15*time.Second)
 	agentAPI.SetHandoffs(handoffs)
 	app := ui.New(mgr, web, handoffs, prefs, log, ui.Options{
@@ -355,7 +369,9 @@ func newHandler(web *auth.Web, agentAPI *api.API, live *webrtc.Handler, handoffs
 	// MCP tools call the agent API in-process, through routes of their own.
 	apiRoutes := http.NewServeMux()
 	agentAPI.Register(apiRoutes)
-	mcp.New(apiRoutes, web, log, version).Register(mux)
+	mcpServer := mcp.New(apiRoutes, web, log, version)
+	mcpServer.SetSecrets(agentAPI.Scrubber) // filled secrets out of tool results (PROJ-125)
+	mcpServer.Register(mux)
 	if live != nil {
 		live.Register(mux)
 	}

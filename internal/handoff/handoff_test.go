@@ -22,6 +22,7 @@ import (
 	pionwebrtc "github.com/pion/webrtc/v4"
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
+	"github.com/Oni-giri/browser-pier/internal/cdp/cdptest"
 	"github.com/Oni-giri/browser-pier/internal/db"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
@@ -36,6 +37,10 @@ type fixture struct {
 	svc   *Service
 	admin *auth.Admin
 	srv   *httptest.Server
+	// cdp is the browser's CDP, which an until_url watch asks for its
+	// tabs; tabs is what its Target.getTargets answers (watch_test.go).
+	cdp  *cdptest.Browser
+	tabs *fakeTabs
 }
 
 func newFixture(t *testing.T, policy profiles.HandoffPolicy, opts auth.WebOptions) *fixture {
@@ -55,10 +60,14 @@ func newFixture(t *testing.T, policy profiles.HandoffPolicy, opts auth.WebOption
 	rt := sessionstest.New(dir)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok\n") })
-	mux.HandleFunc("GET /cdp/json/list", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, `[{"type":"page","url":"https://accounts.google.com/signin/v2?continue=https%3A%2F%2Fevil.example%2Fpay+now"}]`)
+	tabs := &fakeTabs{}
+	tabs.set(tab{ID: "T1", Typ: "page", URL: "https://accounts.google.com/signin/v2?continue=https%3A%2F%2Fevil.example%2Fpay+now"})
+	mux.HandleFunc("GET /cdp/json/list", tabs.serveList)
+	// No CDP: what the handoff reads of the browser, it reads over HTTP.
+	b := cdptest.New(func(m cdptest.Message) (any, error) {
+		return nil, cdptest.Error{Message: "not in the fake: " + m.Method}
 	})
-	rt.Control = mux
+	rt.Control = b.Handler(mux)
 	m, err := sessions.NewManager(d, rt, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +102,8 @@ func newFixture(t *testing.T, policy profiles.HandoffPolicy, opts auth.WebOption
 	// As in production, form posts from other origins are refused.
 	srv := httptest.NewServer(new(http.CrossOriginProtection).Handler(hmux))
 	t.Cleanup(srv.Close)
-	return &fixture{t: t, m: m, svc: svc, admin: admin, srv: srv}
+	t.Cleanup(svc.Close)
+	return &fixture{t: t, m: m, svc: svc, admin: admin, srv: srv, cdp: b, tabs: tabs}
 }
 
 func (f *fixture) running() sessions.Session {
@@ -790,4 +800,34 @@ func TestTURNCredentialsOnlyForTheHolder(t *testing.T) {
 		t.Fatalf("finish: %d", p.code)
 	}
 	refused(phone, "after hand-back")
+}
+
+// With an until_url, the open handoff page tells the person it hands
+// back by itself, quoting the agent's pattern escaped and shortened.
+func TestHandoffPageSaysWhenItHandsBackByItself(t *testing.T) {
+	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
+	_, token := f.openUntil(`/a<b>"c&d/` + strings.Repeat("x", 120))
+	phone := browser()
+	if p := f.do(phone, "POST", "/h/"+token+"/pin", url.Values{"pin": {"4821"}}, nil); p.code != http.StatusSeeOther {
+		t.Fatalf("right PIN: %d %s", p.code, p.body)
+	}
+	p := f.do(phone, "GET", "/h/"+token, nil, nil)
+	want := "This hands back by itself when the page reaches an address containing “/a&lt;b&gt;&#34;c&amp;d/" + strings.Repeat("x", 69) + "…”."
+	if !strings.Contains(p.body, want) {
+		t.Fatalf("the page doesn't say it hands back by itself, escaped and shortened:\n%s", p.body)
+	}
+	if strings.Contains(p.body, "<b>") {
+		t.Fatal("the pattern isn't escaped")
+	}
+
+	// Without one, it says nothing of the kind.
+	g := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
+	_, token = g.open("")
+	phone = browser()
+	if p := g.do(phone, "POST", "/h/"+token+"/pin", url.Values{"pin": {"4821"}}, nil); p.code != http.StatusSeeOther {
+		t.Fatalf("right PIN: %d %s", p.code, p.body)
+	}
+	if p := g.do(phone, "GET", "/h/"+token, nil, nil); !strings.Contains(p.body, `id="finish"`) || strings.Contains(p.body, "hands back by itself") {
+		t.Fatalf("without until_url: %s", p.body)
+	}
 }

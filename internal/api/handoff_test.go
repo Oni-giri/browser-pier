@@ -2,12 +2,14 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Oni-giri/browser-pier/internal/handoff"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
@@ -152,5 +154,115 @@ func TestWithdrawReadsAChunkedNote(t *testing.T) {
 	_ = resp.Body.Close()
 	if got, _ := f.handoffs.Get(context.Background(), h.ID); resp.StatusCode != http.StatusOK || !strings.Contains(got.Note, "not needed after all") {
 		t.Fatalf("withdraw with a chunked note: %d, note %q", resp.StatusCode, got.Note)
+	}
+}
+
+// TestHandoffUntilURL: until_url is checked, echoed, and ends the handoff
+// as done once the page navigates to a matching origin and path, with a
+// fixed note that never quotes the address.
+func TestHandoffUntilURL(t *testing.T) {
+	f := newFixture(t)
+	if err := f.web.Admin().SetPIN(context.Background(), "4821"); err != nil {
+		t.Fatal(err)
+	}
+	f.b.mu.Lock()
+	f.b.pageURL = "https://site.example/login"
+	f.b.mu.Unlock()
+	s := f.start(f.all, "google", "api")
+	path := "/api/sessions/" + s.ID + "/handoff"
+	for _, bad := range []string{
+		`"/` + strings.Repeat("a", 200) + `"`,
+		`"/acc\u0007ount"`, `"/acc\nount"`, `"/acc\u202eount"`,
+		`"/cb?code="`, `"/account#top"`, `"/"`, `"/a"`, `"https://"`, `"..."`,
+	} {
+		var e struct{ Error string }
+		if code := f.call(f.all, http.MethodPost, path, `{"reason": "sensitive_input", "until_url": `+bad+`}`, &e); code != http.StatusBadRequest || !strings.Contains(e.Error, "until_url") {
+			t.Fatalf("until_url %s: %d %q", bad, code, e.Error)
+		}
+	}
+	if live, _ := f.m.Live("google"); live.State != sessions.Running {
+		t.Fatalf("a refused handoff paused the agent: %s", live.State)
+	}
+
+	// A pattern only in the query never matches.
+	var h handoffJSON
+	if code := f.call(f.all, http.MethodPost, path, `{"reason": "sensitive_input", "until_url": "code="}`, &h); code != http.StatusCreated || h.UntilURL != "code=" {
+		t.Fatalf("create: %d %+v", code, h)
+	}
+	f.unlock(h.ID)
+	f.b.mu.Lock()
+	f.b.pageURL = "https://site.example/cb?code=1"
+	f.b.mu.Unlock()
+	var got handoffJSON
+	if code := f.call(f.all, http.MethodGet, "/api/handoffs/"+h.ID+"?wait=2", "", &got); code != http.StatusOK || got.Status != "pending" {
+		t.Fatalf("a match in the query: %d %+v", code, got)
+	}
+	// Opened, it is the person's to end now.
+	if ho, err := f.handoffs.Get(context.Background(), h.ID); err != nil {
+		t.Fatal(err)
+	} else if _, err := f.handoffs.Finish(context.Background(), ho, handoff.Cant, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// An empty one is no pattern.
+	h = handoffJSON{}
+	if code := f.call(f.all, http.MethodPost, path, `{"reason": "sensitive_input", "until_url": ""}`, &h); code != http.StatusCreated || h.UntilURL != "" {
+		t.Fatalf("create with an empty until_url: %d %+v", code, h)
+	}
+	if code := f.call(f.all, http.MethodDelete, "/api/handoffs/"+h.ID, "", &got); code != http.StatusOK {
+		t.Fatalf("withdraw: %d %+v", code, got)
+	}
+
+	f.b.mu.Lock()
+	f.b.pageURL = "https://site.example/login"
+	f.b.methods = nil
+	f.b.mu.Unlock()
+	if code := f.call(f.all, http.MethodPost, path, `{"reason": "sensitive_input", "detail": "Sign in", "until_url": "site.example/account"}`, &h); code != http.StatusCreated {
+		t.Fatalf("create: %d %+v", code, h)
+	}
+	f.unlock(h.ID) // the person opens the link: the watch looks from then
+	go func() {
+		time.Sleep(1200 * time.Millisecond)
+		f.b.mu.Lock()
+		f.b.pageURL = "https://site.example/account/home?token=s3cr3t"
+		f.b.mu.Unlock()
+	}()
+	req, _ := http.NewRequest(http.MethodGet, f.srv.URL+"/api/handoffs/"+h.ID+"?wait=30", nil)
+	req.Header.Set("Authorization", "Bearer "+f.all)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "done" || !got.Reached || got.Note != handoff.AutoNote || !strings.Contains(got.Message, "until_url") || !strings.Contains(got.Message, "re-read") {
+		t.Fatalf("after the page reached the address: %s", raw)
+	}
+	if strings.Contains(string(raw), "s3cr3t") || strings.Contains(string(raw), "/home") {
+		t.Fatalf("the answer quotes the page's address: %s", raw)
+	}
+	f.b.mu.Lock()
+	methods := f.b.methods
+	f.b.mu.Unlock()
+	if len(methods) != 0 {
+		t.Fatalf("the watch sent %v; it reads /json/list over HTTP only", methods)
+	}
+	if live, _ := f.m.Live("google"); live.State != sessions.Running {
+		t.Fatalf("browser not given back: %s", live.State)
+	}
+}
+
+// unlock does what a person opening a handoff's link does.
+func (f *fixture) unlock(id string) {
+	f.t.Helper()
+	h, err := f.handoffs.Get(context.Background(), id)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if err := f.handoffs.Unlock(context.Background(), h, "the person's browser"); err != nil {
+		f.t.Fatal(err)
 	}
 }

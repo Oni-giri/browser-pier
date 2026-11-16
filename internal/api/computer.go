@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
+	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
@@ -45,7 +46,19 @@ type computerRequest struct {
 	// Screenshot returns the screen after the action, Width wide if set.
 	Screenshot bool `json:"screenshot"`
 	Width      int  `json:"width"`
+	// Pace is human (the default: the pointer glides, aims and holds, and
+	// keys come at a typist's rhythm) or instant (PROJ-113).
+	Pace string `json:"pace"`
+	// DownloadWaitMS is how long a click or key press waits for a
+	// download it started to finish: 3,000 ms if unset, 0 not to wait,
+	// at most 30,000 (PROJ-116). When set, it is also how long it looks
+	// for one to start (files.Mark.Expect). Other actions ignore it.
+	DownloadWaitMS *int `json:"download_wait_ms"`
 }
+
+// downloads reports whether an action may start a download, so its
+// notice is looked for: a click on a link, or a key (Return on one).
+func (c computerRequest) downloads() bool { return c.Action == "click" || c.Action == "key" }
 
 // inputBody is what the control socket takes for an input action, or an
 // error saying what is missing.
@@ -56,6 +69,11 @@ func (c computerRequest) inputBody() (path string, body any, err error) {
 		}
 		return nil
 	}
+	switch c.Pace {
+	case "", "human", "instant":
+	default:
+		return "", nil, fmt.Errorf("pace %q: want human or instant", c.Pace)
+	}
 	switch c.Action {
 	case "click":
 		type click struct {
@@ -63,43 +81,48 @@ func (c computerRequest) inputBody() (path string, body any, err error) {
 			Y      int    `json:"y"`
 			Button string `json:"button,omitempty"`
 			Double bool   `json:"double,omitempty"`
+			Pace   string `json:"pace,omitempty"`
 		}
 		if err := at(); err != nil {
 			return "", nil, err
 		}
-		return "/input/click", click{*c.X, *c.Y, c.Button, c.Double}, nil
+		return "/input/click", click{*c.X, *c.Y, c.Button, c.Double, c.Pace}, nil
 	case "type":
 		return "/input/type", struct {
 			Text string `json:"text"`
-		}{c.Text}, nil
+			Pace string `json:"pace,omitempty"`
+		}{c.Text, c.Pace}, nil
 	case "scroll":
 		type scroll struct {
-			X  int `json:"x"`
-			Y  int `json:"y"`
-			DX int `json:"dx"`
-			DY int `json:"dy"`
+			X    int    `json:"x"`
+			Y    int    `json:"y"`
+			DX   int    `json:"dx"`
+			DY   int    `json:"dy"`
+			Pace string `json:"pace,omitempty"`
 		}
 		if err := at(); err != nil {
 			return "", nil, err
 		}
-		return "/input/scroll", scroll{*c.X, *c.Y, c.DX, c.DY}, nil
+		return "/input/scroll", scroll{*c.X, *c.Y, c.DX, c.DY, c.Pace}, nil
 	case "key":
 		if len(c.Keys) == 0 {
 			return "", nil, fmt.Errorf("key: want keys, like \"ctrl+l\" or [\"Tab\", \"Return\"]")
 		}
 		return "/input/key", struct {
 			Keys json.RawMessage `json:"keys"`
-		}{c.Keys}, nil
+			Pace string          `json:"pace,omitempty"`
+		}{c.Keys, c.Pace}, nil
 	case "drag":
 		type drag struct {
 			From   pointJSON `json:"from"`
 			To     pointJSON `json:"to"`
 			Button string    `json:"button,omitempty"`
+			Pace   string    `json:"pace,omitempty"`
 		}
 		if c.From == nil || c.To == nil {
 			return "", nil, fmt.Errorf("drag: want from and to, each {x, y}")
 		}
-		return "/input/drag", drag{*c.From, *c.To, c.Button}, nil
+		return "/input/drag", drag{*c.From, *c.To, c.Button, c.Pace}, nil
 	}
 	return "", nil, fmt.Errorf("action %q: want click, type, scroll, key, drag, wait or zoom", c.Action)
 }
@@ -147,6 +170,11 @@ func (a *API) computer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	wait, err := files.DownloadWait(c.DownloadWaitMS)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	s, ok := a.running(w, r, true)
 	if !ok {
 		return
@@ -156,17 +184,42 @@ func (a *API) computer(w http.ResponseWriter, r *http.Request) {
 		a.internal(w, "encoding an action", err)
 		return
 	}
-	if a.act(w, r, s, path, raw) {
-		a.done(w, r, s, c)
+	var mark *files.Mark
+	if c.downloads() {
+		mark = a.markDownloads(s)
+		if c.DownloadWaitMS != nil {
+			mark.Expect(wait) // the caller expects a download: look as long for it to start
+		}
 	}
+	if !a.act(w, r, s, path, raw) {
+		return
+	}
+	mark.Ended()
+	a.doneWith(w, r, s, c, func() {
+		if mark != nil {
+			a.reportDownloads(w, r, s, mark, wait)
+		}
+	})
 }
+
+// maxScreenshot caps the screenshot an action answers with (a variable
+// for tests).
+var maxScreenshot int64 = 64 << 20
 
 // done answers an action that ran: with the screen if asked, else 204.
 // The action ran either way, so a screenshot that fails doesn't fail the
 // call (an agent would retry it, clicking or paying twice): it answers
 // 204 with X-Screenshot-Error.
 func (a *API) done(w http.ResponseWriter, r *http.Request, s sessions.Session, c computerRequest) {
+	a.doneWith(w, r, s, c, func() {})
+}
+
+// doneWith is done, with headers set by before just ahead of the answer:
+// after the screenshot is taken, so that a download notice gets the
+// screenshot's time to see a download start.
+func (a *API) doneWith(w http.ResponseWriter, r *http.Request, s sessions.Session, c computerRequest, before func()) {
 	if !c.Screenshot {
+		before()
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -174,18 +227,33 @@ func (a *API) done(w http.ResponseWriter, r *http.Request, s sessions.Session, c
 	if c.Width > 0 {
 		target += "?width=" + strconv.Itoa(c.Width)
 	}
+	var shot []byte
 	resp, err := a.control(r.Context(), s.Profile, http.MethodGet, target, nil)
-	if err == nil && resp.StatusCode != http.StatusOK {
-		err = fmt.Errorf("the browser answered %d", resp.StatusCode)
+	if err == nil {
+		if resp.StatusCode != http.StatusOK {
+			err = fmt.Errorf("the browser answered %d", resp.StatusCode)
+		} else {
+			shot, err = io.ReadAll(io.LimitReader(resp.Body, maxScreenshot+1))
+			if err == nil && int64(len(shot)) > maxScreenshot {
+				// Never a cut-off image passed off as the screen.
+				shot, err = nil, fmt.Errorf("the screenshot is over %d MiB", maxScreenshot>>20)
+			}
+		}
 		_ = resp.Body.Close()
 	}
+	before()
 	if err != nil {
 		w.Header().Set("X-Screenshot-Error", strings.ReplaceAll(err.Error(), "\n", " "))
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	defer func() { _ = resp.Body.Close() }()
-	relay(w, resp, "Content-Type", "X-Screen-Width", "X-Screen-Height")
+	for _, h := range []string{"Content-Type", "X-Screen-Width", "X-Screen-Height"} {
+		if v := resp.Header.Get(h); v != "" {
+			w.Header().Set(h, v)
+		}
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(shot)
 }
 
 // zoom answers with a region of the screen at full resolution. The region

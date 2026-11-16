@@ -68,6 +68,12 @@ func TestComputerForwardsInput(t *testing.T) {
 		`{"action": "key", "keys": ["ctrl+l", "Return"]}`:                        `/input/key {"keys":["ctrl+l","Return"]}`,
 		`{"action": "key", "keys": "ctrl+shift+t"}`:                              `/input/key {"keys":"ctrl+shift+t"}`,
 		`{"action": "drag", "from": {"x": 1, "y": 2}, "to": {"x": 3, "y": 4}}`:   `/input/drag {"from":{"x":1,"y":2},"to":{"x":3,"y":4}}`,
+		// The pace goes along when it's given.
+		`{"action": "click", "x": 1, "y": 2, "pace": "instant"}`:                                  `/input/click {"x":1,"y":2,"pace":"instant"}`,
+		`{"action": "type", "text": "a", "pace": "human"}`:                                        `/input/type {"text":"a","pace":"human"}`,
+		`{"action": "scroll", "x": 5, "y": 6, "dy": 3, "pace": "instant"}`:                        `/input/scroll {"x":5,"y":6,"dx":0,"dy":3,"pace":"instant"}`,
+		`{"action": "key", "keys": "Tab", "pace": "instant"}`:                                     `/input/key {"keys":"Tab","pace":"instant"}`,
+		`{"action": "drag", "from": {"x": 1, "y": 2}, "to": {"x": 3, "y": 4}, "pace": "instant"}`: `/input/drag {"from":{"x":1,"y":2},"to":{"x":3,"y":4},"pace":"instant"}`,
 	} {
 		if code, _, raw := f.computer(s.ID, body); code != http.StatusNoContent {
 			t.Fatalf("%s: %d %s", body, code, raw)
@@ -84,6 +90,7 @@ func TestComputerForwardsInput(t *testing.T) {
 		`{"action": "jump"}`, `{}`, `{"action": "click", "x": 1}`, `{"action": "scroll", "dy": 1}`,
 		`{"action": "key"}`, `{"action": "drag", "from": {"x": 1, "y": 2}}`, `{"action": "click", "x": 1, "y": 1, "extra": 1}`,
 		`{"action": "click", "x": 1, "y": 1, "screenshot": true, "width": 8}`, `not json`,
+		`{"action": "click", "x": 1, "y": 1, "pace": "slow"}`, `{"action": "type", "text": "a", "pace": 1}`,
 	} {
 		if code, _, raw := f.computer(s.ID, body); code != http.StatusBadRequest {
 			t.Errorf("%s: %d %s", body, code, raw)
@@ -193,6 +200,77 @@ func TestComputerDuringAHandoff(t *testing.T) {
 	}
 }
 
+// A handoff doesn't wait for a long human-paced action to finish: it
+// breaks it off at once.
+func TestHandoffInterruptsALongAction(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.all, "google", "visual")
+	type answer struct {
+		code int
+		raw  []byte
+	}
+	got := make(chan answer, 1)
+	go func() {
+		code, _, raw := f.computer(s.ID, `{"action": "type", "text": "typed slowly"}`)
+		got <- answer{code, raw}
+	}()
+	for deadline := time.Now().Add(5 * time.Second); f.lastInput() == ""; {
+		if time.Now().After(deadline) {
+			t.Fatal("the type never reached the browser")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	start := time.Now()
+	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("the handoff waited %v for the type", d)
+	}
+	a := <-got
+	if a.code != http.StatusConflict || !strings.Contains(string(a.raw), "handoff") {
+		t.Fatalf("the type cut short answered %d %s", a.code, a.raw)
+	}
+	for deadline := time.Now().Add(5 * time.Second); f.lastInput() != "cut short"; {
+		if time.Now().After(deadline) {
+			t.Fatalf("the browser never saw the type cut short: %q", f.lastInput())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// The log says it was cut short.
+	if got := strings.Join(f.whats(s.ID), "\n"); !strings.HasSuffix(got, "claude: Typing interrupted") {
+		t.Fatalf("activity:\n%s", got)
+	}
+}
+
+// One input at a time: a second while a long one is under way is refused.
+func TestComputerOneInputAtATime(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.all, "google", "visual")
+	got := make(chan int, 1)
+	go func() {
+		code, _, _ := f.computer(s.ID, `{"action": "type", "text": "typed slowly"}`)
+		got <- code
+	}()
+	for deadline := time.Now().Add(5 * time.Second); f.lastInput() == ""; {
+		if time.Now().After(deadline) {
+			t.Fatal("the type never reached the browser")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	code, _, raw := f.computer(s.ID, `{"action": "key", "keys": "Return"}`)
+	if code != http.StatusConflict || !strings.Contains(string(raw), "another input is still running") {
+		t.Fatalf("a key during the type: %d %s", code, raw)
+	}
+	if strings.Contains(f.lastInput(), "Return") {
+		t.Fatalf("the key reached the browser: %q", f.lastInput())
+	}
+	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	<-got
+}
+
 func TestComputerWhileAPersonDrives(t *testing.T) {
 	f := newFixture(t)
 	s := f.start(f.all, "google", "visual")
@@ -263,5 +341,25 @@ func TestComputerActionStandsWhenItsScreenshotFails(t *testing.T) {
 	r, _ := f.raw(f.all, http.MethodPost, "/api/sessions/"+s.ID+"/computer", strings.NewReader(`{"action": "click", "x": 10, "y": 10, "screenshot": true}`), "application/json")
 	if r.StatusCode != http.StatusNoContent || r.Header.Get("X-Screenshot-Error") == "" {
 		t.Fatalf("click with a failing screenshot: %d %q", r.StatusCode, r.Header.Get("X-Screenshot-Error"))
+	}
+}
+
+// A screenshot over the cap isn't cut off and passed off as the screen:
+// the action stands, and X-Screenshot-Error says why there is none.
+func TestComputerScreenshotOverTheCap(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.all, "github", "visual")
+	old := maxScreenshot
+	maxScreenshot = 4
+	t.Cleanup(func() { maxScreenshot = old })
+	r, _ := f.raw(f.all, http.MethodPost, "/api/sessions/"+s.ID+"/computer", strings.NewReader(`{"action": "click", "x": 10, "y": 10, "screenshot": true, "width": 640}`), "application/json")
+	if r.StatusCode != http.StatusNoContent || !strings.Contains(r.Header.Get("X-Screenshot-Error"), "screenshot is over") {
+		t.Fatalf("click with a screenshot over the cap: %d %q", r.StatusCode, r.Header.Get("X-Screenshot-Error"))
+	}
+	// At the cap, it is the screen.
+	maxScreenshot = int64(len("PNG:640"))
+	code, _, raw := f.computer(s.ID, `{"action": "click", "x": 10, "y": 10, "screenshot": true, "width": 640}`)
+	if code != http.StatusOK || string(raw) != "PNG:640" {
+		t.Fatalf("at the cap: %d %q", code, raw)
 	}
 }

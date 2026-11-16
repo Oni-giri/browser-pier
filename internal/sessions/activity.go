@@ -27,12 +27,15 @@ func (m *Manager) Note(sessionID, agent, what string) { m.note(sessionID, agent,
 func (m *Manager) NoteAttention(sessionID, agent, what string) { m.note(sessionID, agent, what, true) }
 
 func (m *Manager) note(sessionID, agent, what string, attention bool) {
-	m.mu.Lock()
+	// A file name or an address in an entry may hold a secret the page
+	// echoed (PROJ-125).
+	sc := m.lockScrubber(sessionID)
 	defer m.mu.Unlock()
 	l := m.findLocked(sessionID)
 	if l == nil {
 		return
 	}
+	what = sc.String(what)
 	a := Activity{At: m.now(), Agent: agent, What: what, Attention: attention}
 	if len(l.activity) < maxActivity {
 		l.activity = append(l.activity, a)

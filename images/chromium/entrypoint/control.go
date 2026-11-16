@@ -20,7 +20,8 @@ import (
 //	GET /stream    the display as an H.264 Annex-B byte stream, one reader at a time
 //	GET /screenshot, POST /input/{click,type,scroll,key,drag}   Visual mode (see visual.go)
 //	GET /geo           the location the browser runs with
-//	GET /proxy/stats   bytes through the upstream proxy, and connections refused
+//	GET /proxy/stats   bytes through the upstream proxy, connections refused, and blocked for the ad list
+//	POST /proxy/blocking/off, POST /proxy/exempt   the ad list's controls (block.go)
 func newControlHandler(cdp string, stream http.Handler, vis *visual, fwd *forwarder, where geo) http.Handler {
 	target := &url.URL{Scheme: "http", Host: cdp}
 	relay := &httputil.ReverseProxy{Rewrite: func(pr *httputil.ProxyRequest) {
@@ -46,6 +47,9 @@ func newControlHandler(cdp string, stream http.Handler, vis *visual, fwd *forwar
 	})
 	if fwd != nil {
 		mux.HandleFunc("GET /proxy/stats", fwd.stats)
+		if fwd.block != nil {
+			fwd.block.register(mux)
+		}
 	}
 	return mux
 }

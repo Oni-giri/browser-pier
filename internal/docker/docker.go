@@ -46,8 +46,12 @@ const (
 // previous definition mustn't be picked up after an update, so the
 // orchestrator stops it instead: 2 sends every page connection through the
 // egress filter (PROJ-26); 3 starts a window manager with a taskbar and
-// sizes Chromium's window above it (PROJ-29).
-const Spec = "3"
+// sizes Chromium's window above it (PROJ-29); 4 reopens the last tabs and
+// keeps session-only cookies (RestoreOnStartup, PROJ-112), moves Visual
+// input at a hand's pace (PROJ-113), and blocks the ad and tracker list
+// in the egress forwarder, with BROWSERPIER_BLOCK_ADS and /proxy/exempt
+// (PROJ-119): the orchestrator relies on all three.
+const Spec = "4"
 
 const (
 	// StopTimeout is how long a browser container gets to stop before Docker

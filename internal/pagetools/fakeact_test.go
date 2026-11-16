@@ -18,6 +18,20 @@ type behaviour struct {
 	onClick   func()
 	stealsTo  *fnode // focus moves here after the first character
 	unfocused bool   // refuses the focus
+	// A file input's multiple and disabled, and the files set on it;
+	// control is the input a <label> controls.
+	multiple, disabled bool
+	files              []string
+	control            *fnode
+	// quads are its content quads, instead of one from its box.
+	quads [][]float64
+	// dialog is the title of a dialog open over the page, nil for none.
+	dialog *string
+	// onHit is called (with the fake locked) before each hit test on it,
+	// with how many there have been; it can move it or lift its cover.
+	onHit func(hits int)
+	// hits counts hit tests on it; centred, scrolls to the middle.
+	hits, centred int
 }
 
 // tabState of the fake: what has the focus, what was aimed at, and the
@@ -27,6 +41,13 @@ type fakeInput struct {
 	selected bool // everything in the focused field is selected
 	aimed    *fnode
 	events   []string
+	mouse    []mouseEvent // the mouse events, with where they were
+	released int          // objects released
+}
+
+type mouseEvent struct {
+	typ  string
+	x, y float64
 }
 
 func (fb *fakeBrowser) node(tb *ftab, backend int64) *fnode {
@@ -49,6 +70,31 @@ func objBackend(id string) int64 {
 	b, _ := strconv.ParseInt(strings.TrimPrefix(id, "obj-"), 10, 64)
 	return b
 }
+
+// topmostIn is the last-drawn node in n's subtree (n included) whose box
+// holds (x, y), nil if none does.
+func topmostIn(n *fnode, x, y float64) *fnode {
+	var hit *fnode
+	if b := n.box; !strings.HasPrefix(n.tag, "#") && b != nil && x >= b[0] && x < b[0]+b[2] && y >= b[1] && y < b[1]+b[3] {
+		hit = n
+	}
+	for _, k := range n.kids {
+		if h := topmostIn(k, x, y); h != nil {
+			hit = h
+		}
+	}
+	return hit
+}
+
+// ownControl is the fake's version of jsHitTest's control test.
+func ownControl(n *fnode) bool {
+	switch n.tag {
+	case "a", "button", "input", "select", "textarea", "summary":
+		return true
+	}
+	return n.role == "button" || n.role == "link"
+}
+
 func value(v any) map[string]any {
 	return map[string]any{"result": map[string]any{"type": "object", "value": v}}
 }
@@ -107,6 +153,9 @@ func (fb *fakeBrowser) dom(tb *ftab, m cdptest.Message, p map[string]any) (any, 
 		}
 		b := *n.box
 		in.aimed = n
+		if bh := fb.behave[n]; bh != nil && bh.quads != nil {
+			return map[string]any{"quads": bh.quads}, true, nil
+		}
 		return map[string]any{"quads": [][]float64{{b[0], b[1], b[0] + b[2], b[1], b[0] + b[2], b[1] + b[3], b[0], b[1] + b[3]}}}, true, nil
 	case "DOM.focus":
 		n := backend()
@@ -143,6 +192,9 @@ func (fb *fakeBrowser) dom(tb *ftab, m cdptest.Message, p map[string]any) (any, 
 			at = in.aimed.name
 		}
 		in.events = append(in.events, typ+" "+at)
+		x, _ := p["x"].(float64)
+		y, _ := p["y"].(float64)
+		in.mouse = append(in.mouse, mouseEvent{typ, x, y})
 		if fb.onInput != nil {
 			fb.onInput(typ)
 		}
@@ -169,9 +221,28 @@ func (fb *fakeBrowser) dom(tb *ftab, m cdptest.Message, p map[string]any) (any, 
 			}
 		}
 		return nil, true, nil
+	case "Runtime.releaseObject":
+		in.released++
+		return nil, true, nil
 	case "Input.insertText":
 		in.events = append(in.events, "insertText")
 		fb.typeText(tb, p["text"].(string))
+		return nil, true, nil
+	case "DOM.setFileInputFiles":
+		n := backend()
+		if n == nil {
+			return nil, true, gone
+		}
+		bh := fb.behave[n]
+		if bh == nil || bh.field != "file" {
+			return nil, true, cdptest.Error{Message: "Node is not a file input element"}
+		}
+		bh.files = nil
+		fs, _ := p["files"].([]any)
+		for _, f := range fs {
+			bh.files = append(bh.files, f.(string))
+		}
+		in.events = append(in.events, "setFileInputFiles "+n.name)
 		return nil, true, nil
 	}
 	return nil, false, nil
@@ -233,14 +304,36 @@ func (fb *fakeBrowser) function(tb *ftab, n *fnode, p map[string]any) (any, bool
 	}
 	in := fb.input(tb)
 	marker := fn[strings.Index(fn, "/*bp:")+5 : strings.Index(fn, "*/")]
+	if fb.onFunction != nil {
+		fb.onFunction(marker)
+	}
 	switch marker {
 	case "connected":
 		return value(!fb.removed[n]), true, nil
 	case "hittest":
+		bh.hits++
+		if bh.onHit != nil {
+			bh.onHit(bh.hits)
+		}
 		if bh.cover != nil {
 			return nodeObj(bh.cover), true, nil
 		}
+		// The strict test, for a scattered point: a control inside the
+		// element, topmost there, is "nested".
+		if len(args) == 3 && args[2] == true {
+			if hit := topmostIn(n, args[0].(float64), args[1].(float64)); hit != nil && hit != n && ownControl(hit) {
+				return map[string]any{"result": map[string]any{"type": "string", "value": "nested"}}, true, nil
+			}
+		}
 		return map[string]any{"result": map[string]any{"type": "boolean", "value": true}}, true, nil
+	case "centre":
+		bh.centred++
+		return map[string]any{"result": map[string]any{"type": "undefined"}}, true, nil
+	case "dialog":
+		if bh.dialog == nil {
+			return map[string]any{"result": map[string]any{"type": "object", "subtype": "null", "value": nil}}, true, nil
+		}
+		return value(*bh.dialog), true, nil
 	case "focused":
 		return value(in.focused == n), true, nil
 	case "active":
@@ -268,6 +361,16 @@ func (fb *fakeBrowser) function(tb *ftab, n *fnode, p map[string]any) (any, bool
 			}
 		}
 		return value(map[string]any{"error": "no option", "options": bh.options}), true, nil
+	case "fileinput":
+		if bh.field == "file" {
+			return nodeObj(n), true, nil
+		}
+		if c := bh.control; n.tag == "label" && c != nil && fb.behave[c] != nil && fb.behave[c].field == "file" {
+			return nodeObj(c), true, nil
+		}
+		return map[string]any{"result": map[string]any{"type": "object", "subtype": "null", "value": nil}}, true, nil
+	case "fileinfo":
+		return value(map[string]any{"multiple": bh.multiple, "disabled": bh.disabled, "count": len(bh.files)}), true, nil
 	case "visible":
 		return value(!fb.removed[n] && n.box != nil && (*n.box)[2] > 0), true, nil
 	}

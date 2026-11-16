@@ -41,16 +41,22 @@ type API struct {
 }
 
 func New(m *sessions.Manager, web *auth.Web, fs *files.Store, log *slog.Logger, publicURL string) *API {
-	return &API{m: m, web: web, files: fs, log: log, public: strings.TrimRight(publicURL, "/"), tools: pagetools.New(m, log)}
+	tools := pagetools.New(m, log)
+	tools.SetFiles(fs)
+	if fs != nil {
+		m.OnEnd(fs.Forget) // what download notices keep about a session
+	}
+	return &API{m: m, web: web, files: fs, log: log, public: strings.TrimRight(publicURL, "/"), tools: tools}
 }
 
 // SetSettings makes profiles created through the API start from the
 // admin's defaults instead of the built-in ones.
 func (a *API) SetSettings(s *settings.Store) { a.settings = s }
 
-// Register adds the API's routes to mux.
-func (a *API) Register(mux *http.ServeMux) {
-	t := func(h http.HandlerFunc) http.Handler { return a.web.RequireToken(h) }
+// Register adds the API's routes to mux. Each is an agent route (scrub.go)
+// but the CDP proxy's.
+func (a *API) Register(mux Router) {
+	t := a.agent
 	mux.Handle("GET /api/profiles", t(a.listProfiles))
 	mux.Handle("POST /api/profiles", t(a.createProfile))
 	mux.Handle("POST /api/sessions", t(a.startSession))
@@ -72,6 +78,8 @@ func (a *API) Register(mux *http.ServeMux) {
 	}
 	// Many CDP clients can't set headers, so the CDP proxy also takes a
 	// ticket as ?ticket=; never the token, which a proxy in front could log.
+	// It isn't scrubbed: raw CDP is full control of the browser, which can
+	// read any field's value (SPEC §11).
 	c := func(h http.HandlerFunc) http.Handler { return a.web.RequireTokenOrCDPTicket(h) }
 	mux.Handle("GET /cdp/{profile}", c(a.cdp))
 	mux.Handle("GET /cdp/{profile}/{path...}", c(a.cdp))
@@ -87,6 +95,7 @@ type profileJSON struct {
 	TimeZone        string     `json:"time_zone,omitempty"` // set by hand
 	Locale          string     `json:"locale,omitempty"`    // set by hand
 	LocalNetwork    bool       `json:"local_network"`       // pages may reach private addresses
+	BlockAds        bool       `json:"block_ads"`           // the browser blocks ad and tracker domains
 	// Site is the main site as set, whose favicon is the profile's icon in
 	// the web UI. The one BrowserPier infers from the history isn't shown:
 	// it is read from pages.
@@ -123,6 +132,7 @@ func (a *API) profileOut(p profiles.Profile) profileJSON {
 		TimeZone:        p.TimeZone,
 		Locale:          p.Locale,
 		LocalNetwork:    p.LocalNetwork,
+		BlockAds:        p.BlockAds,
 		Site:            p.Site,
 		IconGlyph:       p.IconGlyph,
 		IconColor:       p.IconColor,
@@ -172,6 +182,7 @@ type createProfileJSON struct {
 	HandoffPolicy   *string     `json:"handoff_policy"`
 	Proxy           *string     `json:"proxy"`
 	LocalNetwork    *bool       `json:"local_network"`
+	BlockAds        *bool       `json:"block_ads"`
 	Site            *string     `json:"site"`
 	IconGlyph       *string     `json:"icon_glyph"`
 	IconColor       *string     `json:"icon_color"`
@@ -233,6 +244,16 @@ func (a *API) createProfile(w http.ResponseWriter, r *http.Request) {
 			p.HandoffPolicy = asked
 		}
 	}
+	if in.BlockAds != nil {
+		// Like the handoff policy: an agent can ask for more blocking,
+		// never less. Turning it off is for one session (POST
+		// /api/sessions with "block_ads": false), or the admin's call.
+		if !*in.BlockAds {
+			writeError(w, http.StatusBadRequest, `block_ads: an agent can't turn a profile's ad and tracker blocking off; start the session with "block_ads": false instead, or ask the admin`)
+			return
+		}
+		p.BlockAds = true
+	}
 	if in.Site != nil {
 		p.Site = profiles.NormalizeSite(*in.Site)
 	}
@@ -260,17 +281,21 @@ func (a *API) createProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 type sessionJSON struct {
-	ID          string    `json:"id"`
-	Profile     string    `json:"profile"`
-	Mode        string    `json:"mode"`
-	State       string    `json:"state"`
-	Attached    bool      `json:"attached"`
-	CDPURL      string    `json:"cdp_url,omitempty"`
-	LiveViewURL string    `json:"live_view_url"`
-	InUseBy     []string  `json:"in_use_by,omitempty"`
-	Error       string    `json:"error,omitempty"`
-	LastLog     string    `json:"last_log,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID          string   `json:"id"`
+	Profile     string   `json:"profile"`
+	Mode        string   `json:"mode"`
+	State       string   `json:"state"`
+	Attached    bool     `json:"attached"`
+	CDPURL      string   `json:"cdp_url,omitempty"`
+	LiveViewURL string   `json:"live_view_url"`
+	InUseBy     []string `json:"in_use_by,omitempty"`
+	Error       string   `json:"error,omitempty"`
+	LastLog     string   `json:"last_log,omitempty"`
+	BlockAds    bool     `json:"block_ads"`
+	// AdListMissing: the session was to block, but no list had been
+	// downloaded yet when it started, so block_ads is false.
+	AdListMissing bool      `json:"ad_list_missing,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 func (a *API) sessionOut(r *http.Request, s sessions.Session, attached bool) sessionJSON {
@@ -278,7 +303,7 @@ func (a *API) sessionOut(r *http.Request, s sessions.Session, attached bool) ses
 	out := sessionJSON{
 		ID: s.ID, Profile: s.Profile, Mode: string(s.Mode), State: string(s.State), Attached: attached,
 		LiveViewURL: base + "/profiles/" + url.PathEscape(s.Profile),
-		InUseBy:     s.InUseBy, Error: s.Error, CreatedAt: s.CreatedAt,
+		InUseBy:     s.InUseBy, Error: s.Error, CreatedAt: s.CreatedAt, BlockAds: s.BlockAds, AdListMissing: s.AdListMissing,
 	}
 	// The browser container's words, which a compromised page could have
 	// written: fenced like page text.
@@ -310,6 +335,10 @@ func (a *API) baseURL(r *http.Request) string {
 type startJSON struct {
 	Profile string `json:"profile"`
 	Mode    string `json:"mode"`
+	// BlockAds false turns the profile's ad and tracker blocking off for
+	// this session, a running one included; true or nothing leaves it as
+	// it is. It can't turn blocking on.
+	BlockAds *bool `json:"block_ads"`
 }
 
 func (a *API) startSession(w http.ResponseWriter, r *http.Request) {
@@ -328,7 +357,9 @@ func (a *API) startSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "mode: want api or visual")
 		return
 	}
-	s, attached, err := a.m.Start(r.Context(), in.Profile, profiles.Mode(in.Mode))
+	allowAds := in.BlockAds != nil && !*in.BlockAds
+	before, wasLive := a.m.Live(in.Profile)
+	s, attached, err := a.m.StartWith(r.Context(), in.Profile, sessions.StartOptions{Mode: profiles.Mode(in.Mode), AllowAds: allowAds})
 	switch {
 	case errors.Is(err, profiles.ErrNotFound):
 		writeError(w, http.StatusNotFound, "no profile named "+strconv.Quote(in.Profile))
@@ -352,13 +383,20 @@ func (a *API) startSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.m.Touch(s.ID)
+	if allowAds && wasLive && before.ID == s.ID && before.BlockAds && !s.BlockAds {
+		a.m.Note(s.ID, tok.Name, "Turned ad and tracker blocking off for this session")
+	}
 	status := http.StatusCreated
 	if attached {
 		status = http.StatusOK
 		a.m.Note(s.ID, tok.Name, "Attached")
 	} else {
-		a.m.Note(s.ID, tok.Name, "Started the browser")
-		a.log.Info("session started", "session", s.ID, "profile", s.Profile, "mode", s.Mode, "token", tok.Name)
+		what := "Started the browser"
+		if allowAds {
+			what += ", without ad and tracker blocking"
+		}
+		a.m.Note(s.ID, tok.Name, what)
+		a.log.Info("session started", "session", s.ID, "profile", s.Profile, "mode", s.Mode, "block_ads", s.BlockAds, "token", tok.Name)
 	}
 	writeJSON(w, status, a.sessionOut(r, s, attached))
 }
@@ -510,23 +548,89 @@ func (a *API) input(path string) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "body too large")
 			return
 		}
-		if a.act(w, r, s, path, body) {
-			w.WriteHeader(http.StatusNoContent)
+		var mark *files.Mark
+		var wait time.Duration
+		if path == "/input/click" {
+			// A click may start a download (PROJ-116); the browser
+			// doesn't take download_wait_ms, which is BrowserPier's.
+			// When it is set, the click expects one (files.Mark.Expect).
+			var ms *int
+			if body, ms, err = takeDownloadWait(body); err == nil {
+				wait, err = files.DownloadWait(ms)
+			}
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			mark = a.markDownloads(s)
+			if ms != nil {
+				mark.Expect(wait)
+			}
 		}
+		if !a.act(w, r, s, path, body) {
+			return
+		}
+		if mark != nil {
+			mark.Ended()
+			a.reportDownloads(w, r, s, mark, wait)
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// takeDownloadWait takes download_wait_ms out of a click's JSON body,
+// leaving the rest as it was. A body that isn't a JSON object goes on
+// unchanged, for the browser to refuse.
+func takeDownloadWait(body []byte) ([]byte, *int, error) {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(body, &fields) != nil {
+		return body, nil, nil
+	}
+	raw, ok := fields["download_wait_ms"]
+	if !ok {
+		return body, nil, nil
+	}
+	var ms int
+	if err := json.Unmarshal(raw, &ms); err != nil {
+		return nil, nil, errors.New("download_wait_ms: want a number of milliseconds")
+	}
+	delete(fields, "download_wait_ms")
+	out, err := json.Marshal(fields)
+	return out, &ms, err
 }
 
 // act runs one input action through the control socket and logs it, or
 // writes why it didn't run.
 func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, path string, body []byte) bool {
-	done, err := a.m.AgentInput(s.ID)
+	ctx, done, err := a.m.AgentInput(r.Context(), s.ID)
+	if errors.Is(err, sessions.ErrInputBusy) {
+		writeError(w, http.StatusConflict, "another input is still running in this browser; wait for it to finish, then send this one")
+		return false
+	}
 	if err != nil {
 		writeError(w, http.StatusConflict, "a person has this browser (live view or a handoff); wait until they hand it back")
 		return false
 	}
-	defer done() // until the browser has answered: a handoff waits for it
-	resp, err := a.control(r.Context(), s.Profile, http.MethodPost, path, body)
+	// Until this returns: a handoff, the live view's Take control or a
+	// stop cancels ctx, which aborts the request to the browser and waits
+	// for done. The browser then breaks the action off and lets go of any
+	// key or button it held, which can still take it some tens of
+	// milliseconds after the person has the browser.
+	defer done()
+	tok, _ := auth.TokenFromContext(r.Context())
+	resp, err := a.control(ctx, s.Profile, http.MethodPost, path, body)
 	if err != nil {
+		if ctx.Err() != nil && r.Context().Err() == nil {
+			// Cut short: how far it got isn't known, but the log says
+			// it began.
+			what := "Input interrupted"
+			if path == "/input/type" {
+				what = "Typing interrupted"
+			}
+			a.m.Note(s.ID, tok.Name, what)
+			writeError(w, http.StatusConflict, "input broke off: "+context.Cause(ctx).Error())
+			return false
+		}
 		writeError(w, http.StatusBadGateway, "input failed: "+err.Error())
 		return false
 	}
@@ -536,7 +640,6 @@ func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, pa
 		writeError(w, resp.StatusCode, strings.TrimSpace(string(msg)))
 		return false
 	}
-	tok, _ := auth.TokenFromContext(r.Context())
 	a.m.Note(s.ID, tok.Name, describeInput(path, body))
 	return true
 }
@@ -648,5 +751,14 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 
 func (a *API) internal(w http.ResponseWriter, what string, err error) {
 	a.log.Error(what, "err", err)
+	writeError(w, http.StatusInternalServerError, what+" failed")
+}
+
+// pageInternal is internal for a call on a session's page: the error may
+// quote the page, so it is logged with the session's filled secrets
+// hidden (PROJ-125).
+func (a *API) pageInternal(w http.ResponseWriter, s sessions.Session, what string, err error) {
+	sc := a.m.Scrubber(func(p string) bool { return p == s.Profile })
+	a.log.Error(what, "session", s.ID, "err", sc.String(err.Error()))
 	writeError(w, http.StatusInternalServerError, what+" failed")
 }

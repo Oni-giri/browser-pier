@@ -34,6 +34,7 @@
   <section class="cell">
     <p class="caption" style="margin:0">{{.H.Agent}} on {{.H.Profile}}{{if .H.Origin}} · {{.H.Origin}}{{end}}</p>
     {{if .H.Detail}}<p class="ho-detail" style="margin-top:4px">{{.H.Detail}}</p>{{end}}
+    {{if .H.UntilURL}}<p class="caption ho-until">This hands back by itself when the page reaches an address containing “{{shorten .H.UntilURL}}”.</p>{{end}}
     <form method="post" action="/h/{{.Token}}/finish" id="finish">
       <label class="ho-label" for="msg">Note for the agent · optional</label>
       <textarea class="input" id="msg" name="note" rows="2" maxlength="1000"></textarea>
@@ -50,6 +51,7 @@
 {{else}}
 <main class="ho"><section class="cell ho-end">
   {{if eq .Ended "done"}}<h1>Handed back</h1><p>{{.H.Agent}} has your note and is carrying on. This link no longer works.</p>
+  {{else if eq .Ended "auto"}}<h1>Done: handed back automatically</h1><p>The page reached the address {{.H.Agent}} was waiting for, so it is carrying on. This link no longer works.</p>
   {{else if eq .Ended "cant"}}<h1>Told the agent you couldn’t</h1><p>{{.H.Agent}} will stop this task and report back. This link no longer works.</p>
   {{else if eq .Ended "cancelled"}}<h1>This link was cancelled</h1><p>{{if .H.Note}}{{.H.Note}}. {{end}}The agent has been told.</p>
   {{else if eq .Ended "insecure"}}<h1>This link needs HTTPS</h1><p>It was opened over plain HTTP from outside your network, where a PIN or password would travel in the clear. Open BrowserPier over HTTPS, or from your LAN or Tailscale.</p>

@@ -132,8 +132,9 @@ New MCP servers usually load in a new session. If the browserpier tools (`list_p
 Once connected, the server tells you how to use its tools. Which ones depend on the browser's mode, which `start_browser` reports:
 
 - **Visual mode** (sites with heavy anti-bot measures): `screenshot` to see the screen, then `click`, `type_text`, `press_keys`, `scroll`, `drag`, `wait` and `zoom`, with coordinates in the screenshot's pixels.
-- **API mode**: `snapshot` to read the page as text, with refs like `a7e12` for its controls, `find` to search it, `act` to click, fill, type, press, select, check or hover by ref, `wait_for`, `navigate` and `tabs` (sign-in popups open in a new tab), and `page_content` to read a whole page as Markdown, its main text only (`readability`, the fewest tokens) or a PDF. Or connect your own CDP client to the `cdp_url`.
-- **Both:** `request_handoff`, `wait_for_handoff`, `cancel_handoff`, `list_files`, `stop_browser`, and `page_content` with `screenshot`.
+- **API mode**: `snapshot` to read the page as text, with refs like `a7e12` for its controls, `find` to search it, `act` to click, fill, type, press, select, check, hover or upload by ref, or by a target like `role=button[name="Save"]` or `text=Save` with no snapshot first (put the file in first with `upload_file`), `wait_for`, `navigate` and `tabs` (sign-in popups open in a new tab), and `page_content` to read a whole page as Markdown, its main text only (`readability`, the fewest tokens) or a PDF. Or connect your own CDP client to the `cdp_url`.
+- **Both:** `request_handoff`, `wait_for_handoff`, `cancel_handoff`, `list_files`, `upload_file`, `stop_browser`, and `page_content` with `screenshot`.
+- **Ads and trackers** are usually blocked. If a page misses something it needs (a video player, a sign-in widget), call `start_browser` again with `allow_ads`; that turns blocking off for this session only.
 
 ## 4. No MCP? Use the REST API
 
@@ -144,18 +145,21 @@ H="Authorization: Bearer $PIER_TOKEN"
 curl -s {{.Base}}/api/profiles -H "$H"
 # start or attach to a profile's browser; the reply has its "id"
 curl -s -X POST {{.Base}}/api/sessions -H "$H" -d '{"profile": "NAME", "mode": "visual"}'
+#   add "block_ads": false if a page needs what the ad and tracker blocking stops (this session only)
 # see the screen (a PNG), then act; coordinates are in that screenshot's pixels
 curl -s {{.Base}}/api/sessions/ID/screenshot -H "$H" -o screen.png
 curl -s -X POST {{.Base}}/api/sessions/ID/computer -H "$H" -d '{"action": "click", "x": 640, "y": 360, "screenshot": true}' -o screen.png
 #   other actions: type {"text"}, key {"keys": "ctrl+l"}, scroll {"x", "y", "dy"}, drag {"from", "to"}, wait {"ms"}, zoom {"x", "y", "w", "h"}
 # a person is needed (sign-in, 2FA, CAPTCHA, payment): send them a link, then wait for them
 curl -s -X POST {{.Base}}/api/sessions/ID/handoff -H "$H" -d '{"reason": "sensitive_input", "detail": "Enter the 2FA code"}'
+#   with "until_url": "example.com/account" it also ends by itself once a tab navigates there (origin and path only)
 curl -s "{{.Base}}/api/handoffs/HANDOFF_ID?wait=900" -H "$H"
 # API mode instead ("mode": "api"): read the page, act on refs from it, all as text
 curl -s -X POST {{.Base}}/api/sessions/ID/navigate -H "$H" -d '{"url": "https://example.com/login"}'
 curl -s -X POST {{.Base}}/api/sessions/ID/snapshot -H "$H"
 curl -s -X POST {{.Base}}/api/sessions/ID/act -H "$H" -d '{"steps": [{"action": "fill", "ref": "a7e12", "text": "ana@example.com"}, {"action": "click", "ref": "a7e14"}]}'
-#   also /find {"text"}, /wait {"text"} or {"ref", "state"} or {"url_change": true}, /tabs {"action": "list|switch|close|new"}
+#   a step may name its element by "target" instead: role=button[name="Sign in"], text=Sign in or text="Sign in", optionally + " >> nth=0"
+#   also /find {"text"}, /wait {"text"} or {"ref", "state"} or {"target", "state"} or {"url_change": true} or {"load": true}, /tabs {"action": "list|switch|close|new"}
 # the whole page as Markdown (or "readability": its main text only), 20,000 characters at a time; read on with "offset"
 curl -s -X POST {{.Base}}/api/sessions/ID/content -H "$H" -d '{"format": "markdown"}'
 curl -s -X POST {{.Base}}/api/sessions/ID/content -H "$H" -d '{"format": "pdf"}' -o page.pdf
@@ -163,7 +167,7 @@ curl -s -X POST {{.Base}}/api/sessions/ID/content -H "$H" -d '{"format": "pdf"}'
 curl -s -X DELETE {{.Base}}/api/sessions/ID -H "$H"
 ```
 
-Handoff reasons: `sensitive_input`, `captcha`, `file_upload`, `review`, `manual_step`.
+Handoff reasons: `sensitive_input`, `captcha`, `file_upload`, `review`, `manual_step`. If you know the address where the person's part ends (the account page after a sign-in), pass it as `until_url`, so you aren't left waiting when they stop there without tapping Done.
 
 ## Rules
 

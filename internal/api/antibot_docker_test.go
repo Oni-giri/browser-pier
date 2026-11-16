@@ -6,8 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -34,7 +36,7 @@ func TestVisualModeLooksLikeAPerson(t *testing.T) {
 	a.allowLocalNetwork(t, name)
 
 	var s sessionJSON
-	if code := a.do(http.MethodPost, "/api/sessions", fmt.Sprintf(`{"profile": %q}`, name), &s); code != http.StatusCreated || s.Mode != "visual" {
+	if code := a.do(http.MethodPost, "/api/sessions", fmt.Sprintf(`{"profile": %q}`, name), &s); code != http.StatusCreated || s.Mode != "visual" || !s.BlockAds {
 		t.Fatalf("start: %d %+v", code, s)
 	}
 	// Open the page as a person would: the address bar, the URL, Enter.
@@ -199,5 +201,227 @@ func targets(t *testing.T, sock string) []target {
 			}
 			return out
 		}
+	}
+}
+
+// TestVisualInputLooksHuman is PROJ-113's check in Visual mode: what a
+// page's own script records of a click and of typing looks like a hand,
+// not like xdotool's jumps and 12 ms keystrokes.
+func TestVisualInputLooksHuman(t *testing.T) {
+	a := newRealAPI(t)
+	det := browsertest.NewDetector(t, browsertest.SiteHost(t))
+	name := fmt.Sprintf("h%d", time.Now().UnixNano()%1e9)
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", "browserpier-"+name).Run() })
+	if code := a.do(http.MethodPost, "/api/profiles", fmt.Sprintf(`{"name": %q, "default_mode": "visual"}`, name), nil); code != http.StatusCreated {
+		t.Fatalf("create profile: %d", code)
+	}
+	a.allowLocalNetwork(t, name)
+	var s sessionJSON
+	if code := a.do(http.MethodPost, "/api/sessions", fmt.Sprintf(`{"profile": %q}`, name), &s); code != http.StatusCreated || s.Mode != "visual" {
+		t.Fatalf("start: %d %+v", code, s)
+	}
+	computer := func(body string) {
+		t.Helper()
+		if code := a.do(http.MethodPost, "/api/sessions/"+s.ID+"/computer", body, nil); code != http.StatusNoContent {
+			t.Fatalf("%s: %d", body, code)
+		}
+	}
+	sw, sh := a.screenSize(t, s.ID)
+	for _, body := range []string{
+		`{"action": "key", "keys": "ctrl+l", "pace": "instant"}`,
+		fmt.Sprintf(`{"action": "type", "text": %q, "pace": "instant"}`, det.InputURL()),
+		`{"action": "key", "keys": "Return", "pace": "instant"}`,
+	} {
+		computer(body)
+	}
+	// Where the page is on the screen: an instant click lands exactly
+	// where it is sent. Once the page has loaded, its recorder sees it.
+	x0, y0 := sw/2, sh*3/4
+	var offX, offY float64
+	for deadline := time.Now().Add(30 * time.Second); ; {
+		computer(fmt.Sprintf(`{"action": "click", "x": %d, "y": %d, "pace": "instant"}`, x0, y0))
+		time.Sleep(500 * time.Millisecond)
+		if downs := ofType(det.Events(), "mousedown"); len(downs) > 0 {
+			offX, offY = float64(x0)-downs[0].X, float64(y0)-downs[0].Y
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the input recorder never loaded")
+		}
+	}
+	var all []browsertest.InputEvent
+	take := func() []browsertest.InputEvent {
+		ev := det.Events()
+		det.ResetEvents()
+		all = append(all, ev...)
+		return ev
+	}
+	ups := func(n int) func([]browsertest.InputEvent) bool {
+		return func(ev []browsertest.InputEvent) bool { return len(ofType(ev, "mouseup")) >= n }
+	}
+	time.Sleep(300 * time.Millisecond)
+	take()
+
+	// A 400 px click: a glide, not a jump, and a held button.
+	ax, bx := sw/2-200, sw/2+200
+	computer(fmt.Sprintf(`{"action": "click", "x": %d, "y": %d}`, ax, y0))
+	det.WaitEvents(t, "the first click", ups(1))
+	time.Sleep(300 * time.Millisecond)
+	take()
+	computer(fmt.Sprintf(`{"action": "click", "x": %d, "y": %d}`, bx, y0))
+	det.WaitEvents(t, "the 400 px click", ups(1))
+	time.Sleep(300 * time.Millisecond)
+	looksLikeAHandsClick(t, take())
+
+	// Ten clicks at one point land on more than one pixel, within 40% of
+	// the 8 px landing size (about 3 px; 4 with rounding) of it.
+	for range 10 {
+		computer(fmt.Sprintf(`{"action": "click", "x": %d, "y": %d}`, bx, y0))
+	}
+	det.WaitEvents(t, "ten clicks", ups(10))
+	time.Sleep(300 * time.Millisecond)
+	ev := take()
+	seen := map[[2]float64]bool{}
+	for _, d := range ofType(ev, "mousedown") {
+		seen[[2]float64{d.X, d.Y}] = true
+		if dx, dy := d.X+offX-float64(bx), d.Y+offY-float64(y0); math.Abs(dx) > 4 || math.Abs(dy) > 4 {
+			t.Errorf("a click at (%d, %d) landed %v, %v px away", bx, y0, dx, dy)
+		}
+	}
+	if len(seen) < 2 {
+		t.Errorf("ten clicks at one point all landed on %v", seen)
+	}
+	holdsLikeAHand(t, ev)
+
+	// Typing 30 characters into the textarea: a typist's uneven rhythm.
+	computer(fmt.Sprintf(`{"action": "click", "x": %d, "y": %d}`, sw/2, int(offY)+40))
+	det.WaitEvents(t, "the click into the textarea", ups(1))
+	time.Sleep(300 * time.Millisecond)
+	take()
+	const text = "the quick brown fox jumps over"
+	computer(fmt.Sprintf(`{"action": "type", "text": %q}`, text))
+	ev = det.WaitEvents(t, "30 keystrokes", func(ev []browsertest.InputEvent) bool { return len(ofType(ev, "keyup")) >= len(text) })
+	typesLikeATypist(t, ev, text)
+	take()
+
+	for _, e := range all {
+		if !e.Trusted {
+			t.Fatalf("an untrusted event: %+v", e)
+		}
+	}
+	// And nothing attached to the page over CDP all along.
+	for _, tg := range targets(t, a.m.Layout().ControlSocket(name)) {
+		if tg.Type == "page" && tg.Attached {
+			t.Errorf("in Visual mode, a CDP client is attached to %s", tg.URL)
+		}
+	}
+}
+
+// screenSize is a session's screen, from a screenshot's headers.
+func (a agent) screenSize(t *testing.T, id string) (int, int) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, a.base+"/api/sessions/"+id+"/screenshot", nil)
+	req.Header.Set("Authorization", "Bearer "+a.token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	w, _ := strconv.Atoi(resp.Header.Get("X-Screen-Width"))
+	h, _ := strconv.Atoi(resp.Header.Get("X-Screen-Height"))
+	if resp.StatusCode != http.StatusOK || w == 0 || h == 0 {
+		t.Fatalf("screenshot: %d, %dx%d", resp.StatusCode, w, h)
+	}
+	return w, h
+}
+
+func ofType(ev []browsertest.InputEvent, typ string) []browsertest.InputEvent {
+	var out []browsertest.InputEvent
+	for _, e := range ev {
+		if e.Type == typ {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// looksLikeAHandsClick checks a long click's events: at least 10 moves
+// before the press, not on one line, and a button held 60-200 ms.
+func looksLikeAHandsClick(t *testing.T, ev []browsertest.InputEvent) {
+	t.Helper()
+	var moves []browsertest.InputEvent
+	for _, e := range ev {
+		if e.Type == "mousedown" {
+			break
+		}
+		if e.Type == "mousemove" {
+			moves = append(moves, e)
+		}
+	}
+	if len(moves) < 10 {
+		t.Fatalf("%d mousemoves before the press of a 400 px click, want 10 or more", len(moves))
+	}
+	a, b := moves[0], moves[len(moves)-1]
+	dx, dy := b.X-a.X, b.Y-a.Y
+	worst := 0.0
+	for _, m := range moves {
+		worst = math.Max(worst, math.Abs(dy*(m.X-a.X)-dx*(m.Y-a.Y))/math.Hypot(dx, dy))
+	}
+	if worst <= 2 {
+		t.Errorf("the moves stray at most %.1f px from a straight line", worst)
+	}
+	t.Logf("%d moves, %.0f px, at most %.1f px off the line", len(moves), math.Hypot(dx, dy), worst)
+	holdsLikeAHand(t, ev)
+}
+
+// holdsLikeAHand checks every press is released 60-200 ms later.
+func holdsLikeAHand(t *testing.T, ev []browsertest.InputEvent) {
+	t.Helper()
+	var down *browsertest.InputEvent
+	for i, e := range ev {
+		switch e.Type {
+		case "mousedown":
+			down = &ev[i]
+		case "mouseup":
+			if down == nil {
+				continue
+			}
+			if held := e.T - down.T; held < 60 || held > 200 {
+				t.Errorf("the button was held %.0f ms", held)
+			}
+			down = nil
+		}
+	}
+}
+
+// typesLikeATypist checks the keystrokes typed text, with gaps between
+// key-downs that vary (coefficient of variation over 0.25) around a
+// typist's mean (0.12-0.45 s).
+func typesLikeATypist(t *testing.T, ev []browsertest.InputEvent, text string) {
+	t.Helper()
+	downs := ofType(ev, "keydown")
+	keys := ""
+	for _, d := range downs {
+		keys += d.Key
+	}
+	if keys != text {
+		t.Fatalf("the page saw keys %q, want %q", keys, text)
+	}
+	var gaps []float64
+	for i := 1; i < len(downs); i++ {
+		gaps = append(gaps, (downs[i].T-downs[i-1].T)/1000)
+	}
+	mean, sd := 0.0, 0.0
+	for _, g := range gaps {
+		mean += g
+	}
+	mean /= float64(len(gaps))
+	for _, g := range gaps {
+		sd += (g - mean) * (g - mean)
+	}
+	sd = math.Sqrt(sd / float64(len(gaps)))
+	t.Logf("key-down gaps: mean %.3f s, SD %.3f s, CV %.2f", mean, sd, sd/mean)
+	if sd/mean <= 0.25 || mean < 0.12 || mean > 0.45 {
+		t.Errorf("key-down gaps: mean %.3f s, CV %.2f; want a typist's (0.12-0.45 s, CV over 0.25)", mean, sd/mean)
 	}
 }

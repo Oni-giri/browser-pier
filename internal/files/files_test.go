@@ -161,6 +161,58 @@ func TestUpload(t *testing.T) {
 	}
 }
 
+// TestUploadedStaysInTheFolder is PROJ-117's confinement: act's upload
+// step only hands the browser a regular file in uploads, by its name.
+func TestUploadedStaysInTheFolder(t *testing.T) {
+	s, dir := setup(t, 0)
+	up := filepath.Join(dir, Uploads)
+	write(t, filepath.Join(up, "report.pdf"), "%PDF", 0)
+	write(t, filepath.Join(dir, "secret"), "outside", 0)
+	if err := os.Symlink(filepath.Join(dir, "secret"), filepath.Join(up, "link.pdf")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("report.pdf", filepath.Join(up, "inside-link.pdf")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/etc/passwd", filepath.Join(up, "passwd")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(up, "folder"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(up, "fifo"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, Downloads, "downloaded.pdf"), "dl", 0)
+
+	f, p, err := s.Uploaded("google", "report.pdf")
+	if err != nil || f.Name != "report.pdf" || f.Size != 4 || p != "/files/uploads/report.pdf" {
+		t.Fatalf("Uploaded = %+v, %q, %v", f, p, err)
+	}
+	for _, name := range []string{"link.pdf", "inside-link.pdf", "passwd", "folder", "fifo", "missing.pdf", "downloaded.pdf"} {
+		if _, p, err := s.Uploaded("google", name); !errors.Is(err, ErrNotFound) || p != "" {
+			t.Errorf("Uploaded(%q) = %q, %v; want ErrNotFound", name, p, err)
+		}
+	}
+	for _, bad := range []string{"../secret", "..", "a/b", `a\b`, "nul\x00.pdf", ".hidden", "", strings.Repeat("a", 256)} {
+		if _, p, err := s.Uploaded("google", bad); !errors.Is(err, ErrBadName) || p != "" {
+			t.Errorf("Uploaded(%q) = %q, %v; want ErrBadName", bad, p, err)
+		}
+	}
+	// The uploads folder replaced by a link out of the files folder.
+	if err := os.RemoveAll(up); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	write(t, filepath.Join(outside, "report.pdf"), "outside", 0)
+	if err := os.Symlink(outside, up); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Uploaded("google", "report.pdf"); err == nil {
+		t.Error("followed an uploads folder that links out")
+	}
+}
+
 func TestEnforceEvictsOldestFirst(t *testing.T) {
 	s, dir := setup(t, 10)
 	write(t, filepath.Join(dir, Downloads, "a"), "aaaa", 3*time.Hour)
