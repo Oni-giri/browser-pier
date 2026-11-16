@@ -182,8 +182,12 @@ func TestVisualClickReportsADownload(t *testing.T) {
 		time.Sleep(300 * time.Millisecond)
 	}
 
+	// The click expects a download, so it says so (SPEC §8 Downloads):
+	// without download_wait_ms the look lasts 40 ms, which a slow
+	// machine's server can miss, and the notice then comes with the next
+	// action instead (TestComputerTellsALateDownloadNextTime).
 	start := time.Now()
-	h := computer(`{"action": "click", ` + at(0.2) + `}`)
+	h := computer(`{"action": "click", ` + at(0.2) + `, "download_wait_ms": 10000}`)
 	t.Logf("click on Export CSV: %v, X-Downloads %s", time.Since(start).Round(time.Millisecond), h.Get(DownloadsHeader))
 	if h.Get(DownloadsHeader) == "" {
 		// Say when the file did come, to tell a late download from none.
