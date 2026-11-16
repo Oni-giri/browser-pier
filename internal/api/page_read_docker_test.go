@@ -371,14 +371,14 @@ func TestCloudflareChallengeNote(t *testing.T) {
 	s := a.startAPIBrowser(t, "cf")
 	sw, sh := a.screenSize(t, s.ID)
 	at := regexp.MustCompile(`computer click at screen x=(\d+), y=(\d+) \(MCP: click at (\d+), (\d+) in screenshot pixels`)
-	// note checks the answer has the note in its fence and returns its
-	// screen point.
+	// note checks the answer has the note after its fence (BrowserPier's
+	// words, the clamped point the page's) and returns its screen point.
 	note := func(what, out string) (int, int) {
 		t.Helper()
 		m := at.FindStringSubmatch(out)
 		i, end := strings.Index(out, "Cloudflare challenge."), strings.LastIndex(out, "</untrusted-content-")
-		if m == nil || i < 0 || i > end {
-			t.Fatalf("%s: no note in the fence:\n%s", what, out)
+		if m == nil || i < 0 || i < end || !strings.Contains(out, "(position read from the page's layout;") {
+			t.Fatalf("%s: no note after the fence:\n%s", what, out)
 		}
 		n := make([]int, 4)
 		for k := range n {

@@ -128,9 +128,9 @@ func TestCloudflareNote(t *testing.T) {
 		fmt.Sprintf("MCP: click at %d, %d in screenshot pixels", mx, my),
 		"request_handoff with reason captcha",
 		"A named profile keeps the pass.",
-		"where the page's layout puts it",
-		// The browser's own prompts can cover the page: look first.
-		"take a screenshot and check its checkbox, which snapshot can't see, is at this point (the browser's own prompts can cover the page), then click it",
+		// The point is the page's; the browser's own prompts can cover
+		// the page: look first.
+		"take a screenshot and check its checkbox, which snapshot can't see, is at this point (position read from the page's layout; the browser's own prompts can cover the page), then click it",
 	} {
 		if !strings.Contains(n, want) {
 			t.Errorf("no %q in %q", want, n)
@@ -164,7 +164,9 @@ func TestCloudflareNote(t *testing.T) {
 	}
 }
 
-// snapshot, navigate, find and page_content add the note, in the fence;
+// snapshot, navigate, find and page_content add the note, after the
+// fence (its words are BrowserPier's; only the clamped point is the
+// page's, and it says so);
 // a page without the widget gets none, and act doesn't add it.
 func TestCloudflareNoteInTools(t *testing.T) {
 	f := newFixture(t)
@@ -174,11 +176,14 @@ func TestCloudflareNoteInTools(t *testing.T) {
 	}
 	f.fb.addTab("https://plain.example/", f.fb.pages(""), true)
 	ctx := context.Background()
-	inFence := func(name, out string) {
+	afterFence := func(name, out string) {
 		t.Helper()
-		i, start, end := strings.Index(out, "Cloudflare challenge."), strings.Index(out, "<untrusted-content-"), strings.LastIndex(out, "</untrusted-content-")
-		if i < 0 || i > end || start < 0 || start > i {
-			t.Errorf("%s: no note in the fence:\n%s", name, out)
+		i, end := strings.Index(out, "Cloudflare challenge."), strings.LastIndex(out, "</untrusted-content-")
+		if i < 0 || i < end { // after the fence, if the answer has one
+			t.Errorf("%s: no note after the fence:\n%s", name, out)
+		}
+		if strings.Count(out, "Cloudflare challenge.") != 1 || !strings.Contains(out, "(position read from the page's layout;") {
+			t.Errorf("%s: the note isn't there once, saying where its point comes from:\n%s", name, out)
 		}
 		if !strings.Contains(out, "computer click at screen x=591, y=413 (MCP") {
 			t.Errorf("%s: coordinates:\n%s", name, out)
@@ -201,7 +206,7 @@ func TestCloudflareNoteInTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	inFence("navigate", out)
+	afterFence("navigate", out)
 	for _, tc := range []struct {
 		name string
 		in   SnapshotIn
@@ -213,24 +218,24 @@ func TestCloudflareNoteInTools(t *testing.T) {
 		if tc.in.Diff && !strings.Contains(out, "no changes since the last snapshot") {
 			t.Errorf("not a diff:\n%s", out)
 		}
-		inFence(tc.name, out)
+		afterFence(tc.name, out)
 	}
 	out, err = f.tools.Find(ctx, f.session(), f.who, FindIn{Text: "human"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	inFence("find", out)
+	afterFence("find", out)
 	out, err = f.tools.Find(ctx, f.session(), f.who, FindIn{Text: "absent"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	inFence("find with no match", out)
+	afterFence("find with no match", out)
 	for _, format := range []string{"markdown", "readability"} {
 		out, err := f.text(TextIn{Format: format})
 		if err != nil {
 			t.Fatal(format, err)
 		}
-		inFence(format, out)
+		afterFence(format, out)
 	}
 	// The note says nothing in the activity log.
 	for _, a := range f.m.Activity(f.sess.ID) {

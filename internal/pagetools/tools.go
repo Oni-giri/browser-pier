@@ -258,6 +258,10 @@ type call struct {
 	unreachable string
 	world       int64
 	notices     []string
+	// notes are BrowserPier's own lines for the result, which go after
+	// the fence, not in it: the Cloudflare note, whose only part from the
+	// page is a clamped point.
+	notes []string
 	// instant: the step under way is at instant pace, not a hand's.
 	// keyAt is when act last pressed a key at human pace, and keyDue how
 	// long after it the next key goes down.
@@ -516,6 +520,13 @@ func (c *call) result(source, body, trailer string) string {
 	case trailer != "":
 		out += "\n" + trailer
 	}
+	for _, n := range c.notes {
+		if out != "" {
+			out += "\n"
+		}
+		out += n
+	}
+	c.notes = nil // said once
 	return out
 }
 

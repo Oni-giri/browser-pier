@@ -144,9 +144,11 @@ func clampInt(v, lo, hi int) int {
 }
 
 // cloudflareNote is the line snapshot, navigate, find and page_content
-// add when the page is a Cloudflare challenge, "" when it isn't. It goes
-// inside the fence with the page's text, since where the checkbox is
-// comes from the page's layout.
+// add when the page is a Cloudflare challenge, "" when it isn't. Its
+// words are BrowserPier's, so it goes after the fence, not in it: the
+// only part from the page is the point, two integers clamped to the
+// browser's content area, and the line says it was read from the page's
+// layout.
 func cloudflareNote(cf *cfInfo) string {
 	if cf == nil {
 		return ""
@@ -169,13 +171,13 @@ func cloudflareNote(cf *cfInfo) string {
 	// The point comes from the page's layout, and the browser's own
 	// prompts (a permission bubble, say) can sit over the page: the agent
 	// looks before it clicks.
-	return lead + fmt.Sprintf("take a screenshot and check its checkbox, which snapshot can't see, is at this point (the browser's own prompts can cover the page), then click it with a real click where the page's layout puts it: computer click at screen x=%d, y=%d%s,", sx, sy, mcp) + tail
+	return lead + fmt.Sprintf("take a screenshot and check its checkbox, which snapshot can't see, is at this point (position read from the page's layout; the browser's own prompts can cover the page), then click it with a real click: computer click at screen x=%d, y=%d%s,", sx, sy, mcp) + tail
 }
 
-// noteChallenge adds the Cloudflare note to the call's notices, which
-// its result puts in the fence.
+// noteChallenge adds the Cloudflare note to the call's notes, which its
+// result puts after the fence.
 func (c *call) noteChallenge(cf *cfInfo) {
 	if n := cloudflareNote(cf); n != "" {
-		c.notices = append(c.notices, n)
+		c.notes = append(c.notes, n)
 	}
 }
