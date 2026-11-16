@@ -10,6 +10,7 @@ package sessions
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -198,6 +199,58 @@ func TestSessionCookieLoginSurvivesIdleAutoStop(t *testing.T) {
 	next := startRunning(t, m, name)
 	if got := site.Account(t, browsertest.Page(t, control)); got != token {
 		t.Fatalf("after the idle auto-stop the site saw session %q, want %q: the session-only cookie was lost", got, token)
+	}
+	stopCleanly(t, m, next.ID)
+}
+
+// TestTabsWithASecretArentReopened is PROJ-125's guard on PROJ-112: a
+// tab that showed a secret typed into the last session isn't reopened by
+// the next start (its scrubber wouldn't know the value), while the login,
+// a session-only cookie, survives. It also checks that this Chromium
+// keeps its tabs where forgetTabs looks (Default/Sessions).
+func TestTabsWithASecretArentReopened(t *testing.T) {
+	f := newRealFixture(t)
+	m := f.manager(f.layout)
+	name := f.profile(m)
+	site := browsertest.NewSite(t, browsertest.SiteHost(t))
+	site.SessionCookie()
+
+	s := startRunning(t, m, name)
+	control := browsertest.ControlClient(f.layout.ControlSocket(name))
+	p := browsertest.Page(t, control)
+	token := site.Login(t, p)
+	const secret = "s3cret-Fill-77"
+	p.Navigate(site.URL + "/login?code=" + secret)
+	p.Close()
+	if err := m.RegisterSecret(s.ID, secret); err != nil {
+		t.Fatal(err)
+	}
+	stopCleanly(t, m, s.ID)
+	saved, err := os.ReadDir(filepath.Join(f.dir, "profiles", name, "chrome", "Default", "Sessions"))
+	if err != nil || len(saved) == 0 {
+		t.Fatalf("Chromium kept its tabs somewhere else than Default/Sessions (%d files, %v)", len(saved), err)
+	}
+
+	next := startRunning(t, m, name)
+	// Chromium would have reopened the tab by now.
+	time.Sleep(3 * time.Second)
+	resp, err := control.Get("http://control/cdp/json/list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var targets []struct{ Type, URL string }
+	err = json.NewDecoder(resp.Body).Decode(&targets)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tg := range targets {
+		if strings.Contains(tg.URL, secret) {
+			t.Fatalf("the tab with the secret was reopened: %+v", targets)
+		}
+	}
+	if got := site.Account(t, browsertest.Page(t, control)); got != token {
+		t.Fatalf("after the start the site saw session %q, want %q: the session-only login was lost", got, token)
 	}
 	stopCleanly(t, m, next.ID)
 }

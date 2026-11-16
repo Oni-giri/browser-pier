@@ -440,6 +440,10 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 		m.abort(l, "", fmt.Sprintf("preparing the profile folder: %v", err))
 		return
 	}
+	if err := m.forgetTabsIfFilled(ctx, p.Name, id); err != nil {
+		m.abort(l, "", fmt.Sprintf("closing the tabs of a session a secret was typed into: %v", err))
+		return
+	}
 	if err := m.writeProxyFile(p); err != nil {
 		m.abort(l, "", fmt.Sprintf("handing over the proxy: %v", err))
 		return

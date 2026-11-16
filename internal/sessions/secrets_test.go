@@ -6,9 +6,11 @@ import (
 	"database/sql"
 	"errors"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/db"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
@@ -172,5 +174,110 @@ func TestReconcileStopsABrowserWhoseSecretsWereLost(t *testing.T) {
 	}
 	if got := f.stored(s.ID); got.HadFills {
 		t.Fatal("the new session starts marked")
+	}
+}
+
+// A browser reopens its tabs as it starts, and one could show a secret
+// typed into the last session again, with nothing left to hide it: the
+// next start removes Chromium's record of the tabs first, and keeps the
+// cookies. A start after a session with no secret keeps the tabs.
+func TestStartAfterASecretForgetsTheTabs(t *testing.T) {
+	f := newFixture(t)
+	chrome := f.layout.dir("google", "chrome")
+	outside := t.TempDir()
+	write := func(name string) {
+		t.Helper()
+		p := filepath.Join(chrome, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exists := func(name string) bool {
+		_, err := os.Lstat(filepath.Join(chrome, name))
+		return err == nil
+	}
+	tabs := []string{"Default/Sessions/Session_13400000000000000", "Default/Sessions/Tabs_13400000000000000", "Default/Current Session", "Default/Last Tabs"}
+	kept := []string{"Default/Cookies", "Default/Session Storage/000003.log", "Default/Preferences", "Local State"}
+
+	s := f.start(f.m)
+	if err := f.m.RegisterSecret(s.ID, testSecret); err != nil {
+		t.Fatal(err)
+	}
+	f.stop(s.ID)
+	for _, n := range append(tabs, kept...) {
+		write(n)
+	}
+	s = f.start(f.m)
+	for _, n := range tabs {
+		if exists(n) {
+			t.Errorf("%s is still there after a session with a secret", n)
+		}
+	}
+	for _, n := range kept {
+		if !exists(n) {
+			t.Errorf("%s was removed", n)
+		}
+	}
+
+	// That session had none: the next start reopens its tabs.
+	f.stop(s.ID)
+	write(tabs[0])
+	s = f.start(f.m)
+	if !exists(tabs[0]) {
+		t.Error("the tabs of a session without a secret were removed")
+	}
+
+	// A link the browser left in their place is removed, not followed.
+	if err := f.m.RegisterSecret(s.ID, testSecret); err != nil {
+		t.Fatal(err)
+	}
+	f.stop(s.ID)
+	if err := os.WriteFile(filepath.Join(outside, "keep"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(chrome, "Default", "Sessions")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(chrome, "Default", "Sessions")); err != nil {
+		t.Fatal(err)
+	}
+	s = f.start(f.m)
+	if exists("Default/Sessions") {
+		t.Error("the link is still there")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "keep")); err != nil {
+		t.Errorf("a file the link pointed at went: %v", err)
+	}
+	f.stop(s.ID)
+}
+
+// A start that failed before its container was created never ran the
+// browser: the start after it still forgets the tabs of the session with
+// a secret before it.
+func TestAFailedStartDoesntHideAnEarlierSecret(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	if err := f.m.RegisterSecret(s.ID, testSecret); err != nil {
+		t.Fatal(err)
+	}
+	f.stop(s.ID)
+	if _, err := f.m.db.Exec(`INSERT INTO sessions (id, profile, state, mode, container_id, last_log, error, created_at, updated_at, block_ads)
+		VALUES ('failed1', 'google', 'failed', 'api', '', '', 'creating the browser container: no', ?, ?, 0)`,
+		time.Now().Add(time.Second).UnixMilli(), time.Now().Add(time.Second).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(f.layout.dir("google", "chrome"), "Default", "Sessions", "Session_1")
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.stop(f.start(f.m).ID)
+	if _, err := os.Stat(p); err == nil {
+		t.Error("the tabs of the session with a secret were reopened after a failed start")
 	}
 }

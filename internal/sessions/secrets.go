@@ -2,7 +2,11 @@ package sessions
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/scrub"
@@ -16,7 +20,12 @@ import (
 //
 // The value is kept in memory only, never logged or stored, and goes when
 // the session ends. It stays through a handoff or a person taking control:
-// the page may still show it then, and hiding it costs nothing. Values
+// the page may still show it then, and hiding it costs nothing. Since the
+// browser reopens its tabs as it starts (RestoreOnStartup, PROJ-112), a tab
+// could show the value again after a stop and a start, with nothing left
+// to hide it: so the next start of the profile removes Chromium's record
+// of the tabs first (forgetTabs), and that start opens none. Cookies and
+// the rest of the profile are kept. Values
 // under scrub.MinRunes characters are ignored. It fails with ErrNotRunning
 // when the session has ended or isn't known.
 //
@@ -88,4 +97,56 @@ func (m *Manager) lockScrubber(sessionID string) *scrub.Scrubber {
 		}
 		m.mu.Unlock()
 	}
+}
+
+// sessionRestore is what Chromium keeps the tabs it reopens in, under the
+// user data dir: Default/Sessions (its Session_<time> and Tabs_<time>
+// files) since Chromium 100, and the four files of older versions, kept
+// here in case a profile comes from one. Nothing else: the cookies,
+// session-only ones included, and sessionStorage stay where they are.
+var sessionRestore = []string{
+	filepath.Join("Default", "Sessions"),
+	filepath.Join("Default", "Current Session"), filepath.Join("Default", "Current Tabs"),
+	filepath.Join("Default", "Last Session"), filepath.Join("Default", "Last Tabs"),
+}
+
+// forgetTabsIfFilled removes the profile's record of its tabs before
+// session id's browser starts when the profile's last browser to run had
+// a secret typed into it (Session.HadFills): a restored tab could show the
+// value again (a GET form's URL, a page that echoes it), and the new
+// session's scrubber doesn't know it. The last browser to run is the
+// latest other session with a container; one that failed before creating
+// one never ran Chromium, so it doesn't hide an earlier fill.
+func (m *Manager) forgetTabsIfFilled(ctx context.Context, profile, id string) error {
+	var had bool
+	err := m.db.QueryRowContext(ctx, `SELECT had_fills FROM sessions WHERE profile = ? AND id != ? AND container_id != ''
+		ORDER BY created_at DESC, rowid DESC LIMIT 1`, profile, id).Scan(&had)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && !had) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := forgetTabs(m.layout.dir(profile, "chrome")); err != nil {
+		return err
+	}
+	m.log.Info("not reopening the tabs of the profile's last session: a secret was typed into it", "profile", profile, "session", id)
+	return nil
+}
+
+// forgetTabs removes Chromium's record of the tabs it reopens from a user
+// data dir. The browser can write anything there, symlinks included, so
+// it goes through os.Root, which won't follow a link out of the folder.
+func forgetTabs(chromeDir string) error {
+	root, err := os.OpenRoot(chromeDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	for _, name := range sessionRestore {
+		if err := root.RemoveAll(name); err != nil {
+			return err
+		}
+	}
+	return nil
 }
