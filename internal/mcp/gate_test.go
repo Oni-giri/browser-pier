@@ -51,7 +51,7 @@ func TestLargeRequestsAreServedAFewAtATime(t *testing.T) {
 		}
 		resp, err := http.DefaultClient.Do(req)
 		if err == nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 		return err
 	}
