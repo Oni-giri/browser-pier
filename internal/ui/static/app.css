@@ -522,6 +522,7 @@ body.handoff{background:radial-gradient(280px 190px at 50% -10px,rgba(47,107,255
 .ho-who h1{margin:0;font-size:15px;font-weight:500;letter-spacing:0}
 .ho-who .caption{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ho-detail{margin:12px 0 0;font-size:20px;line-height:1.35;font-weight:500;letter-spacing:-.3px;overflow-wrap:anywhere}
+.ho-until{margin:8px 0 0;overflow-wrap:anywhere}
 .ho-form{margin-top:22px}
 .ho-form label,.ho-label{display:block;font-weight:500;margin:14px 0 8px}
 .ho-form label:first-child{margin-top:0}

@@ -30,7 +30,20 @@ var pageJS []byte
 
 var pageJSTag = static.Tag(pageJS)
 
-var page = template.Must(template.New("handoff").Funcs(template.FuncMap{"initials": initials}).Parse(pageHTML))
+var page = template.Must(template.New("handoff").Funcs(template.FuncMap{"initials": initials, "shorten": shorten}).Parse(pageHTML))
+
+// maxShownUntil is how much of an agent's until_url pattern the page
+// shows, in characters: it is the agent's text, and a phone is narrow.
+const maxShownUntil = 80
+
+// shorten cuts s to maxShownUntil characters, with an ellipsis when it
+// was longer. The template escapes what it returns.
+func shorten(s string) string {
+	if r := []rune(s); len(r) > maxShownUntil {
+		return string(r[:maxShownUntil-1]) + "…"
+	}
+	return s
+}
 
 // initials are up to two letters for the agent's badge: "research-bot" → "RB".
 func initials(name string) string {
