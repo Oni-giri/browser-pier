@@ -423,16 +423,20 @@ root.innerHTML = '<button onclick="report(\'shadow free clicked\')">Free in shad
   '<span style="position:relative;display:inline-block;margin-left:20px"><button onclick="report(\'shadow covered clicked\')">Covered in shadow</button>' +
   '<span aria-label="Shadow cover" role="img" style="position:absolute;inset:0"></span></span>';
 </script>`,
-	// A Cloudflare challenge page, as far as BrowserPier looks (PROJ-120):
-	// its title and #challenge-stage, and in it a 300×65 widget holding
-	// the hidden response input, shaped as Turnstile shapes it. A trusted
-	// click reports where it landed and where the checkbox's middle is
-	// (21 px in, halfway down the first 65 px), in CSS pixels.
-	"/cf-challenge": `<!doctype html><title>Just a moment...</title>` + report + `
+	// A Cloudflare challenge page, as far as BrowserPier looks (PROJ-120),
+	// shaped as a real one was in November 2026: a title in the visitor's
+	// language (not "Just a moment"), no #challenge-stage or
+	// #challenge-form, a script from the site's own
+	// /cdn-cgi/challenge-platform/, and a 300×65 widget holding the hidden
+	// response input, named as Turnstile names it. A trusted click reports
+	// where it landed and where the checkbox's middle is (21 px in,
+	// halfway down the first 65 px), in CSS pixels.
+	"/cf-challenge": `<!doctype html><title>Mazliet uzgaidiet…</title>` + report + `
+<script src="/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1?ray=0"></script>
 <style>body{margin:0;font-family:sans-serif} #w{position:absolute;left:240px;top:260px;width:300px;height:65px;box-sizing:border-box;border:1px solid #d9d9d9;background:#fafafa}
 #box{position:absolute;left:9px;top:21px;width:21px;height:21px;box-sizing:border-box;border:2px solid #666;background:#fff}</style>
 <h1>shop.example</h1><p>Verify you are human by completing the action below.</p>
-<div id="challenge-stage"><div id="w"><input type="hidden" name="cf-turnstile-response" id="cf-chl-widget-abc12_response"><div id="box"></div></div></div>
+<div><div id="w"><input type="hidden" name="cf-turnstile-response" id="cf-chl-widget-abc12_response"><div id="box"></div></div></div>
 <script>
 document.addEventListener('click', e => {
   if (!e.isTrusted) return;
@@ -441,18 +445,20 @@ document.addEventListener('click', e => {
 });
 </script>`,
 	// A site's own sign-in with a Turnstile in its form, as Turnstile
-	// renders it (the same id shape as the challenge page's widget, in a
-	// laid-out box where its iframe would be), on a
-	// page that also has the JavaScript-detections script Cloudflare adds
-	// to ordinary pages: not a challenge page, so no Cloudflare note
-	// (PROJ-120).
+	// renders it (the same input as the challenge page's widget, in a
+	// laid-out box with its iframe). Its script and iframe come from
+	// challenges.cloudflare.com under /cdn-cgi/challenge-platform/
+	// (declared, not fetched: text/plain, srcdoc), and the page also has
+	// the JavaScript-detections script Cloudflare adds to ordinary pages:
+	// not a challenge page, so no Cloudflare note (PROJ-120).
 	"/turnstile-login": `<!doctype html><title>Sign in</title>
 <script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>
+<script type="text/plain" src="https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/if/ov2/av0/rcv/x"></script>
 <main><h1>Sign in</h1>
 <form method="post" action="/login">
 <label for="email">Email</label> <input id="email" name="email" autocomplete="username">
 <label for="password">Password</label> <input id="password" name="password" type="password" autocomplete="current-password">
-<div class="cf-turnstile"><div style="width:300px;height:65px;border:1px solid #d9d9d9"><input type="hidden" name="cf-turnstile-response" id="cf-chl-widget-xk3q9_response"></div></div>
+<div class="cf-turnstile"><div style="width:300px;height:65px;border:1px solid #d9d9d9"><iframe srcdoc="" src="https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/if/ov2/av0/rcv/x" width="0" height="0" style="border:0"></iframe><input type="hidden" name="cf-turnstile-response" id="cf-chl-widget-xk3q9_response"></div></div>
 <button>Sign in</button>
 </form></main>`,
 	// A challenge page whose widget has been answered (its input has a

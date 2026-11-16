@@ -17,16 +17,17 @@ import (
 //
 // The page is told by the challenge widget's hidden response input,
 // whose id starts with cf-chl-widget-, inside a laid-out box: the widget,
-// on a page with a mark of Cloudflare's challenge page (a #challenge-form
-// or #challenge-stage element, a script or iframe from its
-// /cdn-cgi/challenge-platform/, not the JavaScript-detections script
-// Cloudflare adds to ordinary pages, or a title starting "Just a moment").
-// A Turnstile on a site's own form has the same id shape: its input,
-// named cf-turnstile-response, counts only inside the challenge page's
-// #challenge-stage or #challenge-form, and a widget already answered (its
-// input has a value) never counts. The look is part of jsPageInfo, the
-// isolated-world read the tools already make: no domain, no script in
-// the page's own world.
+// on a page with a mark of Cloudflare's challenge page: a #challenge-form
+// or #challenge-stage element, a script or iframe from the page's OWN
+// origin under /cdn-cgi/challenge-platform/ (not the JavaScript-detections
+// script Cloudflare adds to ordinary pages), or a title starting "Just a
+// moment". A Turnstile on a site's own form has the same input (id
+// cf-chl-widget-…_response, name cf-turnstile-response, as the challenge
+// page's own widget has too), but its page carries none of these marks:
+// its scripts and iframe come from challenges.cloudflare.com, another
+// origin. A widget already answered (its input has a value) never counts.
+// The look is part of jsPageInfo, the isolated-world read the tools
+// already make: no domain, no script in the page's own world.
 
 // The checkbox's place in the widget: 21 px from its left edge, halfway
 // down its first 65 px (the widget is 65 px tall; a taller one has its
@@ -71,12 +72,19 @@ type cfInfo struct {
 // challenge page.
 const jsChallenge = `(() => {
   const d = document;
-  const mark = d.querySelector('#challenge-form, #challenge-stage, script[src*="/cdn-cgi/challenge-platform/"]:not([src*="/scripts/jsd/"]), iframe[src*="/cdn-cgi/challenge-platform/"]') ||
+  const own = e => {
+    try {
+      const u = new URL(e.src, location.href);
+      return u.origin === location.origin && u.pathname.startsWith('/cdn-cgi/challenge-platform/') && !u.pathname.includes('/scripts/jsd/');
+    } catch (_) { return false; }
+  };
+  const mark = d.querySelector('#challenge-form, #challenge-stage') ||
+    [...d.querySelectorAll('script[src*="/cdn-cgi/challenge-platform/"], iframe[src*="/cdn-cgi/challenge-platform/"]')].some(own) ||
     /^just a moment/i.test(d.title);
   if (!mark) return null;
   let p = null;
   for (const i of d.querySelectorAll('input[id^="cf-chl-widget-"]')) {
-    if (i.value || (i.name === 'cf-turnstile-response' && !i.closest('#challenge-stage, #challenge-form'))) continue;
+    if (i.value) continue;
     p = i.parentElement;
     break;
   }
