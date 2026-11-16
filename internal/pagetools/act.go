@@ -278,6 +278,9 @@ func (t *Tools) downloads(ctx context.Context, s sessions.Session, who Caller, m
 // they have ended.
 func (t *Tools) act(ctx context.Context, s sessions.Session, who Caller, in ActIn, mark *files.Mark) (string, error) {
 	return t.run(ctx, s, who, func(c *call) (string, error) {
+		// Human-paced steps can run for minutes: the person in the live
+		// view may break them off once they have run a few seconds.
+		c.lease.Breakable()
 		ctx := c.lease.Ctx
 		changes := in.Changes != nil && *in.Changes
 		// unkept: the agent's last snapshot of this document was too large
@@ -404,6 +407,17 @@ func (c *call) stepFailed(done []string, i, n int, st Step, err error) error {
 	msg := ""
 	if len(done) > 0 || len(c.notices) > 0 {
 		msg = c.result("page actions", strings.Join(done, "\n"), "") + "\n"
+	}
+	if c.ctx.Err() == nil && errors.Is(context.Cause(c.lease.Ctx), sessions.ErrTookControl) {
+		// The person in the live view broke the steps off (a 409): how
+		// far they got, for the agent and the activity log.
+		ran := fmt.Sprintf("%d of %d steps ran", i, n)
+		if n == 1 {
+			ran = "the step didn't finish"
+		}
+		c.note(fmt.Sprintf("Actions interrupted: a person took control (%s)", ran))
+		msg += fmt.Sprintf("A person took control of this browser in the live view during step %d (%s), which broke off: %s. Wait until they hand it back.", i+1, st.Action, ran)
+		return &Error{Status: http.StatusConflict, Msg: msg, final: true}
 	}
 	msg += fmt.Sprintf("Step %d (%s) failed: %s", i+1, st.Action, err.Error())
 	if rest := n - i - 1; rest == 1 {

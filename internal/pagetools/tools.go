@@ -75,6 +75,9 @@ const (
 type Error struct {
 	Status int
 	Msg    string
+	// final: the answer already says why the lease ended (act broken
+	// off by Take control), so fail keeps it.
+	final bool
 }
 
 func (e *Error) Error() string { return e.Msg }
@@ -312,7 +315,7 @@ func leaseError(err error) error {
 	switch {
 	case errors.Is(err, sessions.ErrHumanDriving):
 		return &Error{Status: http.StatusConflict, Msg: "a person is driving this browser from the live view; wait until they hand it back"}
-	case errors.Is(err, sessions.ErrHandedOver), errors.Is(err, sessions.ErrSessionHeld):
+	case errors.Is(err, sessions.ErrHandedOver), errors.Is(err, sessions.ErrSessionHeld), errors.Is(err, sessions.ErrTookControl):
 		return &Error{Status: http.StatusConflict, Msg: err.Error()}
 	case errors.Is(err, sessions.ErrNotRunning), errors.Is(err, sessions.ErrStopping):
 		return &Error{Status: http.StatusConflict, Msg: "the session isn't running"}
@@ -329,6 +332,8 @@ func (c *call) fail(err error) error {
 	switch {
 	case err == nil:
 		return nil
+	case errors.As(err, &e) && e.final:
+		return e
 	case c.lease.Ctx.Err() != nil && c.ctx.Err() == nil:
 		return leaseError(context.Cause(c.lease.Ctx))
 	case c.ctx.Err() != nil:

@@ -1,6 +1,8 @@
 package pagetools
 
 import (
+	"context"
+	"errors"
 	"math"
 	"net/http"
 	"strings"
@@ -8,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/motion"
+	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
 // mouse returns a tab's mouse events so far, and forgets them.
@@ -277,5 +280,85 @@ func TestEachSessionHasItsOwnMotion(t *testing.T) {
 	pb := b.mot.Path(motion.Point{}, motion.Point{X: 300, Y: 100}, 40)
 	if pa[len(pa)/2] == pb[len(pb)/2] {
 		t.Fatal("two sessions' sources gave the same path")
+	}
+}
+
+// The person in the live view can break off act's human-paced steps once
+// they have run for 3 seconds, as they can a long input action: act
+// answers 409, saying a person took control and how far the steps got,
+// lets go of what it held, and the activity log says so. Before that,
+// Take control is refused.
+func TestTakeControlBreaksOffActAfterThreeSeconds(t *testing.T) {
+	f := newFixture(t)
+	p := newActPage(f.fb)
+	tb := f.fb.addTab("https://example.com/", p.doc, true)
+	r := f.refs()
+	blocked := make(chan struct{})
+	var pauses int
+	f.tools.pause = func(ctx context.Context, d time.Duration) error {
+		f.pauseMu.Lock()
+		pauses++
+		n := pauses
+		f.pauseMu.Unlock()
+		if n == 4 { // the gap before the third key
+			close(blocked)
+			<-ctx.Done()
+		}
+		return ctx.Err()
+	}
+	f.mouse(tb)
+	start := time.Now()
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.tools.Act(context.Background(), f.session(), f.who, ActIn{Steps: []Step{
+			{Action: "click", Ref: r["Email"], Pace: "instant"},
+			{Action: "type", Ref: r["Email"], Text: text("abcdef")},
+			{Action: "type", Ref: r["Password"], Text: text("ghi")},
+		}})
+		done <- err
+	}()
+	<-blocked
+	if err := f.m.TakeControl(f.sess.ID); !errors.Is(err, sessions.ErrAgentDriving) {
+		t.Fatalf("Take control in act's first seconds = %v", err)
+	}
+	time.Sleep(time.Until(start.Add(3*time.Second + 100*time.Millisecond)))
+	if err := f.m.TakeControl(f.sess.ID); err != nil {
+		t.Fatalf("Take control after 3 s of act = %v", err)
+	}
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("act didn't answer after Take control")
+	}
+	f.closedAfter()
+	if !isStatus(err, http.StatusConflict) {
+		t.Fatalf("act broken off: %v", err)
+	}
+	for _, want := range []string{"A person took control of this browser in the live view during step 2 (type)", "1 of 3 steps ran", "Wait until they hand it back", "clicked "} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("answer lacks %q:\n%s", want, err)
+		}
+	}
+	f.fb.mu.Lock()
+	ev := f.fb.input(tb).events
+	f.fb.mu.Unlock()
+	downs, ups := 0, 0
+	for _, e := range ev {
+		switch {
+		case strings.HasPrefix(e, "rawKeyDown"):
+			downs++
+		case strings.HasPrefix(e, "keyUp"):
+			ups++
+		}
+	}
+	if downs != 2 || ups != downs {
+		t.Errorf("keys down %d, up %d: %v", downs, ups, ev)
+	}
+	if *p.pw.value != "" {
+		t.Errorf("the step after it ran: password %q", *p.pw.value)
+	}
+	if acts := f.m.Activity(f.sess.ID); len(acts) == 0 || acts[0].What != "Actions interrupted: a person took control (1 of 3 steps ran)" {
+		t.Errorf("activity %+v", acts)
 	}
 }

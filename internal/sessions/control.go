@@ -65,10 +65,12 @@ func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, f
 // TakeControl gives a person in the live view the mouse and keyboard.
 // It is refused while an agent is driving: connected over CDP, having
 // clicked or typed in the last few seconds, with a page call (PageLease)
-// under way or just ended, or with an input action under way for less
-// than takeOverAfter. One that has run longer (a long human-paced type)
-// is broken off, as a handoff breaks it off, and TakeControl waits for it
-// to end. Meanwhile agents can only watch: their input and new CDP
+// under way or just ended, or with an input action, or a page call marked
+// Breakable (act), under way for less than takeOverAfter. One that has
+// run longer (a long human-paced type, or act's steps) is broken off, as
+// a handoff breaks it off, and TakeControl waits for it to end. A page
+// call not marked Breakable (a read, bounded by its own timeouts) is
+// never broken off: Take control is refused while it runs. Meanwhile agents can only watch: their input and new CDP
 // connections are refused. During a handoff (Needs help) the agent is
 // paused, so it always succeeds.
 func (m *Manager) TakeControl(id string) error {
@@ -81,8 +83,14 @@ func (m *Manager) TakeControl(id string) error {
 	now := m.now()
 	breakOff := false
 	if l.sess.State == Running {
-		if len(l.conns) > 0 || len(l.leases) > 0 {
+		if len(l.conns) > 0 {
 			return ErrAgentDriving
+		}
+		for ls := range l.leases {
+			if !ls.breakable || now.Sub(ls.started) < takeOverAfter {
+				return ErrAgentDriving
+			}
+			breakOff = true
 		}
 		for in := range l.inputs {
 			if now.Sub(in.started) < takeOverAfter {
@@ -101,11 +109,13 @@ func (m *Manager) TakeControl(id string) error {
 	l.generation++
 	l.lastActivity = now
 	if breakOff {
-		// New agent input is refused from now on (l.human); the one
-		// under way breaks off.
+		// New agent input and page calls are refused from now on
+		// (l.human); what is under way breaks off. Every lease left here
+		// is Breakable and old enough, or TakeControl was refused above.
 		for in := range l.inputs {
 			in.cancel(ErrTookControl)
 		}
+		l.cancelLeasesLocked(ErrTookControl)
 	}
 	// What is still under way (that one, or during a handoff what the
 	// handoff cancelled and is itself waiting for) ends before the person

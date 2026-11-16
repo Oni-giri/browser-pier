@@ -15,7 +15,8 @@ var (
 	// ErrStopping: the browser is stopping.
 	ErrStopping = errors.New("the browser is stopping")
 	// ErrTookControl: the person in the live view took control (an agent
-	// input that had run for takeOverAfter or more).
+	// input, or a page call marked Breakable, that had run for
+	// takeOverAfter or more).
 	ErrTookControl = errors.New("a person took control of this browser in the live view; wait until they hand it back")
 	// ErrRevoked: the caller's token was revoked.
 	ErrRevoked = errors.New("the agent token was revoked")
@@ -28,8 +29,12 @@ var (
 type lease struct {
 	tokenID string
 	cancel  context.CancelCauseFunc
-	// started is when an agent input action began (AgentInput).
+	// started is when an agent input action (AgentInput) or a page call
+	// (PageLease) began.
 	started time.Time
+	// breakable: a page call the person in the live view may break off
+	// once it has run for takeOverAfter (Lease.Breakable).
+	breakable bool
 }
 
 // Lease is a call into a session's page, held from PageLease until
@@ -42,17 +47,28 @@ type Lease struct {
 	// page under an older generation is out of date.
 	Generation uint64
 	release    func()
+	breakable  func()
 }
 
 // Release ends the lease; it is safe to call more than once.
 func (l *Lease) Release() { l.release() }
+
+// Breakable lets the person in the live view take control by breaking
+// this call off once it has run for takeOverAfter, counted from when the
+// lease was taken, as for an agent input action (AgentInput): Ctx then
+// ends with ErrTookControl. Before that, and for a lease never marked,
+// Take control is refused. act marks its lease, since its human-paced
+// steps can run for minutes (PROJ-113); the short reads (snapshot, find,
+// page content…) don't, as their own timeouts bound them.
+func (l *Lease) Breakable() { l.breakable() }
 
 // PageLease starts one of BrowserPier's own calls into a running
 // session's page (the API-mode page tools). Leases are not connections
 // (l.conns): they don't show the agent as connected, and they let the
 // browser go idle between calls. But like an agent's input, they keep a
 // person from taking control while one is held and for a few seconds
-// after (TakeControl), and a handoff, a hold, a stop or the token's
+// after (TakeControl), unless marked Breakable and held for
+// takeOverAfter, and a handoff, a hold, a stop or the token's
 // revocation cancels them and waits for them to end.
 //
 // Calls on one session take turns: PageLease waits (until ctx ends) while
@@ -86,15 +102,19 @@ func (m *Manager) PageLease(ctx context.Context, id, tokenID string) (*Lease, er
 		return nil, err
 	}
 	cctx, cancel := context.WithCancelCause(ctx)
-	ls := &lease{tokenID: tokenID, cancel: cancel}
+	now := m.now()
+	ls := &lease{tokenID: tokenID, cancel: cancel, started: now}
 	if l.leases == nil {
 		l.leases = map[*lease]struct{}{}
 	}
 	l.leases[ls] = struct{}{}
-	now := m.now()
 	l.lastActivity, l.lastAgentInput = now, now
 	var once sync.Once
-	return &Lease{Ctx: cctx, Generation: l.generation, release: func() {
+	return &Lease{Ctx: cctx, Generation: l.generation, breakable: func() {
+		m.mu.Lock()
+		ls.breakable = true
+		m.mu.Unlock()
+	}, release: func() {
 		once.Do(func() {
 			cancel(context.Canceled)
 			m.mu.Lock()
