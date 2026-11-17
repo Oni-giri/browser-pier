@@ -41,16 +41,21 @@ type handoffJSON struct {
 	// because a tab got there, not because the person tapped Done.
 	UntilURL string `json:"until_url,omitempty"`
 	Reached  bool   `json:"until_url_reached,omitempty"`
+	// Notified, only when created, says the admin's webhook was queued an
+	// event about it: queued, not delivered.
+	Notified bool `json:"notified,omitempty"`
 	// Message says what to do next.
 	Message string `json:"message"`
 }
 
 func handoffOut(h handoff.Handoff) handoffJSON {
 	out := handoffJSON{ID: h.ID, Session: h.SessionID, Profile: h.Profile, Status: string(h.Status), Reason: string(h.Reason),
-		Policy: string(h.Policy), Origin: h.Origin, ExpiresAt: h.ExpiresAt, Note: h.Note, UntilURL: h.UntilURL, Reached: h.Auto}
+		Policy: string(h.Policy), Origin: h.Origin, ExpiresAt: h.ExpiresAt, Note: h.Note, UntilURL: h.UntilURL, Reached: h.Auto, Notified: h.Notified}
 	switch {
 	case h.Status == handoff.Done && h.Auto:
 		out.Message = "The tab in front reached the address you gave in until_url, so the handoff ended without the person tapping Done. The page may have changed: re-read it before acting."
+	case h.Status == handoff.Pending && h.Notified:
+		out.Message = "Send the URL to the person through your own channel; the admin was also notified by webhook. Then wait on GET /api/handoffs/{id}?wait=900. You are paused until they hand back."
 	case h.Status == handoff.Pending:
 		out.Message = "Send the URL to the person through your own channel, then wait on GET /api/handoffs/{id}?wait=900. You are paused until they hand back."
 	case h.Status == handoff.Done:

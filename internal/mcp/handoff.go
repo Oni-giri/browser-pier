@@ -43,6 +43,7 @@ type handoffOut struct {
 	Note      string    `json:"note"`
 	Message   string    `json:"message"`
 	Reached   bool      `json:"until_url_reached"`
+	Notified  bool      `json:"notified"`
 }
 
 // requestHandoff opens a handoff. A client that can open URLs for its user
@@ -56,9 +57,15 @@ func (s *Server) requestHandoff(ctx context.Context, req *sdk.CallToolRequest, i
 		return nil, nil, err
 	}
 	fallback := func(why string) (*sdk.CallToolResult, any, error) {
+		also := ""
+		if h.Notified {
+			// Queued, not delivered: the agent still passes the link on,
+			// but a headless one knows to wait rather than cancel.
+			also = "The admin was also notified by webhook, so wait for them even if you can't reach anyone. "
+		}
 		return text("%sSend this link to the person through your own channel: %s\n"+
-			"It works once, for 15 minutes. Then call wait_for_handoff with handoff_id %s; you're paused until they hand back. "+
-			"If nobody will take it, call cancel_handoff.", why, h.URL, h.ID), nil, nil
+			"%sIt works once, for 15 minutes. Then call wait_for_handoff with handoff_id %s; you're paused until they hand back. "+
+			"If nobody will take it, call cancel_handoff.", why, h.URL, also, h.ID), nil, nil
 	}
 	caps := req.ClientCapabilities()
 	if caps == nil || caps.Elicitation == nil || caps.Elicitation.URL == nil || req.Session == nil {
