@@ -232,25 +232,31 @@ func readProfileForm(r *http.Request, p *profiles.Profile, keepProxy string) str
 	return ""
 }
 
-// maskProxy shows a proxy URL with its password hidden. Submitting it
-// unchanged keeps the stored one.
+// maskProxy shows a proxy URL with its password hidden; a template is
+// shown as one, its {sticky} never filled in. Submitting it unchanged
+// keeps the stored URL.
 func maskProxy(raw string) string {
 	if raw == "" {
 		return ""
 	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
+	out, err := profiles.FormatProxy(raw, func(u *url.URL) string {
+		if u.Host == "" {
+			return ""
+		}
+		userinfo := ""
+		if u.User != nil {
+			userinfo = u.User.Username()
+			if _, ok := u.User.Password(); ok {
+				userinfo += ":••••"
+			}
+			userinfo += "@"
+		}
+		return u.Scheme + "://" + userinfo + u.Host
+	})
+	if err != nil || out == "" {
 		return "(hidden)"
 	}
-	userinfo := ""
-	if u.User != nil {
-		userinfo = u.User.Username()
-		if _, ok := u.User.Password(); ok {
-			userinfo += ":••••"
-		}
-		userinfo += "@"
-	}
-	return u.Scheme + "://" + userinfo + u.Host
+	return out
 }
 
 // withScreen offers the profile's own screen size too, if it isn't one of ours.

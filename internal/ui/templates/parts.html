@@ -43,6 +43,7 @@
     {{- end}}
     {{if or (not .Page) .Live}}<a href="/profiles/{{.Name}}/edit">Edit settings</a>{{end}}
     {{if .Live}}<button type="button" disabled title="Stop the browser first">Export profile…</button>{{else}}<button type="button" data-dialog="export-dialog" data-name="{{.Name}}">Export profile…</button>{{end}}
+    {{if .StickyProxy}}{{if .Live}}<button type="button" disabled title="Stop the browser first">New exit IP…</button>{{else}}<button type="button" data-dialog="exit-dialog" data-name="{{.Name}}">New exit IP…</button>{{end}}{{end}}
     <hr>
     <button type="button" class="danger" data-dialog="delete-dialog" data-name="{{.Name}}">Delete profile…</button>
   </div>
@@ -106,6 +107,16 @@
       <label class="field"><span class="label">Archive</span><input class="input" name="archive" type="file" accept=".age" required style="padding:8px 10px"><span class="hint">Its proxy, if it had one, comes with it.</span></label>
     </div>
     <div class="dlg-foot"><button class="btn" type="button" data-close>Cancel</button><button class="btn primary" type="submit">Import</button></div>
+  </form>
+</dialog>
+<dialog id="exit-dialog" class="alert" aria-labelledby="exit-title">
+  <form method="post" data-action="/profiles/{name}/new-exit" data-busy="Changing…">
+    <input type="hidden" name="back" value="{{.}}">
+    <div class="dlg-body">
+      <h2 id="exit-title" data-text="Give {name} a new exit IP?"></h2>
+      <p data-text="At its next start, {name} asks its proxy for a new exit. Sites may then ask its accounts to sign in or verify again, and the country may change, bringing a new time zone and language."></p>
+    </div>
+    <div class="dlg-foot"><button class="btn" type="button" data-close>Cancel</button><button class="btn primary" type="submit">New exit IP</button></div>
   </form>
 </dialog>
 <dialog id="delete-dialog" class="alert" aria-labelledby="delete-title">

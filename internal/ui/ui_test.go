@@ -592,8 +592,17 @@ func TestFormatting(t *testing.T) {
 			t.Errorf("formatBytes(%d) = %q, want %q", n, got, s)
 		}
 	}
-	if got := maskProxy("socks5://u:p@h:1"); got != "socks5://u:••••@h:1" {
-		t.Errorf("maskProxy = %q", got)
+	for in, out := range map[string]string{
+		"socks5://u:p@h:1":                 "socks5://u:••••@h:1",
+		"http://user-{sticky}:pw@h:8080":   "http://user-{sticky}:••••@h:8080",
+		"socks5://u:pw-{sticky}@h:1080":    "socks5://u:••••@h:1080",
+		"http://{sticky}-{sticky}@h:8080":  "http://{sticky}-{sticky}@h:8080",
+		"http://user-%7Bsticky%7D:pw@h:80": "http://user-{sticky}:••••@h:80", // decoded, as any user name is
+		"http://u:p@[::1":                  "(hidden)",
+	} {
+		if got := maskProxy(in); got != out {
+			t.Errorf("maskProxy(%q) = %q, want %q", in, got, out)
+		}
 	}
 }
 
@@ -604,7 +613,9 @@ func TestExportAndImport(t *testing.T) {
 	p.DefaultMode, p.Width, p.Height = profiles.ModeAPI, 1280, 800
 	p.Site, p.IconGlyph, p.IconColor = "mail.google.com", "envelope", "sky"
 	p.Record = true
-	if _, err := f.m.Profiles().Create(ctx, p); err != nil {
+	p.Proxy = "http://pier-{sticky}:pw@proxy.example:8080"
+	created, err := f.m.Profiles().Create(ctx, p)
+	if err != nil {
 		t.Fatal(err)
 	}
 	f.recorded() // recordings stay where they are: not in the archive
@@ -680,6 +691,11 @@ func TestExportAndImport(t *testing.T) {
 		return err
 	}); err != nil {
 		t.Fatal(err)
+	}
+	// The proxy template and its token travel together: the copy keeps
+	// the original's exit.
+	if copied.Proxy != p.Proxy || copied.StickyToken == "" || copied.StickyToken != created.StickyToken {
+		t.Fatalf("imported proxy %q, token %q; want %q, %q", copied.Proxy, copied.StickyToken, p.Proxy, created.StickyToken)
 	}
 	if f.get("/profiles/google-copy/icon").code != http.StatusOK {
 		t.Fatal("the icon didn't come with the import")

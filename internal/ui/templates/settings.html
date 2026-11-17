@@ -57,7 +57,7 @@
       <p class="small" style="margin:2px 0 14px;color:var(--ink-2)">Used by new profiles unless they set their own. Leave empty to use this server’s connection.</p>
       <label class="sr-only" for="proxy">Proxy URL</label>
       <input class="input mono" id="proxy" name="proxy" value="{{.Proxy}}" form="defaults" placeholder="socks5://user:pass@host:port" autocomplete="off" spellcheck="false">
-      <ul class="checks" style="margin:14px 0 0"><li>Time zone and language follow the proxy’s location</li></ul>
+      <ul class="checks" style="margin:14px 0 0"><li>Time zone and language follow the proxy’s location</li><li><code>{sticky}</code> in the user name or password becomes a code of each profile’s own, so each profile keeps its own exit IP</li></ul>
       <div class="field" style="margin:18px 0 0">
         <input type="hidden" name="block_ads_field" value="1" form="defaults">
         <label class="check"><input type="checkbox" name="block_ads" value="1" form="defaults"{{if .DefaultBlockAds}} checked{{end}}> Block ads and trackers in new profiles</label>

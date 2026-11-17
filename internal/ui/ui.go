@@ -140,6 +140,7 @@ func (u *UI) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /profiles/{name}/recordings/{session}/{file}", u.segment)
 	mux.Handle("POST /profiles/{name}/recordings/{session}/delete", u.noAgents(admin(u.deleteRecording)))
 	mux.Handle("POST /profiles/{name}/recordings/delete", u.noAgents(admin(u.deleteRecordings)))
+	mux.Handle("POST /profiles/{name}/new-exit", admin(u.newExit))
 	mux.Handle("POST /profiles/import", admin(u.importProfile))
 	mux.Handle("GET /agents", admin(u.agentsPage))
 	mux.Handle("POST /agents/tokens", admin(u.createToken))
