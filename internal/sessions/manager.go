@@ -477,7 +477,7 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 		m.abort(l, "", fmt.Sprintf("closing the tabs of a session a secret was typed into: %v", err))
 		return
 	}
-	if err := m.writeProxyFile(p); err != nil {
+	if err := m.writeProxyFile(ctx, p); err != nil {
 		m.abort(l, "", fmt.Sprintf("handing over the proxy: %v", err))
 		return
 	}
@@ -807,7 +807,9 @@ const proxyFile = "proxy.json"
 
 // writeProxyFile hands the profile's proxy, credentials included, to the
 // browser container through its control folder, never its environment.
-func (m *Manager) writeProxyFile(p profiles.Profile) error {
+// A template's {sticky} is filled in here, and only here, with the
+// profile's own token: what is stored and shown stays the template.
+func (m *Manager) writeProxyFile(ctx context.Context, p profiles.Profile) error {
 	root, err := os.OpenRoot(m.layout.dir(p.Name, "run"))
 	if err != nil {
 		return err
@@ -819,7 +821,17 @@ func (m *Manager) writeProxyFile(p profiles.Profile) error {
 	if p.Proxy == "" {
 		return nil
 	}
-	b, err := json.Marshal(map[string]string{"url": p.Proxy})
+	proxy := p.Proxy
+	if profiles.HasSticky(proxy) {
+		// Read again rather than taken from p: a profile from before
+		// tokens gets its own here, once.
+		tok, err := m.profiles.StickyToken(ctx, p.Name)
+		if err != nil {
+			return err
+		}
+		proxy = profiles.FillSticky(proxy, tok)
+	}
+	b, err := json.Marshal(map[string]string{"url": proxy})
 	if err != nil {
 		return err
 	}
