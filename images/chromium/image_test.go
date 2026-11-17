@@ -107,7 +107,8 @@ type browser struct {
 	http    *http.Client
 }
 
-func startBrowser(t *testing.T, image, volume string) *browser {
+// startBrowser runs the image on volume; env adds KEY=VALUE settings.
+func startBrowser(t *testing.T, image, volume string, env ...string) *browser {
 	t.Helper()
 	sockDir := t.TempDir()
 	if err := os.Chmod(sockDir, 0o777); err != nil { // the container's user creates the socket
@@ -121,14 +122,17 @@ func startBrowser(t *testing.T, image, volume string) *browser {
 	run := append([]string{"run", "-d", "--name", name,
 		"--security-opt", "seccomp=" + seccomp},
 		appArmor(t, image, seccomp)...)
-	docker(t, append(run,
+	run = append(run,
 		"--shm-size=1g",
 		"-e", "BROWSERPIER_SCREEN=1280x800",
 		// The test sites are on the Docker host: the local network.
 		"-e", "BROWSERPIER_LOCAL_NETWORK=true",
 		"-v", volume+":/profile",
-		"-v", sockDir+":/run/browserpier",
-		image)...)
+		"-v", sockDir+":/run/browserpier")
+	for _, e := range env {
+		run = append(run, "-e", e)
+	}
+	docker(t, append(run, image)...)
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
 
 	sock := filepath.Join(sockDir, "control.sock")
