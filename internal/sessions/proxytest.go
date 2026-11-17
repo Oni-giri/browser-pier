@@ -82,7 +82,6 @@ func (m *Manager) testProxy(ctx context.Context, t ProxyTest) (docker.ProxyResul
 		m.removeProxyTestDir()
 		return docker.ProxyResult{}, err
 	}
-	defer m.removeProxyTestDir()
 
 	// Shutting down cuts the test short, and waits for its container to go.
 	ctx, cancel := context.WithCancel(ctx)
@@ -96,11 +95,14 @@ func (m *Manager) testProxy(ctx context.Context, t ProxyTest) (docker.ProxyResul
 	)
 	if !m.spawn(func() {
 		defer close(done)
+		// In here, so Close waits for the folder to go too.
+		defer m.removeProxyTestDir()
 		res, err = m.rt.TestProxy(ctx, docker.ProxyTestSpec{
 			Dir:    filepath.Join(m.layout.HostDataDir, proxyTestDir),
 			GeoURL: m.geoURL,
 		})
 	}) {
+		m.removeProxyTestDir()
 		return docker.ProxyResult{}, ErrClosed
 	}
 	<-done

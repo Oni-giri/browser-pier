@@ -46,6 +46,12 @@ func TestProxyTestHandsOverAFileAndLeavesNothing(t *testing.T) {
 		t.Fatal("the test's folder is still there")
 	}
 
+	// A passing test: its exit IP isn't logged either.
+	f.rt.ProxyTest = nil
+	if res, err := f.m.TestProxy(context.Background(), ProxyTest{Proxy: proxy, Profile: "google", For: "google"}); err != nil || !res.OK || res.IP.String() != "198.51.100.23" {
+		t.Fatalf("TestProxy = %+v, %v", res, err)
+	}
+
 	// A test that didn't run leaves nothing either.
 	f.rt.ProxyTest = func(context.Context, string) (docker.ProxyResult, error) {
 		return docker.ProxyResult{}, errors.New("the daemon is unwell")
@@ -59,7 +65,7 @@ func TestProxyTestHandsOverAFileAndLeavesNothing(t *testing.T) {
 
 	// Logs: what was tested for, and how it went; never the proxy.
 	out := logs.String()
-	for _, want := range []string{"for=google result=auth", "for=settings result=failed"} {
+	for _, want := range []string{"for=google result=auth", "for=google result=ok", "for=settings result=failed"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the log lacks %q:\n%s", want, out)
 		}
@@ -178,11 +184,12 @@ func TestCloseCutsAProxyTestShort(t *testing.T) {
 	}()
 	<-running
 	f.m.Close()
+	// Gone once Close returns, before the request's own goroutine ends.
+	if _, err := os.Stat(filepath.Join(f.dir, proxyTestDir)); !os.IsNotExist(err) {
+		t.Fatal("the test's folder is still there after Close")
+	}
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(f.dir, proxyTestDir)); !os.IsNotExist(err) {
-		t.Fatal("the test's folder is still there")
 	}
 }
 
