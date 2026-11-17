@@ -70,7 +70,7 @@ func onlyTheShortcut(t *testing.T, ks *browsertest.KeySite, n string) {
 	t.Helper()
 	r := ks.Run(n)
 	for _, e := range r.Keys {
-		if e.Key != "Control" && !(e.Ctrl && e.Key == "l") {
+		if shortcut := e.Key == "Control" || e.Ctrl && e.Key == "l"; !shortcut {
 			t.Errorf("run %s: the page saw %q (all: %+v)", n, e.Key, r.Keys)
 			break
 		}
