@@ -115,8 +115,11 @@ func (a *API) cdp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	a.m.Note(s.ID, tok.Name, "Connected over CDP")
-	defer a.m.Note(s.ID, tok.Name, "Disconnected")
+	// The CDP proxy isn't an agent route (scrub.go), so it says itself
+	// whose entries these are.
+	byTok := sessions.WithCall(r.Context(), a.m.NewCall(tok.ID, tok.Name, "cdp"))
+	a.m.NoteFor(byTok, s.ID, tok.Name, "Connected over CDP")
+	defer a.m.NoteFor(byTok, s.ID, tok.Name, "Disconnected")
 	proxy := &httputil.ReverseProxy{
 		Transport: controlTransport(sock),
 		Rewrite: func(pr *httputil.ProxyRequest) {

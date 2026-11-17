@@ -161,7 +161,7 @@ func (a *API) computer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.m.Touch(s.ID)
-		a.m.Note(s.ID, tok.Name, "Waited "+strconv.FormatFloat(d.Seconds(), 'f', -1, 64)+" s")
+		a.m.NoteFor(r.Context(), s.ID, tok.Name, "Waited "+strconv.FormatFloat(d.Seconds(), 'f', -1, 64)+" s")
 		a.done(w, r, s, c)
 		return
 	}
@@ -303,7 +303,7 @@ func (a *API) zoom(w http.ResponseWriter, r *http.Request, c computerRequest) {
 		return
 	}
 	tok, _ := auth.TokenFromContext(r.Context())
-	a.m.Note(s.ID, tok.Name, "Zoomed into a region")
+	a.m.NoteFor(r.Context(), s.ID, tok.Name, "Zoomed into a region")
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("X-Screen-Width", strconv.Itoa(screen.Dx()))
 	w.Header().Set("X-Screen-Height", strconv.Itoa(screen.Dy()))

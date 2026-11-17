@@ -56,7 +56,7 @@ func (a *API) SetSettings(s *settings.Store) { a.settings = s }
 // Register adds the API's routes to mux. Each is an agent route (scrub.go)
 // but the CDP proxy's.
 func (a *API) Register(mux Router) {
-	t := a.agent
+	t, c := a.agent, a.agentCall
 	mux.Handle("GET /api/profiles", t(a.listProfiles))
 	mux.Handle("POST /api/profiles", t(a.createProfile))
 	mux.Handle("POST /api/sessions", t(a.startSession))
@@ -64,9 +64,11 @@ func (a *API) Register(mux Router) {
 	mux.Handle("GET /api/sessions/{id}", t(a.getSession))
 	mux.Handle("DELETE /api/sessions/{id}", t(a.stopSession))
 	mux.Handle("GET /api/sessions/{id}/screenshot", t(a.screenshot))
-	mux.Handle("POST /api/sessions/{id}/click", t(a.input("/input/click")))
-	mux.Handle("POST /api/sessions/{id}/type", t(a.input("/input/type")))
-	mux.Handle("POST /api/sessions/{id}/computer", t(a.computer))
+	mux.Handle("GET /api/sessions/{id}/calls/{call_id}", t(a.callStatus))
+	// The actions that change the page take a call id (PROJ-156).
+	mux.Handle("POST /api/sessions/{id}/click", c("click", a.input("/input/click")))
+	mux.Handle("POST /api/sessions/{id}/type", c("type", a.input("/input/type")))
+	mux.Handle("POST /api/sessions/{id}/computer", c("computer", a.computer))
 	mux.Handle("POST /api/sessions/{id}/files", t(a.uploadFile))
 	mux.Handle("GET /api/profiles/{name}/files", t(a.listFiles))
 	mux.Handle("GET /api/profiles/{name}/files/{file}", t(a.getFile))
@@ -80,9 +82,9 @@ func (a *API) Register(mux Router) {
 	// ticket as ?ticket=; never the token, which a proxy in front could log.
 	// It isn't scrubbed: raw CDP is full control of the browser, which can
 	// read any field's value (SPEC §11).
-	c := func(h http.HandlerFunc) http.Handler { return a.web.RequireTokenOrCDPTicket(h) }
-	mux.Handle("GET /cdp/{profile}", c(a.cdp))
-	mux.Handle("GET /cdp/{profile}/{path...}", c(a.cdp))
+	proxied := func(h http.HandlerFunc) http.Handler { return a.web.RequireTokenOrCDPTicket(h) }
+	mux.Handle("GET /cdp/{profile}", proxied(a.cdp))
+	mux.Handle("GET /cdp/{profile}/{path...}", proxied(a.cdp))
 }
 
 type profileJSON struct {
@@ -384,18 +386,18 @@ func (a *API) startSession(w http.ResponseWriter, r *http.Request) {
 	}
 	a.m.Touch(s.ID)
 	if allowAds && wasLive && before.ID == s.ID && before.BlockAds && !s.BlockAds {
-		a.m.Note(s.ID, tok.Name, "Turned ad and tracker blocking off for this session")
+		a.m.NoteFor(r.Context(), s.ID, tok.Name, "Turned ad and tracker blocking off for this session")
 	}
 	status := http.StatusCreated
 	if attached {
 		status = http.StatusOK
-		a.m.Note(s.ID, tok.Name, "Attached")
+		a.m.NoteFor(r.Context(), s.ID, tok.Name, "Attached")
 	} else {
 		what := "Started the browser"
 		if allowAds {
 			what += ", without ad and tracker blocking"
 		}
-		a.m.Note(s.ID, tok.Name, what)
+		a.m.NoteFor(r.Context(), s.ID, tok.Name, what)
 		a.log.Info("session started", "session", s.ID, "profile", s.Profile, "mode", s.Mode, "block_ads", s.BlockAds, "token", tok.Name)
 	}
 	writeJSON(w, status, a.sessionOut(r, s, attached))
@@ -457,9 +459,11 @@ func (a *API) session(w http.ResponseWriter, r *http.Request) (sessions.Session,
 	return s, true
 }
 
+// getSession answers with the session and the token's own calls on it:
+// those under way and its recent activity entries (PROJ-156).
 func (a *API) getSession(w http.ResponseWriter, r *http.Request) {
 	if s, ok := a.session(w, r); ok {
-		writeJSON(w, http.StatusOK, a.sessionOut(r, s, false))
+		writeJSON(w, http.StatusOK, a.sessionStatus(r, s))
 	}
 }
 
@@ -470,10 +474,10 @@ func (a *API) stopSession(w http.ResponseWriter, r *http.Request) {
 	}
 	tok, _ := auth.TokenFromContext(r.Context())
 	// Noted first: the log goes with the session once it has stopped.
-	a.m.Note(s.ID, tok.Name, "Stopping the browser")
+	a.m.NoteFor(r.Context(), s.ID, tok.Name, "Stopping the browser")
 	stopped, err := a.m.Stop(r.Context(), s.ID)
 	if err != nil {
-		a.m.Note(s.ID, tok.Name, "Couldn't stop the browser") // still live, so still logged
+		a.m.NoteFor(r.Context(), s.ID, tok.Name, "Couldn't stop the browser") // still live, so still logged
 		if errors.Is(err, sessions.ErrClosed) {
 			writeError(w, http.StatusServiceUnavailable, "BrowserPier is shutting down")
 			return
@@ -518,7 +522,7 @@ func (a *API) screenshot(w http.ResponseWriter, r *http.Request) {
 	a.m.Touch(s.ID)
 	if a.sendScreenshot(w, r, s, target) {
 		tok, _ := auth.TokenFromContext(r.Context())
-		a.m.Note(s.ID, tok.Name, "Took a screenshot")
+		a.m.NoteFor(r.Context(), s.ID, tok.Name, "Took a screenshot")
 	}
 }
 
@@ -627,7 +631,7 @@ func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, pa
 			if path == "/input/type" {
 				what = "Typing interrupted"
 			}
-			a.m.Note(s.ID, tok.Name, what)
+			a.m.NoteFor(r.Context(), s.ID, tok.Name, what)
 			writeError(w, http.StatusConflict, "input broke off: "+context.Cause(ctx).Error())
 			return false
 		}
@@ -640,7 +644,7 @@ func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, pa
 		writeError(w, resp.StatusCode, strings.TrimSpace(string(msg)))
 		return false
 	}
-	a.m.Note(s.ID, tok.Name, describeInput(path, body))
+	a.m.NoteFor(r.Context(), s.ID, tok.Name, describeInput(path, body))
 	return true
 }
 

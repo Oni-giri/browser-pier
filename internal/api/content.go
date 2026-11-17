@@ -84,7 +84,7 @@ func (a *API) content(w http.ResponseWriter, r *http.Request) {
 		}
 		a.m.Touch(s.ID)
 		if a.sendScreenshot(w, r, s, target) {
-			a.m.Note(s.ID, tok.Name, "Took a screenshot")
+			a.m.NoteFor(r.Context(), s.ID, tok.Name, "Took a screenshot")
 		}
 	case "pdf":
 		if text || in.Width != nil {
