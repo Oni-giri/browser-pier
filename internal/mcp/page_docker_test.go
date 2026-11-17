@@ -27,6 +27,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/browsertest"
 	"github.com/Oni-giri/browser-pier/internal/db"
 	"github.com/Oni-giri/browser-pier/internal/docker"
+	"github.com/Oni-giri/browser-pier/internal/fence/fencetest"
 	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
@@ -139,7 +140,17 @@ func TestAgentLogsInWithPageTools(t *testing.T) {
 	}
 	id := live.ID
 	tool("navigate", map[string]any{"session_id": id, "url": site.URL + "/login"})
-	snap := tool("snapshot", map[string]any{"session_id": id})
+	// page_content's outline is snapshot (PROJ-167): max_chars 0 gets
+	// through to it, an envelope with no content; then its refs are
+	// acted on.
+	head := tool("page_content", map[string]any{"session_id": id, "format": "outline", "max_chars": 0})
+	if e, err := fencetest.Page(head); err != nil || e.URL != site.URL+"/login" || e.Format != "outline" || e.Content != "" {
+		t.Fatalf("outline with max_chars 0: %v %+v\n%s", err, e, head)
+	}
+	snap := tool("page_content", map[string]any{"session_id": id, "format": "outline"})
+	if e, err := fencetest.Page(snap); err != nil || e.Format != "outline" {
+		t.Fatalf("outline: %v\n%s", err, snap)
+	}
 	// The site's fields have no labels: the snapshot lists them in order.
 	fields := regexp.MustCompile(`(?m)^([a-z][a-z0-9]e[0-9]+) textbox `).FindAllStringSubmatch(snap, -1)
 	button := regexp.MustCompile(`(?m)^([a-z][a-z0-9]e[0-9]+) button "Sign in"`).FindStringSubmatch(snap)
@@ -180,8 +191,9 @@ func TestAgentLogsInWithPageTools(t *testing.T) {
 	// page_content (PROJ-20): the signed-in page as Markdown and as its
 	// main text, fenced; a PDF as an embedded resource; a screenshot.
 	md := tool("page_content", map[string]any{"session_id": id, "format": "markdown"})
-	if !strings.HasPrefix(md, "<untrusted-content-") || !strings.Contains(md, "# Signed in as pier\n\nBrowserPier persistence test") {
-		t.Errorf("markdown:\n%s", md)
+	if e, err := fencetest.Page(md); err != nil || e.Format != "markdown" || e.URL != site.URL+"/account" ||
+		!strings.Contains(e.Content, "# Signed in as pier\n\nBrowserPier persistence test") {
+		t.Errorf("markdown: %v\n%s", err, md)
 	}
 	if out := tool("page_content", map[string]any{"session_id": id, "format": "readability"}); !strings.Contains(out, "Signed in as pier\n\nBrowserPier persistence test") {
 		t.Errorf("readability:\n%s", out)

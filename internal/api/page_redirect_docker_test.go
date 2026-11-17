@@ -41,7 +41,7 @@ func TestNavigateFollowsRedirectChains(t *testing.T) {
 		t.Errorf("no redirect note in the fence:\n%s", out)
 	}
 	// A snapshot right after reads the landed page, not a stale one.
-	if snap := a.mustTool(s.ID, "snapshot", nil); !strings.Contains(snap, "URL: "+site.URL+"/landed\n") || !strings.Contains(snap, "LANDED-PAGE") {
+	if snap := a.mustTool(s.ID, "snapshot", nil); pageOf(t, snap).URL != site.URL+"/landed" || !strings.Contains(snap, "LANDED-PAGE") {
 		t.Errorf("snapshot after the chain:\n%s", snap)
 	}
 

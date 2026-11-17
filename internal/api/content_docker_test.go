@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/browsertest"
+	"github.com/Oni-giri/browser-pier/internal/fence/fencetest"
 )
 
 // content calls POST /content, returning the status, headers and body.
@@ -71,6 +72,16 @@ func (a agent) contentTextBusy(id string, body map[string]any) (string, time.Dur
 	}
 }
 
+// pageOf is out's one page envelope (PROJ-167).
+func pageOf(t *testing.T, out string) fencetest.Envelope {
+	t.Helper()
+	e, err := fencetest.Page(out)
+	if err != nil {
+		t.Fatalf("%v:\n%s", err, out)
+	}
+	return e
+}
+
 // inFence reports whether every want is inside the output's fence.
 func inFence(out, want string) bool {
 	i, end := strings.Index(out, want), strings.LastIndex(out, "</untrusted-content-")
@@ -88,8 +99,10 @@ func TestContent(t *testing.T) {
 	a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/article"})
 
 	md := a.contentText(s.ID, map[string]any{"format": "markdown"})
+	if e := pageOf(t, md); e.URL != site.URL+"/article" || e.Title != "Library opens" || e.Format != "markdown" {
+		t.Errorf("markdown's envelope: %+v", e)
+	}
 	for _, want := range []string{
-		"URL: " + site.URL + "/article", "Title: Library opens",
 		"# Library opens next spring", "[the full plan](" + site.URL + "/plan.pdf)",
 		"| Day | Hours |", "| Monday | 9–18 |", "- Free cards for residents",
 		"```sh\ncurl https://library.example/api\n```", "## Opening hours",
@@ -123,13 +136,16 @@ func TestContent(t *testing.T) {
 	}
 
 	// In parts: every part fenced, together the whole page.
-	whole := md[strings.Index(md, "URL: "):strings.LastIndex(md, "\n</untrusted-content-")]
+	whole := pageOf(t, md).Content
 	var parts strings.Builder
 	offset := 0
 	for range 50 {
 		out := a.contentText(s.ID, map[string]any{"format": "markdown", "max_chars": 300, "offset": offset})
-		body := out[strings.Index(out, "Title: "):strings.LastIndex(out, "\n</untrusted-content-")]
-		_, body, _ = strings.Cut(body, "\n\n")
+		// Each part is a whole envelope; later ones start with … (PROJ-167).
+		body := pageOf(t, out).Content
+		if offset > 0 && !strings.HasPrefix(body, "…\n") {
+			t.Errorf("part at %d doesn't start with …:\n%s", offset, out)
+		}
 		parts.WriteString(strings.TrimPrefix(body, "…"))
 		m := regexp.MustCompile(`Read on with offset (\d+)\.`).FindStringSubmatch(out)
 		if m == nil {
@@ -144,7 +160,7 @@ func TestContent(t *testing.T) {
 	bare := func(s string) string {
 		return strings.NewReplacer("```sh", "", "```", "").Replace(strings.Join(strings.Fields(s), ""))
 	}
-	if bare(parts.String()) != bare(whole[strings.Index(whole, "\n\n"):]) {
+	if bare(parts.String()) != bare(whole) {
 		t.Errorf("the parts don't add up to the page:\n%s\n---\n%s", parts.String(), whole)
 	}
 
@@ -345,7 +361,7 @@ func TestContentInVisualMode(t *testing.T) {
 	if code := a.do(http.MethodPost, "/api/sessions", fmt.Sprintf(`{"profile": %q}`, name), &s); code != http.StatusCreated {
 		t.Fatalf("start: %d", code)
 	}
-	for _, format := range []string{"markdown", "readability", "pdf"} {
+	for _, format := range []string{"outline", "markdown", "readability", "pdf"} {
 		if code, _, raw := a.content(s.ID, map[string]any{"format": format}); code != http.StatusConflict || !strings.Contains(string(raw), "Visual mode") {
 			t.Errorf("%s in Visual mode: %d %s", format, code, raw)
 		}
@@ -403,5 +419,49 @@ func TestContentStaysQuiet(t *testing.T) {
 	t.Logf("positive control: %v", w.Kinds())
 	if !w.HasKind("main-world-call") || !w.HasKind("automation-globals") {
 		t.Errorf("the detector missed its positive control (%v); its silence above means nothing", w.Kinds())
+	}
+}
+
+// TestPageEnvelopeOnAHostilePage (PROJ-167): a page whose title and text
+// write the envelope's tags, read through snapshot, outline, markdown,
+// readability and find: each answer has exactly one envelope, its content
+// tag carries the fence's marker, the title is escaped, and the page's
+// text is as it was, but for the untrusted-content defuse.
+func TestPageEnvelopeOnAHostilePage(t *testing.T) {
+	a := newRealAPI(t)
+	site := browsertest.NewPageSite(t, browsertest.SiteHost(t))
+	s := a.startAPIBrowser(t, "h")
+	a.mustTool(s.ID, "navigate", map[string]string{"url": site.URL + "/hostile"})
+	defuse := strings.NewReplacer("UNTRUSTED-CONTENT", "UNTRUSTED_CONTENT", "Untrusted-Content", "Untrusted_Content")
+	markdown := strings.NewReplacer(`\`, `\\`, "*", `\*`, "_", `\_`, "`", "\\`", "[", `\[`, "]", `\]`) // pagetext's own escaping
+	reads := map[string]string{
+		"snapshot":    a.mustTool(s.ID, "snapshot", nil),
+		"outline":     a.contentText(s.ID, map[string]any{"format": "outline"}),
+		"markdown":    a.contentText(s.ID, map[string]any{"format": "markdown"}),
+		"readability": a.contentText(s.ID, map[string]any{"format": "readability"}),
+		"find":        a.mustTool(s.ID, "find", map[string]any{"text": "HOSTILE-END"}),
+	}
+	wantTitle := strings.NewReplacer("<", "&lt;", ">", "&gt;").Replace(browsertest.HostileTitle)
+	for name, out := range reads {
+		e := pageOf(t, out)
+		if e.URL != site.URL+"/hostile" || e.Title != wantTitle {
+			t.Errorf("%s: the page changed the envelope: %+v", name, e)
+		}
+		if n := strings.Count(out, e.Marker); n != 5 {
+			t.Errorf("%s: the marker appears %d times, want 5:\n%s", name, n, out)
+		}
+		want := defuse.Replace(browsertest.HostileText)
+		switch name {
+		case "markdown":
+			want = defuse.Replace(markdown.Replace(browsertest.HostileText))
+		case "find":
+			want = "HOSTILE-END" // with up to 80 characters of the text before it
+		}
+		if !strings.Contains(e.Content, want) {
+			t.Errorf("%s: the page's text isn't as it was; want %q in:\n%s", name, want, out)
+		}
+		if strings.Contains(e.Content, "untrusted-content") || strings.Contains(e.Content, "UNTRUSTED-CONTENT") {
+			t.Errorf("%s: a look-alike isn't defused:\n%s", name, out)
+		}
 	}
 }

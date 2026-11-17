@@ -121,7 +121,7 @@ func TestPageToolsRead(t *testing.T) {
 	if got := p.Eval("document.title"); got != "Saved password" {
 		t.Errorf("the agent's own client reads %v", got)
 	}
-	if snap := a.mustTool(s.ID, "snapshot", nil); !strings.Contains(snap, "Title: Saved password") {
+	if snap := a.mustTool(s.ID, "snapshot", nil); pageOf(t, snap).Title != "Saved password" {
 		t.Errorf("snapshot with the agent's client connected:\n%s", snap)
 	}
 	p.Close()
@@ -508,7 +508,7 @@ func TestPageToolsKeepEachItemOnItsLine(t *testing.T) {
 	}
 
 	snap := a.mustTool(s.ID, "snapshot", nil)
-	full("snapshot", snap, `Title: Lines <\!-- title`, `button "LINES-BUTTON`, `navigation "LINES-NAV`, " iframe ")
+	full("snapshot", snap, `<title>Lines &lt;\!-- title</title>`, `button "LINES-BUTTON`, `navigation "LINES-NAV`, " iframe ")
 	forged("snapshot", snap, " iframe ", `button "LINES-BUTTON`, `navigation "LINES-NAV`)
 	if l := lineWith(snap, " iframe "); !ref.MatchString(l) || !strings.HasSuffix(l, " (not read)") {
 		t.Errorf("snapshot: the iframe's line is %q\n%s", l, snap)
@@ -526,7 +526,7 @@ func TestPageToolsKeepEachItemOnItsLine(t *testing.T) {
 
 	for _, format := range []string{"markdown", "readability"} {
 		out := a.contentText(s.ID, map[string]any{"format": format})
-		full(format, out, `Title: Lines <\!-- title`)
+		full(format, out, `<title>Lines &lt;\!-- title</title>`)
 		forged(format, out, "[iframe: ")
 	}
 }

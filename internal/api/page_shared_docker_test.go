@@ -79,7 +79,7 @@ func TestSharedStringsOnARealPage(t *testing.T) {
 		if took > 15*time.Second*raceSlowdown {
 			t.Errorf("%s: snapshot took %s", c.kind, took)
 		}
-		if code != http.StatusOK || !strings.Contains(snap, "Title: Shared "+c.kind) {
+		if code != http.StatusOK || !strings.Contains(snap, "<title>Shared "+c.kind+"</title>") {
 			t.Fatalf("%s: the page wasn't built: %d %s", c.kind, code, snap)
 		}
 		start = time.Now()

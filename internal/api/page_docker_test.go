@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Oni-giri/browser-pier/internal/fence/fencetest"
 )
 
 // startAPIBrowser starts an API-mode browser whose pages may reach the
@@ -75,11 +77,10 @@ func (a agent) openBuilt(id, url, title string) {
 	if navCode != http.StatusOK && navCode != http.StatusGatewayTimeout {
 		a.t.Fatalf("navigate %s: %d %s", url, navCode, text)
 	}
-	want := "URL: " + url + "\nTitle: " + title + "\n"
 	deadline := time.Now().Add(90 * time.Second)
 	for {
 		code, text := a.tool(id, "snapshot", map[string]any{"max_chars": 0})
-		if code == http.StatusOK && strings.Contains(text, want) {
+		if e, err := fencetest.Page(text); code == http.StatusOK && err == nil && e.URL == url && e.Title == title {
 			if navCode != http.StatusOK {
 				a.t.Logf("navigate %s: %d; the page was built after %v", url, navCode, time.Since(start).Round(time.Millisecond))
 			}
