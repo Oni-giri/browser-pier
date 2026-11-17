@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -81,9 +82,13 @@ func TestStickyTemplateShownNeverFilled(t *testing.T) {
 	if code := f.call(f.all, http.MethodPost, "/api/profiles", `{"name": "y", "proxy": "http://pier-{sticky}:pw@proxy.example:8080"}`, nil); code != http.StatusBadRequest {
 		t.Errorf("a proxy through the API: %d, want 400", code)
 	}
-	f.call(f.all, http.MethodPost, "/api/profiles", `{"name": "z", "sticky_token": "abcd1234"}`, nil)
-	if z, err := f.profiles.Get(ctx, "z"); err == nil && z.StickyToken == "abcd1234" {
-		t.Fatal("an agent chose a profile's token")
+	// sticky_token isn't a field an agent can send: the request is
+	// refused and no profile is made.
+	if code := f.call(f.all, http.MethodPost, "/api/profiles", `{"name": "z", "sticky_token": "abcd1234"}`, nil); code != http.StatusBadRequest {
+		t.Errorf("a sticky_token through the API: %d, want 400", code)
+	}
+	if _, err := f.profiles.Get(ctx, "z"); !errors.Is(err, profiles.ErrNotFound) {
+		t.Fatalf("a profile was made with an agent's token: %v", err)
 	}
 
 	// No agent route is about the exit or the token.
