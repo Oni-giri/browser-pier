@@ -17,6 +17,7 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/handoff"
+	"github.com/Oni-giri/browser-pier/internal/notify"
 	"github.com/Oni-giri/browser-pier/internal/recording"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/settings"
@@ -63,6 +64,8 @@ type Options struct {
 	// Recorder says whether a session that may be recorded is kept for now
 	// (no room, a broken stream); nil for always.
 	Recorder interface{ Losing(id string) bool }
+	// Notify is the admin's webhook (Settings → Notifications); nil hides it.
+	Notify *notify.Notifier
 }
 
 // UI is the web UI for the signed-in admin.
@@ -150,6 +153,10 @@ func (u *UI) Register(mux *http.ServeMux) {
 	mux.Handle("POST /settings/password", admin(u.changePassword))
 	mux.Handle("POST /settings/sign-out-others", admin(u.signOutOthers))
 	mux.Handle("POST /settings/appearance", admin(u.saveAppearance))
+	mux.Handle("POST /settings/notify", admin(u.saveNotify))
+	mux.Handle("POST /settings/notify/remove", admin(u.removeNotify))
+	mux.Handle("POST /settings/notify/secret", admin(u.regenerateNotify))
+	mux.Handle("POST /settings/notify/test", admin(u.testNotify))
 }
 
 // page is what every app page's layout needs.

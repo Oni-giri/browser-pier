@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -21,6 +22,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/db"
 	"github.com/Oni-giri/browser-pier/internal/handoff"
+	"github.com/Oni-giri/browser-pier/internal/notify"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/recording"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
@@ -43,6 +45,7 @@ type fixture struct {
 	free       int64 // what the host has available, for HostFree
 	// emptied counts the browser's clipboard emptyings (PROJ-194).
 	emptied atomic.Int32
+	notify  *notify.Notifier
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -95,8 +98,15 @@ func newFixture(t *testing.T) *fixture {
 	f := &fixture{t: t, m: m, handoffs: handoff.New(d, m, log), web: web, tokens: tokens, settings: settings.New(d)}
 	emptied = &f.emptied
 	f.recordings = recording.NewStore(filepath.Join(dir, "recordings"), log)
+	// Names resolve to a public address; addresses are themselves.
+	f.notify, err = notify.New(ctx, d, log, notify.Options{Lookup: func(context.Context, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("93.184.215.14")}, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	app := New(m, web, f.handoffs, f.settings, log, Options{HostMemory: 16 << 30, HostFree: func() int64 { return f.free }, SetRAMLimit: func(p int) { f.ram = p },
-		Recordings: f.recordings})
+		Recordings: f.recordings, Notify: f.notify})
 	mux := http.NewServeMux()
 	web.Register(mux)
 	app.Register(mux)

@@ -1,13 +1,16 @@
 package ui
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
+	"github.com/Oni-giri/browser-pier/internal/notify"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/settings"
 	"github.com/Oni-giri/browser-pier/internal/theme"
@@ -25,8 +28,31 @@ type settingsData struct {
 	Error        string
 	// RecordingsUsed is what session recordings hold now, in bytes.
 	RecordingsUsed int64
-	// Which form the error is for: pin, password or defaults.
+	// Which form the error is for: pin, password, defaults or notify.
 	ErrorFor string
+	// Notify is the webhook as shown; nil when there is none to set.
+	Notify *notify.View
+	// NewSecret is the webhook's secret, shown once: just made by a first
+	// save or by Regenerate.
+	NewSecret string
+}
+
+// NotifyEvents are the webhook's events, with whether each is on.
+func (d settingsData) NotifyEvents() []notifyEvent {
+	if d.Notify == nil {
+		return nil
+	}
+	var out []notifyEvent
+	for _, k := range notify.Toggles {
+		out = append(out, notifyEvent{Kind: k, Label: k.Label(), On: d.Notify.On[k]})
+	}
+	return out
+}
+
+type notifyEvent struct {
+	Kind  notify.Kind
+	Label string
+	On    bool
 }
 
 // Policies are the handoff policies, least strict first.
@@ -89,6 +115,10 @@ func (u *UI) settingsData(r *http.Request) (settingsData, error) {
 	d.PINChangedAt, _ = u.web.Admin().PINChangedAt(r.Context())
 	if all, err := u.web.Admin().Sessions(r.Context()); err == nil {
 		d.Devices = len(all)
+	}
+	if u.o.Notify != nil {
+		v := u.o.Notify.View()
+		d.Notify = &v
 	}
 	return d, nil
 }
@@ -297,4 +327,93 @@ func (u *UI) saveAppearance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	done(w, r, "/settings", "Appearance saved", false)
+}
+
+// saveNotify saves the webhook's URL, its events and the address for
+// links. A first URL shows its new secret, once. Neither the URL nor the
+// secret is logged; an error never echoes the URL.
+func (u *UI) saveNotify(w http.ResponseWriter, r *http.Request) {
+	if u.o.Notify == nil {
+		http.NotFound(w, r)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+	c := notify.Change{URL: strings.TrimSpace(r.PostFormValue("url")), LinkBase: r.PostFormValue("link_base"), On: map[notify.Kind]bool{}}
+	for _, k := range r.PostForm["event"] {
+		c.On[notify.Kind(k)] = true
+	}
+	secret, err := u.o.Notify.Save(r.Context(), c)
+	if err != nil {
+		u.settingsError(w, r, "notify", sentence(err.Error()))
+		return
+	}
+	u.log.Info("notifications saved from the UI", "webhook_set", u.o.Notify.View().Set)
+	if secret != "" {
+		u.showSecret(w, r, secret)
+		return
+	}
+	done(w, r, "/settings#notify", "Notifications saved", false)
+}
+
+// showSecret renders Settings with the webhook's new secret, which is
+// never shown again.
+func (u *UI) showSecret(w http.ResponseWriter, r *http.Request, secret string) {
+	d, err := u.settingsData(r)
+	if err != nil {
+		u.log.Error("reading settings", "err", err)
+		http.Error(w, "something went wrong", http.StatusInternalServerError)
+		return
+	}
+	d.NewSecret = secret
+	u.render(w, r, http.StatusOK, "settings", "Settings", "settings", d)
+}
+
+func (u *UI) removeNotify(w http.ResponseWriter, r *http.Request) {
+	if u.o.Notify == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if err := u.o.Notify.Remove(r.Context()); err != nil {
+		u.log.Error("removing the webhook", "err", err)
+		done(w, r, "/settings#notify", "Couldn't remove the webhook", true)
+		return
+	}
+	u.log.Info("webhook removed from the UI")
+	done(w, r, "/settings#notify", "Webhook removed", false)
+}
+
+func (u *UI) regenerateNotify(w http.ResponseWriter, r *http.Request) {
+	if u.o.Notify == nil {
+		http.NotFound(w, r)
+		return
+	}
+	secret, err := u.o.Notify.Regenerate(r.Context())
+	if err != nil {
+		u.settingsError(w, r, "notify", sentence(err.Error()))
+		return
+	}
+	u.log.Info("webhook secret regenerated from the UI")
+	u.showSecret(w, r, secret)
+}
+
+// testNotify sends the test event once and says what the webhook
+// answered: its status, or a short error. Never the answer's body.
+func (u *UI) testNotify(w http.ResponseWriter, r *http.Request) {
+	if u.o.Notify == nil {
+		http.NotFound(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), notify.Timeout+5*time.Second)
+	defer cancel()
+	status, err := u.o.Notify.SendTest(ctx)
+	switch {
+	case errors.Is(err, notify.ErrNoWebhook):
+		done(w, r, "/settings#notify", "No webhook is set. Save a URL first", true)
+	case err != nil:
+		done(w, r, "/settings#notify", "The test didn't arrive: "+err.Error(), true)
+	case status < 200 || status > 299:
+		done(w, r, "/settings#notify", fmt.Sprintf("The webhook answered %d %s", status, http.StatusText(status)), true)
+	default:
+		done(w, r, "/settings#notify", fmt.Sprintf("Test sent: the webhook answered %d", status), false)
+	}
 }
