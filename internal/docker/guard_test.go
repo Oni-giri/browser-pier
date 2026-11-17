@@ -128,7 +128,7 @@ func replaceOpt(opts []string, prefix, with string) []string {
 
 var (
 	fixedCustom = appArmorPlan{fixed: "apparmor=my-browsers"}
-	tr, fa      = true, false
+	tr          = true
 	other       = 31
 )
 
