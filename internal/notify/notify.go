@@ -44,7 +44,7 @@ func (k Kind) Toggle() bool { return slices.Contains(Toggles, k) }
 func (k Kind) Label() string {
 	return map[Kind]string{
 		HandoffRequested: "An agent asks for a handoff",
-		HandoffExpired:   "Nobody took a handoff in 15 minutes",
+		HandoffExpired:   "A handoff wasn’t handed back in 15 minutes",
 		HandoffCancelled: "Five wrong PINs cancelled a handoff",
 		BrowserFailed:    "A browser crashed or failed to start",
 	}[k]

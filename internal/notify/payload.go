@@ -145,7 +145,7 @@ func (n *Notifier) HandoffExpired(h Handoff) bool {
 	}
 	cfg, _ := n.current()
 	p := n.handoffPayload(cfg, h, "")
-	p.Text = sentence(p.Profile, "nobody took the handoff within 15 minutes, so it expired", p.URL)
+	p.Text = sentence(p.Profile, "the handoff wasn't handed back within 15 minutes, so it expired", p.URL)
 	p.Content = p.Text
 	return n.enqueue(HandoffExpired, h.Profile, p, nil)
 }
