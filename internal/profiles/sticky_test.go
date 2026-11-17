@@ -17,7 +17,10 @@ func TestValidProxyTakesAStickyTemplate(t *testing.T) {
 		"http://a-{sticky}-b-{sticky}:pw@proxy.example:8080",
 		"socks5://{sticky}:{sticky}@proxy.example:1080",
 		"http://user-%7Bsticky%7D:pw@proxy.example:8080", // a literal, not a placeholder
-		"http://" + strings.Repeat("u", 247) + "{sticky}:" + strings.Repeat("p", 255) + "@proxy.example:8080",
+		"socks5://" + strings.Repeat("u", 247) + "{sticky}:" + strings.Repeat("p", 255) + "@proxy.example:1080",
+		// Basic authentication has no length limit: a long token works.
+		"http://" + strings.Repeat("u", 300) + ":" + strings.Repeat("p", 300) + "@proxy.example:8080",
+		"https://" + strings.Repeat("u", 254) + "{sticky}:pw@proxy.example:8443",
 	} {
 		if err := validProxy(proxy); err != nil {
 			t.Errorf("validProxy(%q) = %v", proxy, err)
@@ -34,9 +37,9 @@ func TestValidProxyRefusesBadTemplates(t *testing.T) {
 		"another one":       "http://user-{other}:pw@proxy.example:8080",
 		"a lone brace":      "http://user-{:pw@proxy.example:8080",
 		"upper case":        "http://user-{STICKY}:pw@proxy.example:8080",
-		"long user":         "http://" + strings.Repeat("u", 254) + "{sticky}:pw@proxy.example:8080",
+		"long user":         "socks5://" + strings.Repeat("u", 254) + "{sticky}:pw@proxy.example:1080",
 		"long password":     "socks5://u:" + strings.Repeat("p", 254) + "{sticky}@proxy.example:1080",
-		"long plain user":   "socks5://" + strings.Repeat("u", 256) + ":pw@proxy.example:1080",
+		"long plain user":   "socks5://" + strings.Repeat("u", 300) + ":pw@proxy.example:1080",
 		"colon in user":     "http://a%3A{sticky}:pw@proxy.example:8080",
 		"colon, https":      "https://a%3Ab:pw@proxy.example:8443",
 		"no host, template": "http://user-{sticky}:pw@:8080",

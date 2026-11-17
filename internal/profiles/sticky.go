@@ -87,10 +87,11 @@ func replaceInUserinfo(raw, old, repl string) string {
 // sampleSticky fills a template when checking it: a token like any other.
 const sampleSticky = "a0b1c2d3"
 
-// maxCredential is the longest user name or password, in bytes: the
-// SOCKS5 limit (RFC 1929), which the browser's forwarder would only
-// report when it connects.
-const maxCredential = 255
+// maxSOCKS5Credential is the longest user name or password a SOCKS5
+// proxy takes, in bytes (RFC 1929), which the browser's forwarder would
+// only report when it connects. Basic authentication, for http and https,
+// has no such limit.
+const maxSOCKS5Credential = 255
 
 // checkCredentials applies the limits a filled-in proxy URL must meet.
 // Errors never echo the URL.
@@ -100,8 +101,8 @@ func checkCredentials(u *url.URL) error {
 	}
 	user := u.User.Username()
 	pass, _ := u.User.Password()
-	if len(user) > maxCredential || len(pass) > maxCredential {
-		return errors.New("proxy: the user name and the password may have at most 255 bytes each")
+	if u.Scheme == "socks5" && (len(user) > maxSOCKS5Credential || len(pass) > maxSOCKS5Credential) {
+		return errors.New("proxy: a SOCKS5 proxy's user name and password may have at most 255 bytes each")
 	}
 	if (u.Scheme == "http" || u.Scheme == "https") && strings.Contains(user, ":") {
 		return errors.New("proxy: an http proxy's user name can't hold a colon")

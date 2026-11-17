@@ -190,7 +190,7 @@ Pages can leave through an upstream proxy, such as a residential one: set it per
 http://user:password@proxy.example.net:8080      # also https:// and socks5://
 ```
 
-Percent-encode a reserved character in the user name or password (`@` is `%40`, `:` is `%3A`). Each may be at most 255 bytes, and an `http`/`https` user name can't hold a colon. Time zone and language follow where the proxy exits.
+Percent-encode a reserved character in the user name or password (`@` is `%40`, `:` is `%3A`). For `socks5://` each may be at most 255 bytes, and an `http`/`https` user name can't hold a colon. Time zone and language follow where the proxy exits.
 
 **One exit per profile: `{sticky}`.** Many providers keep a client on one exit IP while it sends the same session code, in the user name or the password. Write `{sticky}` where the code goes and each profile fills in a code of its own (8 lowercase letters and digits), kept until you choose **New exit IP** in its ⋯ menu. So one default proxy in Settings gives every profile its own exit, instead of all sharing one. For example, with IPRoyal, whose session code goes in the password and must be 8 characters:
 

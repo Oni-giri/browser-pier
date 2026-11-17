@@ -78,7 +78,7 @@ func TestProxyErrorsNeverEchoTheURL(t *testing.T) {
 		"ftp://user:s3cret@proxy:21", "http://user:s3cret@proxy", "http://user:s3cret@proxy:1/x", "http://user:s3cret@[::1",
 		// Templates, refused before or after filling in.
 		"ftp://n4me-{sticky}:s3cret@pr0xyhost:21", "http://n4me-{sticky}:s3cret@{sticky}:1", "http://n4me-{other}:s3cret@pr0xyhost:1",
-		"http://n4me-{sticky}:s3cret@pr0xyhost:1/x", "http://n4me-{sticky}:" + long + "@pr0xyhost:1", "socks5://" + long + "{sticky}:pw@pr0xyhost:1",
+		"http://n4me-{sticky}:s3cret@pr0xyhost:1/x", "socks5://n4me-{sticky}:" + long + "@pr0xyhost:1", "socks5://" + long + "{sticky}:pw@pr0xyhost:1",
 		"http://n4%3Ame-{sticky}:s3cret@pr0xyhost:1", "http://n4me-{sticky}:s3cret{sticky}@[::1",
 	} {
 		p := New("google")
