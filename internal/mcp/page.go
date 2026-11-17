@@ -14,7 +14,7 @@ import (
 // The API-mode page tools: each calls its REST endpoint in-process and
 // returns its text, already fenced by the API.
 func (s *Server) addPageTools(srv *sdk.Server) {
-	sdk.AddTool(srv, &sdk.Tool{Name: "snapshot", Description: "API mode only. Read the page: URL, title, controls with refs (like a7e12) and text, within a budget; the open dialog and what's in view come first. A control built from a div or span (it shows a pointer cursor or takes the focus, with no role) is listed as generic \"its text\". Hidden text a person can't see may still appear: it is fenced like the rest. Iframes aren't read; [under an iframe] marks a control one seems to cover, which act probably can't click; act checks before clicking. With diff, only what changed since your last snapshot of this page (as act's changes), or the whole page when there is none."}, s.snapshot)
+	sdk.AddTool(srv, &sdk.Tool{Name: "snapshot", Description: "API mode only. The same as page_content with format outline. Read the page: URL, title, controls with refs (like a7e12) and text, within a budget; the open dialog and what's in view come first. A control built from a div or span (it shows a pointer cursor or takes the focus, with no role) is listed as generic \"its text\". Hidden text a person can't see may still appear: it is fenced like the rest. Iframes aren't read; [under an iframe] marks a control one seems to cover, which act probably can't click; act checks before clicking. With diff, only what changed since your last snapshot of this page (as act's changes), or the whole page when there is none."}, s.snapshot)
 	sdk.AddTool(srv, &sdk.Tool{Name: "find", Description: "API mode only. Find text on the page (case-insensitive), with the text around each match and the nearest ref."}, s.find)
 	sdk.AddTool(srv, &sdk.Tool{Name: "act", Description: "API mode only. Act on elements, 1 to 20 steps in order, stopping at the first that fails: click, fill (replace a field's text), type (key by key), press (keys, like Enter or ctrl+a), select (an option of a <select>), check, uncheck, hover, upload (set files from upload_file on an <input type=file> or its <label>; no chooser opens, and a page's own button that opens one can't be handled). Each step names its element by ref (from snapshot, find or an earlier answer) or by target, with no snapshot needed: " +
 		"role=button[name=\"Save\"] (an ARIA role and a part of the accessible name, ignoring case), text=Save (the innermost element whose visible text holds it) or text=\"Save\" (exactly that text), optionally followed by >> nth=0 (the first match; -1 the last). " +
@@ -23,39 +23,31 @@ func (s *Server) addPageTools(srv *sdk.Server) {
 		"Answers already true when wait started: … when it was so before waiting (waiting for text already on the page, your own typed text say, proves nothing), else waited 1.4 s for …, or timed out, with what a ref is now (on the page but hidden, or gone). A target is visible when exactly one visible element matches (the answer gives its ref); several for more than 1 s fail, listing them with refs."}, s.waitFor)
 	sdk.AddTool(srv, &sdk.Tool{Name: "tabs", Description: "API mode only. List the browser's tabs (the active one is the one in front), or switch to one, close one, or open a new one. Tools always act on the active tab; when a page opens a tab, results say so and you switch to it."}, s.tabs)
 	sdk.AddTool(srv, &sdk.Tool{Name: "navigate", Description: "API mode only. Open an http(s) URL in the active tab, or go back, forward or reload; waits for the page to load, then for script redirects (a sign-in bounce) to settle, up to 15 s, and answers with the page it landed on, adding Redirected from: when that isn't the URL you gave. A failed navigation names the address that failed when a redirect led there. The tab's refs go stale."}, s.navigate)
-	sdk.AddTool(srv, &sdk.Tool{Name: "page_content", Description: "The active tab's content: markdown (the whole page, with links) or readability (its main text only, the fewest tokens), API mode only, 20000 characters at a time (read on with offset); pdf, API mode only; or screenshot, either mode. Text a person can't see may appear: it is fenced like the rest."}, s.pageContent)
+	sdk.AddTool(srv, &sdk.Tool{Name: "page_content", Description: "The active tab's content, in one format: outline (for acting on the page: controls with refs and text, within a budget, as snapshot gives it; with diff, only what changed since your last outline or snapshot), markdown (the whole page, with links) or readability (its main text only, the fewest tokens), all API mode only; markdown and readability come 20000 characters at a time (read on with offset); pdf, API mode only; or screenshot, either mode. " +
+		"Page text comes inside <page>, after its <url> and <title>, in a page_content tag that says its format. Text a person can't see may appear: it is fenced like the rest."}, s.pageContent)
 }
 
 type contentArgs struct {
-	SessionID  string `json:"session_id" jsonschema:"from start_browser"`
-	Format     string `json:"format" jsonschema:"markdown, readability, pdf or screenshot"`
-	MaxChars   int    `json:"max_chars,omitempty" jsonschema:"markdown and readability: at most this many characters, default 20000, at most 100000"`
+	SessionID string `json:"session_id" jsonschema:"from start_browser"`
+	Format    string `json:"format" jsonschema:"outline, markdown, readability, pdf or screenshot"`
+	// MaxChars is a pointer, so outline's 0 (only the URL and title)
+	// differs from unset.
+	MaxChars   *int   `json:"max_chars,omitempty" jsonschema:"outline: the budget for controls and text, default 4000, at most 20000, 0 for only the URL and title; markdown and readability: at most this many characters, default 20000 (also for 0), at most 100000"`
 	Offset     int    `json:"offset,omitempty" jsonschema:"markdown and readability: start here, as the last answer said"`
+	Diff       bool   `json:"diff,omitempty" jsonschema:"outline only: only what changed since your last outline or snapshot of this page; the whole page if there is none"`
 	Landscape  bool   `json:"landscape,omitempty" jsonschema:"pdf: landscape pages"`
 	Background bool   `json:"background,omitempty" jsonschema:"pdf: print background colours and images"`
 	Pages      string `json:"pages,omitempty" jsonschema:"pdf: pages to print, like 1-5, 8 (default all)"`
 }
 
 func (s *Server) pageContent(ctx context.Context, req *sdk.CallToolRequest, in contentArgs) (*sdk.CallToolResult, any, error) {
-	body := map[string]any{"format": in.Format}
-	switch in.Format {
-	case "markdown", "readability":
-		if in.MaxChars != 0 {
-			body["max_chars"] = in.MaxChars
-		}
-		if in.Offset != 0 {
-			body["offset"] = in.Offset
-		}
-	case "screenshot":
+	if in.Format == "screenshot" {
 		// The same as the screenshot tool, so its coordinates hold.
 		return s.screenshot(ctx, req, sessionArgs{SessionID: in.SessionID})
-	case "pdf":
-		body["landscape"], body["background"] = in.Landscape, in.Background
-		if in.Pages != "" {
-			body["pages"] = in.Pages
-		}
-	default:
-		return nil, nil, toolError("format: markdown, readability, pdf or screenshot")
+	}
+	body, err := contentBody(in)
+	if err != nil {
+		return nil, nil, err
 	}
 	r, err := s.call(ctx, req.Extra, "POST", "/api/sessions/"+url.PathEscape(in.SessionID)+"/content", body)
 	if err != nil {
@@ -77,6 +69,39 @@ func (s *Server) pageContent(ctx context.Context, req *sdk.CallToolRequest, in c
 		return nil, nil, err
 	}
 	return text("%s", out.Text), nil, nil
+}
+
+// contentBody is page_content's request to the content endpoint, which
+// refuses options that don't go with the format.
+func contentBody(in contentArgs) (map[string]any, error) {
+	body := map[string]any{"format": in.Format}
+	if in.Diff {
+		body["diff"] = true
+	}
+	switch in.Format {
+	case "outline":
+		if in.MaxChars != nil {
+			body["max_chars"] = *in.MaxChars
+		}
+		if in.Offset != 0 {
+			body["offset"] = in.Offset
+		}
+	case "markdown", "readability":
+		if in.MaxChars != nil && *in.MaxChars != 0 {
+			body["max_chars"] = *in.MaxChars
+		}
+		if in.Offset != 0 {
+			body["offset"] = in.Offset
+		}
+	case "pdf":
+		body["landscape"], body["background"] = in.Landscape, in.Background
+		if in.Pages != "" {
+			body["pages"] = in.Pages
+		}
+	default:
+		return nil, toolError("format: outline, markdown, readability, pdf or screenshot")
+	}
+	return body, nil
 }
 
 // pageCall calls a page tool's endpoint and returns its text.

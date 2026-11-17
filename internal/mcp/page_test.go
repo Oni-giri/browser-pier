@@ -61,7 +61,7 @@ func TestPageContent(t *testing.T) {
 	call(t, cs, "start_browser", map[string]any{"profile": "google"})
 	s, _ := f.m.Live("google")
 	// Visual mode: the text formats and PDF need CDP; a screenshot doesn't.
-	for _, format := range []string{"markdown", "readability", "pdf"} {
+	for _, format := range []string{"outline", "markdown", "readability", "pdf"} {
 		res, out := call(t, cs, "page_content", map[string]any{"session_id": s.ID, "format": format})
 		if !res.IsError || !strings.Contains(out, "Visual mode") {
 			t.Errorf("%s in Visual mode: %v %s", format, res.IsError, out)
@@ -74,8 +74,36 @@ func TestPageContent(t *testing.T) {
 	if _, ok := res.Content[1].(*sdk.ImageContent); !ok {
 		t.Errorf("no image: %T", res.Content[1])
 	}
-	if res, out := call(t, cs, "page_content", map[string]any{"session_id": s.ID, "format": "html"}); !res.IsError || !strings.Contains(out, "format") {
+	if res, out := call(t, cs, "page_content", map[string]any{"session_id": s.ID, "format": "html"}); !res.IsError || !strings.Contains(out, "outline, markdown") {
 		t.Errorf("format html: %s", out)
+	}
+}
+
+// page_content's request: outline's max_chars 0 gets through (only the
+// URL and title), markdown's means the default; diff and offset go to the
+// endpoint, which refuses them with the wrong format (PROJ-167).
+func TestPageContentBody(t *testing.T) {
+	zero, some := 0, 300
+	for _, c := range []struct {
+		in   contentArgs
+		want string
+	}{
+		{contentArgs{Format: "outline", MaxChars: &zero}, `{"format":"outline","max_chars":0}`},
+		{contentArgs{Format: "outline"}, `{"format":"outline"}`},
+		{contentArgs{Format: "outline", MaxChars: &some, Diff: true}, `{"diff":true,"format":"outline","max_chars":300}`},
+		{contentArgs{Format: "outline", Offset: 10}, `{"format":"outline","offset":10}`},
+		{contentArgs{Format: "markdown", MaxChars: &zero}, `{"format":"markdown"}`},
+		{contentArgs{Format: "readability", MaxChars: &some, Offset: 5}, `{"format":"readability","max_chars":300,"offset":5}`},
+		{contentArgs{Format: "markdown", Diff: true}, `{"diff":true,"format":"markdown"}`},
+	} {
+		body, err := contentBody(c.in)
+		raw, _ := json.Marshal(body)
+		if err != nil || string(raw) != c.want {
+			t.Errorf("%+v: %v %s, want %s", c.in, err, raw, c.want)
+		}
+	}
+	if _, err := contentBody(contentArgs{Format: "html"}); err == nil {
+		t.Error("format html went through")
 	}
 }
 
