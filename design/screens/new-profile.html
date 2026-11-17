@@ -147,8 +147,8 @@ input:focus,select:focus{outline:none;box-shadow:0 0 0 1px #2F6BFF,0 0 0 4px rgb
             <div style="display: flex; flex-direction: column; gap: 8px">
               <label for="np-proxy" style="font-size: 14px; font-weight: 500">Proxy <span style="font-weight: 400; color: #64748B">· optional</span></label>
               <div style="display: flex; gap: 8px">
-                <input id="np-proxy" type="text" value="http://pier-{sticky}:••••@proxy.example:8080" placeholder="socks5://user:pass@host:port" style="flex: 1; min-width: 0; height: 38px; box-sizing: border-box; padding: 0 10px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; color: #0F172A; font-family: 'Geist Mono', monospace; font-size: 13px">
-                <button type="button" onClick="{{testProxy}}" style="min-height: 38px; padding: 0 12px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0, 0 1px 2px rgba(15,23,42,0.05); color: #0F172A; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Test</button>
+                <input id="np-proxy" type="text" value="{{proxy}}" onInput="{{setProxy}}" placeholder="socks5://user:pass@host:port" style="flex: 1; min-width: 0; height: 38px; box-sizing: border-box; padding: 0 10px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; color: #0F172A; font-family: 'Geist Mono', monospace; font-size: 13px">
+                <button type="button" onClick="{{testProxy}}" disabled="{{noProxy}}" style="opacity: {{testOpacity}}; min-height: 38px; padding: 0 12px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0, 0 1px 2px rgba(15,23,42,0.05); color: #0F172A; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Test</button>
               </div>
               <sc-if value="{{proxyTested}}" hint-placeholder-val="{{false}}">
                 <div style="display: flex; flex-direction: column; gap: 4px; font-size: 13px">
@@ -158,7 +158,7 @@ input:focus,select:focus{outline:none;box-shadow:0 0 0 1px #2F6BFF,0 0 0 4px rgb
                   <span style="color: #64748B">Nothing was saved.</span>
                 </div>
               </sc-if>
-              <span style="font-size: 13px; color: #64748B">Timezone and language follow the proxy’s location. Test is off while the field is empty, and an edit clears its result.</span>
+              <span style="font-size: 13px; color: #64748B">Timezone and language follow the proxy’s location.</span>
             </div>
           </div>
         </sc-if>
@@ -177,7 +177,7 @@ input:focus,select:focus{outline:none;box-shadow:0 0 0 1px #2F6BFF,0 0 0 4px rgb
 class Component extends DCLogic {
   constructor(props) {
     super(props);
-    this.state = { mode: 'visual', adv: false, policy: 'pin', proxyTested: false };
+    this.state = { mode: 'visual', adv: false, policy: 'pin', proxy: '', proxyTested: false };
   }
   renderVals() {
     const list = [
@@ -222,10 +222,15 @@ class Component extends DCLogic {
       advOpen: adv,
       advExpanded: adv ? 'true' : 'false',
       chevron: adv ? 'rotate(180deg)' : 'none',
-      advSummary: cur.title + ' · auto-stop 15 min · 1440 × 900 · proxy',
+      advSummary: cur.title + ' · auto-stop 15 min · 1440 × 900 · ' + (this.state.proxy.trim() ? 'proxy' : 'no proxy'),
       toggleAdv: () => this.setState({ adv: !adv }),
+      proxy: this.state.proxy,
       proxyTested: this.state.proxyTested,
-      testProxy: () => this.setState({ proxyTested: true }),
+      // Test is off while the field is empty, and an edit clears its result.
+      setProxy: (e) => this.setState({ proxy: e.target.value, proxyTested: false }),
+      noProxy: !this.state.proxy.trim(),
+      testOpacity: this.state.proxy.trim() ? '1' : '0.5',
+      testProxy: () => { if (this.state.proxy.trim()) this.setState({ proxyTested: true }); },
       ghosts: [
         { name: 'google', status: 'Needs you', fg: '#C2410C', pillBg: '#FFF1EB', bg: '#F1F5F9', ring: '0 0 0 1.5px #FF6A3D' },
         { name: 'linkedin', status: 'Running', fg: '#15803D', pillBg: '#ECFDF3', bg: '#EEF2FB', ring: ring },

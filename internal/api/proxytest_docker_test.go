@@ -219,10 +219,9 @@ func TestProxyTestInAContainer(t *testing.T) {
 			a.m.SetGeoURL(site.URL + "/geo")
 			up.Close()
 			res, err := a.m.TestProxy(ctx, sessions.ProxyTest{Proxy: proxyAt(up.Port(), proxyTestPass), For: "settings"})
-			if err != nil || res.OK || (res.Reason != docker.ProxyUnreachable && res.Reason != docker.ProxyRefused) {
+			if err != nil || res.OK || res.Reason != docker.ProxyUnreachable {
 				t.Fatalf("proxy stopped: %+v, %v", res, err)
 			}
-			t.Logf("proxy stopped: %s", res.Reason)
 			checkNothingLeft(t, a)
 		})
 	}

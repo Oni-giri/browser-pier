@@ -134,8 +134,8 @@ input[type=range]:focus{box-shadow:none!important}
         </div>
         <div style="display: flex; gap: 8px">
           <label for="st-proxy-url" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Proxy URL</label>
-          <input id="st-proxy-url" type="text" value="socks5://pier:••••@proxy.example:1080" placeholder="socks5://user:pass@host:port" style="flex: 1; min-width: 0; height: 38px; box-sizing: border-box; padding: 0 10px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; color: #0F172A; font-family: 'Geist Mono', monospace; font-size: 13px">
-          <button type="button" onClick="{{testProxy}}" style="min-height: 38px; padding: 0 12px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0, 0 1px 2px rgba(15,23,42,0.05); color: #0F172A; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Test</button>
+          <input id="st-proxy-url" type="text" value="{{proxy}}" onInput="{{setProxy}}" placeholder="socks5://user:pass@host:port" style="flex: 1; min-width: 0; height: 38px; box-sizing: border-box; padding: 0 10px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; color: #0F172A; font-family: 'Geist Mono', monospace; font-size: 13px">
+          <button type="button" onClick="{{testProxy}}" disabled="{{noProxy}}" style="opacity: {{testOpacity}}; min-height: 38px; padding: 0 12px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0, 0 1px 2px rgba(15,23,42,0.05); color: #0F172A; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Test</button>
         </div>
         <sc-if value="{{proxyTested}}" hint-placeholder-val="{{false}}">
           <div style="display: flex; flex-direction: column; gap: 4px; font-size: 13px">
@@ -190,7 +190,7 @@ class Component extends DCLogic {
   constructor(props) {
     super(props);
     this.saved = { ram: 70, policy: 'pin', idle: 15 };
-    this.state = { ...this.saved, pin: 'idle', proxyTested: false, toast: null, theme: 'system' };
+    this.state = { ...this.saved, pin: 'idle', proxy: '', proxyTested: false, toast: null, theme: 'system' };
   }
   flash(msg) {
     this.setState({ toast: msg });
@@ -233,8 +233,13 @@ class Component extends DCLogic {
         };
       }),
       themes: [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([id, title]) => ({ title, ...seg(id === s.theme), on: id === s.theme ? 'true' : 'false', pick: () => { this.setState({ theme: id }); this.flash('Appearance saved'); } })),
+      proxy: s.proxy,
       proxyTested: s.proxyTested,
-      testProxy: () => this.setState({ proxyTested: true }),
+      // Test is off while the field is empty, and an edit clears its result.
+      setProxy: (e) => this.setState({ proxy: e.target.value, proxyTested: false }),
+      noProxy: !s.proxy.trim(),
+      testOpacity: s.proxy.trim() ? '1' : '0.5',
+      testProxy: () => { if (s.proxy.trim()) this.setState({ proxyTested: true }); },
       dirty: dirty && !s.toast,
       discard: () => this.setState({ ...this.saved }),
       save: () => { this.saved = { ram: s.ram, policy: s.policy, idle: s.idle }; this.flash('Settings saved'); },

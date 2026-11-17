@@ -42,14 +42,14 @@ The container exits 0 only after a graceful stop: Chromium closed through CDP's 
 
 ## Proxy check
 
-With the argument `proxy-check`, the entrypoint tests a proxy instead of starting the browser, for the admin's Test button (SPEC.md §3). The image label `io.browserpier.proxy-check=1` says it can; with an older image the orchestrator says to update it. The orchestrator runs it with a browser's settings and network, less the profile, files, shared memory and `SYS_CHROOT`, with `/run/browserpier` the only mount, 128 MiB and 64 processes. It reads and deletes `proxy.json` (`BROWSERPIER_PROXY_FILE`) as a start does, builds the forwarder for that proxy and looks up the exit through it at `BROWSERPIER_GEOIP_URL`, with a start's 5 s lookup timeout and 15 s in all. No Xvfb, no Chromium, no control socket, no mount check. It logs nothing, and prints one JSON line on standard output, then exits 0 if the proxy works and 1 if not:
+With the argument `proxy-check`, the entrypoint tests a proxy instead of starting the browser, for the admin's Test button (SPEC.md §3). The image label `io.browserpier.proxy-check=1` says it can; with an older image the orchestrator says to update it. The orchestrator runs it with a browser's settings and network, less the profile, files, shared memory and `SYS_CHROOT`, with `/run/browserpier` the only mount, 128 MiB and 64 processes. It reads and deletes `proxy.json` (`BROWSERPIER_PROXY_FILE`) as a start does, builds the forwarder for that proxy and looks up the exit through it at `BROWSERPIER_GEOIP_URL`, with a start's 5 s lookup timeout, which bounds the whole check. No Xvfb, no Chromium, no control socket, no mount check. It logs nothing, and prints one JSON line on standard output, then exits 0 if the proxy works and 1 if not:
 
 ```json
 {"ok":true,"ip":"198.51.100.23","country":"DE","time_zone":"Europe/Berlin","locale":"de-DE","accept_languages":["de-DE","de","en-US","en"],"ms":312}
 {"ok":false,"reason":"auth"}
 ```
 
-`reason` is one of `unreachable` (the name doesn't resolve, or nothing answers), `tls_proxy` (the TLS handshake with an `https` proxy failed), `auth` (407, or SOCKS5 refused the method or the credentials), `refused` (the proxy answered but opened no tunnel), `timeout`, `lookup` (the tunnel opened, but the endpoint's answer wasn't usable), `lookup_off` (`BROWSERPIER_GEOIP_URL` is empty; nothing is contacted) or `failed` (no usable proxy file). It never holds the proxy's or the endpoint's own words.
+`reason` is one of `unreachable` (the name doesn't resolve, or nothing answers), `tls_proxy` (the TLS handshake with an `https` proxy failed), `auth` (407, or SOCKS5 refused the method or the credentials), `refused` (the proxy answered but opened no tunnel), `timeout` (the time ran out before the tunnel opened), `lookup` (the tunnel opened, but the endpoint gave no usable answer, or none in time), `lookup_off` (`BROWSERPIER_GEOIP_URL` is empty; nothing is contacted) or `failed` (no usable proxy file). It never holds the proxy's or the endpoint's own words.
 
 ## Control socket
 
