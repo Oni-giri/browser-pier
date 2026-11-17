@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
+	"sync/atomic"
 	"time"
 )
 
@@ -16,10 +19,6 @@ import (
 // network, to test a proxy before a browser uses it (the admin's Test
 // button; see internal/docker's TestProxy).
 const proxyCheckArg = "proxy-check"
-
-// proxyCheckDeadline bounds the whole check. The orchestrator gives the
-// container twice as long before it kills it.
-const proxyCheckDeadline = 15 * time.Second
 
 // The check's outcomes besides the forwarder's own kinds (proxy.go).
 const (
@@ -44,7 +43,7 @@ type checkResult struct {
 // proxyCheck does what a start does to find the exit, and nothing more:
 // it reads (and deletes) the proxy file, builds the forwarder for that
 // upstream, and looks up the location through fwd.connect, against geoURL,
-// with a start's lookup timeout. It logs nothing: the URL, the user name
+// with a start's lookup timeout, which bounds the whole check. It logs nothing: the URL, the user name
 // and the password never reach the output.
 func proxyCheck(ctx context.Context, proxyFile, geoURL string) checkResult {
 	upstream, err := readProxyFile(proxyFile)
@@ -60,13 +59,25 @@ func proxyCheck(ctx context.Context, proxyFile, geoURL string) checkResult {
 	if err != nil {
 		return checkResult{Reason: checkFailed}
 	}
-	ctx, cancel := context.WithTimeout(ctx, proxyCheckDeadline)
-	defer cancel()
+	// The lookup is a start's, with its timeout (lookupTimeout), which
+	// bounds the whole check. Whether the tunnel opened tells a slow
+	// proxy from a slow endpoint when that timeout passes.
+	client := lookupClient(fwd)
+	var tunnel atomic.Bool
+	tr := client.Transport.(*http.Transport)
+	dial := tr.DialContext
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		c, err := dial(ctx, network, addr)
+		if err == nil {
+			tunnel.Store(true)
+		}
+		return c, err
+	}
 	start := time.Now()
-	ip, country, tz, err := lookupGeo(ctx, lookupClient(fwd), geoURL)
+	ip, country, tz, err := lookupGeo(ctx, client, geoURL)
 	took := time.Since(start)
 	if err != nil {
-		return checkResult{Reason: checkReason(err)}
+		return checkResult{Reason: checkReason(err, tunnel.Load())}
 	}
 	locale, accept := localeFor(country)
 	return checkResult{OK: true, IP: ip, Country: country, TimeZone: tz, Locale: locale, Accept: accept,
@@ -74,14 +85,15 @@ func proxyCheck(ctx context.Context, proxyFile, geoURL string) checkResult {
 }
 
 // checkReason is the kind of a lookup's failure: the forwarder's, if the
-// proxy failed; a timeout; or else the lookup's own (the tunnel opened,
-// but the endpoint's answer wasn't usable). Never the error's text.
-func checkReason(err error) string {
+// proxy failed; a timeout, if the time ran out before the tunnel opened;
+// or else the lookup's own (the tunnel opened, but the endpoint gave no
+// usable answer in time). Never the error's text.
+func checkReason(err error, tunnelOpened bool) string {
 	var pe *proxyError
 	switch {
 	case errors.As(err, &pe):
 		return pe.kind
-	case errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded):
+	case !tunnelOpened && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded)):
 		return proxyTimeout
 	}
 	return checkLookup

@@ -279,8 +279,9 @@ func (f *forwarder) connect(ctx context.Context, addr string) (net.Conn, error) 
 		}
 		conn = tc
 	}
-	// The handshake with the proxy ends with the caller's deadline, if
-	// sooner: a proxy that never answers is then a timeout, not a hang.
+	// The handshake with the proxy ends 30 s after the dial began, or at
+	// the caller's deadline if sooner (the dial counts against both): a
+	// proxy that never answers is then a timeout, not a hang.
 	deadline := time.Now().Add(30 * time.Second)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d

@@ -35,6 +35,13 @@ func geoEndpoint(t *testing.T) (port string) {
 			_, _ = io.WriteString(w, `<html>hello</html>`)
 		case "/nocountry":
 			_, _ = io.WriteString(w, `{"ip":"198.51.100.23","time_zone":"Europe/Berlin"}`)
+		case "/slow":
+			// Answers after the lookup has given up.
+			select {
+			case <-r.Context().Done():
+			case <-time.After(3 * time.Second):
+			}
+			_, _ = io.WriteString(w, `{"ip":"198.51.100.23","country_iso":"DE","time_zone":"Europe/Berlin"}`)
 		case "/local":
 			_, _ = io.WriteString(w, `{"ip":"198.51.100.23","country_iso":"DE","time_zone":"Local"}`)
 		default:
@@ -105,7 +112,7 @@ func TestProxyCheckFindsTheExit(t *testing.T) {
 			up.Alias("geo.test", "127.0.0.1")
 			res, _ := runCheck(t, name+"://"+checkUser+":"+checkPass+"@"+up.Addr, "http://geo.test:"+port+"/geo")
 			want := checkResult{OK: true, IP: "198.51.100.23", Country: "DE", TimeZone: "Europe/Berlin", Locale: "de-DE", Accept: []string{"de-DE", "de", "en-US", "en"}}
-			if res.MS <= 0 || res.MS > proxyCheckDeadline.Milliseconds() {
+			if res.MS <= 0 || res.MS > lookupTimeout.Milliseconds() {
 				t.Errorf("ms = %d", res.MS)
 			}
 			res.MS = 0
@@ -250,6 +257,8 @@ func TestProxyCheckReasons(t *testing.T) {
 		{"endpoint not JSON", "http://" + creds + httpUp.Addr, geo + "/notjson", checkLookup},
 		{"endpoint without a country", "http://" + creds + httpUp.Addr, geo + "/nocountry", checkLookup},
 		{"endpoint with time zone Local", "http://" + creds + httpUp.Addr, geo + "/local", checkLookup},
+		{"tunnel opens, endpoint too slow", "http://" + creds + httpUp.Addr, geo + "/slow", checkLookup},
+		{"tunnel opens over socks5, endpoint too slow", "socks5://" + creds + socksUp.Addr, geo + "/slow", checkLookup},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -349,7 +358,7 @@ func TestProxyErrorKeepsItsText(t *testing.T) {
 	if err == nil || err.Error() != "the proxy answered 407 Proxy Authentication Required" {
 		t.Fatalf("err = %v", err)
 	}
-	if checkReason(err) != proxyAuth {
-		t.Fatalf("kind %s", checkReason(err))
+	if checkReason(err, false) != proxyAuth {
+		t.Fatalf("kind %s", checkReason(err, false))
 	}
 }
