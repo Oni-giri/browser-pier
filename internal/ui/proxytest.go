@@ -47,6 +47,7 @@ func (l *proxyLimiter) allow(now time.Time) bool {
 type proxyResultView struct {
 	OK       bool
 	Problem  string // why not, when not OK
+	Subject  string // whose browser the time zone and languages are
 	IP       string
 	Country  string
 	TimeZone string
@@ -146,8 +147,10 @@ func (u *UI) testProxy(w http.ResponseWriter, r *http.Request) {
 	u.proxyAnswer(w, http.StatusOK, proxyView(res, p, name != "", profiles.HasSticky(value)))
 }
 
-// proxyView words a result, comparing it on Edit with what the profile
-// ran with last time and what is set by hand.
+// proxyView words a result. On Edit it says what this profile's browser
+// would run with, as a start decides (the entrypoint's decideGeo): a time
+// zone or language set by hand wins, and while the country is the one it
+// ran from last time, the stored time zone is kept.
 func proxyView(res docker.ProxyResult, p profiles.Profile, edit, sticky bool) proxyResultView {
 	if !res.OK {
 		problem, ok := proxyProblems[res.Reason]
@@ -156,8 +159,8 @@ func proxyView(res docker.ProxyResult, p profiles.Profile, edit, sticky bool) pr
 		}
 		return proxyResultView{Problem: problem}
 	}
-	v := proxyResultView{OK: true, IP: res.IP.String(), Country: res.Country, TimeZone: res.TimeZone, Locale: res.Locale,
-		Accept: strings.Join(res.Accept, ", "), MS: res.Lookup.Milliseconds()}
+	v := proxyResultView{OK: true, Subject: "A browser there", IP: res.IP.String(), Country: res.Country, TimeZone: res.TimeZone,
+		Locale: res.Locale, Accept: strings.Join(res.Accept, ", "), MS: res.Lookup.Milliseconds()}
 	switch {
 	case sticky && edit:
 		v.Notes = append(v.Notes, "Tested with this profile's own {sticky} code, so this is the exit it gets.")
@@ -167,21 +170,50 @@ func proxyView(res docker.ProxyResult, p profiles.Profile, edit, sticky bool) pr
 	if !edit {
 		return v
 	}
+	v.Subject = "This profile's browser"
 	switch last := p.Location; {
 	case last.Country != "" && last.Country != res.Country:
 		v.Warn = "Last time this profile ran from " + last.Country + ", not " + res.Country + ". Sites may ask its accounts to sign in or verify again."
 	case last.Country != "" && last.TimeZone != "" && p.TimeZone == "":
-		v.Notes = append(v.Notes, "Same country as last time, so the browser keeps its time zone, "+last.TimeZone+".")
+		v.TimeZone = last.TimeZone
+		if last.TimeZone != res.TimeZone {
+			v.Notes = append(v.Notes, "Same country as last time, so it keeps its time zone, "+last.TimeZone+", rather than the exit's "+res.TimeZone+".")
+		} else {
+			v.Notes = append(v.Notes, "Same country as last time, so it keeps its time zone.")
+		}
 	}
 	if p.TimeZone != "" {
-		v.Notes = append(v.Notes, "This profile's time zone is set by hand, "+p.TimeZone+", and stays.")
+		v.TimeZone = p.TimeZone
+		v.Notes = append(v.Notes, "Its time zone is set by hand, and stays.")
 	}
 	if p.Locale != "" {
-		v.Notes = append(v.Notes, "This profile's language is set by hand, "+p.Locale+", and stays.")
+		v.Locale, v.Accept = p.Locale, strings.Join(acceptFor(p.Locale), ", ")
+		v.Notes = append(v.Notes, "Its language is set by hand, and stays.")
 	}
 	return v
 }
 
+// acceptFor is the Accept-Language list a browser sends for a locale set
+// by hand, as the entrypoint's acceptFor makes it: the locale, its
+// language, then English.
+func acceptFor(locale string) []string {
+	lang, _, _ := strings.Cut(locale, "-")
+	out := []string{locale}
+	if lang != locale {
+		out = append(out, lang)
+	}
+	if lang != "en" {
+		out = append(out, "en-US", "en")
+	}
+	return out
+}
+
+// proxyFragmentHeader marks the answers app.js may show: a page from
+// something in front of BrowserPier (a proxy's error page) is never put
+// into the form.
+const proxyFragmentHeader = "X-BrowserPier-Fragment"
+
 func (u *UI) proxyAnswer(w http.ResponseWriter, status int, v proxyResultView) {
+	w.Header().Set(proxyFragmentHeader, "proxy-result")
 	u.fragment(w, status, "settings", "proxy-result", v)
 }

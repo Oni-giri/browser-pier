@@ -279,12 +279,12 @@
     btn.textContent = "Testing…";
     btn.disabled = true;
     out.hidden = false;
-    out.innerHTML = '<span class="hint" style="margin:0">Testing the proxy from this server. This takes up to 30 seconds, longer if the browser image is still to download.</span>';
+    out.innerHTML = '<span class="hint" style="margin:0">Testing the proxy from this server. This takes a few seconds, longer if the browser image is still to download.</span>';
     let html = "";
     try {
       const r = await fetch("/proxy/test", { method: "POST", body, credentials: "same-origin" });
       if (r.status === 401) html = '<p class="errors" style="margin:0">You were signed out. Reload the page and sign in again.</p>';
-      else if ((r.headers.get("Content-Type") || "").startsWith("text/html")) html = await r.text();
+      else if (r.headers.get("X-BrowserPier-Fragment") === "proxy-result") html = await r.text();
       if (!html) throw new Error("no answer");
     } catch (err) {
       html = '<p class="errors" style="margin:0">Can\'t reach BrowserPier.</p>';

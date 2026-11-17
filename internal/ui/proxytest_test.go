@@ -192,28 +192,69 @@ func TestProxyTestComparesWithTheProfile(t *testing.T) {
 
 	// Never run: nothing to compare.
 	r := f.testProxy(form)
-	want(t, r, http.StatusOK, "Works.")
+	want(t, r, http.StatusOK, "Works.", "This profile&#39;s browser runs in Europe/Berlin, in de-DE (de-DE, de, en-US, en).")
 	if strings.Contains(r.body, "Last time") || strings.Contains(r.body, "Same country") || strings.Contains(r.body, "set by hand") {
 		t.Fatalf("a profile that never ran compared: %s", r.body)
 	}
 
+	// Same country, another zone than the exit's: the start keeps the
+	// stored zone, and the main line says so.
 	if err := f.m.Profiles().SetLocation(ctx, "bank", profiles.Location{Country: "DE", TimeZone: "Europe/Busingen"}); err != nil {
 		t.Fatal(err)
 	}
 	f.app.proxyTests = proxyLimiter{}
-	want(t, f.testProxy(form), http.StatusOK, "Same country as last time, so the browser keeps its time zone, Europe/Busingen.")
+	r = f.testProxy(form)
+	want(t, r, http.StatusOK, "This profile&#39;s browser runs in Europe/Busingen, in de-DE",
+		"Same country as last time, so it keeps its time zone, Europe/Busingen, rather than the exit&#39;s Europe/Berlin.")
+	if strings.Contains(r.body, "runs in Europe/Berlin") {
+		t.Fatalf("the main line gives the exit's zone, not the one the browser keeps: %s", r.body)
+	}
+	// Same zone: just kept.
+	if err := f.m.Profiles().SetLocation(ctx, "bank", profiles.Location{Country: "DE", TimeZone: "Europe/Berlin"}); err != nil {
+		t.Fatal(err)
+	}
+	want(t, f.testProxy(form), http.StatusOK, "runs in Europe/Berlin", "Same country as last time, so it keeps its time zone.")
 
+	// Another country: a neutral notice, never the orange one.
 	if err := f.m.Profiles().SetLocation(ctx, "bank", profiles.Location{Country: "FR", TimeZone: "Europe/Paris"}); err != nil {
 		t.Fatal(err)
 	}
-	want(t, f.testProxy(form), http.StatusOK, "Last time this profile ran from FR, not DE. Sites may ask its accounts to sign in or verify again.")
+	r = f.testProxy(form)
+	want(t, r, http.StatusOK, `<p class="notice" style="margin:8px 0 0">Last time this profile ran from FR, not DE. Sites may ask its accounts to sign in or verify again.`,
+		"runs in Europe/Berlin, in de-DE")
+	if strings.Contains(r.body, "warn") {
+		t.Fatal("the country change uses the orange box")
+	}
 
+	// Set by hand: those win, in the main line too.
+	f.app.proxyTests = proxyLimiter{}
 	p, _ = f.m.Profiles().Get(ctx, "bank")
-	p.TimeZone, p.Locale = "America/New_York", "en-US"
+	p.TimeZone, p.Locale = "America/New_York", "fr-CA"
 	if _, err := f.m.Profiles().Update(ctx, p); err != nil {
 		t.Fatal(err)
 	}
-	want(t, f.testProxy(form), http.StatusOK, "time zone is set by hand, America/New_York, and stays.", "language is set by hand, en-US, and stays.")
+	want(t, f.testProxy(form), http.StatusOK, "runs in America/New_York, in fr-CA (fr-CA, fr, en-US, en).",
+		"Its time zone is set by hand, and stays.", "Its language is set by hand, and stays.")
+	if err := f.m.Profiles().SetLocation(ctx, "bank", profiles.Location{Country: "DE", TimeZone: "Europe/Busingen"}); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.testProxy(form); !strings.Contains(r.body, "runs in America/New_York") || strings.Contains(r.body, "keeps its time zone") {
+		t.Fatalf("a zone set by hand beats the stored one: %s", r.body)
+	}
+}
+
+// TestProxyAnswersAreMarked: app.js shows only answers marked as
+// BrowserPier's own fragment.
+func TestProxyAnswersAreMarked(t *testing.T) {
+	f := proxyFixture(t)
+	for _, form := range []url.Values{
+		{"proxy": {"http://u:p@x.example:8080"}, "form": {"settings"}},
+		{"proxy": {""}, "form": {"settings"}},
+	} {
+		if r := f.testProxy(form); r.header.Get(proxyFragmentHeader) != "proxy-result" {
+			t.Fatalf("%d answer without the mark", r.code)
+		}
+	}
 }
 
 func TestProxyTestLimits(t *testing.T) {
