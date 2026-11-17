@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.3.0
+
+**Before you update:** the browser definition changed, so browsers started by 0.2.x are closed gracefully on the first start of 0.3.0, logins kept, and start again under the new definition the next time they're used.
+
+**Changed for agents**
+- **Input moves at a hand's pace by default** (`pace: human`), on `/computer`, `click`, `type_text`, `press_keys`, `scroll`, `drag` and act's steps. The pointer glides there in 0.2–1.15 s, lands a few pixels from the middle of the target (within about 3 px in Visual mode), pauses about 0.16 s and holds the button about 0.12 s; typing takes about 0.25 s a character, with a typist's uneven gaps. `pace: instant` is input as it was before. Expect actions, and typing above all, to take longer.
+- **Typing caps:** at human pace, `type` takes at most 500 characters a call over REST (it was 2,000; 2,000 still at instant pace in Visual mode), and act's human-paced type steps 500 together. Over MCP (`type_text`, and act's human-paced type steps together) the cap is 150 characters, about 40 s, so the call ends before an MCP client's request timeout and isn't retried. Split longer text across calls, use `fill`, or set `pace: instant`.
+- **One input at a time per browser:** a Visual-mode input sent while another is still running answers 409 ("another input is still running"). A person's **Take control** in the live view now breaks off an input action, or an `act` call, that has run 3 s or more, instead of being refused for its whole length: the call answers 409 (act's says which step a person took control in and how many steps ran), and the activity log says it was interrupted.
+- **`wait_for` says how it went:** `already true when wait started: …` when the condition held at the first look (the wait proved nothing), `waited 1.4 s for …`, or `timed out after 10 s waiting for …; now: …` with the state it found. A ref whose page navigated away ends the wait at once (`gave up after …`). Anything parsing the old answers needs updating.
+- **act reports what changed:** once the agent has a snapshot of the page, act's answer ends with `### Changes`, what changed on the page since that snapshot, instead of nothing. Pass `changes: false` to leave it out.
+- **`generic "…"` lines in snapshots:** controls built from a div or a span (no role, only a pointer cursor or a tabindex) now appear as `generic "<text>"` with a ref, so they can be clicked.
+- **Back, forward or reload onto the browser's error page answers 502,** with the browser's error, as `navigate` to a failing address already did.
+- **Tabs come back after a stop:** a browser starts again with the tabs it had, the one in front still in front, and keeps session-only cookies, so a stop or the idle auto-stop no longer logs out of sites whose login is a session cookie ("remember me" unticked, many SSO and bank sessions). The exception is a session BrowserPier typed a secret into: the next start opens none of its tabs, logins still kept.
+
+**Changed for people running BrowserPier**
+- **New profiles block ads and trackers** by default (Settings → default for new profiles; per profile under Advanced). Existing profiles keep running as before, with blocking off. To fill the list, BrowserPier downloads two public lists (Peter Lowe's ad servers and EasyPrivacy) into `<data dir>/blocklists/` and checks them every 4 days. Set `BROWSERPIER_BLOCKLIST_URLS=none` to download nothing, or point it at lists of your own. Blocking is by host name in the browser container's network forwarder: pages see a listed host's requests fail, as they do with any DNS-level blocker. Challenge and CAPTCHA providers are never blocked.
+
+**New**
+- **Human-like input:** `pace` on every input action, with the glide, aim, hold and typing rhythm above.
+- **`snapshot` diff and act's changes:** `snapshot` with `diff: true` gives only what changed since the last one.
+- **Covered clicks wait:** act aims at a wrapped link's largest box, and when something covers an element it scrolls it to the middle and waits up to `cover_wait_ms` (1 s by default) for the cover to go.
+- **Download notices:** act ends with `### Downloads`, MCP `click` and `press_keys` say what they downloaded, and REST `/click` and `/computer` add an `X-Downloads` header; `download_wait_ms` waits for a download to finish.
+- **Uploads:** MCP `upload_file` puts a file (up to 20 MiB) in the session, and act's `upload` step sets it on a file input.
+- **Handoffs that hand back by themselves:** `request_handoff` takes `until_url`, and the handoff ends as done once the person's tab in front reaches a matching address. The person's page says so.
+- **Ad and tracker blocking,** per profile, with `block_ads: false` (REST) or `allow_ads` (MCP `start_browser`) to turn it off for one session.
+- **Cloudflare challenges:** the page tools spot Cloudflare's challenge page and say where its checkbox is on the screen, for a real click (`/computer`, or MCP `click`, which now works on API-mode sessions) or a handoff. BrowserPier never clicks it by itself.
+- **`navigate` waits out script redirect chains,** such as a sign-in bounce, and names the address that failed after a redirect.
+- **`wait_for` takes `load`,** for an app that loads, then fetches its content: it waits until the page and its requests have been quiet for 500 ms.
+- **Targets:** act steps and `wait_for` can name an element by `role=button[name="Save"]` or `text=…` instead of a ref, with no snapshot first.
+- **Div and span controls** are listed and clickable, and `role=generic` targets find them.
+- **Filled secrets are hidden:** a value BrowserPier types itself is replaced by `<hidden>`, in every common encoding, in every answer to agents and in the activity log. This is the groundwork for vault fills; nothing registers a secret yet.
+
+**Fixed**
+- A browser with an input action under way is no longer stopped as idle in the middle of it.
+- An element that goes with its page during a call is reported as the page changing (409, take a new snapshot), not as "can't reach the browser" (502).
+- `navigate` to a download address, or one that answers an empty 204, answers at once that the tab stayed where it was, instead of waiting for an error page.
+- A `text=` target never matches the value inside a field, whatever role the page gives the field.
+- Upload names with two dots inside them (`report..v2.pdf`) are accepted wherever the REST upload accepts them.
+
 ## 0.2.1
 
 **Fixed**
