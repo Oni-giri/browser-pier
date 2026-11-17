@@ -7,12 +7,20 @@ CHROMIUM_IMAGE ?= ghcr.io/oni-giri/browser-pier-chromium
 
 DOCKER_TEST_PKGS = $(sort $(dir $(shell grep -rl --include='*_test.go' '^//go:build docker' .)))
 
-.PHONY: all build run test test-docker test-docker-only vet lint fmt release-files image image-chromium push push-chromium clean
+.PHONY: all build docs run test test-docker test-docker-only vet lint fmt release-files image image-chromium push push-chromium clean
 
 all: lint test build
 
 build:
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o bin/browserpier ./cmd/browserpier
+
+# The docs site (site/), built and put where the next build embeds it
+# (internal/docs), so the binary serves its own version's docs. Needs Node;
+# without it, a build has no docs and links to browserpier.com/docs.
+docs:
+	cd site && npm ci --no-audit --no-fund && npm run build
+	find internal/docs/site -mindepth 1 ! -name .gitkeep -delete
+	cp -R site/dist/. internal/docs/site/
 
 run: build
 	./bin/browserpier
