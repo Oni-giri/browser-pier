@@ -136,7 +136,8 @@ type Options struct {
 	// chosen to suit the host (see planAppArmor).
 	AppArmor string
 	// User is the uid:gid browsers run as; the sandbox check runs as it
-	// too. Empty means the image's own user.
+	// too. Required, numeric, and not root: the create guard refuses any
+	// other.
 	User string
 	// Log gets what's worth saying about the AppArmor choice, and what
 	// the daemon reports that isn't an error for the caller (see Stop).
@@ -152,6 +153,14 @@ func New(o Options) (*Client, error) {
 	}
 	if o.Instance == "" {
 		return nil, errors.New("no instance ID set")
+	}
+	// What the create guard would refuse at every browser start, refused
+	// now instead.
+	if m := guardUserRE.FindStringSubmatch(o.User); m == nil || strings.TrimLeft(m[1], "0") == "" {
+		return nil, fmt.Errorf("the browsers' user must be a numeric uid:gid other than root, got %q", o.User)
+	}
+	if !guardUsernsRE.MatchString(o.UsernsMode) {
+		return nil, fmt.Errorf("the user namespace mode must be unset or keep-id, got %q", o.UsernsMode)
 	}
 	var seccomp bytes.Buffer
 	if err := json.Compact(&seccomp, chromium.SeccompProfile); err != nil {
@@ -177,6 +186,9 @@ func New(o Options) (*Client, error) {
 // short-lived container to check (see planAppArmor). It doesn't pull the
 // browser image for that: without it, the first browser start chooses.
 func (c *Client) UseDataDir(ctx context.Context, dataDir, hostDataDir string) error {
+	if !filepath.IsAbs(hostDataDir) {
+		return fmt.Errorf("the data dir's path on the Docker host must be absolute, got %q", hostDataDir)
+	}
 	c.hostDataDir = filepath.Clean(hostDataDir)
 	info, err := c.api.Info(ctx, client.InfoOptions{})
 	if err != nil {

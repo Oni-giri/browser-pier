@@ -73,7 +73,7 @@ func TestBrowserConfigLocksDownTheContainer(t *testing.T) {
 }
 
 func TestNewCompactsTheEmbeddedSeccompProfile(t *testing.T) {
-	c, err := New(Options{Image: "img", Instance: "i1"})
+	c, err := New(Options{Image: "img", Instance: "i1", User: "1000:1000"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,8 +87,27 @@ func TestNewCompactsTheEmbeddedSeccompProfile(t *testing.T) {
 	if _, err := New(Options{Instance: "i1"}); err == nil {
 		t.Fatal("New must refuse an empty image")
 	}
-	if _, err := New(Options{Image: "img"}); err == nil {
+	if _, err := New(Options{Image: "img", User: "1000:1000"}); err == nil {
 		t.Fatal("New must refuse an empty instance ID")
+	}
+	// What the create guard refuses, New refuses (PROJ-159).
+	for _, user := range []string{"", "0:0", "00:1000", "chrome:chrome", "1000"} {
+		if _, err := New(Options{Image: "img", Instance: "i1", User: user}); err == nil {
+			t.Errorf("New took the user %q", user)
+		}
+	}
+	for _, userns := range []string{"host", "private", "keep-id:"} {
+		if _, err := New(Options{Image: "img", Instance: "i1", User: "1000:1000", UsernsMode: userns}); err == nil {
+			t.Errorf("New took the user namespace mode %q", userns)
+		}
+	}
+	for _, userns := range []string{"", "keep-id", "keep-id:uid=1000,gid=1000"} {
+		c, err := New(Options{Image: "img", Instance: "i1", User: "1000:1000", UsernsMode: userns})
+		if err != nil {
+			t.Errorf("%q: %v", userns, err)
+			continue
+		}
+		_ = c.Close()
 	}
 }
 

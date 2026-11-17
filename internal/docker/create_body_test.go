@@ -109,7 +109,7 @@ func goldenClient(t *testing.T, d http.Handler, podman bool, apparmorOpt string)
 
 func compactSeccomp(t *testing.T) string {
 	t.Helper()
-	c, err := New(Options{Image: "img", Instance: "i1"})
+	c, err := New(Options{Image: "img", Instance: "i1", User: "1000:1000"})
 	if err != nil {
 		t.Fatal(err)
 	}
