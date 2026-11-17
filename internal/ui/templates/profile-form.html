@@ -59,11 +59,16 @@
             <select class="input" name="screen">{{range .Screens}}<option value="{{.}}"{{if eq . $.Profile.Screen}} selected{{end}}>{{screenLabel .}}</option>{{end}}</select>
           </label>
         </div>
-        <label class="field"><span class="label">Proxy <span class="muted" style="font-weight:400">· optional</span></span>
-          <input class="input mono" name="proxy" value="{{.Proxy}}" placeholder="socks5://user:pass@host:port" autocomplete="off" spellcheck="false">
-          <span class="hint">HTTP, HTTPS or SOCKS5. Time zone and language follow the proxy's location.</span>
+        <div class="field" data-proxy>
+          <label class="label" for="{{if .New}}new{{else}}edit{{end}}-proxy">Proxy <span class="muted" style="font-weight:400">· optional</span></label>
+          <div class="proxy-row">
+            <input class="input mono" id="{{if .New}}new{{else}}edit{{end}}-proxy" name="proxy" value="{{.Proxy}}" placeholder="socks5://user:pass@host:port" autocomplete="off" spellcheck="false">
+            <button class="btn" type="button" data-proxy-test="{{if .New}}new{{else}}edit{{end}}"{{if not .New}} data-profile="{{.Profile.Name}}"{{end}}{{if not .Proxy}} disabled{{end}}>Test</button>
+          </div>
+          <div class="proxy-result" data-proxy-result aria-live="polite" hidden></div>
+          <span class="hint">HTTP, HTTPS or SOCKS5. Time zone and language follow the proxy's location. Test checks it from this server, the way a browser's start would, and saves nothing.</span>
           <span class="hint"><code>{sticky}</code> in the user name or password becomes a code of this profile's own, so it keeps its own exit IP where the provider offers sticky sessions.</span>
-        </label>
+        </div>
         <div class="field">
           <label class="check"><input type="checkbox" name="local_network" value="1"{{if .Profile.LocalNetwork}} checked{{end}}> Let pages reach the local network</label>
           <span class="hint">For a router's admin page, say. Off, pages can't open addresses on your LAN, this server or its other apps.</span>

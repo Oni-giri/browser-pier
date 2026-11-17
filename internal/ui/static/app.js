@@ -251,6 +251,53 @@
     }
   }
 
+  // Test proxy: the field's value goes to the server, which tests it from
+  // a short-lived container and answers with the result to show under the
+  // field. Nothing is saved, and the button doesn't submit the form. An
+  // empty field has nothing to test; an edit clears a result, so a stale
+  // one never looks current.
+  const proxyBox = (el) => el.closest && el.closest("[data-proxy]");
+  document.addEventListener("input", (e) => {
+    const box = e.target.name === "proxy" && proxyBox(e.target);
+    if (!box) return;
+    const out = $("[data-proxy-result]", box);
+    out.hidden = true;
+    out.textContent = "";
+    const btn = $("[data-proxy-test]", box);
+    if (!btn.dataset.label) btn.disabled = !e.target.value.trim();
+  });
+  document.addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-proxy-test]");
+    if (!btn || btn.disabled) return;
+    const box = proxyBox(btn);
+    const input = $("input[name=proxy]", box);
+    const out = $("[data-proxy-result]", box);
+    const sent = input.value;
+    if (!sent.trim()) return;
+    const body = new URLSearchParams({ proxy: sent, form: btn.dataset.proxyTest, profile: btn.dataset.profile || "" });
+    btn.dataset.label = btn.textContent;
+    btn.textContent = "Testing…";
+    btn.disabled = true;
+    out.hidden = false;
+    out.innerHTML = '<span class="hint" style="margin:0">Testing the proxy from this server. This can take up to 30 seconds.</span>';
+    let html = "";
+    try {
+      const r = await fetch("/proxy/test", { method: "POST", body, credentials: "same-origin" });
+      if (r.status === 401) html = '<p class="errors" style="margin:0">You were signed out. Reload the page and sign in again.</p>';
+      else if ((r.headers.get("Content-Type") || "").startsWith("text/html")) html = await r.text();
+      if (!html) throw new Error("no answer");
+    } catch (err) {
+      html = '<p class="errors" style="margin:0">Can\'t reach BrowserPier.</p>';
+    }
+    btn.textContent = btn.dataset.label;
+    delete btn.dataset.label;
+    btn.disabled = !input.value.trim();
+    // An answer about a value since edited would look current: drop it.
+    if (input.value !== sent) return;
+    out.innerHTML = html; // BrowserPier's own fragment, every value escaped
+    out.hidden = false;
+  });
+
   // Code tabs.
   $$("[data-tabs]").forEach((box) => {
     box.addEventListener("click", (e) => {

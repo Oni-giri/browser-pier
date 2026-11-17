@@ -133,3 +133,12 @@
 {{define "code-tabs"}}
 <div class="code-tabs" role="tablist">{{range $i, $t := .}}<button type="button" role="tab" data-tab="{{$t}}" aria-selected="{{if eq $i 0}}true{{else}}false{{end}}">{{$t}}</button>{{end}}</div>
 {{end}}
+
+{{define "proxy-result"}}
+{{- if .OK}}<p class="proxy-ok">Works. It exits at <span class="mono">{{.IP}}</span>, in {{.Country}}.</p>
+<span class="hint">A browser there runs in {{.TimeZone}}, in {{.Locale}} ({{.Accept}}). One lookup through the proxy took {{.MS}} ms.</span>
+{{- with .Warn}}<p class="notice warn" style="margin:8px 0 0">{{.}}</p>{{end}}
+{{- range .Notes}}<span class="hint">{{.}}</span>{{end}}
+<span class="hint">Nothing was saved.</span>
+{{- else}}<p class="errors" style="margin:0">{{.Problem}}</p>{{end}}
+{{end}}
