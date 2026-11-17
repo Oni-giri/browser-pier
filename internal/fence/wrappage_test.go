@@ -106,15 +106,15 @@ func TestWrapPageEscapesTheURLAndTitle(t *testing.T) {
 
 func TestWrapPageCleansEachField(t *testing.T) {
 	out := WrapPage("page", Page{
-		URL: "https://exa​mple.com/", Title: "Sign​in", Format: "markdown",
-		Content: "pay‮now <!-- x", After: "tab​ t2",
+		URL: "https://exa\u200bmple.com/", Title: "Sign\u200bin", Format: "markdown",
+		Content: "pay\u202enow <!-- x", After: "tab\u200b t2",
 	})
 	for _, want := range []string{"<url>https://example.com/</url>", "<title>Signin</title>", "paynow <\\!-- x", "\ntab t2\n"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q: %q", want, out)
 		}
 	}
-	if strings.ContainsRune(out, '​') || strings.ContainsRune(out, '‮') {
+	if strings.ContainsRune(out, '\u200b') || strings.ContainsRune(out, '\u202e') {
 		t.Fatalf("invisible characters survived: %q", out)
 	}
 }
