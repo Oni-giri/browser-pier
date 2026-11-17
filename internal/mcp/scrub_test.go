@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/db"
+	"github.com/Oni-giri/browser-pier/internal/fence"
 	"github.com/Oni-giri/browser-pier/internal/scrub"
 )
 
@@ -54,7 +56,8 @@ var toolArgs = map[string]map[string]any{
 type leakyAPI struct {
 	mu    sync.Mutex
 	calls int
-	ok    bool // answer 200 with the secret in every field, not an error
+	ok    bool   // answer 200 with the secret in every field, not an error
+	text  string // if set, the answer's text instead of the secret
 }
 
 func (l *leakyAPI) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
@@ -70,8 +73,14 @@ func (l *leakyAPI) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	s := mcpSecret
+	text := s
+	l.mu.Lock()
+	if l.text != "" {
+		text = l.text
+	}
+	l.mu.Unlock()
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"text": s, "error": s, "name": s, "id": s, "profile": s, "mode": "api", "state": s, "status": s,
+		"text": text, "error": s, "name": s, "id": s, "profile": s, "mode": "api", "state": s, "status": s,
 		"cdp_url": s, "live_view_url": s, "url": s, "path": s, "note": s, "message": s, "origin": s, "reason": s,
 		"in_use_by": []string{s}, "profiles": []map[string]any{{"name": s, "status": s, "default_mode": s, "session_id": s}},
 		"files": []map[string]any{{"name": s, "size": 3}},
@@ -109,7 +118,7 @@ func leakyServer(t *testing.T, scrubbing bool) (*sdk.ClientSession, *leakyAPI) {
 	api := &leakyAPI{}
 	srv := New(api, web, log, "test")
 	if scrubbing {
-		sc := scrub.New([]string{mcpSecret})
+		sc := scrub.New([]string{mcpSecret, envelopeSecret})
 		srv.SetSecrets(func(allow func(string) bool) *scrub.Scrubber {
 			if !allow("google") {
 				return nil
@@ -226,5 +235,39 @@ func TestUnscrubbedToolsAreCaught(t *testing.T) {
 			}
 		}
 		t.Errorf("without the scrub, these tools weren't caught leaking: %v", missed)
+	}
+}
+
+// envelopeSecret has a "<" and an "&", which the page envelope writes as
+// "&lt;" in the URL and title and leaves in the page text.
+const envelopeSecret = `Se<cret&Value42`
+
+// A secret in the page envelope's URL, title and content is hidden in all
+// three through MCP too (PROJ-167).
+func TestPageEnvelopeIsScrubbed(t *testing.T) {
+	cs, api := leakyServer(t, true)
+	api.mu.Lock()
+	api.ok = true
+	api.text = fence.WrapPage("page snapshot", fence.Page{
+		URL:     "https://x.example/?p=" + url.QueryEscape(envelopeSecret),
+		Title:   "Account " + envelopeSecret,
+		Format:  "outline",
+		Content: "Your key is " + envelopeSecret,
+	})
+	api.mu.Unlock()
+	res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "page_content", Arguments: map[string]any{"session_id": "s1", "format": "outline"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := resultText(res)
+	for _, leak := range []string{envelopeSecret, "Se&lt;cret", url.QueryEscape(envelopeSecret), "cret&Value"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("%q leaked:\n%s", leak, out)
+		}
+	}
+	for _, want := range []string{"<url>https://x.example/?p=" + scrub.Hidden + "</url>", "<title>Account " + scrub.Hidden + "</title>", "Your key is " + scrub.Hidden} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
 	}
 }
