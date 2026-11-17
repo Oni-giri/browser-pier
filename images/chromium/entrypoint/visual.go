@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -42,6 +43,84 @@ type visual struct {
 	// clip is the live view's clipboard box's side of the X clipboard
 	// (clipboard.go).
 	clip clipState
+	// shortcutAt is when the last agent key call that ended on a
+	// browser-bound combination ended (with mu held); the next keyboard
+	// action waits until shortcutGap after it (PROJ-151).
+	shortcutAt time.Time
+	// now and sleep are the clock, replaced in tests. sleep returns
+	// early with ctx's error if ctx ends first.
+	now   func() time.Time
+	sleep func(ctx context.Context, d time.Duration) error
+}
+
+// shortcutGap is the least time between an agent's key call that ends on
+// a browser-bound combination (ctrl+l, alt+d, F6…) and its next keyboard
+// action (PROJ-151). While a page has the keyboard, Chrome sends it every
+// key and moves the focus to its own UI only once the page has answered
+// that it left the key alone; keys that come before that answer are the
+// page's. On Chromium 156 over xdotool, a page answers at once unless its
+// key handler is busy, and the agent's text then went to the page as long
+// as the handler took for the shortcut's keys (images/chromium/ANTI-BOT.md).
+// The gap covers pages that take up to about 100 ms a key; a slower page
+// still gets the text. It is a floor, not a guarantee, and it costs
+// nothing to a call that comes later than it. At most 250 ms, so a wait
+// under v.mu holds a handoff back by no more than that.
+const shortcutGap = 150 * time.Millisecond
+
+// browserBound reports whether a key combination is one the browser's
+// own UI may take instead of the page: any with ctrl, alt or super (by
+// any of their names, in any case), and F1–F12, alone or with shift.
+// Plain keys, Return, Tab, Escape, arrows and shift-only combinations are
+// the page's, in order, so they don't wait: typing a password key by key
+// isn't slowed.
+func browserBound(combo string) bool {
+	parts := strings.Split(combo, "+")
+	fkey := false
+	for _, p := range parts {
+		k := strings.ToLower(strings.TrimSpace(p))
+		if a, ok := keyAliases[k]; ok {
+			k = a
+		}
+		switch {
+		case k == "ctrl" || k == "alt" || k == "super":
+			return true
+		case strings.HasPrefix(k, "control_") || strings.HasPrefix(k, "alt_") || strings.HasPrefix(k, "super_") ||
+			strings.HasPrefix(k, "meta_") || strings.HasPrefix(k, "hyper_"):
+			return true
+		case fkeyRE.MatchString(k):
+			fkey = true
+		case k != "shift" && !strings.HasPrefix(k, "shift_"):
+			return false
+		}
+	}
+	return fkey
+}
+
+var fkeyRE = regexp.MustCompile(`^f([1-9]|1[0-2])$`)
+
+// settle waits, with v.mu held, until shortcutGap has passed since the
+// last browser-bound key call, if it hasn't. If ctx ends first it stops
+// waiting and returns ctx's error; nothing has been sent.
+func (v *visual) settle(ctx context.Context) error {
+	if v.shortcutAt.IsZero() {
+		return nil
+	}
+	if d := v.shortcutAt.Add(shortcutGap).Sub(v.now()); d > 0 {
+		return v.sleep(ctx, d)
+	}
+	return nil
+}
+
+// sleepCtx sleeps for d, or until ctx ends.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 // maxTypeLen caps one type action; at human pace, which takes about a
@@ -53,7 +132,8 @@ const (
 )
 
 func newVisual(width, height int) *visual {
-	return &visual{width: width, height: height, run: runCommand, output: runStdout, mot: motion.NewRandom(), live: newLiveInput(width, height), clip: clipState{hold: holdClipboard, read: readSelection}}
+	return &visual{width: width, height: height, run: runCommand, output: runStdout, mot: motion.NewRandom(), live: newLiveInput(width, height),
+		clip: clipState{hold: holdClipboard, read: readSelection}, now: time.Now, sleep: sleepCtx}
 }
 
 func (v *visual) register(mux *http.ServeMux) {
@@ -205,7 +285,7 @@ func (v *visual) click(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	release := []string{"mouseup", buttons[c.Button]}
-	v.perform(w, r, func(from func() hand) []xcmd {
+	v.perform(w, r, pointerAction, func(from func() hand) []xcmd {
 		if !now {
 			args = v.humanClick(from(), c)
 		}
@@ -217,14 +297,35 @@ func (v *visual) click(w http.ResponseWriter, r *http.Request) {
 // that let go of whatever it may have left held.
 type xcmd struct{ args, release []string }
 
+// keyboard is what an action does with the keyboard, for shortcutGap.
+type keyboard int
+
+const (
+	pointerAction  keyboard = iota // neither waits for the gap nor arms it
+	keysAction                     // waits for the gap
+	shortcutAction                 // waits for the gap, and arms it again as it ends
+)
+
 // perform runs an action's xdotool commands one after another, with v.mu
-// held: build can ask where the pointer is now. If one fails, or the request
-// ends (a handoff interrupting a long type, say), the rest don't run and
-// its release does, so no button or key stays held.
-func (v *visual) perform(w http.ResponseWriter, r *http.Request, build func(from func() hand) []xcmd) {
+// held: build can ask where the pointer is now. A keyboard action first
+// waits out shortcutGap (settle). If one fails, or the request ends (a
+// handoff interrupting a long type, say), the rest don't run and its
+// release does, so no button or key stays held.
+func (v *visual) perform(w http.ResponseWriter, r *http.Request, kb keyboard, build func(from func() hand) []xcmd) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	ctx := r.Context()
+	if kb != pointerAction {
+		// Nothing has been sent yet, so there is nothing to let go of.
+		if err := v.settle(ctx); err != nil {
+			http.Error(w, "input failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if kb == shortcutAction {
+		// Armed once the keys have gone, even if a command failed part way.
+		defer func() { v.shortcutAt = v.now() }()
+	}
 	for _, c := range build(func() hand { return v.pointer(ctx) }) {
 		err := ctx.Err()
 		if err == nil {
@@ -428,14 +529,14 @@ func (v *visual) typeText(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		v.input(w, r, args)
+		v.input(w, r, keysAction, args)
 		return
 	}
 	if err := checkText(t.Text, maxHumanTypeLen); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	v.perform(w, r, func(func() hand) []xcmd { return v.humanType(t.Text) })
+	v.perform(w, r, keysAction, func(func() hand) []xcmd { return v.humanType(t.Text) })
 }
 
 type scrollRequest struct {
@@ -511,10 +612,10 @@ func (v *visual) scroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if now {
-		v.input(w, r, args)
+		v.input(w, r, pointerAction, args)
 		return
 	}
-	v.perform(w, r, func(from func() hand) []xcmd {
+	v.perform(w, r, pointerAction, func(from func() hand) []xcmd {
 		// The wheel's notches are clicks, pressed and released inside
 		// xdotool: nothing stays held between commands.
 		return []xcmd{{v.humanScroll(from(), s), nil}}
@@ -627,14 +728,36 @@ func keyArgs(keys combos) ([]string, error) {
 }
 
 // humanKeys presses each combination (checked by keyArgs) and holds it
-// as a hand would, with a pause between combinations.
+// as a hand would, with a pause between combinations, of at least
+// shortcutGap after a browser-bound one.
 func (v *visual) humanKeys(combos []string) []string {
 	var args []string
 	for i, c := range combos {
 		if i > 0 {
-			args = append(args, "sleep", secs(v.mot.JitterDuration(0.18, 0.06)))
+			pause := v.mot.JitterDuration(0.18, 0.06)
+			if browserBound(combos[i-1]) {
+				pause = max(pause, shortcutGap)
+			}
+			args = append(args, "sleep", secs(pause))
 		}
 		args = append(args, "keydown", c, "sleep", secs(v.mot.KeyHold()), "keyup", c)
+	}
+	return args
+}
+
+// instantKeys presses each combination (checked by keyArgs) as keyArgs
+// does, but after a browser-bound combination that isn't the last, it
+// sleeps shortcutGap (a constant, never the request's) and starts a new
+// key command for the rest. A single combination's arguments are
+// keyArgs's.
+func instantKeys(combos []string) []string {
+	args := slices.Clone(keyArgsPrefix)
+	for i, c := range combos {
+		args = append(args, c)
+		if i < len(combos)-1 && browserBound(c) {
+			args = append(args, "sleep", secs(shortcutGap))
+			args = append(args, keyArgsPrefix...)
+		}
 	}
 	return args
 }
@@ -654,12 +777,18 @@ func (v *visual) key(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	combos := args[len(keyArgsPrefix):]
+	// A call that ends on a browser-bound combination arms the gap; one
+	// with keys after it has had its gap inside.
+	kb := keysAction
+	if browserBound(combos[len(combos)-1]) {
+		kb = shortcutAction
+	}
 	if now {
-		v.input(w, r, args)
+		v.input(w, r, kb, instantKeys(combos))
 		return
 	}
-	combos := args[len(keyArgsPrefix):]
-	v.perform(w, r, func(func() hand) []xcmd {
+	v.perform(w, r, kb, func(func() hand) []xcmd {
 		return []xcmd{{v.humanKeys(combos), append([]string{"keyup"}, combos...)}}
 	})
 }
@@ -726,7 +855,7 @@ func (v *visual) drag(w http.ResponseWriter, r *http.Request) {
 	}
 	// Don't leave the button held if the drag breaks off half way.
 	release := []string{"mouseup", buttons[d.Button]}
-	v.perform(w, r, func(from func() hand) []xcmd {
+	v.perform(w, r, pointerAction, func(from func() hand) []xcmd {
 		if !now {
 			args = v.humanDrag(from(), d)
 		}
@@ -734,15 +863,9 @@ func (v *visual) drag(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (v *visual) input(w http.ResponseWriter, r *http.Request, args []string) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	v.noteMove(args)
-	if _, err := v.run(r.Context(), "xdotool", args...); err != nil {
-		http.Error(w, "input failed: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
+// input runs one xdotool command at instant pace.
+func (v *visual) input(w http.ResponseWriter, r *http.Request, kb keyboard, args []string) {
+	v.perform(w, r, kb, func(func() hand) []xcmd { return []xcmd{{args, nil}} })
 }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {

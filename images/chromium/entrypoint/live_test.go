@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakeXdotool records what would go to xdotool's stdin.
@@ -94,5 +95,28 @@ func TestLiveRestartsXdotool(t *testing.T) {
 	}
 	if *starts != 2 || fresh.buf.String() != "mousemove 1 1\n" {
 		t.Fatalf("starts %d, sent %q", *starts, fresh.buf.String())
+	}
+}
+
+// A person's keys in the live view neither wait for the agent's shortcut
+// gap nor arm it (PROJ-151).
+func TestLiveKeysIgnoreTheShortcutGap(t *testing.T) {
+	c := newClockedVisual()
+	x := &fakeXdotool{}
+	c.live, _ = newTestLive(x)
+	c.do(t, http.MethodPost, "/input/key", `{"keys": "ctrl+l", "pace": "instant"}`)
+	rec := serveVisual(c.visual, http.MethodPost, "/input/events", `[{"t":"keydown","k":"Control_L"},{"t":"keydown","k":"l"},{"t":"keyup","k":"l"},{"t":"keyup","k":"Control_L"},{"t":"keydown","k":"a"},{"t":"keyup","k":"a"}]`)
+	if rec.Code != http.StatusNoContent || !strings.HasSuffix(x.buf.String(), "keydown a\nkeyup a\n") {
+		t.Fatalf("events: %d %q", rec.Code, x.buf.String())
+	}
+	if len(c.slept) != 0 {
+		t.Fatalf("the live view waited %v", c.slept)
+	}
+	// Past the agent's gap, a person's ctrl+l doesn't make the agent wait.
+	c.t = c.t.Add(time.Second)
+	serveVisual(c.visual, http.MethodPost, "/input/events", `[{"t":"keydown","k":"Control_L"},{"t":"keydown","k":"l"},{"t":"keyup","k":"l"},{"t":"keyup","k":"Control_L"}]`)
+	c.do(t, http.MethodPost, "/input/type", `{"text": "x", "pace": "instant"}`)
+	if len(c.slept) != 0 {
+		t.Fatalf("a person's ctrl+l made the agent wait %v", c.slept)
 	}
 }
