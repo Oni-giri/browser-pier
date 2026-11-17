@@ -117,6 +117,8 @@ type Client struct {
 	user            string // uid:gid browsers run as, and the sandbox check
 	instance        string
 	log             *slog.Logger
+	// proxyTestMu is held by the one proxy test running (TestProxy).
+	proxyTestMu sync.Mutex
 }
 
 // Options configure a Client.
@@ -186,6 +188,10 @@ func (c *Client) UseDataDir(ctx context.Context, dataDir, hostDataDir string) er
 		if err := c.writeSeccomp(dataDir, hostDataDir); err != nil {
 			return err
 		}
+	}
+	// A proxy test cut short by a killed orchestrator left its container.
+	if err := c.RemoveProxyTest(ctx); err != nil {
+		c.log.Warn("removing a proxy test's leftover container", "err", err)
 	}
 	c.apparmorMu.Lock()
 	defer c.apparmorMu.Unlock()
