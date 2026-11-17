@@ -1,0 +1,30 @@
+---
+// The page title, then a link to the same page as Markdown, for people who
+// want to paste it into an agent and for agents that would rather read it.
+import Default from '@astrojs/starlight/components/PageTitle.astro';
+
+const { entry } = Astro.locals.starlightRoute;
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const markdown = `${base}/${entry.id}.md`;
+---
+
+<Default />
+<p class="bp-page-tools">
+	<a href={markdown}>View as Markdown</a>
+</p>
+
+<style>
+	.bp-page-tools {
+		margin: 0.5rem 0 0;
+		font-size: 13px;
+	}
+	.bp-page-tools a {
+		color: var(--bp-ink-3);
+		text-decoration: underline;
+		text-decoration-color: var(--bp-line-strong);
+		text-underline-offset: 3px;
+	}
+	.bp-page-tools a:hover {
+		color: var(--bp-blue-text);
+	}
+</style>

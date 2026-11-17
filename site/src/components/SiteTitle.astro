@@ -1,0 +1,36 @@
+---
+// The site title as on the landing page's header, plus a "Docs" pill.
+import Default from '@astrojs/starlight/components/SiteTitle.astro';
+---
+
+<div class="bp-site-title">
+	<Default />
+	<span class="bp-docs-pill">Docs</span>
+</div>
+
+<style>
+	.bp-site-title {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		min-width: 0;
+	}
+	.bp-site-title :global(.site-title) {
+		gap: 9px;
+		font-size: 16px;
+		font-weight: 600;
+		letter-spacing: -0.3px;
+		color: var(--bp-ink);
+	}
+	.bp-site-title :global(.site-title img) {
+		height: 24px;
+	}
+	.bp-docs-pill {
+		padding: 2px 8px;
+		border-radius: 999px;
+		background: var(--bp-blue-tint);
+		color: var(--bp-blue-text);
+		font-size: 12px;
+		font-weight: 500;
+	}
+</style>
