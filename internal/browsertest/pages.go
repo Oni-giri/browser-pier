@@ -169,6 +169,9 @@ var pageSitePages = map[string]string{ //nolint:gosec // test pages, not credent
 <span id="lbl" style="display:none">LABELLEDBY-HIDDEN-NAME</span>
 <button aria-labelledby="lbl">x</button>
 <button aria-label="ARIA-LABEL-NAME">y</button>`,
+	// PROJ-158: a page whose title is what is typed into it.
+	"/title-echo": `<!doctype html><title>Title echo</title>
+<label for="t">Title</label> <input id="t" autofocus oninput="document.title = this.value || 'Title echo'">`,
 	// A password field the page filled in itself.
 	// PROJ-125: a sign-in that sends its password in the URL (a GET
 	// form), to /echo, which shows it in the title and the page.
