@@ -153,6 +153,42 @@ input[type=range]:focus{box-shadow:none!important}
         </dl>
       </section>
 
+      <!-- Notifications -->
+      <section class="g-cell" id="notify" aria-labelledby="st-notify" style="--s: 12; padding: 20px; background: #111A2E; border-radius: 16px; box-shadow: 0 0 0 1px rgba(148,163,184,0.14), 0 1px 2px rgba(0,0,0,0.156), 0 10px 28px -12px rgba(0,0,0,0.52); display: flex; flex-direction: column; gap: 14px">
+        <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px">
+          <div style="display: flex; flex-direction: column; gap: 4px">
+            <h2 id="st-notify" style="margin: 0; font-size: 16px; font-weight: 600">Notifications</h2>
+            <p style="margin: 0; font-size: 14px; color: #A7B3C6">Tell a webhook when an agent needs you: Slack, Discord or your own endpoint. For agents with no chat to pass the link through. Agents can’t see or change it.</p>
+          </div>
+          <span style="flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; background: #1A3728; color: #77D68E; font-size: 12px; font-weight: 500"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #4ADE80"></span>Set</span>
+        </div>
+        <sc-if value="{{secretShown}}" hint-placeholder-val="{{true}}">
+          <div style="display: flex; flex-direction: column; gap: 6px">
+            <span style="font-size: 14px; font-weight: 500">Signing secret</span>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 10px; background: #1C273B; font-family: 'Geist Mono', monospace; font-size: 13px; word-break: break-all"><code style="flex: 1">9f2c41d07be35a68c1e0f4b2d97a3856e1c04fb7a2d9e6c3b5f8017a4e2d9c61</code><button type="button" onClick="{{copySecret}}" style="min-height: 34px; padding: 0 12px; background: #111A2E; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #283449, 0 1px 2px rgba(0,0,0,0.13); color: #E8EDF5; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Copy</button></div>
+            <span style="font-size: 13px; color: #8A99B0">Copy it now: you won’t see it again. Your endpoint checks the <code>BrowserPier-Signature</code> header with it. Slack and Discord don’t need it.</span>
+          </div>
+        </sc-if>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px">
+          <label style="display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-weight: 500">Webhook URL<input type="text" value="https://hooks.slack.com/…" style="width: 100%; height: 38px; box-sizing: border-box; padding: 0 10px; background: #111A2E; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #283449; color: #E8EDF5; font-family: 'Geist Mono', monospace; font-size: 13px"><span style="font-weight: 400; font-size: 13px; color: #8A99B0">https://, or http:// on your own network. Shown as its host once saved: the rest is a password.</span></label>
+          <label style="display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-weight: 500">Address for links<input type="text" placeholder="https://pier.example.com" style="width: 100%; height: 38px; box-sizing: border-box; padding: 0 10px; background: #111A2E; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #283449; color: #E8EDF5; font-family: 'Geist Mono', monospace; font-size: 13px"><span style="font-weight: 400; font-size: 13px; color: #8A99B0">How you open BrowserPier, for the links in messages. Empty: messages say to open BrowserPier.</span></label>
+        </div>
+        <fieldset style="margin: 0; padding: 0; border: 0; display: flex; flex-direction: column">
+          <legend style="margin-bottom: 6px; font-size: 14px; font-weight: 500">Send when</legend>
+          <label style="display: flex; align-items: center; gap: 10px; min-height: 32px; font-size: 14px"><input type="checkbox" checked style="width: 16px; height: 16px; accent-color: #E8EDF5">An agent asks for a handoff</label>
+          <label style="display: flex; align-items: center; gap: 10px; min-height: 32px; font-size: 14px"><input type="checkbox" checked style="width: 16px; height: 16px; accent-color: #E8EDF5">A handoff wasn’t handed back in 15 minutes</label>
+          <label style="display: flex; align-items: center; gap: 10px; min-height: 32px; font-size: 14px"><input type="checkbox" checked style="width: 16px; height: 16px; accent-color: #E8EDF5">Five wrong PINs cancelled a handoff</label>
+          <label style="display: flex; align-items: center; gap: 10px; min-height: 32px; font-size: 14px"><input type="checkbox" style="width: 16px; height: 16px; accent-color: #E8EDF5">A browser crashed or failed to start</label>
+          <span style="margin-top: 6px; font-size: 13px; color: #8A99B0">Messages name the profile and the reason, never what the agent or the page wrote. The handoff link is sent only for Link + PIN and Full sign-in; One tap profiles get their page’s address, which needs you signed in.</span>
+        </fieldset>
+        <div style="display: flex; flex-wrap: wrap; gap: 8px">
+          <button type="button" onClick="{{saveNotify}}" style="min-height: 34px; padding: 0 14px; background: #1C273B; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px rgba(148,163,184,0.22); color: #E8EDF5; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Save</button>
+          <button type="button" onClick="{{sendTest}}" style="min-height: 34px; padding: 0 12px; background: #111A2E; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #283449, 0 1px 2px rgba(0,0,0,0.13); color: #E8EDF5; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Send test</button>
+          <button type="button" onClick="{{regenerate}}" style="min-height: 34px; padding: 0 12px; background: #111A2E; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #283449, 0 1px 2px rgba(0,0,0,0.13); color: #E8EDF5; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Regenerate secret</button>
+          <button type="button" style="min-height: 34px; padding: 0 12px; background: #111A2E; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #283449, 0 1px 2px rgba(0,0,0,0.13); color: #FFA195; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Remove</button>
+        </div>
+      </section>
+
       <!-- Appearance -->
       <section class="g-cell" aria-labelledby="st-look" style="--s: 12; padding: 20px; background: #111A2E; border-radius: 16px; box-shadow: 0 0 0 1px rgba(148,163,184,0.14), 0 1px 2px rgba(0,0,0,0.156), 0 10px 28px -12px rgba(0,0,0,0.52); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px">
         <div style="display: flex; flex-direction: column; gap: 4px">
@@ -186,7 +222,7 @@ class Component extends DCLogic {
   constructor(props) {
     super(props);
     this.saved = { ram: 70, policy: 'pin', idle: 15 };
-    this.state = { ...this.saved, pin: 'idle', proxyTested: false, toast: null, theme: 'system' };
+    this.state = { ...this.saved, pin: 'idle', proxyTested: false, toast: null, theme: 'system', secretShown: true };
   }
   flash(msg) {
     this.setState({ toast: msg });
@@ -234,6 +270,11 @@ class Component extends DCLogic {
       dirty: dirty && !s.toast,
       discard: () => this.setState({ ...this.saved }),
       save: () => { this.saved = { ram: s.ram, policy: s.policy, idle: s.idle }; this.flash('Settings saved'); },
+      secretShown: s.secretShown,
+      copySecret: () => this.flash('Secret copied'),
+      saveNotify: () => { this.setState({ secretShown: false }); this.flash('Notifications saved'); },
+      sendTest: () => this.flash('Test sent: the webhook answered 200'),
+      regenerate: () => this.setState({ secretShown: true }),
       toastOn: !!s.toast, toast: s.toast || ''
     };
   }
