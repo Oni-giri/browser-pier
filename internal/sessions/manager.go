@@ -41,6 +41,9 @@ type Runtime interface {
 	// Outdated reports whether a container labelled with this definition
 	// version (docker.Container.Spec) must not run on: Reconcile stops it.
 	Outdated(spec string) bool
+	// TestProxy runs the proxy check with the proxy file in spec.Dir
+	// (see TestProxy).
+	TestProxy(ctx context.Context, spec docker.ProxyTestSpec) (docker.ProxyResult, error)
 }
 
 // Layout is where profile folders live:
@@ -152,6 +155,8 @@ type Manager struct {
 	// admit is held from checking there is room for a new browser to
 	// recording its session, so two starts can't both squeeze in.
 	admit sync.Mutex
+	// proxyTest is held by the one proxy test running (TestProxy).
+	proxyTest sync.Mutex
 }
 
 // live is a session with a container, from Starting until it is final.

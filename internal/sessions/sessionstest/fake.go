@@ -4,12 +4,16 @@ package sessionstest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
+	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/docker"
 )
@@ -43,6 +47,11 @@ type FakeRuntime struct {
 	// instead of the default, which answers /healthz and empties the
 	// clipboard only.
 	Control http.Handler
+	// ProxyTest, if set, answers TestProxy, given the proxy URL the
+	// check would have read from the test's folder; by default it works.
+	ProxyTest func(ctx context.Context, proxy string) (docker.ProxyResult, error)
+	// ProxyTests are the proxy URLs TestProxy read, in order.
+	ProxyTests []string
 }
 
 type FakeContainer struct {
@@ -250,3 +259,30 @@ func (f *FakeRuntime) Count() int {
 // Outdated reports a container created under another definition than
 // docker.Spec, which Create labels containers with.
 func (f *FakeRuntime) Outdated(spec string) bool { return spec != docker.Spec }
+
+// TestProxy reads and deletes the proxy file the way the check does (the
+// fake runs on this host, so spec.Dir is ours too), records it, and
+// answers with ProxyTest.
+func (f *FakeRuntime) TestProxy(ctx context.Context, spec docker.ProxyTestSpec) (docker.ProxyResult, error) {
+	path := filepath.Join(spec.Dir, "proxy.json")
+	b, err := os.ReadFile(path) //nolint:gosec // the test's own folder
+	if err != nil {
+		return docker.ProxyResult{}, err
+	}
+	_ = os.Remove(path)
+	var v struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return docker.ProxyResult{}, err
+	}
+	f.Mu.Lock()
+	f.ProxyTests = append(f.ProxyTests, v.URL)
+	answer := f.ProxyTest
+	f.Mu.Unlock()
+	if answer != nil {
+		return answer(ctx, v.URL)
+	}
+	return docker.ProxyResult{OK: true, IP: netip.MustParseAddr("198.51.100.23"), Country: "DE", TimeZone: "Europe/Berlin",
+		Locale: "de-DE", Accept: []string{"de-DE", "de", "en-US", "en"}, Lookup: 312 * time.Millisecond}, nil
+}

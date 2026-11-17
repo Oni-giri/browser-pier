@@ -36,6 +36,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			m.log.Warn("checking the recordings folder", "err", err)
 		}
 	}
+	m.removeProxyTestDir()
 	containers, err := m.rt.List(ctx)
 	if err != nil {
 		return err
