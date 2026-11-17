@@ -197,6 +197,8 @@ func TestAgentLogsInWithPageTools(t *testing.T) {
 	}
 	if out := tool("page_content", map[string]any{"session_id": id, "format": "readability"}); !strings.Contains(out, "Signed in as pier\n\nBrowserPier persistence test") {
 		t.Errorf("readability:\n%s", out)
+	} else if e, err := fencetest.Page(out); err != nil || e.Format != "readability" || e.URL != site.URL+"/account" {
+		t.Errorf("readability's envelope: %v %+v", err, e)
 	}
 	res, out := call(t, cs, "page_content", map[string]any{"session_id": id, "format": "pdf"})
 	if res.IsError || len(res.Content) != 2 || !strings.Contains(out, "PDF of the active tab") {

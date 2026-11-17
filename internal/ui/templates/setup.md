@@ -162,7 +162,8 @@ curl -s -X POST {{.Base}}/api/sessions/ID/act -H "$H" -d '{"steps": [{"action": 
 #   a step may name its element by "target" instead: role=button[name="Sign in"], text=Sign in or text="Sign in", optionally + " >> nth=0"
 #   also /find {"text"}, /wait {"text"} or {"ref", "state"} or {"target", "state"} or {"url_change": true} or {"load": true}, /tabs {"action": "list|switch|close|new"}
 #   page text comes in <page>: its <url> and <title> are BrowserPier's, the page_content tag holds the page's own text
-# the whole page as Markdown (or "readability": its main text only, or "outline": as /snapshot), 20,000 characters at a time; read on with "offset"
+# the whole page as Markdown (or "readability": its main text only), 20,000 characters at a time; read on with "offset"
+#   ("outline" is /snapshot's answer, with its max_chars and diff)
 curl -s -X POST {{.Base}}/api/sessions/ID/content -H "$H" -d '{"format": "markdown"}'
 curl -s -X POST {{.Base}}/api/sessions/ID/content -H "$H" -d '{"format": "pdf"}' -o page.pdf
 # done: stop the browser; its logins are kept

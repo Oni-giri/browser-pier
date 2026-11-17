@@ -530,7 +530,7 @@ func (c *call) pageResult(source, url, title, format, body, trailer string, enve
 	}
 	out := fence.WrapPage(source, fence.Page{
 		// Capped and on one line, as header() writes them.
-		URL:     capText(url, maxHeader),
+		URL:     capText(collapse(url), maxHeader),
 		Title:   capText(collapse(title), maxHeader),
 		Format:  format,
 		Content: body,

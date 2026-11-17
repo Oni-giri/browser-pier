@@ -41,13 +41,13 @@ type contentArgs struct {
 }
 
 func (s *Server) pageContent(ctx context.Context, req *sdk.CallToolRequest, in contentArgs) (*sdk.CallToolResult, any, error) {
-	if in.Format == "screenshot" {
-		// The same as the screenshot tool, so its coordinates hold.
-		return s.screenshot(ctx, req, sessionArgs{SessionID: in.SessionID})
-	}
 	body, err := contentBody(in)
 	if err != nil {
 		return nil, nil, err
+	}
+	if in.Format == "screenshot" {
+		// The same as the screenshot tool, so its coordinates hold.
+		return s.screenshot(ctx, req, sessionArgs{SessionID: in.SessionID})
 	}
 	r, err := s.call(ctx, req.Extra, "POST", "/api/sessions/"+url.PathEscape(in.SessionID)+"/content", body)
 	if err != nil {
@@ -71,32 +71,36 @@ func (s *Server) pageContent(ctx context.Context, req *sdk.CallToolRequest, in c
 	return text("%s", out.Text), nil, nil
 }
 
-// contentBody is page_content's request to the content endpoint, which
-// refuses options that don't go with the format.
+// contentBody is page_content's request to the content endpoint. Every
+// option given goes with it, so the endpoint refuses one that doesn't go
+// with the format, as it does over REST; a screenshot, which is the
+// screenshot tool's, takes none. (Over MCP a false or 0 is the same as
+// unset, but outline's max_chars, a pointer, keeps its 0.)
 func contentBody(in contentArgs) (map[string]any, error) {
 	body := map[string]any{"format": in.Format}
+	if in.MaxChars != nil && (in.Format == "outline" || *in.MaxChars != 0) {
+		body["max_chars"] = *in.MaxChars
+	}
+	if in.Offset != 0 {
+		body["offset"] = in.Offset
+	}
 	if in.Diff {
 		body["diff"] = true
 	}
+	if in.Landscape {
+		body["landscape"] = true
+	}
+	if in.Background {
+		body["background"] = true
+	}
+	if in.Pages != "" {
+		body["pages"] = in.Pages
+	}
 	switch in.Format {
-	case "outline":
-		if in.MaxChars != nil {
-			body["max_chars"] = *in.MaxChars
-		}
-		if in.Offset != 0 {
-			body["offset"] = in.Offset
-		}
-	case "markdown", "readability":
-		if in.MaxChars != nil && *in.MaxChars != 0 {
-			body["max_chars"] = *in.MaxChars
-		}
-		if in.Offset != 0 {
-			body["offset"] = in.Offset
-		}
-	case "pdf":
-		body["landscape"], body["background"] = in.Landscape, in.Background
-		if in.Pages != "" {
-			body["pages"] = in.Pages
+	case "outline", "markdown", "readability", "pdf":
+	case "screenshot":
+		if len(body) > 1 {
+			return nil, toolError("screenshot takes no options here; use the screenshot tool's")
 		}
 	default:
 		return nil, toolError("format: outline, markdown, readability, pdf or screenshot")

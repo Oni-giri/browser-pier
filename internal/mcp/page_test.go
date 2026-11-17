@@ -95,6 +95,9 @@ func TestPageContentBody(t *testing.T) {
 		{contentArgs{Format: "markdown", MaxChars: &zero}, `{"format":"markdown"}`},
 		{contentArgs{Format: "readability", MaxChars: &some, Offset: 5}, `{"format":"readability","max_chars":300,"offset":5}`},
 		{contentArgs{Format: "markdown", Diff: true}, `{"diff":true,"format":"markdown"}`},
+		{contentArgs{Format: "outline", Pages: "1", Landscape: true}, `{"format":"outline","landscape":true,"pages":"1"}`},
+		{contentArgs{Format: "pdf", MaxChars: &some, Background: true}, `{"background":true,"format":"pdf","max_chars":300}`},
+		{contentArgs{Format: "pdf"}, `{"format":"pdf"}`},
 	} {
 		body, err := contentBody(c.in)
 		raw, _ := json.Marshal(body)
@@ -104,6 +107,12 @@ func TestPageContentBody(t *testing.T) {
 	}
 	if _, err := contentBody(contentArgs{Format: "html"}); err == nil {
 		t.Error("format html went through")
+	}
+	if _, err := contentBody(contentArgs{Format: "screenshot", Diff: true}); err == nil {
+		t.Error("screenshot with diff went through")
+	}
+	if _, err := contentBody(contentArgs{Format: "screenshot"}); err != nil {
+		t.Errorf("screenshot: %v", err)
 	}
 }
 

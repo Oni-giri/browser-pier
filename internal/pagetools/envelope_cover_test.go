@@ -273,3 +273,18 @@ func TestEnvelopeTitleAndURLAreCapped(t *testing.T) {
 		t.Errorf("url %q (%d characters)", e.url, len([]rune(e.url)))
 	}
 }
+
+// A diff with no changes but a new-tab notice: the notice alone, plainly
+// fenced, with no <page>.
+func TestEnvelopeDiffWithOnlyANotice(t *testing.T) {
+	f := newFixture(t)
+	f.fb.addTab("https://example.com/", newMenuPage(f.fb).doc, true)
+	f.mustSnapshot(nil)
+	f.fb.addTab("https://example.com/background", loginPage(), false) // a target=_blank link
+	out, err := f.tools.Snapshot(context.Background(), f.session(), f.who, SnapshotIn{Diff: true})
+	f.closedAfter()
+	if err != nil || strings.Contains(out, "<page>") || !strings.HasPrefix(out, "<untrusted-content-") ||
+		!strings.Contains(out, "a new tab opened: t2") || !strings.HasSuffix(out, "\n"+diffNoChanges) {
+		t.Errorf("a diff with only a notice: %v\n%s", err, out)
+	}
+}
