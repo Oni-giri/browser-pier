@@ -64,8 +64,10 @@ type visual struct {
 // The gap covers pages that take up to about 100 ms a key; a slower page
 // still gets the text. It is a floor, not a guarantee, and it costs
 // nothing to a call that comes later than it. At most 250 ms, so a wait
-// under v.mu holds a handoff back by no more than that.
-const shortcutGap = 150 * time.Millisecond
+// under v.mu holds a handoff back by no more than that. The value is
+// motion.ShortcutGap, which the press_keys description and the Docker
+// tests in internal/api read too.
+const shortcutGap = motion.ShortcutGap
 
 // browserBound reports whether a key combination is one the browser's
 // own UI may take instead of the page: any with ctrl, alt or super (by
@@ -784,12 +786,15 @@ func (v *visual) key(w http.ResponseWriter, r *http.Request) {
 	if browserBound(combos[len(combos)-1]) {
 		kb = shortcutAction
 	}
+	// Cut short (a handoff, a stop), a run lets go of its keys, at either
+	// pace: a list's pauses make an instant run longer than it was.
+	release := append([]string{"keyup"}, combos...)
 	if now {
-		v.input(w, r, kb, instantKeys(combos))
+		v.perform(w, r, kb, func(func() hand) []xcmd { return []xcmd{{instantKeys(combos), release}} })
 		return
 	}
 	v.perform(w, r, kb, func(func() hand) []xcmd {
-		return []xcmd{{v.humanKeys(combos), append([]string{"keyup"}, combos...)}}
+		return []xcmd{{v.humanKeys(combos), release}}
 	})
 }
 

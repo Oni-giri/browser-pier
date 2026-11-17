@@ -18,6 +18,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/api"
 	"github.com/Oni-giri/browser-pier/internal/fence"
 	"github.com/Oni-giri/browser-pier/internal/files"
+	"github.com/Oni-giri/browser-pier/internal/motion"
 	"github.com/Oni-giri/browser-pier/internal/screenshot"
 )
 
@@ -496,6 +497,7 @@ func (s *Server) listFiles(ctx context.Context, req *sdk.CallToolRequest, in pro
 }
 
 // shortcutNote tells agents what PROJ-151 leaves to them: the container
-// waits 150 ms after a shortcut before the next keys, which covers a page
-// that answers a key within about that; a slower page can still get them.
-const shortcutNote = "After a shortcut that moves the focus to the browser (ctrl+l, alt+d, F6, ctrl+t…), the next keys wait 150 ms, but a page that is busy or still loading can still take them: on such a page, look at the screen before you type."
+// keeps the next keys at least motion.ShortcutGap after a shortcut, which
+// covers a page that answers a key within about that; a slower page can
+// still get them.
+var shortcutNote = fmt.Sprintf("After a shortcut that moves the focus to the browser (ctrl+l, alt+d, F6, ctrl+t…), the next keys come at least %d ms after it, but a page that is busy or still loading can still take them: on such a page, look at the screen before you type.", motion.ShortcutGap.Milliseconds())
