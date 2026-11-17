@@ -845,3 +845,23 @@ func TestTheLogHoldsNoSecret(t *testing.T) {
 	rc.Close()
 	_, _ = f.n.SendTest(context.Background())
 }
+
+// TestADeadAddressDoesntUseTheWholeTime: of a host's addresses, one that
+// drops packets gets only its share of the POST's time, and the next is
+// still tried. (10.255.255.1 is routed nowhere here; where it fails at
+// once, the test passes without showing the split.)
+func TestADeadAddressDoesntUseTheWholeTime(t *testing.T) {
+	rc := newReceiver(t)
+	_, port, _ := strings.Cut(strings.TrimPrefix(rc.URL, "http://"), ":")
+	f := newNotifier(t, Options{Lookup: stubLookup(map[string]string{"hooks.lan": "10.255.255.1,127.0.0.1"})})
+	f.set("http://hooks.lan:" + port + "/x")
+	f.n.timeout = 5 * time.Second
+	start := time.Now()
+	status, err := f.n.SendTest(context.Background())
+	if err != nil || status != 200 {
+		t.Fatalf("SendTest = %d, %v after %s", status, err, time.Since(start))
+	}
+	if d := time.Since(start); d > 4*time.Second {
+		t.Errorf("took %s", d)
+	}
+}

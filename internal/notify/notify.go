@@ -139,7 +139,7 @@ func (n *Notifier) client(plain bool) *http.Client {
 	return &http.Client{
 		Transport: &http.Transport{
 			Proxy:             nil, // never HTTP_PROXY: the address check must see the real address
-			DialContext:       dialer(n.lookup, plain),
+			DialContext:       dialer(n.lookup, plain, func() time.Duration { return n.timeout }),
 			DisableKeepAlives: true,
 		},
 		// Redirects aren't followed: a 3xx is final.

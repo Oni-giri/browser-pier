@@ -122,7 +122,10 @@ func checkURL(ctx context.Context, lookup Lookup, raw string) error {
 // dialer connects to a webhook. The address rules are checked on the
 // address actually dialled: a name can change what it resolves to between
 // saving and sending. No proxy: the check must see the real address.
-func dialer(lookup Lookup, plain bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
+// budget is the time a connection may take in all, split between the
+// host's addresses: net/http dials with a context that may carry no
+// deadline of its own.
+func dialer(lookup Lookup, plain bool, budget func() time.Duration) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(addr)
 		if err != nil {
@@ -139,14 +142,37 @@ func dialer(lookup Lookup, plain bool) func(ctx context.Context, network, addr s
 			}
 			return allowed(ap.Addr(), plain)
 		}}
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			deadline = time.Now().Add(budget())
+		}
 		var last error
-		for _, a := range addrs {
-			c, err := d.DialContext(ctx, network, net.JoinHostPort(a.String(), port))
+		for i, a := range addrs {
+			c, err := dialOne(ctx, &d, network, net.JoinHostPort(a.String(), port), deadline, len(addrs)-i)
 			if err == nil {
 				return c, nil
 			}
 			last = err
+			if ctx.Err() != nil {
+				break
+			}
 		}
 		return nil, last
 	}
+}
+
+// minDialShare is the least time an address gets before the next is tried.
+const minDialShare = 2 * time.Second
+
+// dialOne dials one of a host's addresses with its share of the time left,
+// so an address that drops packets silently (often the IPv6 one) doesn't
+// use the whole POST's time and the next is still tried.
+func dialOne(ctx context.Context, d *net.Dialer, network, addr string, deadline time.Time, left int) (net.Conn, error) {
+	share := time.Until(deadline)
+	if left > 1 {
+		share = max(share/time.Duration(left), minDialShare)
+	}
+	ctx, cancel := context.WithTimeout(ctx, share)
+	defer cancel()
+	return d.DialContext(ctx, network, addr)
 }
