@@ -41,6 +41,7 @@ None of these is spoofed, by design (SPEC §10). They come from the container:
 - **Software WebGL renderer.** There's no GPU in the container, so WebGL is software-rendered and says so: `ANGLE (Mesa, llvmpipe (LLVM 19.1.7 256 bits), OpenGL 4.5)` since PROJ-148, which is what a Linux desktop or VM without a GPU driver reports. That is no longer SwiftShader, which was the one red line on sannysoft and an item of CreepJS's "like headless", but a detector can still read llvmpipe as "a VM, or no GPU". Giving containers the host's GPU would replace it where there is one (PROJ-30).
 - **A 0×0 window, often, as a page starts.** In both modes, a page's first inline script often sees `outerWidth` and `outerHeight` as 0, which headless browsers report. It reads normally once the page has loaded. A window manager didn't change it (PROJ-29, below). The likely cause, from reading Chromium's source and not verified: a new document's widget hears its window's bounds from the browser only once it's shown, after the commit, while the renderer may already be running the page's first script (`RenderWidgetHostImpl::SendScreenRects` skips hidden widgets). If so, desktop Chrome does the same. PROJ-65 checks both.
 - **No speech voices** (`speechSynthesis.getVoices()` is empty), as on many Linux desktops.
+- **Back never restores from the back/forward cache** (PROJ-160, for memory: Memory flags, below). A page the cache could have kept, that a person's Chrome would usually show again at once on Back, is loaded again: `persisted` false, a `back_forward` navigation, and `performance.getEntriesByType('navigation')[0].notRestoredReasons` `null`, where Chrome with the cache on gives an object for a page it didn't restore (`{"reasons": [{"reason": "masked"}]}` for one dropped after its time limit). That `null` is what the cache being off looks like, which a person's browser rarely is. It takes a page that is cache-eligible itself, a Back to it, and a script that reads this; plenty of pages are never kept by the cache in any browser, and a page never kept sees nothing unusual. Accepted, as decided in Memory flags below: the memory matters more to an agent than an instant Back, and nothing is spoofed (SPEC §10).
 
 ## API mode, specifically
 
@@ -123,6 +124,45 @@ What CreepJS still counts in "like headless" is `noWebShare`, `noContentIndex`, 
 **Not run here, so unverified:** arm64 (CI builds the arm64 image under emulation, and the build-time library check runs there; no Docker test has run on arm64, so WebGL on llvmpipe there is unchecked, and since there's no fallback, an arm64 failure would mean no WebGL at all: run `TestBrowserEnvironment` and `TestWebGLRendererIsStable` on an arm64 host or the Umbrel before a release ships this), the Umbrel, llvmpipe's JIT under the `browserpier` and Docker-default AppArmor profiles (CI's Docker job, on Docker with AppArmor, covers one of them once the branch runs there), and PROJ-15's OVH datacenter address. The **go** above is for amd64 without AppArmor.
 
 `TestVisualModeLooksLikeAPerson`, `TestPageToolsStayQuiet`, `TestContentStaysQuiet`, the login tests and `TestMeasureWindowAtLoad` (window 1280×768 and `availHeight` 768 in all 70 loads, as in PROJ-29's table) pass unchanged.
+
+## Memory flags (PROJ-160)
+
+Two Chromium features keep memory for speed: the **back/forward cache** keeps a page the tab has left whole in memory, to show it at once on Back, and the **spare renderer** keeps a renderer process started for the next site. Browser containers have no memory cap of their own, and admission counts what each uses (SPEC §3, Capacity), so a page kept for a Back nobody makes can get another profile's idle browser stopped, or a start refused. easi.run turns both off on its numbers; these are ours.
+
+Measured on 2026-11-17 with `TestMeasureMemoryFlags` (`go test -tags 'docker measure' -run TestMeasureMemoryFlags -v -timeout 90m ./images/chromium/`), Chromium 156.0.8078.79, amd64, on the PROJ-148 image (WebGL on llvmpipe, pages composited in software): a 6-vCPU VM on an AMD Ryzen 9 6900HX, rootless Podman 5.7, a 1280×800 screen, one container at a time. Memory is the container's as admission counts it (`internal/docker/memusage`, which `MemoryUsage` uses: usage less the inactive page cache), in MiB. Each run passes Chromium extra switches through a throwaway wrapper mounted over its binary (the image's own binary, copied out). `/heavy` is a test-site page that holds 200 MB in typed arrays and a 20,000-paragraph DOM, and that the cache can keep: a GET, no `unload` handler, no `no-store`, nothing left open. Each page reports its `pageshow` to the test site (`persisted`, the navigation's type, `notRestoredReasons`, and a number random to each document).
+
+**Back/forward cache.** The tab opens `/hello`, then `/heavy`, then `/hello` again; the memory is read every 5 s for 4 minutes, then the tab goes Back. Visual mode drives the address bar through xdotool, with no CDP client; API mode uses `Page.navigate` and `history.back()` with a CDP client attached throughout. "Other site" is `/hello` at another address of the test site, as an agent going from a search to a result.
+
+| Mode | Leaves to | Cache | Before | On `/heavy` | +0 s | +15 s | +30 s | +1 min | +2 min | +4 min | Back to `/heavy` |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Visual | same site | on | 226 | 550 | 570 | 516 | 475 | 473 | 471 | 479 | restored (`persisted` true) |
+| Visual | same site | **off** | 223 | 545 | 562 | 508 | 216 | 214 | 212 | 214 | loaded again |
+| Visual | other site | on | 222 | 558 | 583 | 537 | 492 | 489 | 488 | 490 | restored |
+| Visual | other site | **off** | 223 | 535 | 255 | 210 | 210 | 208 | 207 | 209 | loaded again |
+| API | same site | on | 209 | 512 | 512 | 503 | 464 | 460 | 458 | 461 | restored |
+| API | same site | **off** | 210 | 509 | 509 | 498 | 207 | 203 | 201 | 203 | loaded again |
+| API | other site | on | 209 | 529 | 541 | 529 | 484 | 480 | 479 | 481 | restored |
+| API | other site | **off** | 210 | 510 | 212 | 201 | 204 | 200 | 198 | 201 | loaded again |
+
+With the cache on, 250–270 MiB of the page was still counted four minutes after the tab left it, in every case. With it off, the memory was back at its level before the page within 5 s when the tab went to another site (its renderer process exits), and within 25 s on the same site (the renderer is reused, and frees the page at its next garbage collection). An attached CDP client changed nothing the cache keeps: the API rows match the Visual ones. A longer run (Visual, other site, cache on, `MEASURE_SECONDS=660`) held the page's memory until 595 s after the tab left it, and dropped it by 600 s (489 → 209 MiB); Back then loaded the page again.
+
+- **Chromium's limits**, from its source at this version (`content/browser/back_forward_cache/back_forward_cache_impl.cc`): a page stays at most 600 s (3 minutes for a `no-store` one; the 600 s is measured above), six pages at most; under memory pressure, three in the foreground and one in the background (moderate), none (critical).
+- **Memory pressure.** easi.run's claim holds here: on Linux, the only memory-pressure source in this binary is `dbus_memory_pressure_evaluator_linux` (systemd-oomd or low-memory-monitor, over the system D-Bus). The container runs no system bus (there's no `/run/dbus`), so Chromium never hears memory is short, whatever the host has left, and only the time limit or the six-page limit drops a page. Not tested by driving the host short of memory: on a shared machine that risks the OOM killer for everything else.
+- **The feature name.** `BackForwardCache` is in the binary as a whole string, and the switch takes effect (`persisted` false). `--disable-features` puts no bar over the page: `TestBrowserEnvironment`'s "no warning bar over the page" passes on the new image (the managed policy hides the unsupported-flag bar, as for `--disable-blink-features`).
+- **One `--disable-features`.** With two, Chromium used only the last: `--disable-features=BackForwardCache --disable-features=Translate` left the cache on (A restored on Back), the other order turned it off. So the image passes one, with every feature in it.
+
+**Decision: off** (the ticket's rule: at least 100 MB still counted 60 s after leaving with it on, and back within 30 s with it off; both hold in all four cases). `--disable-features=BackForwardCache`, in `flags.go`, the Dockerfile's feature check and SPEC §3.
+
+**What a page sees.** Back to a page loads it again: `pageshow` with `persisted` false, a new document, and a navigation of type `back_forward`. Its HTML came from the HTTP cache here (the test site wasn't asked again), as Back does in any browser when it can. Many pages are never kept by the cache in any browser (an `unload` handler, `no-store`, an open connection), and they see exactly this. With the cache off, `notRestoredReasons` was `null` in every run, so it doesn't name the flag. With it on, a page the cache had dropped after its 600 s got `{"reasons": [{"reason": "masked"}], …}` instead (Chrome masks most reasons from pages), and a restored one `null` (its navigation entry is the first load's). So a cache-eligible page loaded again on Back with `null` reasons is what the cache being off looks like; see Signals that remain.
+
+**Spare renderer** (`SpareRendererForSitePerProcess`): a browser idle 60 s on `/hello`, three runs each.
+
+| | Run 1 | Run 2 | Run 3 | Renderer processes |
+|---|---|---|---|---|
+| Image's switches (spare on) | 205 | 206 | 206 | 4 (353 MiB RSS together, much of it shared) |
+| `--disable-features=SpareRendererForSitePerProcess` | 199 | 196 | 197 | 3 (278 MiB) |
+
+Its name is in this Chromium only as `kSpareRendererForSitePerProcess`: Chromium's `BASE_FEATURE` now names a feature from its constant, reading the string from its second character, so a whole-string search for the name finds nothing though the feature is there, and turning it off did drop a renderer. It saves 7–10 MiB, as easi.run measured, under the 20 MiB threshold: **left on**. (The Dockerfile's feature check accepts a name stored either way.)
 
 ## Continue where you left off (PROJ-112)
 
