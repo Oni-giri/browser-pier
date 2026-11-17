@@ -270,7 +270,8 @@ func TestProxyTestCutShort(t *testing.T) {
 }
 
 // TestProxyTestBesideItsBrowser: testing a running profile's proxy leaves
-// its browser alone.
+// its browser alone, and its login and stored location too: the AGENTS.md
+// run, with tests before the first start and while the browser runs.
 func TestProxyTestBesideItsBrowser(t *testing.T) {
 	a := newRealAPI(t)
 	host := browsertest.SiteHost(t)
@@ -286,11 +287,35 @@ func TestProxyTestBesideItsBrowser(t *testing.T) {
 	if _, err := a.m.Profiles().Create(context.Background(), p); err != nil {
 		t.Fatal(err)
 	}
+	ctx := context.Background()
+	location := func() profiles.Location {
+		got, err := a.m.Profiles().Get(ctx, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got.Location
+	}
+	// Before the first start: nothing stored, and the test stores nothing.
+	if res, err := a.m.TestProxy(ctx, sessions.ProxyTest{Proxy: p.Proxy, Profile: name, For: name}); err != nil || !res.OK {
+		t.Fatalf("TestProxy = %+v, %v", res, err)
+	}
+	if l := location(); l != (profiles.Location{}) {
+		t.Fatalf("the test stored a location: %+v", l)
+	}
+
 	var s sessionJSON
 	if code := a.do(http.MethodPost, "/api/sessions", fmt.Sprintf(`{"profile": %q}`, name), &s); code != http.StatusCreated {
 		t.Fatalf("start: %d %+v", code, s)
 	}
-	res, err := a.m.TestProxy(context.Background(), sessions.ProxyTest{Proxy: p.Proxy, Profile: name, For: name})
+	control := browsertest.ControlClient(a.m.Layout().ControlSocket(name))
+	pg := browsertest.Page(t, control)
+	login := site.Login(t, pg)
+	pg.Close()
+	stored := location()
+	if stored.Country != "DE" {
+		t.Fatalf("the start stored %+v", stored)
+	}
+	res, err := a.m.TestProxy(ctx, sessions.ProxyTest{Proxy: p.Proxy, Profile: name, For: name})
 	if err != nil || !res.OK || res.Country != "DE" {
 		t.Fatalf("TestProxy = %+v, %v", res, err)
 	}
@@ -306,4 +331,25 @@ func TestProxyTestBesideItsBrowser(t *testing.T) {
 	}
 	_ = resp.Body.Close()
 	checkNothingLeft(t, a)
+	if l := location(); l != stored {
+		t.Fatalf("the location went from %+v to %+v", stored, l)
+	}
+
+	// Stop, start again: still signed in.
+	stopCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	if _, err := a.m.Stop(stopCtx, s.ID); err != nil {
+		t.Fatal(err)
+	}
+	var again sessionJSON
+	if code := a.do(http.MethodPost, "/api/sessions", fmt.Sprintf(`{"profile": %q}`, name), &again); code != http.StatusCreated || again.ID == s.ID {
+		t.Fatalf("second start: %d %+v", code, again)
+	}
+	if got := site.Account(t, browsertest.Page(t, control)); got != login {
+		t.Fatalf("after stop and start the site saw session %q, want %q", got, login)
+	}
+	// The new start checked again (CheckedAt), and found the same place.
+	if l := location(); l.Country != stored.Country || l.TimeZone != stored.TimeZone {
+		t.Fatalf("the location went from %+v to %+v", stored, l)
+	}
 }
