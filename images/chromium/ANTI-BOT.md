@@ -94,6 +94,45 @@ What a page's own script records (`browsertest.Detector`'s input recorder, `Inpu
 
 None of this is fingerprint spoofing: the browser reports nothing different about itself. `TestVisualModeLooksLikeAPerson` and `TestPageToolsStayQuiet` pass unchanged with it. Not done: typing mistakes and corrections, and a check against a public behaviour-scoring page (to be done by hand).
 
+## Text typed right after a shortcut (PROJ-151)
+
+While a page has the keyboard, Chrome sends it every key and moves the focus to its own UI (the address bar for `ctrl+l`) only once the page has answered that it left the key alone. Keys that arrive before that answer are the page's. easi.run found this race in Google Chrome on Wayland; this measures it on BrowserPier's stack.
+
+**2026-11-17, Chromium 156.0.8078.79** (`localhost/bp-proj151-chromium`, built from origin/main with PROJ-113), 1280×800, on a 6-CPU VM shared with other work, load average 1–2. `TestMeasureTextAfterShortcut` (`go test -tags 'docker measure' -run TestMeasureTextAfterShortcut -v ./images/chromium/`, not part of `make test` or `make test-docker`) sends the three calls an agent makes, `key ctrl+l`, `type <the /arrived URL>` and `key Return`, straight to the control socket, back to back at instant pace (the fastest client there can be), on `browsertest.KeySite`'s `/keys` page, whose `keydown` listener busy-waits `slow` ms. A run is **lost** when `/arrived` never loads. One container at a time, no `-race`, under a memory cap. Runs per shape: 100 where quick; **30** where every run is lost, since a lost run behind a 400 ms handler takes about 25 s to clear (each key the page took costs it 400 ms), and the whole matrix at 100 would have taken several hours here; 20 for other shortcuts and the click, as the ticket asked.
+
+| Shape (instant pace, control socket) | Lost | Notes |
+|---|---|---|
+| `slow=0`, a focused field | 0 of 100 | |
+| `slow=0`, nothing focused (body) | 0 of 100 | |
+| `slow=50` | 1 of 100 | the page took one character |
+| `slow=100` | **30 of 30** | the page took 12.8 characters on average |
+| `slow=200` | **30 of 30** | at least 16 characters (a page Chrome replaced while it was still busy stopped reporting) |
+| `slow=400` | **30 of 30** | the whole address and Return |
+| A cross-site frame with the focus (clicked into), `slow=0` | 1 of 100 | the frame saw no character (below) |
+| The same, `slow=400` | **30 of 30** | 48.8 characters: a busy frame holds the shortcut as a busy page does |
+| One key call `["ctrl+l", "a", "b", "c"]`, `slow=0` | 0 of 100 | |
+| The same, `slow=200` | **30 of 30** | the page's field got all three letters |
+| `alt+d`, `F6`, `ctrl+k`, `ctrl+f` then text, `slow=0` | 0 of 20 each | |
+| The same, `slow=200` | **20 of 20 each** | `ctrl+k` and `ctrl+f`, which don't navigate, show the page took about 44 of 47 characters |
+| `ctrl+t` then text, `slow=0` and `slow=200` | 0 of 20 each | Chromium handles `ctrl+t` before the page (a reserved shortcut), so it can't lose text |
+| A click on the address bar (y = 63) then text, `slow=400` | 0 of 20 | the page saw no key: a click on the browser's UI moves the focus without asking the page |
+| **Restarted browser**: the restored `/keys` tab takes 2 s to load, the calls sent as soon as the control socket answers | 0 of 20 | the restored page saw a key in 1 run of 20: the focus is in the address bar while it loads |
+| **Fresh browser** (no profile), the calls at once | 0 of 10 | the focus starts in the address bar, over the start page (DuckDuckGo's home page here) |
+| Over REST (`/computer`), `slow=0` / `slow=200` | 0 of 30 / **30 of 30** | the orchestrator's round trip hides nothing |
+| Over MCP (`press_keys`, `type_text`), `slow=0` / `slow=200` | 0 of 30 / **30 of 30** | the same |
+
+**At human pace** (PROJ-113, the default; 10 runs each, as typing an address takes about 13 s): `slow=0` 0 of 10, `slow=100` **9 of 10**, `slow=200` **10 of 10** (the page took the first one or two characters: holding `ctrl+l` for about 116 ms is not enough), restarted 0 of 5, fresh 0 of 3. Over REST and MCP at human pace (10 each): `slow=0` 0 of 10, `slow=200` **10 of 10** (1.4 characters).
+
+Two runs in all (`slow=50` with a 25 ms gap, and the frame at `slow=0`) didn't arrive although the page saw no character but the shortcut's: the tab went back to an earlier `/keys` address, which the address bar suggested from history as the text was typed. That is the address bar's autocomplete, not this race, and it is counted as lost all the same.
+
+**The smallest gap with no loss** (a pause between the end of the `key` call and the `type` call): `slow=0`, the restarted and the fresh browser need none. `slow=50`: 25 ms lost 1 of 100, 50 ms 0 of 100. `slow=100`: 100 ms lost 1 of 100, **150 ms 0 of 100**. `slow=200`: 250 ms still lost 12 of 30 (and 18 more arrived with the page having taken a key). `slow=400`: 250 ms lost 30 of 30. Chrome waits for the page twice, for the `ctrl` key-down and the `l`, so a shortcut's window is about twice the handler's time from the key press.
+
+**Outcome: loss only behind a slow key handler**; a quick page, a restarted browser whose page is still loading and a fresh browser lost nothing. Phase 2 was built anyway, as the ticket decided: the container waits **150 ms** (`shortcutGap` in `entrypoint/visual.go`) between an agent's `key` call ending on a browser-bound combination and its next keyboard action, and inside a key list. The rule asked for the smallest clean gap for `slow=0` and the restarted browser (none) plus a margin; 150 ms is that margin, chosen as the smallest gap measured clean behind a 100 ms handler. With it (`localhost/bp-proj151-chromium:gap`, 30 runs each): `slow=0` 0 of 30, `slow=100` **0 of 30**, `slow=200` 30 of 30, the key list at `slow=200` 30 of 30; the three calls take about 150 ms longer (0.66 s instead of 0.51 s). **The residual:** a page whose key handler takes more than about 100 ms a key still gets the text, as does any page busy for longer than the gap when the shortcut comes. SPEC §8 says so, and `press_keys` tells agents to look at the screen before typing on such a page.
+
+**A real run** with the gap (2026-11-17): a script on the control socket sent `ctrl+l`, an address and Return back to back 20 times, alternating GitHub's golang/go page and Wikipedia's United States article, each round as soon as the last address showed in the tab, the page still loading: 20 of 20 navigated.
+
+Not built, as the ticket rules out: anything over CDP to learn that the browser handled a key. The X display can't tell either: Chromium's toolbar and page are one X window, so `xdotool getwindowfocus` named the same window (4194306, the tab's title) with the page focused and right after `ctrl+l`. The gap changes no event a page sees: the same keys, the next ones only later, as a person's are.
+
 ## Fixed along the way
 
 - **`Intl` contradicted the browser's languages.** The image had only Chromium's `en-US` interface, so whatever `LANGUAGE` said, `Intl` reported `en-US` while `navigator.languages` and Accept-Language followed the exit location (`fr-FR`). The image now installs `chromium-l10n` (about 120 MB), and its build fails if the locales are missing. `Intl` now follows the interface language: `de` for a German exit, as Chromium on a German Linux desktop reports.
