@@ -597,7 +597,8 @@ func TestFormatting(t *testing.T) {
 		"http://user-{sticky}:pw@h:8080":   "http://user-{sticky}:••••@h:8080",
 		"socks5://u:pw-{sticky}@h:1080":    "socks5://u:••••@h:1080",
 		"http://{sticky}-{sticky}@h:8080":  "http://{sticky}-{sticky}@h:8080",
-		"http://user-%7Bsticky%7D:pw@h:80": "http://user-{sticky}:••••@h:80", // decoded, as any user name is
+		"http://user-%7Bsticky%7D:pw@h:80": "http://user-%7Bsticky%7D:••••@h:80", // a literal stays one
+		"http://a%7B{sticky}%7D:pw@h:80":   "http://a%7B{sticky}%7D:••••@h:80",
 		"http://u:p@[::1":                  "(hidden)",
 	} {
 		if got := maskProxy(in); got != out {

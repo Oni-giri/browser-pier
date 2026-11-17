@@ -72,6 +72,26 @@ func TestStickyProxyForm(t *testing.T) {
 	r = f.post("/profiles/bank/edit", url.Values{"policy": {"pin"}, "proxy": {"http://u:s3cret@{sticky}.example:8080"}})
 	want(t, r, http.StatusUnprocessableEntity, "only in the user name or password")
 
+	// A literal %7Bsticky%7D isn't a placeholder: shown encoded, so an
+	// edit of the field keeps it literal, and no New exit IP is offered.
+	literal := "http://pier-%7Bsticky%7D:s3cret@proxy.example:8080"
+	p.Proxy = literal
+	if _, err := f.m.Profiles().Update(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	want(t, f.get("/profiles/bank/edit"), http.StatusOK, `value="http://pier-%7Bsticky%7D:••••@proxy.example:8080"`)
+	if strings.Contains(f.get("/profiles/bank").body, `data-dialog="exit-dialog"`) {
+		t.Fatal("New exit IP is offered for a literal %7Bsticky%7D")
+	}
+	r = f.post("/profiles/bank/edit", url.Values{"policy": {"pin"}, "proxy": {"http://pier-%7Bsticky%7D:••••@proxy.example:8080"}})
+	if got, _ := f.m.Profiles().Get(context.Background(), "bank"); r.code != http.StatusSeeOther || got.Proxy != literal {
+		t.Fatalf("saving the literal unchanged: %d, stored %q", r.code, got.Proxy)
+	}
+	r = f.post("/profiles/bank/edit", url.Values{"policy": {"pin"}, "proxy": {"http://pier-%7Bsticky%7D:pw@other.example:8080"}})
+	if got, _ := f.m.Profiles().Get(context.Background(), "bank"); r.code != http.StatusSeeOther || profiles.HasSticky(got.Proxy) {
+		t.Fatalf("an edit kept from the shown value: %d, stored %q", r.code, got.Proxy)
+	}
+
 	// Settings take a template too, and show it masked.
 	if r := f.post("/settings", url.Values{"proxy": {stickyProxy}}); r.code != http.StatusSeeOther {
 		t.Fatalf("settings: %d %s", r.code, r.body)

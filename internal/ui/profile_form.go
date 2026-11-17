@@ -232,6 +232,8 @@ func readProfileForm(r *http.Request, p *profiles.Profile, keepProxy string) str
 	return ""
 }
 
+var braces = strings.NewReplacer("{", "%7B", "}", "%7D")
+
 // maskProxy shows a proxy URL with its password hidden; a template is
 // shown as one, its {sticky} never filled in. Submitting it unchanged
 // keeps the stored URL.
@@ -245,7 +247,10 @@ func maskProxy(raw string) string {
 		}
 		userinfo := ""
 		if u.User != nil {
-			userinfo = u.User.Username()
+			// Braces in the user name are literal ones, sent encoded
+			// (FormatProxy has the placeholder stood in by plain letters):
+			// shown encoded, an edit keeps them literal.
+			userinfo = braces.Replace(u.User.Username())
 			if _, ok := u.User.Password(); ok {
 				userinfo += ":••••"
 			}
