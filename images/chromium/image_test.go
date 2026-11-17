@@ -600,8 +600,9 @@ func TestBrowserEnvironment(t *testing.T) {
 		if g := line("GPU process crash count"); g != "0" {
 			t.Errorf("GPU process crash count: %q", g)
 		}
-		// Chromium 156 on X11 reports its GPU process unsandboxed whether
-		// WebGL is on SwiftShader or llvmpipe; see ANTI-BOT.md (PROJ-148).
+		// Chromium 156 here reports its GPU process unsandboxed whether
+		// WebGL is on SwiftShader or llvmpipe: it has the container's
+		// seccomp filter but not Chromium's own (ANTI-BOT.md, PROJ-165).
 		t.Logf("GPU process sandboxed (Chromium's own seccomp policy): %s", line("Sandboxed"))
 	})
 	// A canvas drawn with WebGL shows on the X display, which screenshots
