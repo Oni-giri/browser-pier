@@ -458,14 +458,23 @@ func TestBrowserEnvironment(t *testing.T) {
 		}
 	})
 	t.Run("webgl", func(t *testing.T) {
-		v := p.Eval(`(() => { const gl = document.createElement('canvas').getContext('webgl');
-			if (!gl) return null;
-			const d = gl.getExtension('WEBGL_debug_renderer_info');
-			return d ? gl.getParameter(d.UNMASKED_RENDERER_WEBGL) : 'unknown'; })()`)
-		if v == nil {
-			t.Fatal("no WebGL context")
+		// WebGL and WebGL2 both render on llvmpipe, and draw (PROJ-148).
+		for kind, gl := range readWebGL(t, p) {
+			if gl == nil {
+				t.Errorf("no %s context", kind)
+				continue
+			}
+			t.Logf("%s: %s / %s", kind, gl.Vendor, gl.Renderer)
+			if !strings.Contains(gl.Renderer, "llvmpipe") {
+				t.Errorf("%s renders on %q, want llvmpipe", kind, gl.Renderer)
+			}
+			if strings.Contains(strings.ToLower(gl.Vendor+gl.Renderer), "swiftshader") {
+				t.Errorf("%s is on SwiftShader: %s / %s", kind, gl.Vendor, gl.Renderer)
+			}
+			if gl.Pixel != triangleRGBA {
+				t.Errorf("%s drew a triangle that reads back as %s, want %s", kind, gl.Pixel, triangleRGBA)
+			}
 		}
-		t.Logf("WebGL renderer: %v", v)
 	})
 	t.Run("webrtc sends no unproxied udp", func(t *testing.T) {
 		// With no proxy, disable_non_proxied_udp leaves WebRTC no UDP candidates at all.
@@ -506,6 +515,52 @@ func TestBrowserEnvironment(t *testing.T) {
 		if out := docker(t, "exec", b.name, "xdotool", "getmouselocation"); !strings.HasPrefix(out, "x:40 y:50 ") {
 			t.Fatalf("mouse at %q, want x:40 y:50", out)
 		}
+	})
+	t.Run("gpu", func(t *testing.T) {
+		p.Navigate("chrome://gpu/")
+		var text string
+		deadline := time.Now().Add(10 * time.Second)
+		for !strings.Contains(text, "GPU process crash count") {
+			if time.Now().After(deadline) {
+				t.Fatalf("chrome://gpu has no driver information:\n%s", text)
+			}
+			time.Sleep(200 * time.Millisecond)
+			text, _ = p.Eval(deepText).(string)
+		}
+		line := func(name string) string {
+			m := regexp.MustCompile(`(?m)^\s*\*?\s*` + regexp.QuoteMeta(name) + `\s*:\s*(.*?)\s*$`).FindStringSubmatch(text)
+			if m == nil {
+				return ""
+			}
+			return m[1]
+		}
+		// With software compositing Chromium says "Hardware accelerated but
+		// at reduced performance"; blocked, it says "Disabled" or "Software
+		// only, hardware acceleration unavailable".
+		if w := line("WebGL"); !strings.HasPrefix(w, "Hardware accelerated") {
+			t.Errorf("chrome://gpu says WebGL: %q", w)
+		}
+		if w := line("WebGL2"); w != "" && !strings.HasPrefix(w, "Hardware accelerated") {
+			t.Errorf("chrome://gpu says WebGL2: %q", w)
+		}
+		if g := line("GL implementation parts"); g != "(gl=egl-angle,angle=opengl)" {
+			t.Errorf("GL implementation parts %q, want ANGLE's OpenGL backend", g)
+		}
+		if g := line("In-process GPU"); g != "false" {
+			t.Errorf("In-process GPU: %q, want a GPU process of its own", g)
+		}
+		if g := line("GPU process crash count"); g != "0" {
+			t.Errorf("GPU process crash count: %q", g)
+		}
+		// Chromium 156 on X11 reports its GPU process unsandboxed whether
+		// WebGL is on SwiftShader or llvmpipe; see ANTI-BOT.md (PROJ-148).
+		t.Logf("GPU process sandboxed (Chromium's own seccomp policy): %s", line("Sandboxed"))
+	})
+	// A canvas drawn with WebGL shows on the X display, which screenshots
+	// and the live stream read, and isn't black or empty there.
+	t.Run("webgl on screen", func(t *testing.T) {
+		p.Navigate(trianglePage)
+		b.onScreen(t, 640, pageTop(t, p)+200, color.RGBA{0x33, 0xcc, 0x66, 0xff})
 	})
 	// Test pages paint their targets blue, so a test can see they're on screen.
 	blue := color.RGBA{0x2f, 0x6b, 0xff, 0xff}
@@ -667,5 +722,133 @@ func TestBrowserEnvironment(t *testing.T) {
 	}
 	if logs := b.logs(); bytes.Contains([]byte(logs), []byte("No usable sandbox")) {
 		t.Fatalf("Chromium had no sandbox:\n%s", logs)
+	}
+	checkGPUProcess(t, b.logs())
+}
+
+// checkGPUProcess fails if the GPU process failed to start or crashed: then
+// Chromium starts it again and again, and falls back to no WebGL.
+func checkGPUProcess(t *testing.T, logs string) {
+	t.Helper()
+	for _, bad := range []string{"Exiting GPU process due to errors during initialization", "GPU process exited unexpectedly", "GPU process isn't usable"} {
+		if strings.Contains(logs, bad) {
+			t.Fatalf("the GPU process failed (%s):\n%s", bad, logs)
+		}
+	}
+}
+
+// triangleRGBA is the colour readWebGL's triangle and trianglePage draw,
+// (0.2, 0.8, 0.4) as bytes.
+const triangleRGBA = "51,204,102,255"
+
+// webGLInfo is what a page reads from one kind of WebGL context.
+type webGLInfo struct {
+	Vendor, Renderer string
+	// Pixel is the middle of a triangle drawn over the whole canvas, read
+	// back with readPixels as "R,G,B,A".
+	Pixel string
+}
+
+// readWebGL reads the unmasked vendor and renderer of a webgl and a webgl2
+// context, and has each draw a triangle and read it back. A kind with no
+// context maps to nil.
+func readWebGL(t *testing.T, p *browsertest.CDP) map[string]*webGLInfo {
+	t.Helper()
+	v, _ := p.Eval(`(() => {
+		const out = {};
+		for (const kind of ['webgl', 'webgl2']) {
+			const c = document.createElement('canvas'); c.width = c.height = 64;
+			const gl = c.getContext(kind);
+			if (!gl) { out[kind] = null; continue; }
+			const d = gl.getExtension('WEBGL_debug_renderer_info');
+			const v2 = kind === 'webgl2';
+			const vs = v2 ? '#version 300 es\nin vec2 p; void main() { gl_Position = vec4(p, 0.0, 1.0); }'
+				: 'attribute vec2 p; void main() { gl_Position = vec4(p, 0.0, 1.0); }';
+			const fs = v2 ? '#version 300 es\nprecision mediump float; out vec4 o; void main() { o = vec4(0.2, 0.8, 0.4, 1.0); }'
+				: 'precision mediump float; void main() { gl_FragColor = vec4(0.2, 0.8, 0.4, 1.0); }';
+			const prog = gl.createProgram();
+			for (const [type, src] of [[gl.VERTEX_SHADER, vs], [gl.FRAGMENT_SHADER, fs]]) {
+				const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); gl.attachShader(prog, s);
+			}
+			gl.linkProgram(prog); gl.useProgram(prog);
+			gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+			gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+			const loc = gl.getAttribLocation(prog, 'p');
+			gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+			gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT); gl.drawArrays(gl.TRIANGLES, 0, 3);
+			const px = new Uint8Array(4); gl.readPixels(32, 32, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+			out[kind] = { vendor: d ? gl.getParameter(d.UNMASKED_VENDOR_WEBGL) : '',
+				renderer: d ? gl.getParameter(d.UNMASKED_RENDERER_WEBGL) : '', pixel: Array.from(px).join(',') };
+		}
+		return JSON.stringify(out);
+	})()`).(string)
+	var out map[string]*webGLInfo
+	if err := json.Unmarshal([]byte(v), &out); err != nil || len(out) != 2 {
+		t.Fatalf("reading WebGL: %q: %v", v, err)
+	}
+	return out
+}
+
+// trianglePage fills the window with a canvas and draws readWebGL's
+// triangle on it with WebGL, covering the whole canvas.
+const trianglePage = `data:text/html,<body style="margin:0"><canvas id="c" style="display:block;width:100vw;height:100vh"></canvas><script>` +
+	`const c = document.getElementById('c'); c.width = innerWidth; c.height = innerHeight; const gl = c.getContext('webgl');` +
+	`const sh = (t, s) => { const x = gl.createShader(t); gl.shaderSource(x, s); gl.compileShader(x); return x; };` +
+	`const p = gl.createProgram(); gl.attachShader(p, sh(gl.VERTEX_SHADER, 'attribute vec2 a; void main() { gl_Position = vec4(a, 0.0, 1.0); }'));` +
+	`gl.attachShader(p, sh(gl.FRAGMENT_SHADER, 'precision mediump float; void main() { gl_FragColor = vec4(0.2, 0.8, 0.4, 1.0); }'));` +
+	`gl.linkProgram(p); gl.useProgram(p); gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());` +
+	`gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);` +
+	`gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);` +
+	`gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT); gl.drawArrays(gl.TRIANGLES, 0, 3);</script>`
+
+// deepText is a page's text, shadow roots included (chrome://gpu keeps
+// its report in one), a block per line.
+const deepText = `(() => { const walk = n => { let s = ''; if (n.shadowRoot) s += walk(n.shadowRoot);
+	for (const c of n.childNodes) {
+		if (c.nodeType === 3) s += c.textContent;
+		else if (c.nodeType === 1 && !/^(STYLE|SCRIPT)$/.test(c.tagName) || c.nodeType === 11) { s += walk(c); if (c.nodeType === 1 && /^(DIV|LI|TR|P|H\d)$/.test(c.tagName)) s += '\n'; }
+	}
+	return s; }; return walk(document.body); })()`
+
+// pageTop is the height of the browser's UI above the page.
+func pageTop(t *testing.T, p *browsertest.CDP) int {
+	t.Helper()
+	h, _ := p.Eval("window.outerHeight - window.innerHeight").(float64)
+	return int(h)
+}
+
+// TestWebGLRendererIsStable: a profile sees the same WebGL renderer each
+// time it starts, and so does every profile on the same host and image
+// (PROJ-148). There's one renderer and no fallback to change to.
+func TestWebGLRendererIsStable(t *testing.T) {
+	image := testImage(t)
+	vol := newVolume(t)
+	read := func(volume string) string {
+		t.Helper()
+		b := startBrowser(t, image, volume)
+		p := b.page()
+		p.Navigate("about:blank")
+		gl := readWebGL(t, p)
+		p.Close()
+		if code := b.stop(); code != "0" {
+			t.Fatalf("exit code after stop = %s, want 0\n%s", code, b.logs())
+		}
+		checkGPUProcess(t, b.logs())
+		if gl["webgl"] == nil || gl["webgl2"] == nil {
+			t.Fatalf("no WebGL: %v", gl)
+		}
+		r := gl["webgl"].Vendor + " / " + gl["webgl"].Renderer
+		if r2 := gl["webgl2"].Vendor + " / " + gl["webgl2"].Renderer; r2 != r {
+			t.Errorf("webgl says %q, webgl2 %q", r, r2)
+		}
+		return r
+	}
+	first := read(vol)
+	t.Logf("renderer: %s", first)
+	if again := read(vol); again != first {
+		t.Errorf("after a restart the profile's renderer is %q, was %q", again, first)
+	}
+	if other := read(newVolume(t)); other != first {
+		t.Errorf("another profile's renderer is %q, the first's %q", other, first)
 	}
 }
