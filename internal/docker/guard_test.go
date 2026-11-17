@@ -448,12 +448,34 @@ func TestGuardRefusesABrowserBeforeUseDataDir(t *testing.T) {
 	if err := c.checkCreate(kindBrowser, o); !errors.Is(err, ErrOutsideEnvelope) || !strings.Contains(err.Error(), "UseDataDir") {
 		t.Fatalf("a browser before UseDataDir: %v", err)
 	}
+	// Nor a relative one, which Clean makes of "" (".").
+	for _, dir := range []string{".", "relative/dir"} {
+		c = guardClient(t, false, appArmorPlan{})
+		c.hostDataDir = dir
+		spec := goldenSpec()
+		spec.ProfileDir, spec.ControlDir, spec.FilesDir = filepath.Join(dir, "profiles/google/chrome"), filepath.Join(dir, "profiles/google/run"), filepath.Join(dir, "profiles/google/files")
+		err := c.checkCreate(kindBrowser, c.browserCreateOptions("", spec))
+		if !errors.Is(err, ErrOutsideEnvelope) || !strings.Contains(err.Error(), "HostConfig.Mounts") {
+			t.Errorf("host data dir %q: %v", dir, err)
+		}
+		assertNoValues(t, dir, err.Error())
+	}
 	// Podman's seccomp path can't be checked either.
-	c = guardClient(t, true, appArmorPlan{})
-	o = c.sandboxCheckOptions("")
-	c.hostDataDir = ""
-	if err := c.checkCreate(kindSandboxCheck, o); !errors.Is(err, ErrOutsideEnvelope) {
-		t.Fatalf("Podman's seccomp path before UseDataDir: %v", err)
+	for _, dir := range []string{"", ".", "relative/dir"} {
+		c = guardClient(t, true, appArmorPlan{})
+		c.hostDataDir, c.seccompOpt = dir, "seccomp="+filepath.Join(dir, "seccomp.json")
+		err := c.checkCreate(kindSandboxCheck, c.sandboxCheckOptions(""))
+		if !errors.Is(err, ErrOutsideEnvelope) {
+			t.Fatalf("Podman's seccomp path under %q: %v", dir, err)
+		}
+		assertNoValues(t, dir, err.Error())
+	}
+	// UseDataDir refuses one before asking the daemon anything.
+	c = guardClient(t, false, appArmorPlan{})
+	for _, dir := range []string{"", "relative/dir"} {
+		if err := c.UseDataDir(context.Background(), t.TempDir(), dir); err == nil {
+			t.Errorf("UseDataDir took the host data dir %q", dir)
+		}
 	}
 }
 
@@ -480,16 +502,34 @@ func TestGuardChecksTheClientsOwnSettings(t *testing.T) {
 			if name == "root user" {
 				o.Config.User = "0:0"
 			}
-			if err := c.checkCreate(kind, o); !errors.Is(err, ErrOutsideEnvelope) {
+			err := c.checkCreate(kind, o)
+			if !errors.Is(err, ErrOutsideEnvelope) {
 				t.Errorf("%s, %s: %v", name, kind, err)
+				continue
+			}
+			assertNoValues(t, name, err.Error())
+		}
+	}
+}
+
+// guardValues are values the refusals in these tests are about; no error
+// or log record may show one.
+var guardValues = []string{"SCMP", "defaultAction", "/", "srv", "docker.sock", "1440x900", "ipinfo", "Paris", "fr-FR", "192.168", "evil", "9222",
+	"LD_PRELOAD", "my-browsers", "bank", "1000", "unconfined", "tmp", "uid=x", "relative"}
+
+func assertNoValues(t *testing.T, what string, texts ...string) {
+	t.Helper()
+	for _, s := range texts {
+		for _, v := range guardValues {
+			if strings.Contains(s, v) {
+				t.Errorf("%s: %q shows %q", what, s, v)
 			}
 		}
 	}
 }
 
 func TestGuardErrorNamesFieldsNotValues(t *testing.T) {
-	values := []string{"SCMP", "defaultAction", "/", "srv", "docker.sock", "1440x900", "ipinfo", "Paris", "fr-FR", "192.168", "evil", "9222",
-		"LD_PRELOAD", "my-browsers", "bank", "1000"}
+	values := guardValues
 	for _, w := range widenings {
 		if w.opt == "" && w.plan == nil {
 			w.opt = optBrowserPier

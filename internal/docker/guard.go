@@ -204,8 +204,10 @@ func (c *Client) checkCreate(kind createKind, o client.ContainerCreateOptions) e
 
 func (g guard) browser(c *Client, o client.ContainerCreateOptions, apparmor string) error {
 	cfg, host := o.Config, o.HostConfig
-	if c.hostDataDir == "" {
-		return g.refuse("HostConfig.Mounts", "can't be checked before UseDataDir")
+	// Not "" (before UseDataDir) nor relative: the mounts' sources are
+	// computed from it, and only an absolute one says where they are.
+	if !filepath.IsAbs(c.hostDataDir) {
+		return g.refuse("HostConfig.Mounts", "can't be checked before UseDataDir gave an absolute host data dir")
 	}
 	profile := cfg.Labels[LabelProfile]
 	spec := Spec
@@ -382,7 +384,7 @@ func (g guard) securityOpt(c *Client, opts []string) (string, error) {
 	const field = "HostConfig.SecurityOpt"
 	inline := embeddedSeccomp()
 	podman := ""
-	if c.hostDataDir != "" {
+	if filepath.IsAbs(c.hostDataDir) {
 		podman = "seccomp=" + filepath.Join(c.hostDataDir, "seccomp.json")
 	}
 	if c.seccompOpt != inline && (podman == "" || c.seccompOpt != podman) {
