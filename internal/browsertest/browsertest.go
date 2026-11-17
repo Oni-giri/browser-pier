@@ -204,7 +204,85 @@ type Site struct {
 	// released lets /later's page go on (ReleaseLater); arrived is set
 	// once it has.
 	released, arrived bool
+	// shown is every pageshow the /hello, /heavy and /back pages
+	// reported; served counts the requests for each of them.
+	shown  []Shown
+	served map[string]int
 }
+
+// Shown is what a page saw in a pageshow event (PROJ-160): whether it came
+// from the back/forward cache, its navigation's type, and Chromium's
+// notRestoredReasons for it as JSON ("null" when there are none). Load
+// is random to each document: a page loaded again, rather than restored,
+// reports a new one, even when its HTML came from the HTTP cache.
+type Shown struct {
+	Page      string
+	Persisted bool
+	Type      string
+	Reasons   string
+	Load      string
+}
+
+// Shows lists the pageshow events page reported, oldest first.
+func (s *Site) Shows(page string) []Shown {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []Shown
+	for _, e := range s.shown {
+		if e.Page == page {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// Served counts the requests for path, one of the pages that report
+// pageshow (/hello, /heavy, /back/a, /back/b).
+func (s *Site) Served(path string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.served[path]
+}
+
+// WaitShown waits until page has reported n pageshow events, and returns
+// the last.
+func (s *Site) WaitShown(t *testing.T, page string, n int, timeout time.Duration) Shown {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		if e := s.Shows(page); len(e) >= n {
+			return e[len(e)-1]
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s reported %d pageshow events in %v, want %d", page, len(s.Shows(page)), timeout, n)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// reportShown is a script that tells the site of each pageshow, as Shown.
+// It holds no connection open and registers no unload handler, so it
+// leaves its page eligible for the back/forward cache.
+const reportShown = `<script>
+const load = Math.random().toString(36).slice(2);
+addEventListener('pageshow', e => {
+  const n = performance.getEntriesByType('navigation')[0] || {};
+  fetch('/shown?' + new URLSearchParams({page: PAGE, persisted: e.persisted, type: n.type || '',
+    reasons: JSON.stringify(n.notRestoredReasons || null), load}));
+});
+</script>`
+
+// heavyPage holds mb MB in typed arrays, filled so the memory is
+// committed, and a 20,000-paragraph DOM: a page heavy enough that keeping
+// it in the back/forward cache shows in the container's memory.
+const heavyPage = `<title>Heavy</title><h1>Heavy</h1><div id="d"></div><script>
+const mb = Number(new URLSearchParams(location.search).get('mb')) || 200;
+window.held = [];
+for (let i = 0; i < mb; i++) { const a = new Float64Array(131072); a.fill(i + Math.random()); held.push(a); }
+const f = document.createDocumentFragment();
+for (let i = 0; i < 20000; i++) { const p = document.createElement('p'); p.textContent = 'Row ' + i + ' ' + 'lorem ipsum '.repeat(4); f.append(p); }
+document.getElementById('d').append(f);
+</script>`
 
 // ReleaseLater sends the /later page, wherever it is, on to
 // /account-later, which its tab can be told to match without being the
@@ -359,6 +437,32 @@ setInterval(async () => { if ((await fetch('/later/go')).status === 200) locatio
 		s.mu.Lock()
 		s.iconServed = true
 		s.mu.Unlock()
+	})
+	// Pages that report each pageshow to /shown (PROJ-160): two light
+	// ones for Back, a plain one to leave to, and a heavy one (?mb=N).
+	for path, body := range map[string]string{
+		"/hello":  "<title>Hello</title><h1>Hello</h1>",
+		"/back/a": "<title>A</title><h1>Page A</h1>",
+		"/back/b": "<title>B</title><h1>Page B</h1>",
+		"/heavy":  heavyPage,
+	} {
+		script := strings.Replace(reportShown, "PAGE", fmt.Sprintf("%q", path), 1)
+		mux.HandleFunc("GET "+path, func(w http.ResponseWriter, _ *http.Request) {
+			s.mu.Lock()
+			if s.served == nil {
+				s.served = map[string]int{}
+			}
+			s.served[path]++
+			s.mu.Unlock()
+			_, _ = io.WriteString(w, body+script)
+		})
+	}
+	mux.HandleFunc("GET /shown", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		s.mu.Lock()
+		s.shown = append(s.shown, Shown{Page: q.Get("page"), Persisted: q.Get("persisted") == "true", Type: q.Get("type"), Reasons: q.Get("reasons"), Load: q.Get("load")})
+		s.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /geo", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

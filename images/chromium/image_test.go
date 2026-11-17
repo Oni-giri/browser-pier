@@ -111,6 +111,12 @@ type browser struct {
 // startBrowser runs the image on volume; env adds KEY=VALUE settings.
 func startBrowser(t *testing.T, image, volume string, env ...string) *browser {
 	t.Helper()
+	return startBrowserWith(t, image, volume, nil, env...)
+}
+
+// startBrowserWith is startBrowser with more `docker run` options, such as mounts.
+func startBrowserWith(t *testing.T, image, volume string, runArgs []string, env ...string) *browser {
+	t.Helper()
 	sockDir := t.TempDir()
 	if err := os.Chmod(sockDir, 0o777); err != nil { // the container's user creates the socket
 		t.Fatal(err)
@@ -139,6 +145,7 @@ func startBrowser(t *testing.T, image, volume string, env ...string) *browser {
 	for _, e := range env {
 		run = append(run, "-e", e)
 	}
+	run = append(run, runArgs...)
 	docker(t, append(run, image)...)
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
 
