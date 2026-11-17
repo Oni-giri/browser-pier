@@ -47,7 +47,13 @@ var toolArgs = map[string]map[string]any{
 	"request_handoff":  {"session_id": "s1", "reason": "captcha", "detail": "Solve it"},
 	"wait_for_handoff": {"handoff_id": "h1", "seconds": 1},
 	"cancel_handoff":   {"handoff_id": "h1"},
+	"read_docs":        {"query": "handoff"},
 }
+
+// ownText are the tools whose results come from the binary alone (the
+// docs built into it), never from the API or a browser, so they can't
+// carry a secret. The scrub still runs over them, as over every tool.
+var ownText = map[string]bool{"read_docs": true}
 
 // leakyAPI stands in for the agent API with no scrub of its own: every
 // answer quotes the secret, in an error or in each field a tool reads.
@@ -177,7 +183,7 @@ func leaks(t *testing.T, scrubbing bool) (leaked []string) {
 		api.ok = ok
 		api.mu.Unlock()
 		for _, name := range names {
-			if toolArgs[name] == nil {
+			if toolArgs[name] == nil || ownText[name] {
 				continue
 			}
 			before := api.count()
@@ -218,10 +224,10 @@ func TestUnscrubbedToolsAreCaught(t *testing.T) {
 	got := leaks(t, false)
 	slices.Sort(got)
 	got = slices.Compact(got)
-	if len(got) != len(toolArgs) {
+	if len(got) != len(toolArgs)-len(ownText) {
 		var missed []string
 		for name := range toolArgs {
-			if !slices.Contains(got, name) {
+			if !slices.Contains(got, name) && !ownText[name] {
 				missed = append(missed, name)
 			}
 		}
