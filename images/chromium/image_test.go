@@ -282,6 +282,54 @@ func TestLoginSurvivesStopStartAndRebuild(t *testing.T) {
 	b.stop()
 }
 
+// TestLoginSurvivesImageUpgrade: a profile made by an older image, with its
+// GPU caches, starts cleanly on this one and keeps its login. It needs the
+// older image, named by BROWSERPIER_TEST_OLD_IMAGE (0.2.1 for PROJ-148,
+// whose WebGL renderer moved from SwiftShader to llvmpipe).
+func TestLoginSurvivesImageUpgrade(t *testing.T) {
+	image := testImage(t)
+	old := os.Getenv("BROWSERPIER_TEST_OLD_IMAGE")
+	if old == "" {
+		t.Skip("BROWSERPIER_TEST_OLD_IMAGE not set")
+	}
+	s := browsertest.NewSite(t, browsertest.SiteHost(t))
+	vol := newVolume(t)
+
+	b := startBrowser(t, old, vol)
+	p := b.page()
+	token := s.Login(t, p)
+	p.Navigate("about:blank")
+	before := readWebGL(t, p)["webgl"]
+	p.Close()
+	if code := b.stop(); code != "0" {
+		t.Fatalf("exit code after stop = %s, want 0\n%s", code, b.logs())
+	}
+
+	b = startBrowser(t, image, vol)
+	// The old renderer's shader caches are there for the new one to find.
+	if out := docker(t, "exec", b.name, "sh", "-c", "ls -d /profile/GPUCache /profile/Default/GPUCache 2>/dev/null || true"); out == "" {
+		t.Log("no GPUCache folder in the old profile")
+	}
+	p = b.page()
+	if got := s.Account(t, p); got != token {
+		t.Fatalf("on the new image the site saw session %q, want %q", got, token)
+	}
+	p.Navigate("about:blank")
+	after := readWebGL(t, p)
+	p.Close()
+	if code := b.stop(); code != "0" {
+		t.Fatalf("exit code after stop = %s, want 0\n%s", code, b.logs())
+	}
+	checkGPUProcess(t, b.logs())
+	if after["webgl"] == nil || after["webgl2"] == nil {
+		t.Fatalf("no WebGL on the new image: %v", after)
+	}
+	if before != nil {
+		t.Logf("renderer on %s: %s / %s", old, before.Vendor, before.Renderer)
+	}
+	t.Logf("renderer on %s: %s / %s", image, after["webgl"].Vendor, after["webgl"].Renderer)
+}
+
 // TestKillLosesFreshLogin is the negative control for the test above: without
 // a graceful close, a cookie set a moment before the stop is lost. If this
 // starts failing, the test above no longer proves anything.

@@ -84,8 +84,8 @@ func TestMeasureWebGLCost(t *testing.T) {
 	}
 	gpu := func() string {
 		return docker(t, "exec", b.name, "sh", "-c", `for d in /proc/[0-9]*; do
-			if tr '\0' ' ' < $d/cmdline 2>/dev/null | grep -q -- '--type=gpu-process'; then
-				grep -aE '^(VmRSS|Threads):' $d/status | tr -s '\t\n' '  '; fi; done`)
+			case $(tr '\0' ' ' < $d/cmdline 2>/dev/null) in /usr/lib/chromium/*--type=gpu-process*)
+				grep -aE '^(VmRSS|Threads):' $d/status | tr -s '\t\n' '  ';; esac; done`)
 	}
 	// sample runs during for the window, while it reads the container's
 	// CPU time and peak memory, and what the live stream costs if watch.
