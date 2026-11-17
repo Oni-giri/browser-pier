@@ -66,7 +66,7 @@
             <button class="btn" type="button" data-proxy-test="{{if .New}}new{{else}}edit{{end}}"{{if not .New}} data-profile="{{.Profile.Name}}"{{end}}{{if not .Proxy}} disabled{{end}}>Test</button>
           </div>
           <div class="proxy-result" data-proxy-result aria-live="polite" hidden></div>
-          <span class="hint">HTTP, HTTPS or SOCKS5. Time zone and language follow the proxy's location. Test checks it from this server, the way a browser's start would, and saves nothing.</span>
+          <span class="hint">HTTP, HTTPS or SOCKS5. Time zone and language follow the proxy's location.</span>
           <span class="hint"><code>{sticky}</code> in the user name or password becomes a code of this profile's own, so it keeps its own exit IP where the provider offers sticky sessions.</span>
         </div>
         <div class="field">
