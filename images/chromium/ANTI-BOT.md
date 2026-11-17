@@ -21,10 +21,10 @@ Visual mode was driven only through the address bar, clicks and screenshots. API
 
 | Page | Visual mode | API mode |
 |---|---|---|
-| [bot.sannysoft.com](https://bot.sannysoft.com/) | All pass except **WebGL renderer: SwiftShader**; all pass since WebGL moved to llvmpipe (PROJ-148, below) | Same |
+| [bot.sannysoft.com](https://bot.sannysoft.com/) | All pass except **WebGL renderer: SwiftShader**; all pass since WebGL moved to llvmpipe (PROJ-148: measured from a residential connection, not this OVH address; see below) | Same |
 | [BrowserScan bot detection](https://www.browserscan.net/bot-detection) | **Normal** (webdriver, user agent, CDP, navigator) | **Normal**: its CDP check doesn't catch Playwright on Chromium 156 |
 | [deviceandbrowserinfo: Are you a bot?](https://deviceandbrowserinfo.com/are_you_a_bot) | **"You are human!"**, every signal false | **"You are a bot!"**: `isAutomatedWithCDP` (main thread and workers) |
-| [CreepJS](https://abrahamjuliot.github.io/creepjs/) | 0% headless, 0% stealth, 50% "like headless"; 44% since PROJ-29's taskbar, 38% since PROJ-148's llvmpipe | Same |
+| [CreepJS](https://abrahamjuliot.github.io/creepjs/) | 0% headless, 0% stealth, 50% "like headless"; 44% since PROJ-29's taskbar, 38% since PROJ-148's llvmpipe (residential connection, not this OVH address; see below) | Same |
 | [nowsecure.nl](https://nowsecure.nl/), [scrapingcourse.com Cloudflare challenge](https://www.scrapingcourse.com/cloudflare-challenge) | Cloudflare's interactive checkbox | Same |
 
 **How to read these:**
@@ -72,7 +72,7 @@ Measured on 2026-11-17 with Chromium 156.0.8078.79, Debian trixie's Mesa 25.0.7-
 
 **The switches.** `--ignore-gpu-blocklist` alone, with no `--use-angle`, puts WebGL on llvmpipe: ANGLE's default backend on Linux is OpenGL, through Xvfb's GLX (`chrome://gpu`: `GL implementation parts (gl=egl-angle,angle=opengl)`, display type `ANGLE_OPENGL`). No EGL package is needed. Without that switch Chromium blocks llvmpipe: `chrome://gpu` says `WebGL: Disabled`, `getContext('webgl')` returns null, and compositing falls back to software; so that switch is required, and the tests fail with "no WebGL" without it. `--disable-gpu-compositing` keeps page compositing in software (see the cost below); WebGL then reads `Hardware accelerated but at reduced performance` in `chrome://gpu`, and renders as before.
 
-**Packages: none new, and the image is the same size.** `xvfb` already pulls in Mesa's GLX and llvmpipe (`xvfb` → `libgl1` → `libglx0` → `libglx-mesa0` → `mesa-libgallium`, 41 MB, which links `libllvm19`, 124 MB). The Dockerfile now names `libgl1` and `libglx-mesa0`, which Chromium needs, and the build fails if libGL, the Mesa GLX library or the gallium driver is missing, lacks llvmpipe or can't load its libraries. amd64 image: 1,100,647,500 bytes before, 1,100,647,108 after. arm64: not measured here; the dependency chain is the same in Debian.
+**Packages: none new, and the image is the same size.** `xvfb` already pulls in Mesa's GLX and llvmpipe (`xvfb` → `libgl1` → `libglx0` → `libglx-mesa0` → `mesa-libgallium`, 41 MB, which links `libllvm19`, 124 MB). The Dockerfile now names `libgl1` and `libglx-mesa0`, which Chromium needs, and the build fails if libGL, the Mesa GLX library or the gallium driver is missing, lacks llvmpipe or can't resolve its libraries. That checks the files and their linkage, not an actual load: the image has no GL client to load the driver with at build time (Xvfb reports nothing about GLX as it starts), so the load is checked by the Docker tests' `webgl` subtest. amd64 image: 1,100,647,500 bytes before, 1,100,647,108 after. arm64: not measured here; the dependency chain is the same in Debian.
 
 **The renderer string**, exactly, from `UNMASKED_VENDOR_WEBGL` / `UNMASKED_RENDERER_WEBGL`:
 
@@ -118,7 +118,7 @@ What CreepJS still counts in "like headless" is `noWebShare`, `noContentIndex`, 
 
 **Existing profiles.** `TestLoginSurvivesImageUpgrade` signed in with the 0.2.1 image (SwiftShader), then started that profile, its `GPUCache` folders included, on the new image: it kept the login, WebGL worked on llvmpipe, and the GPU process didn't fail. The renderer, and with it WebGL and canvas hashes, changes once for such a profile.
 
-**Not run here:** arm64 (CI builds the arm64 image under emulation, and the build-time driver check runs there; the Docker tests don't), the Umbrel, the `browserpier` and Docker-default AppArmor choices, and an OVH datacenter address.
+**Not run here, so unverified:** arm64 (CI builds the arm64 image under emulation, and the build-time library check runs there; no Docker test has run on arm64, so WebGL on llvmpipe there is unchecked, and since there's no fallback, an arm64 failure would mean no WebGL at all: run `TestBrowserEnvironment` and `TestWebGLRendererIsStable` on an arm64 host or the Umbrel before a release ships this), the Umbrel, llvmpipe's JIT under the `browserpier` and Docker-default AppArmor profiles (CI's Docker job, on Docker with AppArmor, covers one of them once the branch runs there), and PROJ-15's OVH datacenter address. The **go** above is for amd64 without AppArmor.
 
 `TestVisualModeLooksLikeAPerson`, `TestPageToolsStayQuiet`, `TestContentStaysQuiet`, the login tests and `TestMeasureWindowAtLoad` (window 1280×768 and `availHeight` 768 in all 70 loads, as in PROJ-29's table) pass unchanged.
 

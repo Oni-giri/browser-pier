@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -285,7 +286,8 @@ func TestLoginSurvivesStopStartAndRebuild(t *testing.T) {
 // TestLoginSurvivesImageUpgrade: a profile made by an older image, with its
 // GPU caches, starts cleanly on this one and keeps its login. It needs the
 // older image, named by BROWSERPIER_TEST_OLD_IMAGE (0.2.1 for PROJ-148,
-// whose WebGL renderer moved from SwiftShader to llvmpipe).
+// whose WebGL renderer moved from SwiftShader to llvmpipe). CI doesn't set
+// it: run it by hand when the image changes (CONTRIBUTING.md).
 func TestLoginSurvivesImageUpgrade(t *testing.T) {
 	image := testImage(t)
 	old := os.Getenv("BROWSERPIER_TEST_OLD_IMAGE")
@@ -308,7 +310,7 @@ func TestLoginSurvivesImageUpgrade(t *testing.T) {
 	b = startBrowser(t, image, vol)
 	// The old renderer's shader caches are there for the new one to find.
 	if out := docker(t, "exec", b.name, "sh", "-c", "ls -d /profile/GPUCache /profile/Default/GPUCache 2>/dev/null || true"); out == "" {
-		t.Log("no GPUCache folder in the old profile")
+		t.Error("no GPUCache folder in the old profile: the test isn't checking what it should")
 	}
 	p = b.page()
 	if got := s.Account(t, p); got != token {
@@ -588,7 +590,10 @@ func TestBrowserEnvironment(t *testing.T) {
 		if w := line("WebGL"); !strings.HasPrefix(w, "Hardware accelerated") {
 			t.Errorf("chrome://gpu says WebGL: %q", w)
 		}
-		if w := line("WebGL2"); w != "" && !strings.HasPrefix(w, "Hardware accelerated") {
+		// Chromium 156's report has no WebGL2 row (WebGL's covers both);
+		// the webgl subtest checks a webgl2 context draws. If a WebGL2 row
+		// comes back, it must say the same.
+		if w := line("WebGL2"); strings.Contains(text, "WebGL2:") && !strings.HasPrefix(w, "Hardware accelerated") {
 			t.Errorf("chrome://gpu says WebGL2: %q", w)
 		}
 		if g := line("GL implementation parts"); g != "(gl=egl-angle,angle=opengl)" {
@@ -603,7 +608,32 @@ func TestBrowserEnvironment(t *testing.T) {
 		// Chromium 156 here reports its GPU process unsandboxed whether
 		// WebGL is on SwiftShader or llvmpipe: it has the container's
 		// seccomp filter but not Chromium's own (ANTI-BOT.md, PROJ-165).
-		t.Logf("GPU process sandboxed (Chromium's own seccomp policy): %s", line("Sandboxed"))
+		// Pinned, so a change either way is noticed.
+		switch sb := line("Sandboxed"); sb {
+		case "false":
+			t.Log("GPU process: Sandboxed false, as before PROJ-148 (PROJ-165)")
+		case "true":
+			t.Error("chrome://gpu now says the GPU process is sandboxed: tighten this test to require it (PROJ-165)")
+		default:
+			t.Errorf("chrome://gpu's Sandboxed line is %q; has the report changed?", sb)
+		}
+		// What it does have: a process of its own, no new privileges, and
+		// at least the container's seccomp filter.
+		status := docker(t, "exec", b.name, "sh", "-c", `for d in /proc/[0-9]*; do
+			case $(tr '\0' ' ' < $d/cmdline 2>/dev/null) in /usr/lib/chromium/*--type=gpu-process*)
+				grep -aE '^(NoNewPrivs|Seccomp|Seccomp_filters):' $d/status;; esac; done`)
+		field := func(name string) int {
+			m := regexp.MustCompile(`(?m)^` + name + `:\s*(\d+)`).FindStringSubmatch(status)
+			if m == nil {
+				return -1
+			}
+			n, _ := strconv.Atoi(m[1])
+			return n
+		}
+		if field("NoNewPrivs") != 1 || field("Seccomp") != 2 || field("Seccomp_filters") < 1 {
+			t.Errorf("the GPU process isn't under a seccomp filter with no new privileges:\n%s", status)
+		}
+		t.Logf("GPU process: %s", strings.Join(strings.Fields(status), " "))
 	})
 	// A canvas drawn with WebGL shows on the X display, which screenshots
 	// and the live stream read, and isn't black or empty there.

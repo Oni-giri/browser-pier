@@ -92,8 +92,9 @@ func TestChromiumArgs(t *testing.T) {
 	}
 	for _, a := range args {
 		for _, banned := range []string{"--enable-automation", "--headless", "--no-sandbox", "--user-agent",
-			// The GPU process keeps its sandbox, and WebGL has one
-			// renderer, llvmpipe, with no SwiftShader to fall back on.
+			// No switch that takes the GPU process out of its own process
+			// or drops a sandbox, and WebGL has one renderer, llvmpipe,
+			// with no SwiftShader to fall back on.
 			"--disable-gpu-sandbox", "--in-process-gpu", "--disable-seccomp-filter-sandbox",
 			"--disable-gpu", "--use-gl=swiftshader", "--use-angle=swiftshader", "--enable-unsafe-swiftshader",
 		} {
