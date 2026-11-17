@@ -5,9 +5,7 @@ package chromium
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/Oni-giri/browser-pier/internal/browsertest"
