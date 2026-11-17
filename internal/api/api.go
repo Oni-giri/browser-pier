@@ -362,7 +362,7 @@ func (a *API) startSession(w http.ResponseWriter, r *http.Request) {
 	}
 	allowAds := in.BlockAds != nil && !*in.BlockAds
 	before, wasLive := a.m.Live(in.Profile)
-	s, attached, err := a.m.StartWith(r.Context(), in.Profile, sessions.StartOptions{Mode: profiles.Mode(in.Mode), AllowAds: allowAds})
+	s, attached, err := a.m.StartWith(r.Context(), in.Profile, sessions.StartOptions{Mode: profiles.Mode(in.Mode), AllowAds: allowAds, By: tok.Name})
 	switch {
 	case errors.Is(err, profiles.ErrNotFound):
 		writeError(w, http.StatusNotFound, "no profile named "+strconv.Quote(in.Profile))
@@ -474,9 +474,10 @@ func (a *API) stopSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tok, _ := auth.TokenFromContext(r.Context())
-	// Noted first: the log goes with the session once it has stopped.
+	// Noted first: the live log ends with the session (its kept run then
+	// says who stopped it).
 	a.m.NoteFor(r.Context(), s.ID, tok.Name, "Stopping the browser")
-	stopped, err := a.m.Stop(r.Context(), s.ID)
+	stopped, err := a.m.StopFor(r.Context(), s.ID, sessions.StopByAgent(tok.Name))
 	if err != nil {
 		a.m.NoteFor(r.Context(), s.ID, tok.Name, "Couldn't stop the browser") // still live, so still logged
 		if errors.Is(err, sessions.ErrClosed) {
