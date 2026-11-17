@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 )
 
@@ -19,6 +20,8 @@ var procs = newReaper()
 type reaper struct {
 	mu      sync.Mutex
 	waiters map[int]waiter
+	// starts counts the processes started, for tests that must start none.
+	starts atomic.Int64
 }
 
 type waiter struct {
@@ -46,6 +49,7 @@ func (r *reaper) start(cmd *exec.Cmd) (<-chan syscall.WaitStatus, error) {
 	// before it is registered, even if it exits at once.
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.starts.Add(1)
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}

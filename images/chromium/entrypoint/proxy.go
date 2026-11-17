@@ -261,23 +261,31 @@ func (f *forwarder) dial(ctx context.Context, addr string) (net.Conn, error) {
 
 // connect opens a connection to addr through the upstream proxy, or
 // straight to it without one. It checks nothing: dial does, for pages.
+// An error reaching or going through the upstream is a *proxyError,
+// which says what kind of failure it was; its text is the cause's own.
 func (f *forwarder) connect(ctx context.Context, addr string) (net.Conn, error) {
 	if f.upstream == nil {
 		return f.dialer.DialContext(ctx, "tcp", addr)
 	}
 	conn, err := f.dialer.DialContext(ctx, "tcp", f.upstream.Host)
 	if err != nil {
-		return nil, err
+		return nil, &proxyError{kind: failKind(err, proxyUnreachable), err: err}
 	}
 	if f.upstream.Scheme == "https" {
 		tc := tls.Client(conn, &tls.Config{ServerName: f.upstream.Hostname(), MinVersion: tls.VersionTLS12})
 		if err := tc.HandshakeContext(ctx); err != nil {
 			_ = conn.Close()
-			return nil, err
+			return nil, &proxyError{kind: failKind(err, proxyTLS), err: err}
 		}
 		conn = tc
 	}
-	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+	// The handshake with the proxy ends with the caller's deadline, if
+	// sooner: a proxy that never answers is then a timeout, not a hang.
+	deadline := time.Now().Add(30 * time.Second)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	_ = conn.SetDeadline(deadline)
 	if f.upstream.Scheme == "socks5" {
 		err = socks5Connect(conn, addr, f.upstream.User)
 	} else {
@@ -285,10 +293,46 @@ func (f *forwarder) connect(ctx context.Context, addr string) (net.Conn, error) 
 	}
 	if err != nil {
 		_ = conn.Close()
+		var pe *proxyError
+		if !errors.As(err, &pe) {
+			// Cut off or garbled: the proxy answered, but no tunnel.
+			err = &proxyError{kind: failKind(err, proxyRefused), err: err}
+		}
 		return nil, err
 	}
 	_ = conn.SetDeadline(time.Time{})
 	return conn, nil
+}
+
+// The kinds of proxyError: a fixed set, which the proxy check reports
+// (proxycheck.go) instead of any text.
+const (
+	proxyUnreachable = "unreachable" // the name doesn't resolve, or nothing answers
+	proxyTLS         = "tls_proxy"   // the TLS handshake with an https proxy failed
+	proxyAuth        = "auth"        // 407, or SOCKS5 refusing the method or the credentials
+	proxyRefused     = "refused"     // the proxy answered but opened no tunnel
+	proxyTimeout     = "timeout"     // the deadline passed
+)
+
+// proxyError is a failure reaching the upstream proxy or getting a
+// tunnel through it. Error is the cause's own text, as before kinds
+// existed; kind is what the proxy check reports, never the text, which
+// may hold the proxy's own words.
+type proxyError struct {
+	kind string
+	err  error
+}
+
+func (e *proxyError) Error() string { return e.err.Error() }
+func (e *proxyError) Unwrap() error { return e.err }
+
+// failKind is kind, unless err is a deadline passing.
+func failKind(err error, kind string) string {
+	var ne net.Error
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()) {
+		return proxyTimeout
+	}
+	return kind
 }
 
 // httpConnect asks an HTTP proxy for a tunnel to addr.
@@ -311,7 +355,11 @@ func httpConnect(conn net.Conn, addr string, user *url.Userinfo) error {
 	}
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("the proxy answered %s", resp.Status)
+		kind := proxyRefused
+		if resp.StatusCode == http.StatusProxyAuthRequired {
+			kind = proxyAuth
+		}
+		return &proxyError{kind: kind, err: fmt.Errorf("the proxy answered %s", resp.Status)}
 	}
 	return nil
 }
@@ -350,13 +398,19 @@ func socks5Connect(conn net.Conn, addr string, user *url.Userinfo) error {
 		return err
 	}
 	if reply[0] != 0x05 || reply[1] != method {
-		return errors.New("the SOCKS5 proxy refused our authentication method")
+		// Not SOCKS5 at all is no tunnel; a SOCKS5 proxy that wants
+		// another method wants credentials, or others.
+		kind := proxyAuth
+		if reply[0] != 0x05 {
+			kind = proxyRefused
+		}
+		return &proxyError{kind: kind, err: errors.New("the SOCKS5 proxy refused our authentication method")}
 	}
 	if user != nil {
 		pass, _ := user.Password()
 		name := user.Username()
 		if len(name) > 255 || len(pass) > 255 {
-			return errors.New("SOCKS5 username or password over 255 bytes")
+			return &proxyError{kind: proxyAuth, err: errors.New("SOCKS5 username or password over 255 bytes")}
 		}
 		msg := append([]byte{0x01, byte(len(name))}, name...) //nolint:gosec // checked ≤ 255 above
 		msg = append(append(msg, byte(len(pass))), pass...)   //nolint:gosec // checked ≤ 255 above
@@ -367,7 +421,7 @@ func socks5Connect(conn net.Conn, addr string, user *url.Userinfo) error {
 			return err
 		}
 		if reply[1] != 0x00 {
-			return errors.New("the SOCKS5 proxy rejected the username or password")
+			return &proxyError{kind: proxyAuth, err: errors.New("the SOCKS5 proxy rejected the username or password")}
 		}
 	}
 	if len(host) > 255 {
@@ -390,7 +444,7 @@ func socks5Connect(conn net.Conn, addr string, user *url.Userinfo) error {
 		return err
 	}
 	if head[1] != 0x00 {
-		return fmt.Errorf("the SOCKS5 proxy couldn't connect (code %d)", head[1])
+		return &proxyError{kind: proxyRefused, err: fmt.Errorf("the SOCKS5 proxy couldn't connect (code %d)", head[1])}
 	}
 	var skip int
 	switch head[3] {

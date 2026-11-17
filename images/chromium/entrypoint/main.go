@@ -29,14 +29,30 @@ import (
 )
 
 func main() {
-	if len(os.Args) == 2 && os.Args[1] == sandboxCheckArg {
-		os.Exit(runSandboxCheck())
+	if check := checkMode(os.Args); check != nil {
+		os.Exit(check())
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if err := run(log); err != nil {
 		log.Error("exiting", "err", err)
 		os.Exit(1)
 	}
+}
+
+// checkMode is the short-lived check args ask for instead of the
+// browser, or nil. A check runs before anything of the browser's: no
+// mounts checked, no profile, no Xvfb or Chromium.
+func checkMode(args []string) func() int {
+	if len(args) != 2 {
+		return nil
+	}
+	switch args[1] {
+	case sandboxCheckArg:
+		return runSandboxCheck
+	case proxyCheckArg:
+		return func() int { return runProxyCheck(os.Stdout) }
+	}
+	return nil
 }
 
 func run(log *slog.Logger) error {
@@ -90,14 +106,9 @@ func run(log *slog.Logger) error {
 	}
 	defer func() { _ = fln.Close() }()
 	go fwd.serve(fln)
-	// The location lookup goes out the way pages do, through the upstream
-	// proxy if any, but to the endpoint the admin set, so unchecked.
-	lookupClient := &http.Client{}
-	if upstream != nil {
-		lookupClient.Transport = &http.Transport{DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) { return fwd.connect(ctx, addr) }}
-	}
+	client := lookupClient(fwd)
 	where, err := decideGeo(cfg, upstream != nil, func() (string, string, string, error) {
-		return lookupGeo(ctx, lookupClient, cfg.GeoURL)
+		return lookupGeo(ctx, client, cfg.GeoURL)
 	})
 	if err != nil {
 		return err
@@ -149,9 +160,9 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("start Chromium: %w", err)
 	}
-	client := &http.Client{Timeout: time.Second}
+	cdp := &http.Client{Timeout: time.Second}
 	if err := waitFor(ctx, browser, 30*time.Second, func() bool {
-		resp, err := client.Get("http://" + cdpAddr + "/json/version")
+		resp, err := cdp.Get("http://" + cdpAddr + "/json/version")
 		if err != nil {
 			return false
 		}
@@ -193,6 +204,19 @@ func run(log *slog.Logger) error {
 	}
 	log.Info("Chromium closed", "status", describe(browser.status))
 	return nil
+}
+
+// lookupClient is what the location lookup goes out with: the way pages
+// do, through the upstream proxy if any, but to the endpoint the admin
+// set, so unchecked. The proxy check (proxycheck.go) uses it too, so it
+// predicts a start.
+func lookupClient(fwd *forwarder) *http.Client {
+	if fwd.upstream == nil {
+		return &http.Client{}
+	}
+	return &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+		return fwd.connect(ctx, addr)
+	}}}
 }
 
 // prepareProfile checks the profile is writable and clears Chromium's
