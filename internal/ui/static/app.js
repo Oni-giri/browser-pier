@@ -279,7 +279,7 @@
     btn.textContent = "Testing…";
     btn.disabled = true;
     out.hidden = false;
-    out.innerHTML = '<span class="hint" style="margin:0">Testing the proxy from this server. This can take up to 30 seconds.</span>';
+    out.innerHTML = '<span class="hint" style="margin:0">Testing the proxy from this server. This takes up to 30 seconds, longer if the browser image is still to download.</span>';
     let html = "";
     try {
       const r = await fetch("/proxy/test", { method: "POST", body, credentials: "same-origin" });
