@@ -654,6 +654,10 @@ func TestTheSecret(t *testing.T) {
 	if cfg, _ := f.n.current(); cfg.URL != "https://hooks.example.com/a/two" {
 		t.Error("saving the masked URL changed it")
 	}
+	// An edited mask isn't a URL.
+	if _, err := f.n.Save(ctx, Change{URL: "https://other.example.com/…"}); err == nil {
+		t.Error("an edited mask was saved")
+	}
 	next, err := f.n.Regenerate(ctx)
 	if err != nil || len(next) != 64 || next == first {
 		t.Fatalf("regenerate: %v", err)

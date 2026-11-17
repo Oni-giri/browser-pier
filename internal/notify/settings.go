@@ -5,6 +5,7 @@ import (
 	"errors"
 	"maps"
 	"net/url"
+	"strings"
 )
 
 // View is the webhook as Settings shows it: never its secret, nor its URL
@@ -63,6 +64,10 @@ func (n *Notifier) Save(ctx context.Context, c Change) (secret string, err error
 			raw = cfg.URL
 		}
 		if raw != cfg.URL && raw != "" {
+			if strings.Contains(raw, "…") {
+				// An edited mask: the rest of the URL isn't there.
+				return "", errors.New("paste the whole webhook URL: the saved one is shown only up to its host")
+			}
 			if err := checkURL(ctx, n.lookup, raw); err != nil {
 				return "", err
 			}
