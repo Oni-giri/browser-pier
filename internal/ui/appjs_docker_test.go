@@ -347,6 +347,24 @@ func TestAppJS(t *testing.T) {
 		until(t, b, "the error page didn't load", `document.readyState === "complete" && location.pathname === "/profiles/mail/delete"`)
 	})
 
+	t.Run("New exit IP asks first, then gives the profile a new exit", func(t *testing.T) {
+		tok := f.stickyProfile("bank")
+		b.Navigate(base + "/profiles")
+		b.Eval(`document.querySelector("[data-dialog=exit-dialog][data-name=bank]").click()`)
+		is(t, b, `document.querySelector("#exit-dialog").open`, true)
+		is(t, b, `document.querySelector("#exit-title").textContent`, "Give bank a new exit IP?")
+		is(t, b, `document.querySelector("#exit-dialog p").textContent.includes("sign in or verify again, and the country may change")`, true)
+		is(t, b, `new URL(document.querySelector("#exit-dialog form").action).pathname`, "/profiles/bank/new-exit")
+		b.Eval(`document.querySelector("#exit-dialog form").requestSubmit()`)
+		until(t, b, "the page didn't come back", `document.readyState === "complete" && location.pathname === "/profiles" && !document.querySelector("#exit-dialog").open`)
+		if got := f.token("bank"); got == tok || got == "" {
+			t.Fatalf("the token is %q, was %q", got, tok)
+		}
+		if err := f.m.Profiles().Delete(ctx, "bank"); err != nil {
+			t.Fatal(err)
+		}
+	})
+
 	t.Run("the page light follows the needs-you chip", func(t *testing.T) {
 		b.Navigate(base + "/profiles")
 		is(t, b, `document.body.classList.contains("has-help")`, false)
