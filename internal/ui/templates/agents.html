@@ -88,7 +88,8 @@ codex mcp add browserpier --url {{.Base}}/mcp \
 
 <span class="c"># tools: start_browser, request_handoff, stop_browser…
 # Visual mode: screenshot, click, type_text, press_keys, scroll, drag, wait, zoom
-# API mode: snapshot, find, act, wait_for, navigate, tabs, page_content</span></pre>
+# API mode: snapshot, find, act, wait_for, navigate, tabs, page_content
+# page text comes in &lt;page&gt;: &lt;url&gt; and &lt;title&gt; are BrowserPier's, the page_content tag the page's</span></pre>
       <div data-panel="Agent" hidden>
         <p class="code-note">Create a token, set it as <code>PIER_TOKEN</code> where your agent runs, then paste this into the agent's chat. It reads BrowserPier's setup guide and connects itself, whichever agent it is. The token stays out of the chat.</p>
         <pre class="message">{{.AgentMessage}}</pre>
@@ -107,7 +108,7 @@ codex mcp add browserpier --url {{.Base}}/mcp \
         <li><span class="m GET">GET</span><code>/api/sessions/{id}/screenshot</code><span>Visual mode: see the screen</span></li>
         <li><span class="m POST">POST</span><code>/api/sessions/{id}/click</code><span>Visual mode: click, and /type to type</span></li>
         <li><span class="m POST">POST</span><code>/api/sessions/{id}/snapshot</code><span>API mode: the page as text with refs; /act, /find, /wait, /navigate, /tabs</span></li>
-        <li><span class="m POST">POST</span><code>/api/sessions/{id}/content</code><span>The page as Markdown, main text or PDF (API mode), or a screenshot</span></li>
+        <li><span class="m POST">POST</span><code>/api/sessions/{id}/content</code><span>The page as an outline (as /snapshot), Markdown, main text or PDF (API mode), or a screenshot</span></li>
         <li><span class="m GET">GET</span><code>/api/profiles/{name}/files</code><span>Downloaded files</span></li>
         <li><span class="m POST">POST</span><code>/api/sessions/{id}/handoff</code><span>One-time link for a human</span></li>
         <li><span class="m GET">GET</span><code>/api/handoffs/{id}</code><span>Wait for the answer</span></li>
