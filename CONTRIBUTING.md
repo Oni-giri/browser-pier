@@ -119,6 +119,8 @@ npm run build   # dist/, as CI builds it
 
 If a config change doesn't show up, clear the build cache: `rm -rf .astro node_modules/.astro`.
 
+The binary embeds the docs too (`internal/docs`), so each version serves its own at `/docs/` and to agents through MCP's `read_docs`. `make docs` builds the site and puts it there for the next `make build`; without it, the binary links to browserpier.com/docs instead. The release image does this itself.
+
 ## Layout
 
 - `cmd/browserpier/`: the orchestrator's entry point
