@@ -97,8 +97,9 @@ func TestChromiumArgs(t *testing.T) {
 			"--disable-gpu-sandbox", "--in-process-gpu", "--disable-seccomp-filter-sandbox",
 			"--disable-gpu", "--use-gl=swiftshader", "--use-angle=swiftshader", "--enable-unsafe-swiftshader",
 		} {
-			// --disable-gpu-compositing is fine: it isn't --disable-gpu.
-			if strings.HasPrefix(a, banned) && !(banned == "--disable-gpu" && a == "--disable-gpu-compositing") {
+			// A switch alone or with a value; --disable-gpu-compositing
+			// isn't --disable-gpu.
+			if a == banned || strings.HasPrefix(a, banned+"=") {
 				t.Errorf("must not pass %s", a)
 			}
 		}
