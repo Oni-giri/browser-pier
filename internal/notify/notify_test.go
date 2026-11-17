@@ -682,10 +682,10 @@ func TestTheSecret(t *testing.T) {
 
 func TestLinkBase(t *testing.T) {
 	for in, want := range map[string]string{
-		"":                             "",
-		"https://pier.example.com":     "https://pier.example.com",
-		"https://pier.example.com/":    "https://pier.example.com",
-		"http://192.168.1.4:7437":      "http://192.168.1.4:7437",
+		"":                              "",
+		"https://pier.example.com":      "https://pier.example.com",
+		"https://pier.example.com/":     "https://pier.example.com",
+		"http://192.168.1.4:7437":       "http://192.168.1.4:7437",
 		"https://x.example/browserpier": "https://x.example/browserpier",
 	} {
 		got, err := CheckLinkBase(in)
