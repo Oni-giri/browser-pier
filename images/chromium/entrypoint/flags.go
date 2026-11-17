@@ -1,10 +1,28 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // panelHeight is the taskbar's height in pixels, which the window manager
 // reserves at the bottom of the screen. It must match the tray in jwmrc.
 const panelHeight = 32
+
+// disabledFeatures are the Chromium features the image turns off, all in
+// chromiumArgs' one --disable-features: Chromium reads only the last
+// --disable-features it is given (ANTI-BOT.md, PROJ-160). Each must be in
+// the Dockerfile's feature check, which fails the build if Chromium no
+// longer knows it: an unknown feature name is ignored without a word.
+var disabledFeatures = []string{
+	// The back/forward cache kept a page the tab had left whole in memory,
+	// to show it at once on Back: a 200 MB page was still counted against
+	// the RAM limit four minutes later (Chromium keeps it ten), and nothing
+	// in the container tells Chromium memory is short. Off, the memory goes
+	// when the page is left for another site, and Back loads the page
+	// again (ANTI-BOT.md, PROJ-160).
+	"BackForwardCache",
+}
 
 // chromiumArgs is Chromium's command line. It never includes
 // --enable-automation, --headless or --no-sandbox, and spoofs nothing.
@@ -17,6 +35,7 @@ func chromiumArgs(c config, smallShm bool) []string {
 		// A fixed key, so cookies decrypt in every container and survive image updates.
 		"--password-store=basic",
 		"--disable-blink-features=AutomationControlled",
+		"--disable-features=" + strings.Join(disabledFeatures, ","),
 		// No GPU in the container: WebGL runs on Mesa's llvmpipe, through
 		// ANGLE's default OpenGL backend over GLX, as on a Linux desktop
 		// without a GPU driver. One renderer, no fallback: if llvmpipe can't
