@@ -433,6 +433,8 @@ func TestSetupGuide(t *testing.T) {
 		"codex mcp add browserpier --url " + f.srv.URL + "/mcp --bearer-token-env-var PIER_TOKEN",
 		"curl -s -X POST " + f.srv.URL + "/api/sessions",
 		`"screenshot": true}' -o screen.png`, // a PNG, not JSON, for the terminal
+		`-H "Idempotency-Key: pay-order-1"`,  // PROJ-156
+		"send the same call again with the same `call_id`",
 	} {
 		if !strings.Contains(body, s) {
 			t.Errorf("the guide is missing %q", s)

@@ -134,6 +134,7 @@ Once connected, the server tells you how to use its tools. Which ones depend on 
 - **Visual mode** (sites with heavy anti-bot measures): `screenshot` to see the screen, then `click`, `type_text`, `press_keys`, `scroll`, `drag`, `wait` and `zoom`, with coordinates in the screenshot's pixels.
 - **API mode**: `snapshot` to read the page as text, with refs like `a7e12` for its controls, `find` to search it, `act` to click, fill, type, press, select, check, hover or upload by ref, or by a target like `role=button[name="Save"]` or `text=Save` with no snapshot first (put the file in first with `upload_file`), `wait_for`, `navigate` and `tabs` (sign-in popups open in a new tab), and `page_content` to read a whole page as Markdown, its main text only (`readability`, the fewest tokens) or a PDF. Or connect your own CDP client to the `cdp_url`.
 - **Both:** `request_handoff`, `wait_for_handoff`, `cancel_handoff`, `list_files`, `upload_file`, `stop_browser`, and `page_content` with `screenshot`.
+- **Actions that must not happen twice** (a click on Pay, a form sent, a message): pass a new `call_id` of your own to `click`, `type_text`, `press_keys`, `scroll`, `drag`, `act`, `navigate` or `tabs`. If the answer is lost, send the same call again with the same `call_id`: it won't run twice, and the answer says how the first one went. Or ask `call_status`; `session_status` lists your recent calls.
 - **Ads and trackers** are usually blocked. If a page misses something it needs (a video player, a sign-in widget), call `start_browser` again with `allow_ads`; that turns blocking off for this session only.
 
 ## 4. No MCP? Use the REST API
@@ -163,6 +164,9 @@ curl -s -X POST {{.Base}}/api/sessions/ID/act -H "$H" -d '{"steps": [{"action": 
 # the whole page as Markdown (or "readability": its main text only), 20,000 characters at a time; read on with "offset"
 curl -s -X POST {{.Base}}/api/sessions/ID/content -H "$H" -d '{"format": "markdown"}'
 curl -s -X POST {{.Base}}/api/sessions/ID/content -H "$H" -d '{"format": "pdf"}' -o page.pdf
+# an action that must not happen twice: send a new Idempotency-Key with it; if the answer is lost, send the same request
+#   again with the same key (it won't run twice), or ask GET /api/sessions/ID/calls/KEY how it went
+curl -s -X POST {{.Base}}/api/sessions/ID/act -H "$H" -H "Idempotency-Key: pay-order-1" -d '{"steps": [{"action": "click", "target": "role=button[name=\"Pay\"]"}]}'
 # done: stop the browser; its logins are kept
 curl -s -X DELETE {{.Base}}/api/sessions/ID -H "$H"
 ```
