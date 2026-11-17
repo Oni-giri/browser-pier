@@ -116,7 +116,10 @@ type Client struct {
 	userns          string
 	user            string // uid:gid browsers run as, and the sandbox check
 	instance        string
-	log             *slog.Logger
+	// hostDataDir is the data dir as the daemon sees it, set by
+	// UseDataDir: the create guard checks browsers' mounts against it.
+	hostDataDir string
+	log         *slog.Logger
 }
 
 // Options configure a Client.
@@ -174,6 +177,7 @@ func New(o Options) (*Client, error) {
 // short-lived container to check (see planAppArmor). It doesn't pull the
 // browser image for that: without it, the first browser start chooses.
 func (c *Client) UseDataDir(ctx context.Context, dataDir, hostDataDir string) error {
+	c.hostDataDir = filepath.Clean(hostDataDir)
 	info, err := c.api.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		return err
@@ -233,23 +237,30 @@ func (c *Client) Ping(ctx context.Context) error {
 // Create creates a browser container, pulling the image first if Docker
 // doesn't have it.
 func (c *Client) Create(ctx context.Context, spec BrowserSpec) (string, error) {
-	opt := c.appArmorForCreate(ctx)
-	cfg, host := browserConfig(c.image, c.seccompOpt, opt, spec)
-	cfg.Labels[LabelInstance] = c.instance
-	cfg.Labels[LabelSpec] = specLabel(opt)
-	host.UsernsMode = container.UsernsMode(c.userns)
-	opts := client.ContainerCreateOptions{Name: spec.Name, Config: cfg, HostConfig: host}
-	res, err := c.api.ContainerCreate(ctx, opts)
+	opts := c.browserCreateOptions(c.appArmorForCreate(ctx), spec)
+	// Both attempts go through the guard; a refusal isn't NotFound, so it
+	// never leads to a pull.
+	res, err := c.create(ctx, kindBrowser, opts)
 	if cerrdefs.IsNotFound(err) {
 		if err := c.pull(ctx); err != nil {
 			return "", err
 		}
-		res, err = c.api.ContainerCreate(ctx, opts)
+		res, err = c.create(ctx, kindBrowser, opts)
 	}
 	if err != nil {
 		return "", err
 	}
 	return res.ID, nil
+}
+
+// browserCreateOptions is the body Create sends for spec, under the
+// AppArmor option opt.
+func (c *Client) browserCreateOptions(opt string, spec BrowserSpec) client.ContainerCreateOptions {
+	cfg, host := browserConfig(c.image, c.seccompOpt, opt, spec)
+	cfg.Labels[LabelInstance] = c.instance
+	cfg.Labels[LabelSpec] = specLabel(opt)
+	host.UsernsMode = container.UsernsMode(c.userns)
+	return client.ContainerCreateOptions{Name: spec.Name, Config: cfg, HostConfig: host}
 }
 
 func (c *Client) pull(ctx context.Context) error {

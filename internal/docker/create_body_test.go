@@ -96,7 +96,7 @@ func goldenClient(t *testing.T, d http.Handler, podman bool, apparmorOpt string)
 		user: "1000:1000", instance: "i1",
 		plan:        appArmorPlan{try: []string{optBrowserPier, "", optUnconfined}, fallback: optUnconfined},
 		apparmorOpt: apparmorOpt, apparmorSettled: true}
-	setHostDataDir(c, "/srv/bp")
+	c.hostDataDir = "/srv/bp"
 	if podman {
 		c.seccompOpt = "seccomp=" + filepath.Join("/srv/bp", "seccomp.json")
 		c.userns = "keep-id"
