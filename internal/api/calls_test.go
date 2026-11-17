@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/pagetools"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
@@ -515,7 +516,14 @@ func TestARepeatWhileTheFirstRuns(t *testing.T) {
 	for range 2 {
 		go func() { results <- f.send(srv, f.all, a.ID, "act", "r2", body) }()
 	}
-	got := []reply{<-results} // the copy that came second answers at once
+	var got []reply
+	select {
+	case r := <-results: // the copy that came second answers at once
+		got = append(got, r)
+	case <-time.After(5 * time.Second):
+		hold.Release()
+		t.Fatalf("both copies waited for their turn; act ran %d times", page.count())
+	}
 	if !got[0].replayed || got[0].body.Call.State != "waiting" {
 		t.Fatalf("the second copy: %d %s", got[0].code, got[0].raw)
 	}
