@@ -235,6 +235,22 @@ func TestARepeatedClickRunsOnceOverMCP(t *testing.T) {
 	if clicks != 1 {
 		t.Fatalf("the browser clicked %d times", clicks)
 	}
+	// An empty call_id isn't taken as none: the agent meant to be covered.
+	for tool, args := range map[string]map[string]any{
+		"click": {"session_id": s.ID, "x": 1, "y": 1, "call_id": ""},
+		"act":   {"session_id": s.ID, "steps": []map[string]any{{"action": "click", "ref": "a1"}}, "call_id": ""},
+	} {
+		res, out := call(t, cs, tool, args)
+		if !res.IsError || !strings.Contains(out, "call_id") {
+			t.Fatalf("%s with an empty call_id: %s", tool, out)
+		}
+	}
+	f.mu.Lock()
+	clicks = len(f.clicks)
+	f.mu.Unlock()
+	if clicks != 1 {
+		t.Fatalf("an empty call_id clicked: %d clicks", clicks)
+	}
 	if res, out := call(t, cs, "call_status", map[string]any{"session_id": s.ID, "call_id": "pay-1"}); res.IsError || !strings.Contains(out, "Call pay-1 (computer): ok.") {
 		t.Fatalf("call_status: %s", out)
 	}

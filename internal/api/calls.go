@@ -85,7 +85,7 @@ func (a *API) takingCallID(tool string, h http.Handler) http.Handler {
 			return
 		}
 		if len(ids) > 1 || !sessions.ValidCallID(ids[0]) {
-			writeError(w, http.StatusBadRequest, IdempotencyHeader+": want one call id of 1 to 64 letters, digits, - or _, new for each action")
+			writeError(w, http.StatusBadRequest, IdempotencyHeader+" (MCP: call_id): want one call id of 1 to 64 letters, digits, - or _, new for each action; leave it out for none")
 			return
 		}
 		id := ids[0]
@@ -183,7 +183,9 @@ func (a *API) replay(w http.ResponseWriter, s sessions.Session, r sessions.Recei
 	case sessions.CallOK:
 		status = http.StatusOK
 		out["text"] = "This " + what + " ran already and ended ok; it wasn't run again. Its result isn't kept: read the page again (snapshot, or a screenshot in Visual mode) to see where things are."
-	case sessions.CallWaiting, sessions.CallRunning:
+	case sessions.CallWaiting:
+		out["error"] = "This " + what + " is waiting for its turn; it wasn't run again. Ask GET /api/sessions/" + s.ID + "/calls/" + r.CallID + " (MCP: call_status) how it went: if that answers 404, it never ran and can be sent again."
+	case sessions.CallRunning:
 		out["error"] = "This " + what + " is still running; it wasn't run again. Ask GET /api/sessions/" + s.ID + "/calls/" + r.CallID + " (MCP: call_status) how it ended."
 	case sessions.CallInterrupted:
 		out["error"] = "This " + what + " ran already and was interrupted (a person took the browser, it stopped, or its caller went away); it wasn't run again. How far it got isn't known: read the page, then send what is still needed under a new call id."

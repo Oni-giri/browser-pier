@@ -58,6 +58,8 @@ func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, f
 	return cctx, sync.OnceFunc(func() {
 		// Ended before done: a handoff, Take control, a stop or the
 		// caller going away cut it short.
+		// (A cut that comes after the browser answered, just before this,
+		// still counts: the receipt then errs on the safe side.)
 		cut := cctx.Err() != nil
 		cancel(context.Canceled)
 		m.mu.Lock()

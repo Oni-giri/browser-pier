@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -524,7 +525,7 @@ func TestARepeatWhileTheFirstRuns(t *testing.T) {
 		hold.Release()
 		t.Fatalf("both copies waited for their turn; act ran %d times", page.count())
 	}
-	if !got[0].replayed || got[0].body.Call.State != "waiting" {
+	if !got[0].replayed || got[0].body.Call.State != "waiting" || !strings.Contains(got[0].body.Error, "waiting for its turn") {
 		t.Fatalf("the second copy: %d %s", got[0].code, got[0].raw)
 	}
 	hold.Release()
@@ -671,4 +672,136 @@ func (l *lockedWriter) Write(b []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.w.Write(b)
+}
+
+// With 1,000 calls under way on a session, a new id answers 429 and
+// nothing runs: no receipt is dropped, and the call doesn't run without one.
+func TestTooManyCallsUnderWay(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.all, "google", "visual")
+	tok, err := f.tokens.Authenticate(context.Background(), f.all)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := sessions.FingerprintOf("click", nil)
+	for i := range 1000 {
+		if _, _, err := f.m.TakeCall(s.ID, tok.ID, tok.Name, "click", "w"+strconv.Itoa(i), fp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := f.send(f.srv, f.all, s.ID, "click", "one-more", `{"x": 1, "y": 2}`)
+	if r.code != http.StatusTooManyRequests || r.replayed || !strings.Contains(r.body.Error, "1000 calls") {
+		t.Fatalf("one more: %d %s", r.code, r.raw)
+	}
+	if n := f.inputCount(); n != 0 {
+		t.Fatalf("%d inputs reached the browser", n)
+	}
+	// Without an id, it runs as ever.
+	if r := f.send(f.srv, f.all, s.ID, "click", "", `{"x": 1, "y": 2}`); r.code != http.StatusNoContent {
+		t.Fatalf("without an id: %d %s", r.code, r.raw)
+	}
+}
+
+// A Visual click whose lease has ended but which still looks for its
+// download shows in running_calls, as call_status says it runs.
+func TestAClickWaitingForItsDownloadIsRunning(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.all, "google", "visual")
+	done := make(chan reply, 1)
+	go func() {
+		done <- f.send(f.srv, f.all, s.ID, "click", "dl-1", `{"x": 1, "y": 2, "download_wait_ms": 1500}`)
+	}()
+	waitFor(t, func() bool { return f.inputCount() == 1 })
+	time.Sleep(200 * time.Millisecond) // the browser answered: the lease is over, the look isn't
+	var st sessionStatusJSON
+	f.call(f.all, http.MethodGet, "/api/sessions/"+s.ID, "", &st)
+	if len(st.RunningCalls) != 1 || st.RunningCalls[0].CallID != "dl-1" || st.RunningCalls[0].State != "running" || st.RunningCalls[0].Tool != "click" {
+		t.Fatalf("running_calls: %+v", st.RunningCalls)
+	}
+	if got := f.receipt(f.all, s.ID, "dl-1"); got != "running" {
+		t.Fatalf("receipt: %s", got)
+	}
+	if r := <-done; r.code != http.StatusNoContent {
+		t.Fatalf("click: %d %s", r.code, r.raw)
+	}
+	f.call(f.all, http.MethodGet, "/api/sessions/"+s.ID, "", &st)
+	if len(st.RunningCalls) != 0 {
+		t.Fatalf("running_calls after: %+v", st.RunningCalls)
+	}
+}
+
+// Each release case, on every covered route it applies to: the id comes
+// back, and the same id then runs (is admitted: a Visual input reaches the
+// browser, a real page tool gets its lease and fails at the fake CDP,
+// keeping its receipt as error).
+func TestEveryRouteGivesARefusedIDBack(t *testing.T) {
+	type route struct{ tool, body string }
+	visual := []route{{"click", `{"x": 1, "y": 2}`}, {"type", `{"text": "hi"}`}, {"computer", `{"action": "click", "x": 1, "y": 2}`}}
+	page := []route{{"act", `{"steps": [{"action": "press", "keys": "Enter"}]}`}, {"navigate", `{"url": "https://example.com"}`}, {"tabs", `{"action": "new"}`}}
+	f := newFixture(t)
+	v := f.start(f.all, "google", "visual")
+	a := f.start(f.all, "github", "api")
+	refused := func(sessionID string, rt route, id, body string, want int) {
+		t.Helper()
+		if r := f.send(f.srv, f.all, sessionID, rt.tool, id, body); r.code != want || r.replayed {
+			t.Fatalf("%s %s: %d %s", rt.tool, id, r.code, r.raw)
+		}
+		if st := f.receipt(f.all, sessionID, id); st != "" {
+			t.Fatalf("%s %s kept a receipt: %s", rt.tool, id, st)
+		}
+	}
+	runs := func(sessionID string, rt route, id string) {
+		t.Helper()
+		before := f.inputCount()
+		r := f.send(f.srv, f.all, sessionID, rt.tool, id, rt.body)
+		if r.replayed {
+			t.Fatalf("%s %s at last: replayed %s", rt.tool, id, r.raw)
+		}
+		switch st := f.receipt(f.all, sessionID, id); {
+		case sessionID == v.ID && (st != "ok" || f.inputCount() != before+1):
+			t.Fatalf("%s %s at last: %s, %d inputs", rt.tool, id, st, f.inputCount()-before)
+		case sessionID == a.ID && st != "error":
+			t.Fatalf("%s %s at last: %s", rt.tool, id, st)
+		}
+	}
+	all := append(append([]route{}, visual...), page...)
+	for _, rt := range all {
+		sid := v.ID
+		if slices.Contains(page, rt) {
+			sid = a.ID
+		}
+		id := "rel-" + rt.tool
+		refused(sid, rt, id, `{"oops"`, http.StatusBadRequest)                                      // bad JSON
+		if r := f.send(f.srv, f.all, "nope", rt.tool, id, rt.body); r.code != http.StatusNotFound { // unknown session
+			t.Fatalf("%s on no session: %d", rt.tool, r.code)
+		}
+		if sid == a.ID { // the wrong mode
+			refused(v.ID, rt, id, rt.body, http.StatusConflict)
+		}
+		// A person has the browser (a handoff: Take control would wait
+		// out the agent's last few seconds of input).
+		if _, err := f.m.SetNeedsHelp(sid, true); err != nil {
+			t.Fatal(err)
+		}
+		refused(sid, rt, id, rt.body, http.StatusConflict)
+		if _, err := f.m.SetNeedsHelp(sid, false); err != nil {
+			t.Fatal(err)
+		}
+		if sid == v.ID { // another input is under way
+			slow := make(chan reply, 1)
+			before := f.inputCount()
+			go func() { slow <- f.send(f.srv, f.all, v.ID, "type", "", `{"text": "typed slowly"}`) }()
+			waitFor(t, func() bool { return f.inputCount() == before+1 })
+			refused(sid, rt, id, rt.body, http.StatusConflict)
+			if _, err := f.m.SetNeedsHelp(v.ID, true); err != nil {
+				t.Fatal(err)
+			}
+			<-slow
+			if _, err := f.m.SetNeedsHelp(v.ID, false); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, func() bool { return f.lastInput() == "cut short" })
+		}
+		runs(sid, rt, id)
+	}
 }

@@ -230,7 +230,7 @@ func (s *Server) screenshot(ctx context.Context, req *sdk.CallToolRequest, in se
 
 // act runs a Visual-mode action through the API's /computer, in screen
 // pixels, returning a screenshot after it if asked.
-func (s *Server) act(ctx context.Context, extra *sdk.RequestExtra, id, callID string, sc screen, action map[string]any, shot bool, done string) (*sdk.CallToolResult, any, error) {
+func (s *Server) act(ctx context.Context, extra *sdk.RequestExtra, id string, callID *string, sc screen, action map[string]any, shot bool, done string) (*sdk.CallToolResult, any, error) {
 	if p, _ := action["pace"].(string); p == "" {
 		delete(action, "pace")
 	}
@@ -306,7 +306,7 @@ type clickArgs struct {
 	// DownloadWaitMS is a pointer, so 0 (don't wait) differs from unset.
 	DownloadWaitMS *int `json:"download_wait_ms,omitempty" jsonschema:"how long to wait for a download the click started to finish, in ms; default 3000, 0 not to wait, at most 30000; when set, also how long to look for one to start, so a slow server's download is told now rather than with the next action"`
 	// CallID is passed on as the API's Idempotency-Key (PROJ-156).
-	CallID string `json:"call_id,omitempty" jsonschema:"optional: a new id of yours (1 to 64 letters, digits, - or _) for an action that must not happen twice; if its answer is lost, send the same call again with the same call_id and it won't run twice, or ask call_status how it went"`
+	CallID *string `json:"call_id,omitempty" jsonschema:"optional: a new id of yours (1 to 64 letters, digits, - or _) for an action that must not happen twice; if its answer is lost, send the same call again with the same call_id and it won't run twice, or ask call_status how it went"`
 }
 
 func (s *Server) click(ctx context.Context, req *sdk.CallToolRequest, in clickArgs) (*sdk.CallToolResult, any, error) {
@@ -324,7 +324,7 @@ type typeArgs struct {
 	Screenshot bool   `json:"screenshot,omitempty" jsonschema:"return a screenshot after"`
 	Pace       string `json:"pace,omitempty" jsonschema:"human (default): moves, aims and types like a hand, so it takes longer; instant: at once"`
 	// CallID is passed on as the API's Idempotency-Key (PROJ-156).
-	CallID string `json:"call_id,omitempty" jsonschema:"optional: a new id of yours (1 to 64 letters, digits, - or _) for an action that must not happen twice; if its answer is lost, send the same call again with the same call_id and it won't run twice, or ask call_status how it went"`
+	CallID *string `json:"call_id,omitempty" jsonschema:"optional: a new id of yours (1 to 64 letters, digits, - or _) for an action that must not happen twice; if its answer is lost, send the same call again with the same call_id and it won't run twice, or ask call_status how it went"`
 }
 
 // maxHumanType caps what one MCP call types at human pace. At about a
@@ -374,7 +374,7 @@ type keysArgs struct {
 	// DownloadWaitMS is a pointer, so 0 (don't wait) differs from unset.
 	DownloadWaitMS *int `json:"download_wait_ms,omitempty" jsonschema:"how long to wait for a download the keys started to finish, in ms; default 3000, 0 not to wait, at most 30000; when set, also how long to look for one to start, so a slow server's download is told now rather than with the next action"`
 	// CallID is passed on as the API's Idempotency-Key (PROJ-156).
-	CallID string `json:"call_id,omitempty" jsonschema:"optional: a new id of yours (1 to 64 letters, digits, - or _) for an action that must not happen twice; if its answer is lost, send the same call again with the same call_id and it won't run twice, or ask call_status how it went"`
+	CallID *string `json:"call_id,omitempty" jsonschema:"optional: a new id of yours (1 to 64 letters, digits, - or _) for an action that must not happen twice; if its answer is lost, send the same call again with the same call_id and it won't run twice, or ask call_status how it went"`
 }
 
 func (s *Server) pressKeys(ctx context.Context, req *sdk.CallToolRequest, in keysArgs) (*sdk.CallToolResult, any, error) {
@@ -393,7 +393,7 @@ type scrollArgs struct {
 	Down  int `json:"down,omitempty" jsonschema:"notches to scroll down; negative scrolls up"`
 	Right int `json:"right,omitempty" jsonschema:"notches to scroll right; negative scrolls left"`
 	// CallID is passed on as the API's Idempotency-Key (PROJ-156).
-	CallID string `json:"call_id,omitempty" jsonschema:"optional: a new id of yours (1 to 64 letters, digits, - or _) for an action that must not happen twice; if its answer is lost, send the same call again with the same call_id and it won't run twice, or ask call_status how it went"`
+	CallID *string `json:"call_id,omitempty" jsonschema:"optional: a new id of yours (1 to 64 letters, digits, - or _) for an action that must not happen twice; if its answer is lost, send the same call again with the same call_id and it won't run twice, or ask call_status how it went"`
 }
 
 func (s *Server) scroll(ctx context.Context, req *sdk.CallToolRequest, in scrollArgs) (*sdk.CallToolResult, any, error) {
@@ -414,7 +414,7 @@ type dragArgs struct {
 	Screenshot bool   `json:"screenshot,omitempty" jsonschema:"return a screenshot after"`
 	Pace       string `json:"pace,omitempty" jsonschema:"human (default): moves, aims and types like a hand, so it takes longer; instant: at once"`
 	// CallID is passed on as the API's Idempotency-Key (PROJ-156).
-	CallID string `json:"call_id,omitempty" jsonschema:"optional: a new id of yours (1 to 64 letters, digits, - or _) for an action that must not happen twice; if its answer is lost, send the same call again with the same call_id and it won't run twice, or ask call_status how it went"`
+	CallID *string `json:"call_id,omitempty" jsonschema:"optional: a new id of yours (1 to 64 letters, digits, - or _) for an action that must not happen twice; if its answer is lost, send the same call again with the same call_id and it won't run twice, or ask call_status how it went"`
 }
 
 func (s *Server) drag(ctx context.Context, req *sdk.CallToolRequest, in dragArgs) (*sdk.CallToolResult, any, error) {
@@ -443,7 +443,7 @@ func (s *Server) wait(ctx context.Context, req *sdk.CallToolRequest, in waitArgs
 		}
 	}
 	ms := int(min(max(in.Seconds, 0), 10) * 1000)
-	return s.act(ctx, req.Extra, in.SessionID, "", sc, map[string]any{"action": "wait", "ms": ms}, in.Screenshot,
+	return s.act(ctx, req.Extra, in.SessionID, nil, sc, map[string]any{"action": "wait", "ms": ms}, in.Screenshot,
 		fmt.Sprintf("Waited %s.", time.Duration(ms)*time.Millisecond))
 }
 

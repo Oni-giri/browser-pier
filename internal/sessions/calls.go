@@ -359,7 +359,9 @@ type RunningCall struct {
 }
 
 // RunningCalls lists a token's calls under way on a live session, oldest
-// first.
+// first: those holding a lease, and those with an id that are waiting for
+// their turn or still running after their lease (a Visual click waiting
+// for its download, or taking its screenshot).
 func (m *Manager) RunningCalls(sessionID, tokenID string) []RunningCall {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -368,16 +370,20 @@ func (m *Manager) RunningCalls(sessionID, tokenID string) []RunningCall {
 		return nil
 	}
 	var out []RunningCall
+	leased := map[*receipt]bool{}
 	for _, set := range []map[*lease]struct{}{l.inputs, l.leases} {
 		for ls := range set {
 			if c := ls.call; c != nil && c.tokenID == tokenID {
 				out = append(out, RunningCall{Tool: c.tool, CallID: c.id, State: CallRunning, Started: ls.started})
+				if c.rec != nil {
+					leased[c.rec] = true
+				}
 			}
 		}
 	}
 	for k, r := range l.calls {
-		if k.tokenID == tokenID && r.state == CallWaiting {
-			out = append(out, RunningCall{Tool: r.tool, CallID: k.id, State: CallWaiting, Started: r.started})
+		if k.tokenID == tokenID && !r.state.Ended() && !leased[r] {
+			out = append(out, RunningCall{Tool: r.tool, CallID: k.id, State: r.state, Started: r.started})
 		}
 	}
 	slices.SortStableFunc(out, func(a, b RunningCall) int { return a.Started.Compare(b.Started) })
@@ -396,7 +402,10 @@ type RecentCall struct {
 }
 
 // RecentCalls is a live session's last n activity entries made by a
-// token's calls, newest first, with each call's receipt state.
+// token's calls, newest first, with each call's receipt state. The state
+// is looked up by call id when asked: should the id have been taken again
+// since (its receipt given back, or dropped 1,000 receipts later), an old
+// entry shows the new call's.
 func (m *Manager) RecentCalls(sessionID, tokenID string, n int) []RecentCall {
 	m.mu.Lock()
 	defer m.mu.Unlock()

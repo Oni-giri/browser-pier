@@ -81,11 +81,11 @@ func (s *Server) pageContent(ctx context.Context, req *sdk.CallToolRequest, in c
 
 // pageCall calls a page tool's endpoint and returns its text.
 func (s *Server) pageCall(ctx context.Context, req *sdk.CallToolRequest, id, tool string, body any) (*sdk.CallToolResult, any, error) {
-	return s.pageCallWithID(ctx, req, id, tool, body, "")
+	return s.pageCallWithID(ctx, req, id, tool, body, nil)
 }
 
 // pageCallWithID is pageCall with the tool's call_id (PROJ-156).
-func (s *Server) pageCallWithID(ctx context.Context, req *sdk.CallToolRequest, id, tool string, body any, callID string) (*sdk.CallToolResult, any, error) {
+func (s *Server) pageCallWithID(ctx context.Context, req *sdk.CallToolRequest, id, tool string, body any, callID *string) (*sdk.CallToolResult, any, error) {
 	r, err := s.callWithID(ctx, req.Extra, "POST", "/api/sessions/"+url.PathEscape(id)+"/"+tool, body, callID)
 	if err != nil {
 		return nil, nil, err
@@ -130,7 +130,7 @@ type navigateArgs struct {
 	URL       string `json:"url,omitempty" jsonschema:"an http or https URL to open"`
 	Action    string `json:"action,omitempty" jsonschema:"instead of a URL: back, forward or reload"`
 	// CallID is passed on as the API's Idempotency-Key (PROJ-156).
-	CallID string `json:"call_id,omitempty" jsonschema:"optional: a new id of yours (1 to 64 letters, digits, - or _) for an action that must not happen twice; if its answer is lost, send the same call again with the same call_id and it won't run twice, or ask call_status how it went"`
+	CallID *string `json:"call_id,omitempty" jsonschema:"optional: a new id of yours (1 to 64 letters, digits, - or _) for an action that must not happen twice; if its answer is lost, send the same call again with the same call_id and it won't run twice, or ask call_status how it went"`
 }
 
 func (s *Server) navigate(ctx context.Context, req *sdk.CallToolRequest, in navigateArgs) (*sdk.CallToolResult, any, error) {
@@ -161,7 +161,7 @@ type actArgs struct {
 	// DownloadWaitMS is a pointer, so 0 (don't wait) differs from unset.
 	DownloadWaitMS *int `json:"download_wait_ms,omitempty" jsonschema:"how long to wait for a download the steps started to finish, in ms; default 3000, 0 not to wait, at most 30000; when set, also how long to look for one to start, so a slow server's download is told now rather than with the next action"`
 	// CallID is passed on as the API's Idempotency-Key (PROJ-156).
-	CallID string `json:"call_id,omitempty" jsonschema:"optional: a new id of yours (1 to 64 letters, digits, - or _) for an action that must not happen twice; if its answer is lost, send the same call again with the same call_id and it won't run twice, or ask call_status how it went"`
+	CallID *string `json:"call_id,omitempty" jsonschema:"optional: a new id of yours (1 to 64 letters, digits, - or _) for an action that must not happen twice; if its answer is lost, send the same call again with the same call_id and it won't run twice, or ask call_status how it went"`
 }
 
 func (s *Server) actOnPage(ctx context.Context, req *sdk.CallToolRequest, in actArgs) (*sdk.CallToolResult, any, error) {
@@ -198,7 +198,7 @@ type tabsArgs struct {
 	ID        string `json:"id,omitempty" jsonschema:"for switch and close: the tab, like t2 (close takes the active tab without one)"`
 	URL       string `json:"url,omitempty" jsonschema:"for new: an http or https URL (default about:blank)"`
 	// CallID is passed on as the API's Idempotency-Key (PROJ-156).
-	CallID string `json:"call_id,omitempty" jsonschema:"optional: a new id of yours (1 to 64 letters, digits, - or _) for an action that must not happen twice; if its answer is lost, send the same call again with the same call_id and it won't run twice, or ask call_status how it went"`
+	CallID *string `json:"call_id,omitempty" jsonschema:"optional: a new id of yours (1 to 64 letters, digits, - or _) for an action that must not happen twice; if its answer is lost, send the same call again with the same call_id and it won't run twice, or ask call_status how it went"`
 }
 
 func (s *Server) tabs(ctx context.Context, req *sdk.CallToolRequest, in tabsArgs) (*sdk.CallToolResult, any, error) {

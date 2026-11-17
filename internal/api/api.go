@@ -552,6 +552,12 @@ func (a *API) input(path string) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "body too large")
 			return
 		}
+		if !json.Valid(body) {
+			// Refused here, before the input's turn, rather than by the
+			// browser: a call id is then given back (PROJ-156).
+			writeError(w, http.StatusBadRequest, "bad JSON")
+			return
+		}
 		var mark *files.Mark
 		var wait time.Duration
 		if path == "/input/click" {

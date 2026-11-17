@@ -125,6 +125,8 @@ func (m *Manager) PageLease(ctx context.Context, id, tokenID string) (*Lease, er
 		once.Do(func() {
 			// Ended before it let go: a handoff, a hold, a stop, the
 			// token's revocation or the caller going away cut it short.
+			// (A cut that comes after the browser answered, just before this,
+			// still counts: the receipt then errs on the safe side.)
 			cut := cctx.Err() != nil
 			cancel(context.Canceled)
 			m.mu.Lock()

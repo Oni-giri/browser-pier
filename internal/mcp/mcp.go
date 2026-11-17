@@ -228,13 +228,15 @@ func (a apiReply) replayed() (res *sdk.CallToolResult, ok bool) {
 // call runs one agent API request in-process, as the agent that made the
 // tool call: its token, its address and the host it used.
 func (s *Server) call(ctx context.Context, extra *sdk.RequestExtra, method, path string, body any) (apiReply, error) {
-	return s.callWithID(ctx, extra, method, path, body, "")
+	return s.callWithID(ctx, extra, method, path, body, nil)
 }
 
 // callWithID is call with the tool's call_id, sent as the API's
-// Idempotency-Key (PROJ-156); "" sends none. The receipts and the rule
-// are the API's: the tool only passes the id on.
-func (s *Server) callWithID(ctx context.Context, extra *sdk.RequestExtra, method, path string, body any, callID string) (apiReply, error) {
+// Idempotency-Key (PROJ-156); nil sends none. An empty one is sent as it
+// is, for the API to refuse: an agent that set call_id believes it is
+// protected. The receipts and the rule are the API's: the tool only passes
+// the id on.
+func (s *Server) callWithID(ctx context.Context, extra *sdk.RequestExtra, method, path string, body any, callID *string) (apiReply, error) {
 	if body == nil {
 		return s.callRaw(ctx, extra, method, path, "", http.NoBody, callID)
 	}
@@ -246,7 +248,7 @@ func (s *Server) callWithID(ctx context.Context, extra *sdk.RequestExtra, method
 }
 
 // callRaw is callWithID with a body of any type.
-func (s *Server) callRaw(ctx context.Context, extra *sdk.RequestExtra, method, path, contentType string, body io.Reader, callID string) (apiReply, error) {
+func (s *Server) callRaw(ctx context.Context, extra *sdk.RequestExtra, method, path, contentType string, body io.Reader, callID *string) (apiReply, error) {
 	req := httptest.NewRequestWithContext(ctx, method, path, body)
 	if extra == nil || extra.Header == nil {
 		return apiReply{}, fmt.Errorf("no request headers")
@@ -256,8 +258,8 @@ func (s *Server) callRaw(ctx context.Context, extra *sdk.RequestExtra, method, p
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
-	if callID != "" {
-		req.Header.Set(api.IdempotencyHeader, callID)
+	if callID != nil {
+		req.Header.Set(api.IdempotencyHeader, *callID)
 	}
 	for _, k := range []string{"X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host"} {
 		if v := h.Values(k); len(v) > 0 {
