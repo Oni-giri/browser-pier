@@ -273,7 +273,7 @@ func TestStartFailsWhenTheGuardRefusesTheContainer(t *testing.T) {
 	f := newFixture(t)
 	f.rt.CreateErr = fmt.Errorf("refused to create the browser container: HostConfig.Devices is set: %w", docker.ErrOutsideEnvelope)
 	s, _, err := f.m.Start(context.Background(), "google", "")
-	if !errors.Is(err, ErrStartFailed) || s.State != Failed || !strings.Contains(s.Error, "creating the browser container: refused to create the browser container: HostConfig.Devices is set") {
+	if !errors.Is(err, ErrStartFailed) || s.State != Failed || !strings.HasPrefix(s.Error, "refused to create the browser container: HostConfig.Devices is set") {
 		t.Fatalf("Start = %+v, %v", s, err)
 	}
 	if got := f.stored(s.ID); got.State != Failed || got.Error != s.Error {
