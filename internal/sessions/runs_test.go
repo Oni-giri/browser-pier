@@ -495,7 +495,7 @@ func TestTitleEntries(t *testing.T) {
 	}
 	f.m.Note(s.ID, "claude", "Clicked at 1, 2")
 	// Control, C1 and bidi characters go, whitespace collapses.
-	f.m.NoteTitle(s.ID, "  Pay‮⁦ now\n\t\x00 \u0085here\x7f ")
+	f.m.NoteTitle(s.ID, "  Pay\u202e\u2066 now\n\t\x00 \u0085here\x7f ")
 	if got := titles(); len(got) != 2 || got[0].Title != "Pay now here" {
 		t.Fatalf("cleaned: %+v", got)
 	}

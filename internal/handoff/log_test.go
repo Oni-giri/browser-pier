@@ -2,6 +2,7 @@ package handoff
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -37,7 +38,7 @@ func TestLinkOpenedIsNotedOnce(t *testing.T) {
 	if err := f.svc.Unlock(ctx, h, "browser-1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.svc.Unlock(ctx, h, "browser-2"); err != ErrOtherBrowser {
+	if err := f.svc.Unlock(ctx, h, "browser-2"); !errors.Is(err, ErrOtherBrowser) {
 		t.Fatalf("another browser: %v", err)
 	}
 	if n := f.count(h.SessionID, openedLog); n != 1 {
