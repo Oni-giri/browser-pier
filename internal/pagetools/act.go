@@ -334,6 +334,7 @@ func (t *Tools) act(ctx context.Context, s sessions.Session, who Caller, in ActI
 			}
 			c.notices = nil
 			body, marker := c.render(p, DefaultMaxChars)
+			c.noteTitle(p.title)
 			out += "\n" + c.result("page snapshot", body, marker)
 		case unkept:
 			// Still that document (a step that navigated has nothing to

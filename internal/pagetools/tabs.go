@@ -177,6 +177,7 @@ func (c *call) tabResult(ctx context.Context, done string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	c.noteTitle(pi.Title) // the active tab's only, never the list's
 	return c.result("tabs", done+"; the active tab is now "+c.tab.id+"\n"+header(&page{url: pi.URL, title: pi.Title}), ""), nil
 }
 

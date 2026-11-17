@@ -258,6 +258,9 @@ type call struct {
 	unreachable string
 	world       int64
 	notices     []string
+	// title is the tab title page_content's read found (readTree), for
+	// noteTitle once the read is answered.
+	title string
 	// notes are BrowserPier's own lines for the result, which go after
 	// the fence, not in it: the Cloudflare note, whose only part from the
 	// page is a clamped point.
@@ -500,6 +503,12 @@ func (c *call) eval(ctx context.Context, expr string, out any) error {
 // note adds to the session's activity log: the action and refs only,
 // never page text or typed text.
 func (c *call) note(what string) { c.t.m.NoteFor(c.ctx, c.sess.ID, c.who.Agent, what) }
+
+// noteTitle records the active tab's title, which the call read for its
+// answer, in an entry of its own for the admin (sessions.NoteTitle,
+// PROJ-158): never in note's words, never for an agent. It reads nothing
+// more from the page.
+func (c *call) noteTitle(title string) { c.t.m.NoteTitle(c.sess.ID, title) }
 
 // result fences what a tool says from the page, with any new-tab notices,
 // and adds trailer (BrowserPier's own words) after the fence.
