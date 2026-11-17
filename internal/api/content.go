@@ -18,9 +18,13 @@ import (
 // don't go with the format are refused, so a mistake isn't silent.
 type contentIn struct {
 	Format string `json:"format"`
-	// markdown and readability
+	// outline, markdown and readability; a pointer, since 0 is an
+	// outline of only the URL and title
 	MaxChars *int `json:"max_chars"`
-	Offset   *int `json:"offset"`
+	// markdown and readability
+	Offset *int `json:"offset"`
+	// outline
+	Diff *bool `json:"diff"`
 	// screenshot
 	Width *int `json:"width"`
 	// pdf
@@ -29,9 +33,9 @@ type contentIn struct {
 	Pages      *string `json:"pages"`
 }
 
-// content serves the content endpoint (PROJ-20): the active tab as
-// Markdown or its main text ({"text": "…"}, fenced, as the page tools
-// answer), a screenshot (image/png, from the X display in either mode,
+// content serves the content endpoint (PROJ-20): the active tab as an
+// outline (snapshot's, PROJ-167), as Markdown or as its main text
+// ({"text": "…"}, fenced, as the page tools answer), a screenshot (image/png, from the X display in either mode,
 // as /screenshot) or a PDF (application/pdf, as an attachment).
 func (a *API) content(w http.ResponseWriter, r *http.Request) {
 	s, ok := a.session(w, r)
@@ -50,17 +54,26 @@ func (a *API) content(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad JSON: "+err.Error())
 		return
 	}
-	text := in.MaxChars != nil || in.Offset != nil
+	text := in.MaxChars != nil || in.Offset != nil || in.Diff != nil
 	pdf := in.Landscape != nil || in.Background != nil || in.Pages != nil
 	tok, _ := auth.TokenFromContext(r.Context())
 	who := pagetools.Caller{TokenID: tok.ID, Agent: tok.Name}
 	switch in.Format {
-	case "markdown", "readability":
-		if in.Width != nil || pdf {
+	case "outline", "markdown", "readability":
+		switch {
+		case in.Format == "outline" && in.Offset != nil:
+			writeError(w, http.StatusBadRequest, "offset: not with format outline")
+			return
+		case in.Format == "outline" && (in.Width != nil || pdf):
+			writeError(w, http.StatusBadRequest, "outline takes max_chars and diff only")
+			return
+		case in.Format != "outline" && (in.Width != nil || pdf || in.Diff != nil):
 			writeError(w, http.StatusBadRequest, in.Format+" takes max_chars and offset only")
 			return
 		}
-		out, err := a.tools.Text(r.Context(), s, who, pagetools.TextIn{Format: in.Format, MaxChars: deref(in.MaxChars), Offset: deref(in.Offset)})
+		// outline is snapshot's, as it is: its budget, refs, diff
+		// baseline and note.
+		out, err := a.tools.Content(r.Context(), s, who, pagetools.ContentIn{Format: in.Format, MaxChars: in.MaxChars, Offset: deref(in.Offset), Diff: deref(in.Diff)})
 		if a.contentError(w, s, err) {
 			return
 		}
@@ -103,7 +116,7 @@ func (a *API) content(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", strconv.Itoa(len(out)))
 		_, _ = w.Write(out) //nolint:gosec // a PDF, as an attachment, nosniff and sandboxed: never rendered here
 	default:
-		writeError(w, http.StatusBadRequest, "format: markdown, readability, screenshot or pdf")
+		writeError(w, http.StatusBadRequest, "format: outline, markdown, readability, screenshot or pdf")
 	}
 }
 

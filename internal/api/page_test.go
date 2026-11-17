@@ -48,7 +48,7 @@ func TestContentRoutes(t *testing.T) {
 		t.Errorf("without a token: %d", code)
 	}
 	var e map[string]string
-	for _, format := range []string{"markdown", "readability", "pdf"} {
+	for _, format := range []string{"outline", "markdown", "readability", "pdf"} {
 		body := `{"format": "` + format + `"}`
 		if code := f.call(f.all, http.MethodPost, path, body, &e); code != http.StatusConflict || !strings.Contains(e["error"], "Visual mode") {
 			t.Errorf("%s in Visual mode: %d %v", format, code, e)
@@ -67,9 +67,30 @@ func TestContentRoutes(t *testing.T) {
 	}
 	for _, body := range []string{``, `{}`, `{"format": "html"}`, `{"format": "markdown", "nonsense": 1}`,
 		`{"format": "markdown", "width": 640}`, `{"format": "readability", "pages": "1"}`, `{"format": "screenshot", "max_chars": 10}`,
-		`{"format": "screenshot", "width": 8}`, `{"format": "pdf", "offset": 10}`} {
+		`{"format": "screenshot", "width": 8}`, `{"format": "pdf", "offset": 10}`,
+		// outline takes snapshot's options only, and diff goes with it alone (PROJ-167).
+		`{"format": "outline", "offset": 0}`, `{"format": "outline", "width": 640}`, `{"format": "outline", "landscape": true}`,
+		`{"format": "outline", "background": true}`, `{"format": "outline", "pages": "1"}`,
+		`{"format": "markdown", "diff": true}`, `{"format": "readability", "diff": false}`,
+		`{"format": "screenshot", "diff": true}`, `{"format": "pdf", "diff": true}`} {
 		if code := f.call(f.all, http.MethodPost, path, body, &e); code != http.StatusBadRequest {
 			t.Errorf("%s: %d %v", body, code, e)
 		}
+	}
+	for body, want := range map[string]string{
+		`{"format": "html"}`:                 "format: outline, markdown, readability, screenshot or pdf",
+		`{"format": "outline", "offset": 5}`: "offset: not with format outline",
+		`{"format": "outline", "width": 64}`: "outline takes max_chars and diff only",
+	} {
+		if code := f.call(f.all, http.MethodPost, path, body, &e); code != http.StatusBadRequest || e["error"] != want {
+			t.Errorf("%s: %d %v, want %q", body, code, e, want)
+		}
+	}
+	// outline is refused in Visual mode as the page tools are, not with
+	// the content path's words.
+	var snap map[string]string
+	f.call(f.all, http.MethodPost, "/api/sessions/"+visual.ID+"/snapshot", `{}`, &snap)
+	if code := f.call(f.all, http.MethodPost, path, `{"format": "outline", "max_chars": 0}`, &e); code != http.StatusConflict || e["error"] != snap["error"] {
+		t.Errorf("outline in Visual mode: %d %v, want %v", code, e, snap)
 	}
 }

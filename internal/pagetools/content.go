@@ -75,6 +75,43 @@ type TextIn struct {
 	Offset   int
 }
 
+// ContentIn is the input of the content endpoint's text formats.
+type ContentIn struct {
+	// Format is "outline" (snapshot's, PROJ-167), "markdown" or
+	// "readability".
+	Format string
+	// MaxChars is a pointer: for outline, 0 is only the URL and title and
+	// nil the default; for the others, nil and 0 are the default.
+	MaxChars *int
+	// Offset is for markdown and readability, Diff for outline.
+	Offset int
+	Diff   bool
+}
+
+// Content reads the active tab in one of the text formats: outline is
+// snapshot, as it is (its budget, refs, diff baseline, allow-list and
+// Visual-mode refusal), so reading it counts as a snapshot; markdown and
+// readability are Text.
+func (t *Tools) Content(ctx context.Context, s sessions.Session, who Caller, in ContentIn) (string, error) {
+	switch in.Format {
+	case "outline":
+		if in.Offset != 0 {
+			return "", &Error{Status: 400, Msg: "offset: not with format outline"}
+		}
+		return t.Snapshot(ctx, s, who, SnapshotIn{MaxChars: in.MaxChars, Diff: in.Diff})
+	case "markdown", "readability":
+		if in.Diff {
+			return "", &Error{Status: 400, Msg: "diff: only with format outline"}
+		}
+		limit := 0
+		if in.MaxChars != nil {
+			limit = *in.MaxChars
+		}
+		return t.Text(ctx, s, who, TextIn{Format: in.Format, MaxChars: limit, Offset: in.Offset})
+	}
+	return "", &Error{Status: 400, Msg: "format: outline, markdown, readability, screenshot or pdf"}
+}
+
 // errContentVisual refuses what needs CDP in Visual mode.
 var errContentVisual = &Error{Status: http.StatusConflict, Msg: "Markdown, readability text and PDF read the page over CDP, which nothing may attach to in Visual mode. Use format screenshot, or restart the browser with mode api"}
 
@@ -88,7 +125,7 @@ func (t *Tools) Text(ctx context.Context, s sessions.Session, who Caller, in Tex
 	}
 	switch {
 	case in.Format != "markdown" && in.Format != "readability":
-		return "", &Error{Status: 400, Msg: "format: markdown, readability, screenshot or pdf"}
+		return "", &Error{Status: 400, Msg: "format: outline, markdown, readability, screenshot or pdf"}
 	case limit < 1 || limit > MaxContentChars:
 		return "", &Error{Status: 400, Msg: fmt.Sprintf("max_chars: want 1 to %d", MaxContentChars)}
 	case in.Offset < 0:
