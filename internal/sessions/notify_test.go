@@ -35,7 +35,9 @@ func tellFailures(t *testing.T, m *Manager) *failures {
 	t.Helper()
 	c := &failures{}
 	n, err := notify.New(context.Background(), m.db, slog.New(slog.DiscardHandler), notify.Options{
-		Lookup:  func(context.Context, string) ([]netip.Addr, error) { return []netip.Addr{netip.MustParseAddr("93.184.215.14")}, nil },
+		Lookup: func(context.Context, string) ([]netip.Addr, error) {
+			return []netip.Addr{netip.MustParseAddr("93.184.215.14")}, nil
+		},
 		OnQueue: c.add,
 	})
 	if err != nil {
