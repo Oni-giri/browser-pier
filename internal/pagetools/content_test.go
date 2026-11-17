@@ -70,7 +70,11 @@ func TestMarkdown(t *testing.T) {
 	if !strings.HasPrefix(out, "<untrusted-content-") || !strings.Contains(out, `source="page as Markdown"`) || strings.Count(out, "</untrusted-content-") != 2 {
 		t.Fatalf("not one fenced block:\n%s", out)
 	}
-	for _, want := range []string{"URL: https://example.com/dir/article", "Title: Page https://example.com/dir/article",
+	if e := envelope(t, out); e.url != "https://example.com/dir/article" || e.title != "Page https://example.com/dir/article" ||
+		e.format != "markdown" || !strings.HasPrefix(e.content, "[Home]") {
+		t.Errorf("envelope: %+v", e)
+	}
+	for _, want := range []string{
 		"[Home](https://example.com/)", "# Library opens", "[the plan](https://example.com/dir/plan.html)", "Copyright footer"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in\n%s", want, out)
@@ -118,13 +122,26 @@ func TestTextInParts(t *testing.T) {
 	f.fb.addTab("https://example.com/long", el("#document", "RootWebArea", "", box(0, 0, 1280, 800), kids...), true)
 	var all strings.Builder
 	offset, calls := 0, 0
+	markers := map[string]bool{}
 	for {
 		out, err := f.text(TextIn{Format: "markdown", MaxChars: 5000, Offset: offset})
 		if err != nil {
 			t.Fatal(err)
 		}
 		calls++
-		body := out[strings.Index(out, "Title: "):strings.LastIndex(out, "\n</untrusted-content-")]
+		// Each part is a whole envelope of its own (PROJ-167).
+		e := envelope(t, out)
+		if markers[e.marker] {
+			t.Errorf("two parts share the marker %s", e.marker)
+		}
+		markers[e.marker] = true
+		body := e.content
+		if offset > 0 {
+			var ok bool
+			if body, ok = strings.CutPrefix(body, "…\n"); !ok {
+				t.Errorf("a later part doesn't start with …:\n%s", out)
+			}
+		}
 		all.WriteString(body)
 		m := strings.LastIndex(out, "Read on with offset ")
 		if m < 0 {
@@ -348,7 +365,8 @@ func TestTextOffsets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "\n\n…\n```go\n") {
+	// Inside the content tag: … first, then the code block opened again.
+	if e := envelope(t, out); !strings.HasPrefix(e.content, "…\n```go\n") {
 		t.Errorf("a part inside the code block doesn't open it:\n%s", out)
 	}
 }

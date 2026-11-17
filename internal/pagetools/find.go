@@ -119,7 +119,7 @@ func (t *Tools) Find(ctx context.Context, s sessions.Session, who Caller, in Fin
 		if p.textCut {
 			trailer += " The page has more text than BrowserPier reads (4 MB): some of it was left out of the search."
 		}
-		return c.result("find results", strings.Join(out, "\n"), trailer), nil
+		return c.pageResult("find results", p.url, p.title, "find", strings.Join(out, "\n"), trailer, false), nil
 	})
 }
 

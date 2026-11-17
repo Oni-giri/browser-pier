@@ -20,7 +20,7 @@ const (
 // SnapshotIn is snapshot's input.
 type SnapshotIn struct {
 	// MaxChars is the budget for the page's controls and text; 0 gives
-	// only the URL and title. nil is DefaultMaxChars.
+	// only the URL and title (an empty content tag). nil is DefaultMaxChars.
 	MaxChars *int `json:"max_chars,omitempty"`
 	// Diff answers with what changed since the last snapshot of this
 	// document, as act's changes do, instead of the whole page; with no
@@ -54,7 +54,7 @@ func (t *Tools) Snapshot(ctx context.Context, s sessions.Session, who Caller, in
 			c.note("Read the page")
 			c.noteChallenge(p.cf)
 			if r.kind == diffDone {
-				return c.result("page changes", r.body, r.trailer), nil
+				return c.pageResult("page changes", p.url, p.title, "outline-diff", r.body, r.trailer, false), nil
 			}
 			// Nothing to compare with: the whole page, which is now the
 			// one diffs compare with (unless it changed while it was read).
@@ -67,7 +67,7 @@ func (t *Tools) Snapshot(ctx context.Context, s sessions.Session, who Caller, in
 				lead = "The page navigated since the last snapshot; the whole page follows."
 			}
 			body, marker := c.render(p, budget)
-			return lead + "\n" + c.result("page snapshot", body, marker), nil
+			return lead + "\n" + c.pageResult("page snapshot", p.url, p.title, "outline", body, marker, true), nil
 		}
 		if budget == 0 {
 			pi, err := c.info(ctx)
@@ -92,11 +92,12 @@ func (t *Tools) Snapshot(ctx context.Context, s sessions.Session, who Caller, in
 		body, marker := c.render(p, budget)
 		c.note("Read the page")
 		c.noteChallenge(p.cf)
-		return c.result("page snapshot", body, marker), nil
+		return c.pageResult("page snapshot", p.url, p.title, "outline", body, marker, true), nil
 	})
 }
 
-// header is the URL and title lines.
+// header is the URL and title lines, which navigate and tabs answer
+// with; the other tools put them in the page envelope (pageResult).
 func header(p *page) string {
 	return "URL: " + capText(p.url, maxHeader) + "\nTitle: " + capText(strings.Join(strings.Fields(p.title), " "), maxHeader)
 }
@@ -129,13 +130,13 @@ func (c *call) ref(p *page, backend int64) string {
 }
 
 // render spends the budget in tier order (controls before text within
-// each tier) and says what didn't fit.
+// each tier) and says what didn't fit. The URL and title aren't in body:
+// they go in the envelope (pageResult).
 func (c *call) render(p *page, budget int) (body, marker string) {
-	var b strings.Builder
-	b.WriteString(header(p))
 	if budget == 0 {
-		return b.String(), ""
+		return "", ""
 	}
+	var b strings.Builder
 	left := budget
 	omittedControls, omittedChars := 0, 0
 	full := false
@@ -211,7 +212,7 @@ func (c *call) render(p *page, budget int) (body, marker string) {
 		}
 		marker = "…(" + strings.Join(parts, " and ") + " omitted; use find)"
 	}
-	return b.String(), marker
+	return strings.TrimPrefix(b.String(), "\n"), marker
 }
 
 // summary is the line that stands for a big navigation or menu: how many

@@ -514,6 +514,33 @@ func (c *call) result(source, body, trailer string) string {
 	if body != "" {
 		out = fence.Wrap(source, body)
 	}
+	return c.finish(out, trailer)
+}
+
+// pageResult fences page text in the page envelope (PROJ-167): the
+// page's URL and title, then body in a content tag saying its format,
+// with any new-tab notices after the page, all inside the fence; trailer
+// goes after the fence, as with result. An empty body still gets the
+// envelope when envelopeWhenEmpty (a snapshot or a text format: the URL
+// and title are the answer); otherwise (find, a diff) it is answered as
+// result would, with no envelope.
+func (c *call) pageResult(source, url, title, format, body, trailer string, envelopeWhenEmpty bool) string {
+	if body == "" && !envelopeWhenEmpty {
+		return c.result(source, "", trailer)
+	}
+	out := fence.WrapPage(source, fence.Page{
+		// Capped and on one line, as header() writes them.
+		URL:     capText(url, maxHeader),
+		Title:   capText(collapse(title), maxHeader),
+		Format:  format,
+		Content: body,
+		After:   strings.Join(c.notices, "\n"),
+	})
+	return c.finish(out, trailer)
+}
+
+// finish adds trailer and the notes after a fenced answer.
+func (c *call) finish(out, trailer string) string {
 	switch {
 	case out == "":
 		out = trailer

@@ -479,7 +479,7 @@ func TestPressHoverAndSnapshotAfter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, `hovered over `+r["Sign in"]+` button "Sign in"`) || !strings.Contains(out, "pressed Tab shift+Tab Enter") || strings.Count(out, "<untrusted-content-") != 2 || !strings.Contains(out, "URL: https://example.com/") {
+	if !strings.Contains(out, `hovered over `+r["Sign in"]+` button "Sign in"`) || !strings.Contains(out, "pressed Tab shift+Tab Enter") || strings.Count(out, "<untrusted-content-") != 2 || envelope(t, out).url != "https://example.com/" {
 		t.Errorf("result:\n%s", out)
 	}
 	ev := strings.Join(f.fb.input(tb).events, "|")

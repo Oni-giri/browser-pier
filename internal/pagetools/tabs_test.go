@@ -49,7 +49,7 @@ func TestTabs(t *testing.T) {
 	if got := f.activated(); len(got) != 1 || got[0] != "T2" || f.fb.front != "T2" {
 		t.Errorf("activated %v, front %s", got, f.fb.front)
 	}
-	if out := f.mustSnapshot(nil); !strings.Contains(out, "URL: https://example.com/two") {
+	if out := f.mustSnapshot(nil); envelope(t, out).url != "https://example.com/two" {
 		t.Errorf("the tools don't follow the switch:\n%s", out)
 	}
 	// new opens and brings to the front, with no notice for its own tab.
@@ -147,7 +147,8 @@ func TestClosingAPopupBringsBackItsOpener(t *testing.T) {
 	f.fb.addTab("https://example.com/background", loginPage(), false) // a target=_blank link
 	f.fb.addTab("https://accounts.example/", loginPage(), true)       // a popup, in front
 	out := f.mustSnapshot(nil)
-	if !strings.Contains(out, "a new tab opened: t2") || !strings.Contains(out, "a new tab opened: t3") || !strings.Contains(out, "URL: https://accounts.example/") {
+	// The notices are inside the fence, after the page (PROJ-167).
+	if e := envelope(t, out); !strings.HasPrefix(e.after, "a new tab opened: t2 ") || !strings.Contains(e.after, "\na new tab opened: t3 ") || e.url != "https://accounts.example/" {
 		t.Fatalf("after the popup:\n%s", out)
 	}
 	out, err := f.tabs(TabsIn{Action: "close"})

@@ -53,7 +53,7 @@ func TestNavigateFollowsScriptRedirects(t *testing.T) {
 			}
 			// The tab's refs are the landed page's.
 			snap, err := f.tools.Snapshot(context.Background(), f.session(), f.who, SnapshotIn{})
-			if err != nil || !strings.Contains(snap, "URL: https://example.com/landed\n") {
+			if err != nil || envelope(t, snap).url != "https://example.com/landed" {
 				t.Errorf("snapshot after: %v\n%s", err, snap)
 			}
 		})

@@ -58,8 +58,11 @@ func TestSnapshotReadsTheActiveTab(t *testing.T) {
 	if !strings.HasPrefix(out, "<untrusted-content-") || strings.Count(out, "</untrusted-content-") != 2 { // the preamble names the end tag too
 		t.Fatalf("not one fenced block:\n%s", out)
 	}
+	if e := envelope(t, out); e.url != "https://example.com/login?next=%2Faccount" || !strings.HasPrefix(e.title, "Page https://example.com") ||
+		e.format != "outline" || !strings.HasPrefix(e.content, "-- in view --\n") || strings.Contains(out, "URL: ") || strings.Contains(out, "Title: ") {
+		t.Errorf("envelope: %+v", e)
+	}
 	for _, want := range []string{
-		"URL: https://example.com/login?next=%2Faccount", "Title: Page https://example.com",
 		`textbox "Email" = "ana@example.com"`, `textbox "Password" = [filled]`, `checkbox "Remember me" [checked]`,
 		`button "Sign in"`, `link "Home"`, "Far below the fold, in main.", "Footer text elsewhere.",
 	} {
@@ -164,7 +167,7 @@ func TestAWorldNumberThatNamesAnotherWorldIsNeverUsed(t *testing.T) {
 		t.Fatalf("%v %q", err, out)
 	}
 	f.closedAfter()
-	if out := f.mustSnapshot(nil); !strings.Contains(out, "URL: https://b.example/frames") {
+	if out := f.mustSnapshot(nil); envelope(t, out).url != "https://b.example/frames" {
 		t.Errorf("snapshot after:\n%s", out)
 	}
 	checkSent(t, f.fb)
@@ -185,11 +188,10 @@ func TestSnapshotBudget(t *testing.T) {
 	if refRE.MatchString(out) || strings.Contains(out, "Button") {
 		t.Errorf("max_chars 0 gave more than the URL and title:\n%s", out)
 	}
-	if !strings.Contains(out, "URL: https://example.com/qqq") || !strings.Contains(out, "q…\n") {
-		t.Errorf("the URL isn't capped at 256 characters:\n%s", out)
-	}
-	if u := regexp.MustCompile(`URL: (\S+)`).FindStringSubmatch(out); len([]rune(u[1])) != maxHeader {
-		t.Errorf("URL is %d characters, want %d", len([]rune(u[1])), maxHeader)
+	// An empty content tag (PROJ-167), and the URL capped.
+	if e := envelope(t, out); e.content != "" || !strings.HasPrefix(e.url, "https://example.com/qqq") || !strings.HasSuffix(e.url, "q…") ||
+		len([]rune(e.url)) != maxHeader {
+		t.Errorf("the URL isn't capped at 256 characters, or there is content:\n%s", out)
 	}
 
 	small := 300
@@ -202,8 +204,8 @@ func TestSnapshotBudget(t *testing.T) {
 	if fmt.Sprint(60-shown) != m[1] {
 		t.Errorf("shown %d controls, marker says %s omitted", shown, m[1])
 	}
-	body := out[strings.Index(out, "Title:"):strings.LastIndex(out, "</untrusted")]
-	if n := len([]rune(body)); n > 300+300 {
+	// The budget is the content's alone: the envelope is outside it.
+	if n := len([]rune(envelope(t, out).content)); n > 300 {
 		t.Errorf("a 300-character budget gave %d characters", n)
 	}
 	for _, bad := range []int{-1, MaxMaxChars + 1} {
@@ -463,8 +465,8 @@ func TestNewTabNotice(t *testing.T) {
 	if !strings.Contains(out, "a new tab opened: t2 (https://accounts.example/signin)\n") {
 		t.Fatalf("no notice:\n%s", out)
 	}
-	if !strings.Contains(out, "URL: https://accounts.example/signin") {
-		t.Errorf("the tools didn't follow the front tab:\n%s", out)
+	if e := envelope(t, out); !strings.HasPrefix(e.url, "https://accounts.example/signin") || e.after != "a new tab opened: t2 (https://accounts.example/signin)" {
+		t.Errorf("the tools didn't follow the front tab, or the notice isn't after the page:\n%s", out)
 	}
 	if i, j := strings.Index(out, "a new tab"), strings.LastIndex(out, "</untrusted"); i > j {
 		t.Error("the notice is outside the fence")
@@ -730,7 +732,8 @@ func TestSnapshotKeepsEachItemOnItsLine(t *testing.T) {
 		t.Errorf("a comment opener survived:\n%s", out)
 	}
 	for _, want := range []string{
-		`Title: Docs <\!-- title`, `code sample: <\!-- a comment`, "AFTER-COMMENT",
+		// The title can't make a tag: its "<" is escaped (PROJ-167).
+		`<title>Docs &lt;\!-- title</title>`, `code sample: <\!-- a comment`, "AFTER-COMMENT",
 		` iframe "http://127.0.0.1:9/%zz # FAKE-HEADING e99 button \"FAKE\"" (not read)`,
 		`button "SEND # FAKE-NAME"`,
 		`navigation "Main # FAKE-NAV" with 25 controls: "Link 0"`,

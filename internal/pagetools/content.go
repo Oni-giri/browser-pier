@@ -104,7 +104,7 @@ func (t *Tools) Text(ctx context.Context, s sessions.Session, who Caller, in Tex
 			return "", err
 		}
 		defer release()
-		root, cut, base, header, err := c.readTree(c.lease.Ctx)
+		root, cut, base, pageURL, title, err := c.readTree(c.lease.Ctx)
 		if err != nil {
 			return "", err
 		}
@@ -163,13 +163,10 @@ func (t *Tools) Text(ctx context.Context, s sessions.Session, who Caller, in Tex
 		if full && end >= total {
 			trailer = strings.TrimSpace(trailer + fmt.Sprintf(" The page has more than BrowserPier renders (%s characters); use find for the rest.", thousands(total)))
 		}
-		text := header
-		if in.Offset == 0 && part != "" {
-			text += "\n\n" + part
-		} else if part != "" {
-			text += "\n\n…\n" + part
+		if in.Offset > 0 && part != "" {
+			part = "…\n" + part
 		}
-		return c.result(source, text, trailer), nil
+		return c.pageResult(source, pageURL, title, in.Format, part, trailer, true), nil
 	})
 }
 
@@ -215,27 +212,28 @@ func openFence(s string, offset int) string {
 }
 
 // readTree takes a DOM snapshot of the active tab and turns what it lays
-// out into a pagetext tree. The tab's document is checked before and
-// after: a snapshot that straddles a navigation is taken again, once.
-func (c *call) readTree(ctx context.Context) (*pagetext.Node, bool, *url.URL, string, error) {
+// out into a pagetext tree, with the page's URL and title. The tab's
+// document is checked before and after: a snapshot that straddles a
+// navigation is taken again, once.
+func (c *call) readTree(ctx context.Context) (*pagetext.Node, bool, *url.URL, string, string, error) {
 	for try := 0; ; try++ {
 		_, before, _, err := c.frameTree(ctx, c.tgt)
 		if err != nil {
-			return nil, false, nil, "", err
+			return nil, false, nil, "", "", err
 		}
 		d, err := c.readContentDOM(ctx)
 		if err != nil {
-			return nil, false, nil, "", err
+			return nil, false, nil, "", "", err
 		}
 		_, after, _, err := c.frameTree(ctx, c.tgt)
 		if err != nil {
-			return nil, false, nil, "", err
+			return nil, false, nil, "", "", err
 		}
 		if before != after {
 			if try == 0 {
 				continue
 			}
-			return nil, false, nil, "", &Error{Status: http.StatusConflict, Msg: "the page kept changing while it was read; try again"}
+			return nil, false, nil, "", "", &Error{Status: http.StatusConflict, Msg: "the page kept changing while it was read; try again"}
 		}
 		doc := &d.s.Documents[0]
 		pageURL := d.str(doc.DocumentURL)
@@ -243,9 +241,8 @@ func (c *call) readTree(ctx context.Context) (*pagetext.Node, bool, *url.URL, st
 		if err != nil || !base.IsAbs() {
 			base, _ = url.Parse(pageURL)
 		}
-		header := "URL: " + capText(pageURL, maxHeader) + "\nTitle: " + capText(strings.Join(strings.Fields(d.str(doc.Title)), " "), maxHeader)
 		tree, cut, err := contentTree(ctx, d)
-		return tree, cut, base, header, err
+		return tree, cut, base, pageURL, d.str(doc.Title), err
 	}
 }
 

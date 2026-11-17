@@ -334,7 +334,7 @@ func (t *Tools) act(ctx context.Context, s sessions.Session, who Caller, in ActI
 			}
 			c.notices = nil
 			body, marker := c.render(p, DefaultMaxChars)
-			out += "\n" + c.result("page snapshot", body, marker)
+			out += "\n" + c.pageResult("page snapshot", p.url, p.title, "outline", body, marker, true)
 		case unkept:
 			// Still that document (a step that navigated has nothing to
 			// say): no read, which would be too large to keep again.
@@ -361,13 +361,19 @@ func (t *Tools) act(ctx context.Context, s sessions.Session, who Caller, in ActI
 			// The changes are extra: the read waits briefly for a slot,
 			// not holding the session for readWait.
 			c.slotWait = actChangesSlotWait
-			_, r, err := c.changes(ctx, false)
+			p, r, err := c.changes(ctx, false)
 			c.slotWait = 0
 			if err != nil {
 				return out + "The changes couldn't be read: " + c.fail(err).Error(), nil
 			}
 			c.notices = nil // given with the steps
-			out += c.result("page changes", r.body, r.trailer)
+			if r.kind == diffDone {
+				// An outline diff: in the page envelope, as snapshot's.
+				out += c.pageResult("page changes", p.url, p.title, "outline-diff", r.body, r.trailer, false)
+			} else {
+				// navigated to …: the new page isn't read, so it has no title.
+				out += c.result("page changes", r.body, r.trailer)
+			}
 		}
 		return out, nil
 	})
