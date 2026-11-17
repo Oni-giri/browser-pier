@@ -48,7 +48,7 @@ func newPageEnv(t *testing.T, prefix string) pageEnv {
 		t.Skip("BROWSERPIER_TEST_IMAGE not set; run `make test-docker`")
 	}
 	ctx := context.Background()
-	rt, err := docker.New(docker.Options{Image: image, UsernsMode: os.Getenv("BROWSERPIER_USERNS_MODE"), Instance: fmt.Sprintf("test%d", time.Now().UnixNano())})
+	rt, err := docker.New(docker.Options{Image: image, UsernsMode: os.Getenv("BROWSERPIER_USERNS_MODE"), User: docker.User(os.Getuid(), os.Getgid()), Instance: fmt.Sprintf("test%d", time.Now().UnixNano())})
 	if err != nil {
 		t.Fatal(err)
 	}
