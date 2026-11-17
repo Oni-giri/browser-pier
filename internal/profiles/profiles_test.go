@@ -73,12 +73,26 @@ func TestValidateSettings(t *testing.T) {
 }
 
 func TestProxyErrorsNeverEchoTheURL(t *testing.T) {
-	for _, proxy := range []string{"ftp://user:s3cret@proxy:21", "http://user:s3cret@proxy", "http://user:s3cret@proxy:1/x", "http://user:s3cret@[::1"} {
+	long := strings.Repeat("s3cret", 50)
+	for _, proxy := range []string{
+		"ftp://user:s3cret@proxy:21", "http://user:s3cret@proxy", "http://user:s3cret@proxy:1/x", "http://user:s3cret@[::1",
+		// Templates, refused before or after filling in.
+		"ftp://n4me-{sticky}:s3cret@pr0xyhost:21", "http://n4me-{sticky}:s3cret@{sticky}:1", "http://n4me-{other}:s3cret@pr0xyhost:1",
+		"http://n4me-{sticky}:s3cret@pr0xyhost:1/x", "http://n4me-{sticky}:" + long + "@pr0xyhost:1", "socks5://" + long + "{sticky}:pw@pr0xyhost:1",
+		"http://n4%3Ame-{sticky}:s3cret@pr0xyhost:1", "http://n4me-{sticky}:s3cret{sticky}@[::1",
+	} {
 		p := New("google")
 		p.Proxy = proxy
+		p.StickyToken = "t0k3nabc"
 		err := p.Validate()
-		if err == nil || strings.Contains(err.Error(), "s3cret") {
-			t.Errorf("Validate(%q) = %v; want an error without the password", proxy, err)
+		if err == nil {
+			t.Errorf("Validate(%q) accepted it", proxy)
+			continue
+		}
+		for _, leak := range []string{proxy, "s3cret", "n4me", "pr0xyhost", "{other}", "t0k3nabc", sampleSticky} {
+			if strings.Contains(err.Error(), leak) {
+				t.Errorf("Validate(%q) = %v; the error holds %q", proxy, err, leak)
+			}
 		}
 	}
 }

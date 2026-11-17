@@ -55,8 +55,17 @@ type Profile struct {
 	// AutoStop is how long the browser may sit idle before it is stopped; 0 is never.
 	AutoStop      time.Duration
 	Width, Height int
-	// Proxy is the upstream proxy URL, which may carry credentials: never log it.
-	Proxy         string
+	// Proxy is the upstream proxy URL, which may carry credentials: never
+	// log it. It may be a template holding StickyPlaceholder in its user
+	// name or password, stored and shown as such and filled in only when
+	// the browser starts.
+	Proxy string
+	// StickyToken is what StickyPlaceholder becomes in this profile's
+	// proxy: 8 characters from a-z0-9, given once (see Store.StickyToken)
+	// and changed only by Store.NewExit. It is as secret as the proxy's
+	// password: never log it, show it, or hand it to an agent. Update
+	// never changes it.
+	StickyToken   string
 	HandoffPolicy HandoffPolicy
 	// TimeZone and Locale, when set, are used instead of the ones matching
 	// the exit location: an IANA zone such as Europe/Berlin and a BCP 47
@@ -153,6 +162,9 @@ func (p Profile) Validate() error {
 	if err := validIcon(p.IconGlyph, p.IconColor); err != nil {
 		return err
 	}
+	if p.StickyToken != "" && !stickyRE.MatchString(p.StickyToken) {
+		return errors.New("sticky token: want 8 lowercase letters and digits")
+	}
 	return validProxy(p.Proxy)
 }
 
@@ -165,13 +177,20 @@ func validAutoStop(d time.Duration) bool {
 	return false
 }
 
-// validProxy checks the proxy URL without ever echoing it, since it may
-// hold a password.
+// validProxy checks the proxy URL or template without ever echoing it,
+// since it may hold a password. A template is checked filled in with a
+// sample token, so what the browser gets passes the same rules.
 func validProxy(raw string) error {
 	if raw == "" {
 		return nil
 	}
-	u, err := url.Parse(raw)
+	filled := FillSticky(raw, sampleSticky)
+	// Braces left over are a placeholder outside the user info, or one
+	// that isn't ours.
+	if strings.ContainsAny(filled, "{}") {
+		return errors.New("proxy: {sticky} is the only placeholder, and only in the user name or password")
+	}
+	u, err := url.Parse(filled)
 	if err != nil {
 		return errors.New("proxy: not a valid URL")
 	}
@@ -186,7 +205,7 @@ func validProxy(raw string) error {
 	if strings.Trim(u.Path, "/") != "" || u.RawQuery != "" || u.Fragment != "" {
 		return errors.New("proxy: give only scheme, credentials, host and port")
 	}
-	return nil
+	return checkCredentials(u)
 }
 
 // Store keeps profiles in the database.
@@ -199,13 +218,16 @@ func NewStore(db *sql.DB) *Store { return &Store{db: db, now: time.Now} }
 
 const columns = `name, default_mode, auto_stop_minutes, screen_width, screen_height, proxy, handoff_policy, created_at, updated_at,
 	tz_override, locale_override, geo_country, geo_time_zone, geo_ip, geo_checked_at, local_network,
-	site, site_inferred, icon_glyph, icon_color, block_ads, record_sessions`
+	site, site_inferred, icon_glyph, icon_color, block_ads, record_sessions, sticky_token`
 
-// Create adds a new profile. SiteInferred is kept as given, for an
-// imported profile.
+// Create adds a new profile. SiteInferred and StickyToken are kept as
+// given, for an imported profile; a profile without a token gets one.
 func (s *Store) Create(ctx context.Context, p Profile) (Profile, error) {
 	if err := p.Validate(); err != nil {
 		return Profile{}, err
+	}
+	if p.StickyToken == "" {
+		p.StickyToken = NewStickyToken()
 	}
 	if validSite(p.SiteInferred) != nil {
 		p.SiteInferred = ""
@@ -214,11 +236,11 @@ func (s *Store) Create(ctx context.Context, p Profile) (Profile, error) {
 	p.CreatedAt, p.UpdatedAt = now, now
 	res, err := s.db.ExecContext(ctx, `INSERT INTO profiles (name, default_mode, auto_stop_minutes, screen_width, screen_height,
 		proxy, handoff_policy, created_at, updated_at, tz_override, locale_override, local_network,
-		site, site_inferred, icon_glyph, icon_color, block_ads, record_sessions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		site, site_inferred, icon_glyph, icon_color, block_ads, record_sessions, sticky_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (name) DO NOTHING`,
 		p.Name, p.DefaultMode, int(p.AutoStop/time.Minute), p.Width, p.Height, p.Proxy, p.HandoffPolicy,
 		now.UnixMilli(), now.UnixMilli(), p.TimeZone, p.Locale, p.LocalNetwork,
-		p.Site, p.SiteInferred, p.IconGlyph, p.IconColor, p.BlockAds, p.Record)
+		p.Site, p.SiteInferred, p.IconGlyph, p.IconColor, p.BlockAds, p.Record, p.StickyToken)
 	if err != nil {
 		return Profile{}, err
 	}
@@ -229,7 +251,8 @@ func (s *Store) Create(ctx context.Context, p Profile) (Profile, error) {
 }
 
 // Update replaces a profile's settings. The name can't change, nor what
-// BrowserPier records itself (SiteInferred, Location).
+// BrowserPier records itself (SiteInferred, Location), nor the sticky
+// token (see NewExit).
 func (s *Store) Update(ctx context.Context, p Profile) (Profile, error) {
 	if err := p.Validate(); err != nil {
 		return Profile{}, err
@@ -311,7 +334,7 @@ func scan(row interface{ Scan(...any) error }) (Profile, error) {
 	var created, updated, checked int64
 	err := row.Scan(&p.Name, &p.DefaultMode, &autoStop, &p.Width, &p.Height, &p.Proxy, &p.HandoffPolicy, &created, &updated,
 		&p.TimeZone, &p.Locale, &p.Location.Country, &p.Location.TimeZone, &p.Location.IP, &checked, &p.LocalNetwork,
-		&p.Site, &p.SiteInferred, &p.IconGlyph, &p.IconColor, &p.BlockAds, &p.Record)
+		&p.Site, &p.SiteInferred, &p.IconGlyph, &p.IconColor, &p.BlockAds, &p.Record, &p.StickyToken)
 	p.AutoStop = time.Duration(autoStop) * time.Minute
 	p.CreatedAt, p.UpdatedAt = time.UnixMilli(created), time.UnixMilli(updated)
 	if checked != 0 {
