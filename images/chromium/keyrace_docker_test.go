@@ -5,6 +5,7 @@ package chromium
 import (
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -243,7 +244,20 @@ func (k *keyRace) page(n string) string {
 	return k.ks.Keys(n, k.slow, k.focus)
 }
 
-func (k *keyRace) post(path, body string) { k.b.input(k.t, path, body) }
+// post sends an action to the control socket. Unlike browser.input it
+// allows a slow one: typing an address at human pace takes about 12 s.
+func (k *keyRace) post(path, body string) {
+	k.t.Helper()
+	resp, err := k.b.http.Post("http://control"+path, "application/json", strings.NewReader(body))
+	if err != nil {
+		k.t.Fatal(err)
+	}
+	msg, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		k.t.Fatalf("%s %s: %d %s", path, body, resp.StatusCode, msg)
+	}
+}
 
 func (k *keyRace) key(keys string) {
 	k.post("/input/key", fmt.Sprintf(`{"keys": %q, "pace": %q}`, keys, k.pace))
@@ -279,8 +293,13 @@ func (k *keyRace) ready(n string, wait time.Duration) bool {
 		return false
 	}
 	if k.frame {
+		// Chrome drops a click on a page it hasn't painted yet.
+		time.Sleep(time.Second)
 		k.post("/input/click", `{"x": 640, "y": 300, "pace": "instant"}`)
 		time.Sleep(300 * time.Millisecond)
+		if os.Getenv("MEASURE_FRAME_SHOT") != "" {
+			k.shot("frame-clicked")
+		}
 	}
 	k.cur = n
 	return true

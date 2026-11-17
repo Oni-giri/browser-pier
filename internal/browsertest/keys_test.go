@@ -42,7 +42,7 @@ func TestKeySiteServesRecordsAndReports(t *testing.T) {
 		t.Errorf("focus=body has a field or a frame:\n%s", page)
 	}
 	framed := s.Framed("3", s.At("other.test")+`/keys?n=4&slow=400&focus=field"><script>`)
-	if page := get(framed); !strings.Contains(page, `<iframe id="frame" title="Frame" src="http://other.test:`+s.Port+`/keys?n=4&amp;slow=400&amp;focus=field&#34;&gt;&lt;script&gt;"`) {
+	if page := get(framed); !strings.Contains(page, `Around the frame</p><iframe id="frame" title="Frame" src="http://other.test:`+s.Port+`/keys?n=4&amp;slow=400&amp;focus=field&#34;&gt;&lt;script&gt;"`) {
 		t.Errorf("frame: the iframe isn't there, or its URL isn't escaped:\n%s", page)
 	}
 	if page := get(s.Arrived("5", s.Keys("6", 0, "field")+"&x=</script>")); !strings.Contains(page, "/arrived/report") || !strings.Contains(page, "prerendering") ||

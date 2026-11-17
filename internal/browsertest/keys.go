@@ -133,7 +133,9 @@ func (s *KeySite) handler() http.Handler {
 		content := ""
 		switch {
 		case q.Get("frame") != "":
-			content = `<iframe id="frame" title="Frame" src="` + html.EscapeString(q.Get("frame")) + `"></iframe>`
+			// Some text of its own, so Chrome paints the page and takes
+			// clicks on it without waiting for the frame.
+			content = `<p style="margin: 0; height: 24px">Around the frame</p><iframe id="frame" title="Frame" src="` + html.EscapeString(q.Get("frame")) + `"></iframe>`
 		case q.Get("focus") == "field":
 			content = `<input id="f" aria-label="Field" autofocus autocomplete="off">`
 		}
@@ -142,7 +144,7 @@ func (s *KeySite) handler() http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		_, _ = io.WriteString(w, `<!doctype html><title>Keys</title>
 <style>html, body { margin: 0; height: 100%; } #f { display: block; box-sizing: border-box; width: 100%; height: 60vh; font-size: 24px; }
-iframe { display: block; border: 0; width: 100%; height: 100%; }</style>
+iframe { display: block; border: 0; width: 100%; height: calc(100% - 24px); }</style>
 `+content+keysScript)
 	})
 	mux.HandleFunc("POST /keys/report", func(w http.ResponseWriter, r *http.Request) {

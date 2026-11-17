@@ -50,7 +50,12 @@ func TestMeasureTextAfterShortcutThroughBrowserPier(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = rt.Close() })
-	dir := t.TempDir()
+	// A short path: control sockets under it must fit in 107 bytes.
+	dir, err := os.MkdirTemp("", "bp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	if err := rt.UseDataDir(ctx, dir, dir); err != nil {
 		t.Fatal(err)
 	}
