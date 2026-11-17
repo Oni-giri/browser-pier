@@ -39,6 +39,10 @@ func TestPageToolsAreAPIModeOnly(t *testing.T) {
 			t.Errorf("%s: %q", name, desc[name])
 		}
 	}
+	// PROJ-151: what an agent must do itself after a shortcut.
+	if !strings.Contains(desc["press_keys"], "look at the screen before you type") {
+		t.Errorf("press_keys: %q", desc["press_keys"])
+	}
 	// The fixture's browsers start in Visual mode: the API answers 409.
 	call(t, cs, "start_browser", map[string]any{"profile": "google"})
 	s, _ := f.m.Live("google")

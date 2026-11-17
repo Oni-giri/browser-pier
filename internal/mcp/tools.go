@@ -31,7 +31,7 @@ func (s *Server) addTools(srv *sdk.Server) {
 	sdk.AddTool(srv, &sdk.Tool{Name: "screenshot", Description: "See the browser's screen (Visual mode); the strip along the bottom is the desktop's taskbar, not the page. Other tools take coordinates in this screenshot's pixels."}, s.screenshot)
 	sdk.AddTool(srv, &sdk.Tool{Name: "click", Description: "Click at a point of the last screenshot (Visual mode; in API mode too, at a point a page tool gives, such as a Cloudflare checkbox's). At human pace (the default) the pointer glides there, as a hand would, and lands within about 3 screen pixels of the point, so aim at the target's middle. If the click started a download, the answer says so: downloaded name (size), or download in progress when it isn't finished within download_wait_ms (3 s by default)."}, s.click)
 	sdk.AddTool(srv, &sdk.Tool{Name: "type_text", Description: "Type text into whatever has focus, as a keyboard would (Visual mode). At human pace (the default) that takes about 0.25 s a character, so at most 150 characters per call; split longer text, or use pace instant."}, s.typeText)
-	sdk.AddTool(srv, &sdk.Tool{Name: "press_keys", Description: "Press keys or combinations, such as Return, Tab, ctrl+a or ctrl+shift+t (Visual mode). If they started a download, the answer says so, as click's does."}, s.pressKeys)
+	sdk.AddTool(srv, &sdk.Tool{Name: "press_keys", Description: "Press keys or combinations, such as Return, Tab, ctrl+a or ctrl+shift+t (Visual mode). If they started a download, the answer says so, as click's does. " + shortcutNote}, s.pressKeys)
 	sdk.AddTool(srv, &sdk.Tool{Name: "scroll", Description: "Scroll at a point by whole notches: positive down or right, negative up or left (Visual mode)."}, s.scroll)
 	sdk.AddTool(srv, &sdk.Tool{Name: "drag", Description: "Drag from one point to another with the mouse button held (Visual mode)."}, s.drag)
 	sdk.AddTool(srv, &sdk.Tool{Name: "wait", Description: "Wait for the page, up to 10 seconds."}, s.wait)
@@ -494,3 +494,8 @@ func (s *Server) listFiles(ctx context.Context, req *sdk.CallToolRequest, in pro
 	}
 	return text("%s\nFetch one with GET /api/profiles/%s/files/{name} and your token.", fence.Wrap("downloaded file names", b.String()), in.Profile), nil, nil
 }
+
+// shortcutNote tells agents what PROJ-151 leaves to them: the container
+// waits 150 ms after a shortcut before the next keys, which covers a page
+// that answers a key within about that; a slower page can still get them.
+const shortcutNote = "After a shortcut that moves the focus to the browser (ctrl+l, alt+d, F6, ctrl+t…), the next keys wait 150 ms, but a page that is busy or still loading can still take them: on such a page, look at the screen before you type."
