@@ -1,0 +1,4 @@
+# The built docs site (make docs, or the image build) goes here, to be
+# embedded. Only the placeholder that keeps go:embed happy is tracked.
+site/*
+!site/.gitkeep
