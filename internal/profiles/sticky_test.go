@@ -2,6 +2,7 @@ package profiles
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"regexp"
 	"strings"
@@ -147,10 +148,10 @@ func TestStickyTokenLifecycle(t *testing.T) {
 	if got.StickyToken == tok || !stickyRE.MatchString(got.StickyToken) {
 		t.Fatalf("after NewExit the token is %q (was %q)", got.StickyToken, tok)
 	}
-	if err := s.NewExit(ctx, "missing"); err != ErrNotFound {
+	if err := s.NewExit(ctx, "missing"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("NewExit(missing) = %v", err)
 	}
-	if _, err := s.StickyToken(ctx, "missing"); err != ErrNotFound {
+	if _, err := s.StickyToken(ctx, "missing"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("StickyToken(missing) = %v", err)
 	}
 }
