@@ -122,3 +122,7 @@
 {{define "code-tabs"}}
 <div class="code-tabs" role="tablist">{{range $i, $t := .}}<button type="button" role="tab" data-tab="{{$t}}" aria-selected="{{if eq $i 0}}true{{else}}false{{end}}">{{$t}}</button>{{end}}</div>
 {{end}}
+
+{{/* One activity log entry (PROJ-158). Everything in it is text: a tab
+     title is page text, escaped like the rest. */}}
+{{define "log-entry"}}<li class="{{.Kind}}{{if .Attention}} attention{{end}}">{{if .Agent}}<b class="log-agent">{{.Agent}}</b>: {{end}}{{.What}}{{with .Title}}: <q class="log-title">{{.}}</q>{{end}}{{with .Link}}<a class="at" href="{{.}}" title="Play the recording from here">{{end}}<time datetime="{{.At.Format "2006-01-02T15:04:05Z07:00"}}">{{clock .At}}</time>{{if .Link}}</a>{{end}}</li>{{end}}

@@ -13,9 +13,17 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
+// sideLog is how many of the current run's entries the side column
+// shows; the log page shows them all.
+const sideLog = 50
+
 type profilePageData struct {
 	profileView
-	Log []sessions.Activity
+	// Log is the current run's newest entries (sideLog), LogMore set when
+	// it has more; LastRun the last kept run, while the browser is stopped.
+	Log     []sessions.Activity
+	LogMore bool
+	LastRun *sessions.Run
 	// StartNow: the page was opened right after creating the profile, to
 	// log in; it starts the browser itself.
 	StartNow bool
@@ -35,14 +43,17 @@ type profilePageData struct {
 }
 
 // LogLink is the player at the moment of an agent log entry, while the
-// live session's recording covers it; "" otherwise. The log goes with the
-// session, so after a stop the player stands alone.
-func (d profilePageData) LogLink(at time.Time) string {
-	ix := d.liveRec
+// live session's recording covers it; "" otherwise. A kept run (PROJ-158)
+// has none: after a stop the player stands alone.
+func (d profilePageData) LogLink(at time.Time) string { return recordingAt(d.Name, d.liveRec, at) }
+
+// recordingAt is the player of profile's recording ix at the moment at,
+// while ix covers it; "" otherwise.
+func recordingAt(profile string, ix *recording.Index, at time.Time) string {
 	if ix == nil || at.Before(ix.Start().Add(-time.Second)) || at.After(ix.End()) {
 		return ""
 	}
-	return "/profiles/" + url.PathEscape(d.Name) + "/recordings/" + ix.Session + "?t=" + strconv.FormatInt(at.UnixMilli(), 10)
+	return "/profiles/" + url.PathEscape(profile) + "/recordings/" + ix.Session + "?t=" + strconv.FormatInt(at.UnixMilli(), 10)
 }
 
 // RecordingLabel says whether the live session is being recorded, for a
@@ -119,8 +130,16 @@ func (u *UI) profileData(ctx context.Context, r *http.Request, name string) (pro
 	}
 	if d.Live() {
 		d.Log = u.m.Activity(d.Session.ID)
+		if len(d.Log) > sideLog {
+			d.Log, d.LogMore = d.Log[:sideLog], true
+		}
 		if d.Session.BlockAds {
 			d.Blocked, d.BlockedRead = u.m.Blocked(ctx, name)
+		}
+	}
+	if !d.Live() {
+		if runs := u.m.Runs(name); len(runs) > 0 {
+			d.LastRun = &runs[0]
 		}
 	}
 	return d, true

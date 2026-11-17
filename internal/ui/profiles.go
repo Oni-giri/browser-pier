@@ -287,7 +287,7 @@ func (u *UI) startProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
-	_, _, err := u.m.Start(ctx, name, "")
+	_, _, err := u.m.StartWith(ctx, name, sessions.StartOptions{FromApp: true})
 	u.forget()
 	var noRoom *sessions.NoRoomError
 	switch {
@@ -320,7 +320,7 @@ func (u *UI) stopProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 60*time.Second)
 	defer cancel()
-	_, err := u.m.Stop(ctx, s.ID)
+	_, err := u.m.StopFor(ctx, s.ID, sessions.StopFromApp)
 	u.forget()
 	if err != nil {
 		u.log.Warn("stopping a browser from the UI", "profile", name, "err", err)
@@ -340,7 +340,7 @@ func (u *UI) deleteProfile(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 60*time.Second)
 	defer cancel()
 	if s, ok := u.m.Live(name); ok {
-		if _, err := u.m.Stop(ctx, s.ID); err != nil {
+		if _, err := u.m.StopFor(ctx, s.ID, sessions.StopFromApp); err != nil {
 			done(w, r, "/profiles", "Couldn't stop "+name+" to delete it: "+err.Error(), true)
 			return
 		}
