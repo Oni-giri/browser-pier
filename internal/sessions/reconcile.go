@@ -83,7 +83,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		case !ok:
 			m.mu.Unlock()
 			m.end(l, "", func(s *Session) {
-				s.State, s.Error = Failed, "the browser container was gone when BrowserPier restarted"
+				s.State, s.Error, l.how = Failed, "the browser container was gone when BrowserPier restarted", Lost
 			})
 			m.mu.Lock()
 			continue

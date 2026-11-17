@@ -136,6 +136,8 @@ type Manager struct {
 	inputsDone *sync.Cond
 	// onEnd is called with a session's ID once it has ended (OnEnd).
 	onEnd []func(id string)
+	// onFailed is called with each session that failed, and how (OnFailed).
+	onFailed []func(s Session, how Failure)
 	// secrets are the values BrowserPier typed into each live session's
 	// page, by session ID (RegisterSecret); in memory only. Its lock
 	// nests inside mu.
@@ -163,6 +165,9 @@ type live struct {
 	// failure, when set, is why the orchestrator gave up on the session;
 	// it's applied once the container has exited.
 	failure string
+	// how is how the session failed, set with its final state; "" for
+	// a failure no one needs telling of (BrowserPier shutting down).
+	how Failure
 	// stop is the stop in progress, if any; everyone stopping waits on it.
 	stop *stopAttempt
 	// conns are the agents' open connections to the browser.
@@ -265,6 +270,26 @@ func (m *Manager) OnEnd(f func(id string)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onEnd = append(m.onEnd, f)
+}
+
+// Failure is how a session failed, in fixed words: never its error or
+// its container's log, which a page can write to.
+type Failure string
+
+const (
+	FailedToStart Failure = "start_failed"  // it never got going
+	Crashed       Failure = "crashed"       // it exited by itself
+	UncleanClose  Failure = "unclean_close" // a stop that didn't close cleanly
+	Lost          Failure = "lost"          // its container went missing
+)
+
+// OnFailed registers f to be called, without the manager's lock, with each
+// session that fails and how, except one failed because BrowserPier was
+// shutting down. f must not wait.
+func (m *Manager) OnFailed(f func(s Session, how Failure)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onFailed = append(m.onFailed, f)
 }
 
 // Close stops tracking sessions. Browsers keep running; Reconcile picks them
@@ -728,15 +753,15 @@ func (m *Manager) finish(l *live, cid string, code int, waitErr error) {
 	m.end(l, lastLog, func(s *Session) {
 		switch {
 		case l.failure != "":
-			s.State, s.Error = Failed, l.failure
+			s.State, s.Error, l.how = Failed, l.failure, FailedToStart
 		case waitErr != nil:
-			s.State, s.Error = Failed, fmt.Sprintf("lost track of the browser container: %v", waitErr)
+			s.State, s.Error, l.how = Failed, fmt.Sprintf("lost track of the browser container: %v", waitErr), Lost
 		case s.State == Stopping && code == 0:
 			s.State = Stopped
 		case s.State == Stopping:
-			s.State, s.Error = Failed, fmt.Sprintf("the browser didn't close cleanly (exit status %d), so recent logins may be lost", code)
+			s.State, s.Error, l.how = Failed, fmt.Sprintf("the browser didn't close cleanly (exit status %d), so recent logins may be lost", code), UncleanClose
 		default:
-			s.State, s.Error = Failed, fmt.Sprintf("the browser exited unexpectedly (exit status %d)", code)
+			s.State, s.Error, l.how = Failed, fmt.Sprintf("the browser exited unexpectedly (exit status %d)", code), Crashed
 		}
 	})
 }
@@ -798,7 +823,7 @@ func (m *Manager) abort(l *live, cid, reason string) {
 	if cid != "" {
 		lastLog = m.cleanup(cid)
 	}
-	m.end(l, lastLog, func(s *Session) { s.State, s.Error = Failed, reason })
+	m.end(l, lastLog, func(s *Session) { s.State, s.Error, l.how = Failed, reason, FailedToStart })
 }
 
 // proxyFile is where the proxy URL waits for the entrypoint, which reads
@@ -933,12 +958,19 @@ func (m *Manager) end(l *live, lastLog string, final func(*Session)) {
 		l.recTimer.Stop()
 		l.recTimer = nil
 	}
+	failed := slices.Clone(m.onFailed)
+	how := l.how
 	m.mu.Unlock()
 	if m.rec != nil {
 		m.rec.End(s.ID)
 	}
 	for _, f := range hooks {
 		f(s.ID)
+	}
+	if s.State == Failed && how != "" {
+		for _, f := range failed {
+			f(s, how)
+		}
 	}
 	if s.State == Failed {
 		m.log.Warn("session failed", "session", s.ID, "profile", s.Profile, "err", s.Error, "last_log", s.LastLog)
