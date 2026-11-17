@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -44,7 +45,9 @@ import (
 // "spare" reads the memory of a browser idle on /hello for 60 s, with and
 // without SpareRendererForSitePerProcess, MEASURE_RUNS (3) times each.
 // "lastwins" checks what Chromium does with two --disable-features
-// switches. MEASURE_PARTS picks the parts (all by default).
+// switches. MEASURE_PARTS picks the parts (all by default), and
+// MEASURE_CASES, a regular expression, bfcache's runs by their name in the
+// log ("visual, other site, (the image's)").
 func TestMeasureMemoryFlags(t *testing.T) {
 	image := testImage(t)
 	s := browsertest.NewSite(t, browsertest.SiteHost(t))
@@ -125,9 +128,13 @@ func TestMeasureMemoryFlags(t *testing.T) {
 			t.Fatal(err)
 		}
 		other := ""
+		only := regexp.MustCompile(os.Getenv("MEASURE_CASES"))
 		for _, mode := range []string{"visual", "api"} {
 			for _, to := range []string{"same site", "other site"} {
 				for _, flags := range []string{"", "--disable-features=BackForwardCache"} {
+					if !only.MatchString(fmt.Sprintf("%s, %s, %s", mode, to, orNone(flags))) {
+						continue
+					}
 					b := start(flags)
 					d := drive(b, mode)
 					hello := s.URL + "/hello"
