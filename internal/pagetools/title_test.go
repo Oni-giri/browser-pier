@@ -2,7 +2,6 @@ package pagetools
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -107,13 +106,31 @@ func methodsFor(t *testing.T) []string {
 	return out
 }
 
-// TestTitlesAskTheBrowserNothing prints the methods the title-noting
-// tools send (go test -v -run TestTitlesAskTheBrowserNothing), to compare
-// with a build without PROJ-158; the same run twice must send the same.
+// baseMethods is what methodsFor's tools sent on the fake browser before
+// PROJ-158 (recorded on f13b6fc, PROJ-156's branch): noting titles must
+// add no call.
+var baseMethods = []string{
+	"Target.getTargets", "Target.attachToTarget", "Page.getFrameTree", "Page.getFrameTree",
+	"Page.createIsolatedWorld", "Runtime.evaluate", "Page.getFrameTree", "Runtime.callFunctionOn",
+	"Page.getFrameTree", "Page.getFrameTree", "Page.createIsolatedWorld", "Runtime.evaluate",
+	"Page.getFrameTree", "Runtime.callFunctionOn", "DOMSnapshot.captureSnapshot", "Accessibility.getFullAXTree",
+	"Page.getFrameTree", "Target.getTargets", "Target.attachToTarget", "Page.getFrameTree", "Page.getFrameTree",
+	"Page.createIsolatedWorld", "Runtime.evaluate", "Page.getFrameTree", "Runtime.callFunctionOn",
+	"Target.activateTarget", "Target.attachToTarget", "Page.getFrameTree", "Page.getFrameTree",
+	"Page.createIsolatedWorld", "Runtime.evaluate", "Page.getFrameTree", "Runtime.callFunctionOn",
+	"Target.detachFromTarget", "Page.getFrameTree", "Page.getFrameTree", "Page.createIsolatedWorld",
+	"Runtime.evaluate", "Page.getFrameTree", "Runtime.callFunctionOn", "Target.getTargets",
+	"Target.attachToTarget", "Page.getFrameTree", "Page.getFrameTree", "Page.createIsolatedWorld",
+	"Runtime.evaluate", "Page.getFrameTree", "Runtime.callFunctionOn", "Page.getFrameTree",
+	"DOMSnapshot.captureSnapshot", "Page.getFrameTree", "Page.getFrameTree", "Page.getFrameTree",
+	"Page.createIsolatedWorld", "Runtime.evaluate", "Page.getFrameTree", "Runtime.callFunctionOn",
+}
+
+// TestTitlesAskTheBrowserNothing: the tools that note titles send the
+// browser exactly what they sent before titles were noted.
 func TestTitlesAskTheBrowserNothing(t *testing.T) {
-	a, b := methodsFor(t), methodsFor(t)
-	if fmt.Sprint(a) != fmt.Sprint(b) {
-		t.Fatalf("two runs sent different methods:\n%v\n%v", a, b)
+	got := methodsFor(t)
+	if strings.Join(got, " ") != strings.Join(baseMethods, " ") {
+		t.Fatalf("the methods sent changed:\n got %s\nwant %s", strings.Join(got, " "), strings.Join(baseMethods, " "))
 	}
-	t.Logf("methods: %s", strings.Join(a, " "))
 }
