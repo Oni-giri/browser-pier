@@ -447,14 +447,56 @@ func TestAnEndedHandoffGetsNoRetry(t *testing.T) {
 	f := newNotifier(t, Options{PublicURL: "https://pier.example.com"})
 	rc := newReceiver(t, 500)
 	f.set(rc.URL + "/x")
-	f.run()
 	var open atomic.Bool
 	open.Store(true)
 	rc.hook = func(int, http.ResponseWriter, *http.Request) bool { open.Store(false); return false }
+	f.run()
 	f.n.HandoffRequested(testHandoff, "tok", open.Load)
 	rc.settle(t, 1)
 	if !strings.Contains(f.logs.String(), "the handoff has ended") {
 		t.Errorf("the log doesn't say why:\n%s", f.logs.String())
+	}
+}
+
+// TestAHandoffThatEndedWhileQueuedIsNotSent: an event that waited in the
+// queue comes out after its handoff ended: not even one POST.
+func TestAHandoffThatEndedWhileQueuedIsNotSent(t *testing.T) {
+	f := newNotifier(t, Options{PublicURL: "https://pier.example.com"})
+	rc := newReceiver(t)
+	f.set(rc.URL + "/x")
+	if !f.n.HandoffRequested(testHandoff, "tok", func() bool { return false }) {
+		t.Fatal("not queued")
+	}
+	f.n.HandoffExpired(testHandoff) // sent, so the test knows the queue moved
+	f.run()
+	got := rc.settle(t, 1)
+	if !strings.Contains(string(got[0].body), `"event":"handoff.expired"`) {
+		t.Errorf("sent %s", got[0].body)
+	}
+	if !strings.Contains(f.logs.String(), "the handoff has ended") || !strings.Contains(f.logs.String(), "try=1") {
+		t.Errorf("the log doesn't say why:\n%s", f.logs.String())
+	}
+}
+
+// TestShutdownDropsQuietly: events still queued when Run's context ends
+// are dropped without a POST or an "unreachable" warning.
+func TestShutdownDropsQuietly(t *testing.T) {
+	f := newNotifier(t, Options{})
+	rc := newReceiver(t)
+	f.set(rc.URL + "/x")
+	for range 10 {
+		f.n.HandoffExpired(testHandoff)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for range 5 {
+		f.n.Run(ctx) // returns at once; a worker may still pick an event
+	}
+	if n := len(rc.posts()); n != 0 {
+		t.Errorf("%d POSTs after shutdown", n)
+	}
+	if strings.Contains(f.logs.String(), "unreachable") || strings.Contains(f.logs.String(), "cancelled") {
+		t.Errorf("shutdown logged warnings:\n%s", f.logs.String())
 	}
 }
 

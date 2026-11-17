@@ -274,7 +274,8 @@ func (n *Notifier) giveFloodSlot(profile string) {
 }
 
 // deliver sends one event: a network error, a timeout or a 5xx is tried
-// again after 2 s and after 10 s; anything else is final.
+// again after 2 s and after 10 s; anything else is final. Before each try
+// it checks the webhook is the same and, for a handoff, that it is open.
 func (n *Notifier) deliver(ctx context.Context, d delivery) {
 	for try := 1; try <= 1+len(n.retries); try++ {
 		if try > 1 {
@@ -286,13 +287,19 @@ func (n *Notifier) deliver(ctx context.Context, d delivery) {
 			case <-t.C:
 			}
 		}
+		if ctx.Err() != nil {
+			return // shutting down: what is left is dropped, quietly
+		}
 		cfg, gen := n.current()
 		if gen != d.gen || cfg.URL == "" {
 			n.log.Info("webhook event not sent: the webhook changed or was removed", "event", d.kind, "id", d.id, "profile", d.profile, "try", try)
 			return
 		}
-		if try > 1 && d.live != nil && !d.live() {
-			n.log.Info("webhook event not sent again: the handoff has ended", "event", d.kind, "id", d.id, "profile", d.profile, "try", try)
+		// Before every try, the first included: an event that waited in
+		// the queue behind a slow webhook may come out after its handoff
+		// ended, and a dead link helps nobody.
+		if d.live != nil && !d.live() {
+			n.log.Info("webhook event not sent: the handoff has ended", "event", d.kind, "id", d.id, "profile", d.profile, "try", try)
 			return
 		}
 		status, err := n.post(ctx, cfg, d.body)
