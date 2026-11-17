@@ -143,7 +143,7 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 	// A viewer promised control gets it or isn't connected: a page that
 	// thinks it drives while it only watches would send input into nothing.
 	if o.Control {
-		if err := h.m.TakeControl(s.ID); err != nil {
+		if err := h.m.TakeControlByLink(s.ID); err != nil {
 			unwatch()
 			msg := "The browser isn't running."
 			switch {
