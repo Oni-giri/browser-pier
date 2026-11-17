@@ -266,7 +266,11 @@ func TestTurnedOffOrNoWebhookTellsNothing(t *testing.T) {
 // its queue full, Open and the end of a handoff return at once.
 func TestAStuckWebhookHoldsNothingUp(t *testing.T) {
 	stuck := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-stuck }))
+	arrived := make(chan struct{}, notify.Workers)
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		arrived <- struct{}{}
+		<-stuck
+	}))
 	defer srv.Close()
 	defer close(stuck)
 	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
@@ -274,8 +278,22 @@ func TestAStuckWebhookHoldsNothingUp(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go n.Run(ctx)
-	for range notify.Workers + notify.QueueSize + 1 {
+	// Every worker stuck in a POST first, then the queue filled behind
+	// them: on one CPU the workers might not have taken theirs yet.
+	for range notify.Workers {
 		n.BrowserFailed("other", "crashed")
+	}
+	for range notify.Workers {
+		select {
+		case <-arrived:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the workers' POSTs didn't arrive")
+		}
+	}
+	for range notify.QueueSize {
+		if !n.BrowserFailed("other", "crashed") {
+			t.Fatal("the queue filled early")
+		}
 	}
 	s := f.running()
 	start := time.Now()
