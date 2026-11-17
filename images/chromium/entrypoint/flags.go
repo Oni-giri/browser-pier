@@ -17,9 +17,16 @@ func chromiumArgs(c config, smallShm bool) []string {
 		// A fixed key, so cookies decrypt in every container and survive image updates.
 		"--password-store=basic",
 		"--disable-blink-features=AutomationControlled",
-		// No GPU in the container: WebGL runs on SwiftShader.
-		"--use-angle=swiftshader",
-		"--enable-unsafe-swiftshader",
+		// No GPU in the container: WebGL runs on Mesa's llvmpipe, through
+		// ANGLE's default OpenGL backend over GLX, as on a Linux desktop
+		// without a GPU driver. One renderer, no fallback: if llvmpipe can't
+		// start, pages get no WebGL. Chromium blocks software GL, which
+		// leaves no WebGL at all, unless told to ignore its blocklist.
+		"--ignore-gpu-blocklist",
+		// Pages are composited in software, as Chromium does on a desktop
+		// whose GPU it blocks: cheaper than compositing every page through
+		// llvmpipe, and WebGL still renders on it (ANTI-BOT.md, PROJ-148).
+		"--disable-gpu-compositing",
 		// Every connection goes through the forwarder, which refuses the
 		// local network unless the profile allows it (egress.go). With a
 		// single proxy and no DIRECT fallback, if it's down nothing goes out.
