@@ -104,7 +104,7 @@
           <label class="field" style="margin:0"><span class="label">Address for links</span>{{if .PublicURL}}<input class="input mono" value="{{.PublicURL}}" disabled><span class="hint">Set by <code>BROWSERPIER_PUBLIC_URL</code>.</span>{{else}}<input class="input mono" name="link_base" value="{{.LinkBase}}" placeholder="https://pier.example.com" autocomplete="off" spellcheck="false"><span class="hint">How you open BrowserPier, for the links in messages. Empty: messages say to open BrowserPier.</span>{{end}}</label>
         </div>
         <fieldset class="field" style="margin:16px 0 0;border:0;padding:0">
-          <legend class="label">Send when</legend>
+          <legend class="label" style="padding:0">Send when</legend>
           {{range $.Data.NotifyEvents}}<label class="check" style="min-height:32px"><input type="checkbox" name="event" value="{{.Kind}}"{{if .On}} checked{{end}}> {{.Label}}</label>{{end}}
           <span class="hint">Messages name the profile and the reason, never what the agent or the page wrote. The handoff link is sent only for Link + PIN and Full sign-in; One tap profiles get their page’s address, which needs you signed in.</span>
         </fieldset>
