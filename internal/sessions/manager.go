@@ -215,6 +215,10 @@ type live struct {
 	recWhy   recording.Reason
 	recEver  bool // the recorder was told yes once
 	recTimer *time.Timer
+	// calls are the receipts of calls with an id (PROJ-156), by token and
+	// id; endSeq counts the ones that ended. They go with the session.
+	calls  map[callKey]*receipt
+	endSeq uint64
 }
 
 // conn is one agent connection to a browser; cancelling it closes it.
@@ -926,6 +930,7 @@ func (m *Manager) end(l *live, lastLog string, final func(*Session)) {
 		delete(m.live, s.Profile)
 	}
 	m.secrets.Forget(s.ID)
+	l.calls = nil
 	l.disconnectLocked()
 	l.cancelAllLocked(ErrStopping)
 	hooks := slices.Clone(m.onEnd)

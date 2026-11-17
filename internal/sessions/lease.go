@@ -35,6 +35,8 @@ type lease struct {
 	// breakable: a page call the person in the live view may break off
 	// once it has run for takeOverAfter (Lease.Breakable).
 	breakable bool
+	// call is the agent call holding the lease (CallFrom), if known.
+	call *Call
 }
 
 // Lease is a call into a session's page, held from PageLease until
@@ -103,7 +105,11 @@ func (m *Manager) PageLease(ctx context.Context, id, tokenID string) (*Lease, er
 	}
 	cctx, cancel := context.WithCancelCause(ctx)
 	now := m.now()
-	ls := &lease{tokenID: tokenID, cancel: cancel, started: now}
+	ls := &lease{tokenID: tokenID, cancel: cancel, started: now, call: CallFrom(ctx)}
+	if ls.call != nil {
+		// Granted: the call is admitted (its receipt stays, PROJ-156).
+		ls.call.admitLocked()
+	}
 	if l.leases == nil {
 		l.leases = map[*lease]struct{}{}
 	}
@@ -117,8 +123,14 @@ func (m *Manager) PageLease(ctx context.Context, id, tokenID string) (*Lease, er
 		m.mu.Unlock()
 	}, release: func() {
 		once.Do(func() {
+			// Ended before it let go: a handoff, a hold, a stop, the
+			// token's revocation or the caller going away cut it short.
+			cut := cctx.Err() != nil
 			cancel(context.Canceled)
 			m.mu.Lock()
+			if cut && ls.call != nil {
+				ls.call.cut = true
+			}
 			delete(l.leases, ls)
 			now := m.now()
 			l.lastActivity, l.lastAgentInput = now, now

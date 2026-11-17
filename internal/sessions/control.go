@@ -45,15 +45,25 @@ func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, f
 	now := m.now()
 	l.lastActivity, l.lastAgentInput = now, now
 	cctx, cancel := context.WithCancelCause(ctx)
-	in := &lease{cancel: cancel, started: now}
+	in := &lease{cancel: cancel, started: now, call: CallFrom(ctx)}
+	if in.call != nil {
+		// Granted: the call is admitted (its receipt stays, PROJ-156).
+		in.call.admitLocked()
+	}
 	if l.inputs == nil {
 		l.inputs = map[*lease]struct{}{}
 	}
 	l.inputs[in] = struct{}{}
 	m.agentActedLocked(l)
 	return cctx, sync.OnceFunc(func() {
+		// Ended before done: a handoff, Take control, a stop or the
+		// caller going away cut it short.
+		cut := cctx.Err() != nil
 		cancel(context.Canceled)
 		m.mu.Lock()
+		if cut && in.call != nil {
+			in.call.cut = true
+		}
 		delete(l.inputs, in)
 		// The agent counts as driving for agentQuiet after its last
 		// event, not after the action began.
