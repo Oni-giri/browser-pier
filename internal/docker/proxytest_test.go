@@ -118,6 +118,8 @@ func TestParseProxyResult(t *testing.T) {
 		"not JSON":              {`sandbox-check: ok`, 0},
 		"nothing":               {``, 1},
 		"trailing JSON":         {ok + ` {"ok":true}`, 0},
+		"trailing brace":        {`{"ok":false,"reason":"auth"}}`, 1},
+		"trailing bracket":      {ok + `]`, 0},
 	}
 	for name, c := range bad {
 		if r, err := ParseProxyResult([]byte(c.out), c.code); err == nil {
@@ -134,6 +136,9 @@ type proxyDaemon struct {
 	leftover map[string]string // a container by the test's name, with these labels; nil for none
 	removed  []string
 	creates  int
+	// failCreate makes a create fail after the container was made, as a
+	// create cut short does.
+	failCreate bool
 }
 
 func (d *proxyDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -166,6 +171,11 @@ func (d *proxyDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodPost && path == "/containers/create":
 		d.creates++
+		if d.failCreate {
+			d.leftover = map[string]string{LabelProxyTest: "true", LabelInstance: "inst1"}
+			fail(http.StatusInternalServerError, "context canceled")
+			return
+		}
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(map[string]any{"Id": "t1"})
 	case r.Method == http.MethodPost && path == "/containers/t1/start":
@@ -245,5 +255,18 @@ func TestProxyTestOneAtATime(t *testing.T) {
 	c.proxyTestMu.Unlock()
 	if !errors.Is(err, ErrProxyTestBusy) || d.creates != 0 {
 		t.Fatalf("err = %v, %d creates", err, d.creates)
+	}
+}
+
+// TestProxyTestCreateCutShort: a create that fails may have made the
+// container all the same; it goes at once, not at the next test.
+func TestProxyTestCreateCutShort(t *testing.T) {
+	d := &proxyDaemon{labels: map[string]string{LabelProxyCheck: "1"}, failCreate: true}
+	c := proxyClient(t, d)
+	if _, err := c.TestProxy(context.Background(), spec); err == nil {
+		t.Fatal("a failed create reported no error")
+	}
+	if len(d.removed) != 1 || d.removed[0] != ProxyTestName("inst1") || d.leftover != nil {
+		t.Fatalf("removed %v; the half-made container is still there", d.removed)
 	}
 }

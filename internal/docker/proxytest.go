@@ -36,7 +36,7 @@ const (
 	// proxyCheckArg makes the entrypoint run its proxy check.
 	proxyCheckArg = "proxy-check"
 	// ProxyTestTimeout is all a test gets, from create to remove. The
-	// check inside has a 15 s deadline.
+	// check inside is bounded by a start's 5 s lookup timeout.
 	ProxyTestTimeout = 30 * time.Second
 	// ProxyTestMemory and ProxyTestPids bound the test's container: a Go
 	// program making one HTTPS request. It doesn't count against the
@@ -142,6 +142,11 @@ func (c *Client) TestProxy(ctx context.Context, spec ProxyTestSpec) (ProxyResult
 	cfg, host := proxyTestConfig(c.image, c.seccompOpt, opt, c.user, c.userns, c.instance, spec)
 	res, err := c.api.ContainerCreate(ctx, client.ContainerCreateOptions{Name: name, Config: cfg, HostConfig: host})
 	if err != nil {
+		// Cut short while the daemon was creating it, the container may
+		// exist all the same: remove it by name (label checked).
+		rmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		_ = c.removeProxyTest(rmCtx, name)
+		cancel()
 		return ProxyResult{}, fmt.Errorf("creating the proxy test's container: %w", err)
 	}
 	defer func() {
@@ -292,8 +297,11 @@ func ParseProxyResult(out []byte, exitCode int) (ProxyResult, error) {
 	}
 	dec := json.NewDecoder(bytes.NewReader(lines[0]))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&v); err != nil || dec.More() || v.OK == nil {
+	if err := dec.Decode(&v); err != nil || v.OK == nil {
 		return bad("not the check's JSON")
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return bad("more after the check's JSON")
 	}
 	if !*v.OK {
 		if exitCode == 0 || !slices.Contains(proxyReasons, v.Reason) ||
