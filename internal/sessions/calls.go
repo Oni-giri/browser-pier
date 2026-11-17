@@ -416,7 +416,9 @@ func (m *Manager) RecentCalls(sessionID, tokenID string, n int) []RecentCall {
 	var out []RecentCall
 	for i := len(l.activity) - 1; i >= 0 && len(out) < n; i-- {
 		a := l.activity[i]
-		if a.TokenID != tokenID || tokenID == "" {
+		// Only what the token's own calls did: never BrowserPier's
+		// entries, a title among them (PROJ-158).
+		if a.Kind != KindAction || a.TokenID != tokenID || tokenID == "" {
 			continue
 		}
 		rc := RecentCall{At: a.At, What: a.What, FromPage: a.FromPage, Tool: a.Tool, CallID: a.CallID}
