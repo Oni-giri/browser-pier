@@ -3,6 +3,7 @@
 - `SPEC.md` is the source of truth for behaviour, decisions and scope. If the code and the spec disagree, raise it rather than diverging, and update the spec when a decision changes.
 - For anything visual, follow `design/DESIGN.md` and the screens in `design/screens/`.
 - `CONTRIBUTING.md` covers building, testing, running locally and the repo layout.
+- For the docs site (`site/`), follow `site/STYLE.md`. A change to behaviour that the docs describe updates them in the same PR.
 
 ## Task tracking
 
