@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -12,8 +13,9 @@ import (
 // kept after their browser stopped. It sits outside the side column's
 // polled fragment, so open runs don't collapse; nothing on it is polled.
 
-// keptSentence says how long runs are kept; it follows sessions' bounds.
-const keptSentence = "Kept in memory for 24 hours, the last 5 runs. A BrowserPier restart or update clears it."
+// keptSentence says how long runs are kept, from sessions' bounds.
+var keptSentence = fmt.Sprintf("Kept in memory for %d hours, the last %d runs. A BrowserPier restart or update clears it.",
+	int(sessions.KeptFor.Hours()), sessions.KeptRuns)
 
 type logPageData struct {
 	profileView

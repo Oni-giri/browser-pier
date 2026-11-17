@@ -98,7 +98,7 @@
   {{else if .Live}}
   <p class="small muted" style="margin:0">Nothing yet. What agents do in this browser shows up here.</p>
   {{else if .LastRun}}{{with .LastRun}}
-  <p class="small" style="margin:0">Last run ended <time datetime="{{.Ended.Format "2006-01-02T15:04:05Z07:00"}}">{{if ne (dayName .Ended) "Today"}}{{dayName .Ended}} {{end}}{{hhmm .Ended}}</time>: <span class="run-end{{if .End.Failed}} failed{{end}}">{{.EndText}}</span>.</p>
+  <p class="small" style="margin:0">Last run ended <time datetime="{{.Ended.Format "2006-01-02T15:04:05Z07:00"}}">{{if ne (dayName .Ended) "Today"}}{{dayName .Ended}} {{end}}{{hhmm .Ended}}</time>. <span class="run-end{{if .End.Failed}} failed{{end}}">{{.EndText}}</span>.</p>
   <p style="margin:8px 0 0"><a class="cell-link" href="/profiles/{{$.Name}}/log#run-{{.SessionID}}">What happened in it →</a></p>
   {{end}}{{else}}
   <p class="small muted" style="margin:0">Starts when the browser does.</p>

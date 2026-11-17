@@ -16,13 +16,20 @@ import (
 // database, a file or the orchestrator's log. No agent reads them.
 
 const (
-	// keptRuns is how many runs a profile keeps.
-	keptRuns = 5
+	// keptRuns is how many runs a profile keeps (KeptRuns, for the UI).
+	keptRuns = KeptRuns
 	// keptFor is how long after it ended a run is kept.
-	keptFor = 24 * time.Hour
+	keptFor = KeptFor
 	// maxKeptBytes caps every profile's kept runs together; the oldest
 	// run goes first.
 	maxKeptBytes = 8 << 20
+)
+
+// KeptRuns and KeptFor are how many runs a profile keeps, and for how
+// long after each ended; the web UI says so.
+const (
+	KeptRuns = 5
+	KeptFor  = 24 * time.Hour
 )
 
 // EndReason is how a run ended, from a closed set: the kept run and its
@@ -236,6 +243,21 @@ func (m *Manager) expireLocked(now time.Time) {
 			m.kept[p] = runs
 		}
 	}
+}
+
+// LastRun is the profile's newest kept run, without its entries; false
+// when it has none.
+func (m *Manager) LastRun(profile string) (Run, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.expireLocked(m.now())
+	runs := m.kept[profile]
+	if len(runs) == 0 {
+		return Run{}, false
+	}
+	r := runs[len(runs)-1].Run
+	r.Entries = nil
+	return r, true
 }
 
 // Runs returns the profile's kept runs, newest first, as copies: its last

@@ -15,10 +15,16 @@ const (
 	// maxActivity is how many entries each run's log keeps.
 	maxActivity = 500
 	// maxActivityBytes caps a run's log, counted by entrySize; the
-	// oldest entries go first.
+	// oldest entries go first. It counts the entries' text and a fixed
+	// overhead, not the Go values' whole size, which is about twice that.
 	maxActivityBytes = 64 << 10
-	// maxEntryRunes caps one entry's text when it is written.
+	// maxEntryRunes is how much of an entry's words are shown, and kept
+	// when its run ends: cut after the scrub, so a secret registered later
+	// still matches whole. maxEntryBytes caps what a live entry stores,
+	// cut when it is written (only a text that long can lose the end of a
+	// later secret across that cut).
 	maxEntryRunes = 400
+	maxEntryBytes = 2 << 10
 	// entryOverhead is what an entry counts for beyond its text.
 	entryOverhead = 64
 	// maxTitleBytes: a longer title is not kept at all.
@@ -146,8 +152,9 @@ func (m *Manager) note(sessionID string, a Activity) {
 	if l == nil {
 		return
 	}
-	// Scrubbed before it is cut, so a secret cut short still matches.
-	a.What = cutRunes(sc.String(a.What), maxEntryRunes)
+	// Scrubbed before it is cut, so a secret cut short still matches; cut
+	// to maxEntryRunes only when shown, after the scrubs then.
+	a.What = cutBytes(sc.String(a.What), maxEntryBytes)
 	if a.Kind == "" {
 		a.Kind = KindAction
 	}
@@ -172,7 +179,9 @@ func (l *live) appendLocked(a Activity) {
 		drop++
 	}
 	if drop > 0 {
-		l.activity = append(l.activity[:0:0], l.activity[drop:]...)
+		n := copy(l.activity, l.activity[drop:])
+		clear(l.activity[n:])
+		l.activity = l.activity[:n]
 	}
 }
 
@@ -237,6 +246,19 @@ func cleanTitle(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
+// cutBytes cuts s to at most n bytes, on a character boundary, the last
+// of them "…" when it was cut.
+func cutBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	cut := n - len("…")
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
+}
+
 // cutRunes cuts s to at most n characters, the last of them "…" when it
 // was cut.
 func cutRunes(s string, n int) string {
@@ -249,7 +271,7 @@ func cutRunes(s string, n int) string {
 // shown is an entry as it is read: scrubbed with the secrets as they are
 // now, its title cut after.
 func shown(sc *scrub.Scrubber, a Activity) Activity {
-	a.What = sc.String(a.What)
+	a.What = cutRunes(sc.String(a.What), maxEntryRunes)
 	a.Title = cutRunes(sc.String(a.Title), shownTitleRunes)
 	return a
 }
@@ -259,15 +281,24 @@ func shown(sc *scrub.Scrubber, a Activity) Activity {
 // with the session's secrets as they are now: one registered after an
 // entry was written is hidden in it too.
 func (m *Manager) Activity(sessionID string) []Activity {
+	out, _ := m.RecentActivity(sessionID, maxActivity)
+	return out
+}
+
+// RecentActivity is Activity's newest n entries, and whether there are
+// more: the live view's side column shows a few, polled, and scrubs only
+// those.
+func (m *Manager) RecentActivity(sessionID string, n int) ([]Activity, bool) {
 	sc := m.lockScrubber(sessionID)
 	defer m.mu.Unlock()
 	l := m.findLocked(sessionID)
 	if l == nil {
-		return nil
+		return nil, false
 	}
-	out := make([]Activity, len(l.activity))
-	for i, a := range l.activity {
-		out[len(out)-1-i] = shown(sc, a)
+	n = min(n, len(l.activity))
+	out := make([]Activity, n)
+	for i := range n {
+		out[i] = shown(sc, l.activity[len(l.activity)-1-i])
 	}
-	return out
+	return out, len(l.activity) > n
 }

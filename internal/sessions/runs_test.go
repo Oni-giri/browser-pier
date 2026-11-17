@@ -113,22 +113,30 @@ func TestKeptRunsBounds(t *testing.T) {
 		t.Fatalf("live: %d entries, %q to %q", len(got), got[len(got)-1].What, got[0].What)
 	}
 	// ...and at most 64 KiB of them, the oldest dropped first; an entry
-	// is cut to 400 characters.
+	// is shown cut to 400 characters, and stored cut to 2 KiB.
 	long := strings.Repeat("x", 1000)
 	for range 200 {
 		f.m.Note(s.ID, "claude", long)
 	}
+	f.m.Note(s.ID, "claude", strings.Repeat("y", 3000))
 	f.m.Note(s.ID, "claude", "last")
 	live := f.m.Activity(s.ID)
-	if n := utf8.RuneCountInString(live[1].What); n != maxEntryRunes || !strings.HasSuffix(live[1].What, "…") {
+	if n := utf8.RuneCountInString(live[2].What); n != maxEntryRunes || !strings.HasSuffix(live[2].What, "…") {
 		t.Fatalf("a 1,000-character entry has %d", n)
 	}
+	f.m.mu.Lock()
+	l := f.m.findLocked(s.ID)
 	size := 0
-	for _, a := range live {
+	for _, a := range l.activity {
 		size += entrySize(a)
 	}
-	if size > maxActivityBytes || size < maxActivityBytes-entrySize(live[1]) || live[0].What != "last" {
+	stored := l.activity[len(l.activity)-2].What
+	f.m.mu.Unlock()
+	if size > maxActivityBytes || size < maxActivityBytes-entrySize(Activity{What: long, Agent: "claude"}) || live[0].What != "last" {
 		t.Fatalf("live log of %d entries is %d bytes", len(live), size)
+	}
+	if len(stored) > maxEntryBytes || !strings.HasSuffix(stored, "…") {
+		t.Fatalf("a 3,000-byte entry is stored as %d bytes", len(stored))
 	}
 	if _, err := f.m.Stop(ctx, s.ID); err != nil {
 		t.Fatal(err)
@@ -166,6 +174,52 @@ func TestKeptRunsBounds(t *testing.T) {
 	f.m.mu.Unlock()
 	if total > maxKeptBytes || count != n || oldest != "" {
 		t.Fatalf("%d runs of %d bytes kept in all (%d), the oldest left: %q", count, total, maxKeptBytes, oldest)
+	}
+}
+
+// A secret registered after a long entry was written is hidden whole in
+// the kept run, also where the shown text is cut: the scrub comes first.
+func TestLongEntryIsScrubbedBeforeItIsCut(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	prefix := strings.Repeat("a", maxEntryRunes-5)
+	f.m.Note(s.ID, "claude", prefix+testSecret+" and more")
+	if err := f.m.RegisterSecret(s.ID, testSecret); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.m.Activity(s.ID)[0].What; strings.Contains(got, testSecret[:4]) || got != prefix+"<hid…" {
+		t.Fatalf("live: %q", got[len(prefix):])
+	}
+	if _, err := f.m.Stop(context.Background(), s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.runs("google", 1)[0].Entries[1].What; strings.Contains(got, testSecret[:4]) {
+		t.Fatalf("kept: %q", got[len(prefix):])
+	}
+}
+
+func TestRecentActivityAndLastRun(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	for i := range 60 {
+		f.m.Note(s.ID, "claude", fmt.Sprintf("step %d", i))
+	}
+	got, more := f.m.RecentActivity(s.ID, 50)
+	if len(got) != 50 || !more || got[0].What != "step 59" || got[49].What != "step 10" {
+		t.Fatalf("recent: %d, %t", len(got), more)
+	}
+	if _, more := f.m.RecentActivity(s.ID, 60); more {
+		t.Fatal("more than all of them")
+	}
+	if _, ok := f.m.LastRun("google"); ok {
+		t.Fatal("a last run before any stop")
+	}
+	if _, err := f.m.Stop(context.Background(), s.ID); err != nil {
+		t.Fatal(err)
+	}
+	r, ok := f.m.LastRun("google")
+	if !ok || r.SessionID != s.ID || r.End != EndAdmin || r.Entries != nil {
+		t.Fatalf("last run %+v, %t", r, ok)
 	}
 }
 

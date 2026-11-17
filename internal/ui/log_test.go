@@ -64,6 +64,9 @@ func TestLogPageListsRunsNewestFirst(t *testing.T) {
 	if strings.Index(r.body, second.ID) > strings.Index(r.body, first.ID) {
 		t.Fatal("the older run comes first")
 	}
+	if keptSentence != "Kept in memory for 24 hours, the last 5 runs. A BrowserPier restart or update clears it." {
+		t.Fatalf("the sentence says %q", keptSentence)
+	}
 	if r.header.Get("Cache-Control") != "no-store" {
 		t.Fatalf("Cache-Control %q", r.header.Get("Cache-Control"))
 	}

@@ -129,17 +129,14 @@ func (u *UI) profileData(ctx context.Context, r *http.Request, name string) (pro
 		}
 	}
 	if d.Live() {
-		d.Log = u.m.Activity(d.Session.ID)
-		if len(d.Log) > sideLog {
-			d.Log, d.LogMore = d.Log[:sideLog], true
-		}
+		d.Log, d.LogMore = u.m.RecentActivity(d.Session.ID, sideLog)
 		if d.Session.BlockAds {
 			d.Blocked, d.BlockedRead = u.m.Blocked(ctx, name)
 		}
 	}
 	if !d.Live() {
-		if runs := u.m.Runs(name); len(runs) > 0 {
-			d.LastRun = &runs[0]
+		if run, ok := u.m.LastRun(name); ok {
+			d.LastRun = &run
 		}
 	}
 	return d, true
