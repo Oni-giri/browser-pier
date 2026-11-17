@@ -243,6 +243,59 @@ func TestHandoffInterruptsALongAction(t *testing.T) {
 	}
 }
 
+// A handoff requested while the browser waits out the gap after a
+// shortcut (PROJ-151) is granted at once, well within the 250 ms cap:
+// the wait ends with the agent's request, sending nothing, and the
+// agent's next input is refused as during any handoff.
+func TestHandoffDuringTheShortcutGap(t *testing.T) {
+	f := newFixture(t)
+	f.b.mu.Lock()
+	// Long, so a handoff granted in time can only have broken the wait off.
+	f.b.shortcutGap = 10 * time.Second
+	f.b.mu.Unlock()
+	s := f.start(f.all, "google", "visual")
+	if code, _, raw := f.computer(s.ID, `{"action": "key", "keys": "ctrl+l"}`); code != http.StatusNoContent {
+		t.Fatalf("ctrl+l: %d %s", code, raw)
+	}
+	type answer struct {
+		code int
+		raw  []byte
+	}
+	got := make(chan answer, 1)
+	go func() {
+		code, _, raw := f.computer(s.ID, `{"action": "type", "text": "example.com"}`)
+		got <- answer{code, raw}
+	}()
+	for deadline := time.Now().Add(5 * time.Second); f.lastInput() != "waiting"; {
+		if time.Now().After(deadline) {
+			t.Fatalf("the type never waited: %q", f.lastInput())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	start := time.Now()
+	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 250*time.Millisecond {
+		t.Fatalf("the handoff was granted after %v, over the 250 ms cap", d)
+	}
+	if a := <-got; a.code != http.StatusConflict || !strings.Contains(string(a.raw), "handoff") {
+		t.Fatalf("the type cut short answered %d %s", a.code, a.raw)
+	}
+	for deadline := time.Now().Add(5 * time.Second); f.lastInput() != "wait cut short"; {
+		if time.Now().After(deadline) {
+			t.Fatalf("the browser didn't break the wait off: %q", f.lastInput())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if code, _, raw := f.computer(s.ID, `{"action": "key", "keys": "Return"}`); code != http.StatusConflict {
+		t.Fatalf("a key during the handoff: %d %s", code, raw)
+	}
+	if got := f.lastInput(); got != "wait cut short" {
+		t.Fatalf("input reached the browser after the handoff: %q", got)
+	}
+}
+
 // One input at a time: a second while a long one is under way is refused.
 func TestComputerOneInputAtATime(t *testing.T) {
 	f := newFixture(t)

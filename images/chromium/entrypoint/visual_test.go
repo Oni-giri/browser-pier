@@ -849,3 +849,15 @@ func TestAWaitEndsWithItsRequest(t *testing.T) {
 	}
 	c.mu.Unlock()
 }
+
+// An instant key run cut short lets go of its keys, as a human-paced one
+// does: a list's pauses after shortcuts make it longer than it was.
+func TestInstantKeysReleaseWhenCutShort(t *testing.T) {
+	v, calls := newTestVisual(true)
+	if rec := serveVisual(v, http.MethodPost, "/input/key", `{"keys": ["ctrl+l", "a"], "pace": "instant"}`); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("key: %d %s", rec.Code, rec.Body)
+	}
+	if len(*calls) != 2 || strings.Join((*calls)[1].args, " ") != "keyup ctrl+l a" {
+		t.Fatalf("calls %v", *calls)
+	}
+}

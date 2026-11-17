@@ -11,18 +11,20 @@ import (
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/browsertest"
+	"github.com/Oni-giri/browser-pier/internal/motion"
 )
 
 // PROJ-151: while a page has the keyboard, Chrome moves the focus to the
 // address bar for ctrl+l only once the page has answered the key, so text
 // sent right after it went to a page whose key handler is busy. The
-// container waits shortcutGap (150 ms) before an agent's next keyboard
+// container waits motion.ShortcutGap before an agent's next keyboard
 // action; these tests drive Visual mode through /computer, back to back.
 
-// keyRaceSlow is how long the test page's key handler takes: shortcutGap
-// less 50 ms, which the gap covers. Without the gap, text sent at once
-// reaches this page (images/chromium/ANTI-BOT.md).
-const keyRaceSlow = 100
+// keyRaceSlow is how long the test page's key handler takes, in ms: the
+// gap (motion.ShortcutGap) less 75 ms, which the gap covers with room to
+// spare on a loaded machine. Without the gap, text sent at once reaches
+// this page (images/chromium/ANTI-BOT.md).
+var keyRaceSlow = int(motion.ShortcutGap.Milliseconds()) - 75
 
 // keyRaceSession starts a Visual-mode session on a new 1280x800 profile
 // whose pages reach the test sites.
@@ -151,7 +153,7 @@ func TestTypingToThePageIsNotSlowed(t *testing.T) {
 		// Between the calls: the time a call takes to reach xdotool, well
 		// under the gap. Waiting it out here would mean typing waits.
 		if i > 0 {
-			if gap := e.T - r.Keys[i-1].T; gap >= 150 {
+			if gap := e.T - r.Keys[i-1].T; gap >= float64(motion.ShortcutGap.Milliseconds()) {
 				t.Errorf("%.0f ms between %q and %q", gap, r.Keys[i-1].Key, e.Key)
 			}
 		}
