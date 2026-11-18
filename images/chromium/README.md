@@ -1,6 +1,6 @@
 # Browser image
 
-`ghcr.io/oni-giri/browser-pier-chromium`: headful Chromium on Xvfb with a minimal desktop (JWM and a taskbar, `jwmrc`), xdotool for OS-level input and a GStreamer sidecar that streams the display as H.264. See SPEC.md §3 for why it's built this way.
+`ghcr.io/oni-giri/browser-pier-chromium`: headful Chromium on Xvfb with a minimal desktop (JWM and a taskbar, `jwmrc`), xdotool for OS-level input and GStreamer sidecars that stream the display as H.264, live and, for session recordings, as fragmented MP4. See SPEC.md §3 for why it's built this way.
 
 ```sh
 make image-chromium   # build from the repo root
@@ -56,6 +56,7 @@ HTTP over the Unix socket:
 | `GET /geo` | The location the browser runs with: country, time zone, locale, Accept-Language list, and where they came from. |
 | `GET /proxy/stats` | Bytes sent and received through the proxy, when there is one. |
 | `GET /stream` | The display as an H.264 Annex-B byte stream (constrained baseline, 30 fps, keyframe every 2 s), one reader at a time (409 otherwise). The encoder runs only while it's read. |
+| `GET /record` | The display as fragmented MP4 to keep (PROJ-23): at most 5 fps, 3/4 of the screen, H.264 High at constant quality, one keyframe at the start, a fragment about every frame. A pipeline of its own, one reader at a time (409 otherwise), run only while it's read; the live stream is unchanged. |
 
 ## Seccomp profile
 
