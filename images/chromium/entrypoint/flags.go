@@ -19,8 +19,9 @@ var disabledFeatures = []string{
 	// to show it at once on Back: a 200 MB page was still counted against
 	// the RAM limit four minutes later (Chromium keeps it ten), and nothing
 	// in the container tells Chromium memory is short. Off, the memory goes
-	// when the page is left for another site, and Back loads the page
-	// again (ANTI-BOT.md, PROJ-160).
+	// within 5 s when the tab leaves for another site, and within 25 s on
+	// the same site (the renderer frees the page at its next garbage
+	// collection); Back loads the page again (ANTI-BOT.md, PROJ-160).
 	"BackForwardCache",
 }
 
