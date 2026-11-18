@@ -69,6 +69,24 @@ func (a agent) header() http.Header { return http.Header{"Authorization": {"Bear
 
 func newRealAPI(t *testing.T) agent {
 	t.Helper()
+	return newRealAPIEnv(t)
+}
+
+// envRuntime gives every browser container it creates more environment.
+type envRuntime struct {
+	*docker.Client
+	env []string
+}
+
+func (r envRuntime) Create(ctx context.Context, spec docker.BrowserSpec) (string, error) {
+	spec.Env = append(append([]string{}, spec.Env...), r.env...)
+	return r.Client.Create(ctx, spec)
+}
+
+// newRealAPIEnv is newRealAPI with env added to each browser's
+// environment (a shorter time limit, say).
+func newRealAPIEnv(t *testing.T, env ...string) agent {
+	t.Helper()
 	image := os.Getenv("BROWSERPIER_TEST_IMAGE")
 	if image == "" {
 		t.Skip("BROWSERPIER_TEST_IMAGE not set; run `make test-docker`")
@@ -93,7 +111,11 @@ func newRealAPI(t *testing.T) agent {
 	}
 	t.Cleanup(func() { _ = d.Close() })
 	log := slog.New(slog.DiscardHandler)
-	m, err := sessions.NewManager(d, rt, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)
+	var runtime sessions.Runtime = rt
+	if len(env) > 0 {
+		runtime = envRuntime{rt, env}
+	}
+	m, err := sessions.NewManager(d, runtime, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)
 	if err != nil {
 		t.Fatal(err)
 	}

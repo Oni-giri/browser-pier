@@ -665,3 +665,127 @@ func TestBrowserEnvironment(t *testing.T) {
 		t.Fatalf("Chromium had no sandbox:\n%s", logs)
 	}
 }
+
+// TestSessionBus (PROJ-152): the browser container's session bus and
+// file chooser portal. The bus runs, listens on one path socket in a
+// 0700 folder and nowhere else (no TCP, no abstract socket); only
+// Chromium has its address; no desktop portal or terminal is in the
+// image; Chromium's renderers can't reach the socket; the sandbox holds.
+func TestSessionBus(t *testing.T) {
+	image := testImage(t)
+	b := startBrowser(t, image, newVolume(t))
+	sh := func(script string) string {
+		t.Helper()
+		return docker(t, "exec", b.name, "sh", "-c", script)
+	}
+	pidOf := func(pattern string) string {
+		t.Helper()
+		pid := sh("for p in /proc/[0-9]*; do tr '\\0' ' ' < $p/cmdline 2>/dev/null | grep -q -- '" + pattern + "' && { echo ${p#/proc/}; break; }; done")
+		if pid == "" {
+			t.Fatalf("no process matches %s", pattern)
+		}
+		return pid
+	}
+	bus := pidOf("^dbus-daemon --config-file=/tmp/browserpier-bus-")
+	uid := sh("id -u")
+	dir := "/tmp/browserpier-bus-" + uid
+	if got := sh("stat -c '%a %u %F' " + dir); got != "700 "+uid+" directory" {
+		t.Errorf("bus folder: %s", got)
+	}
+	// The bus's own sockets, by inode, against the kernel's tables.
+	inodes := strings.Fields(sh("ls -l /proc/" + bus + "/fd 2>/dev/null | sed -n 's/.*socket:\\[\\([0-9]*\\)\\]/\\1/p'"))
+	if len(inodes) == 0 {
+		t.Fatal("the bus has no sockets")
+	}
+	unix := sh("cat /proc/net/unix")
+	listening := 0
+	for _, line := range strings.Split(unix, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 7 || !slices.Contains(inodes, f[6]) {
+			continue
+		}
+		path := ""
+		if len(f) > 7 {
+			path = f[7]
+		}
+		if strings.HasPrefix(path, "@") {
+			t.Errorf("the bus has an abstract socket: %s", line)
+		}
+		if f[3] == "00010000" { // listening
+			listening++
+			if path != dir+"/bus" {
+				t.Errorf("the bus listens on %q", path)
+			}
+		}
+	}
+	if listening != 1 {
+		t.Errorf("the bus listens on %d unix sockets, want 1", listening)
+	}
+	for _, table := range []string{"tcp", "tcp6", "udp", "udp6"} {
+		for _, line := range strings.Split(sh("cat /proc/net/"+table+" 2>/dev/null || true"), "\n") {
+			f := strings.Fields(line)
+			if len(f) > 9 && slices.Contains(inodes, f[9]) {
+				t.Errorf("the bus has a %s socket: %s", table, line)
+			}
+		}
+	}
+	// Only Chromium is told where the bus is. Its own environment can't
+	// be read (it makes itself undumpable), so: it is on the bus.
+	env := func(pid string) string { return sh("tr '\\0' '\\n' < /proc/" + pid + "/environ") }
+	browserPid := pidOf("^/usr/lib/chromium/chromium --user-data-dir")
+	call := func(method string, args ...string) string {
+		return sh("dbus-send --bus=unix:path=" + dir + "/bus --print-reply --dest=org.freedesktop.DBus / org.freedesktop.DBus." + method + " " + strings.Join(args, " ") + " 2>/dev/null || true")
+	}
+	onBus := false
+	for _, name := range regexp.MustCompile(`string "(:[0-9.]+)"`).FindAllStringSubmatch(call("ListNames"), -1) {
+		if pid := regexp.MustCompile(`uint32 ([0-9]+)`).FindStringSubmatch(call("GetConnectionUnixProcessID", "string:"+name[1])); pid != nil && pid[1] == browserPid {
+			onBus = true
+		}
+	}
+	if !onBus {
+		t.Error("Chromium isn't on the session bus")
+	}
+	for _, p := range []string{"^Xvfb ", "^jwm ", "^/usr/local/bin/browserpier-entrypoint"} {
+		if strings.Contains(env(pidOf(p)), "DBUS_SESSION_BUS_ADDRESS") {
+			t.Errorf("%s has the bus's address", p)
+		}
+	}
+	// Nothing else to answer for the portal, nothing to open a terminal.
+	if out := sh("ls /usr/libexec/xdg-desktop-portal* /usr/lib/xdg-desktop-portal* 2>/dev/null; command -v xdg-desktop-portal x-terminal-emulator xterm 2>/dev/null; true"); out != "" {
+		t.Errorf("in the image: %s", out)
+	}
+	// Each renderer is sandboxed: seccomp, and its root an empty folder,
+	// where no path reaches the bus's socket.
+	renderers := strings.Fields(sh("for p in /proc/[0-9]*; do tr '\\0' ' ' < $p/cmdline 2>/dev/null | grep -q -- '--type=renderer' && echo ${p#/proc/}; done; true"))
+	if len(renderers) == 0 {
+		t.Fatal("no renderer")
+	}
+	checked := 0
+	for _, r := range renderers {
+		root := sh("readlink /proc/" + r + "/root 2>/dev/null || true")
+		seccomp := sh("grep Seccomp: /proc/" + r + "/status 2>/dev/null || true")
+		if root == "" && seccomp == "" {
+			continue // exited meanwhile
+		}
+		checked++
+		if root == "/" || !strings.Contains(seccomp, "2") {
+			t.Errorf("renderer %s: root %q, %s: it could reach %s", r, root, seccomp, dir+"/bus")
+		}
+	}
+	if checked == 0 {
+		t.Error("no renderer to check")
+	}
+	// The portal answers on the control socket.
+	resp, err := b.http.Get("http://control/chooser")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"choosers":[]`) {
+		t.Errorf("GET /chooser: %d %s", resp.StatusCode, body)
+	}
+	if logs := b.logs(); strings.Contains(logs, "no session bus") || strings.Contains(logs, "no file chooser portal") {
+		t.Errorf("the portal didn't start:\n%s", logs)
+	}
+}

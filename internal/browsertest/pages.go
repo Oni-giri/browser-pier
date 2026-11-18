@@ -276,6 +276,32 @@ document.getElementById('video').src = '/consent-frame';</script>`,
 <p><input id="hidden-pick" name="script" type="file" style="display:none"><button type="button" onclick="document.getElementById('hidden-pick').click()">Choose a file</button></p>
 <button>Send</button>
 </form></main>`,
+	// A page's file choosers, for the portal (PROJ-152), laid out in
+	// bands for Visual-mode clicks: a plain file input, a button that
+	// opens a hidden one with a script, a multiple one that accepts PDFs
+	// and images, Send (to /upload, which echoes each file), and a Ping
+	// that says the page still answers. Each input reports its input,
+	// change and cancel events, and the window its focus and blur.
+	"/chooser": `<!doctype html><title>Chooser</title>` + report + `
+<body style="margin:0">
+<form method="post" action="/upload" enctype="multipart/form-data">
+<input id="a" name="a" type="file" style="position:fixed;left:0;top:0;width:100%;height:18vh;display:block;background:#cde">
+<input id="b" name="b" type="file" style="display:none">
+<button type="button" id="bb" style="position:fixed;left:0;top:20vh;width:100%;height:18vh;background:#dce">Choose a file</button>
+<input id="c" name="c" type="file" multiple accept=".pdf,image/*" style="position:fixed;left:0;top:40vh;width:100%;height:18vh;display:block;background:#ecd">
+<button id="send" style="position:fixed;left:0;top:60vh;width:100%;height:15vh">Send</button>
+<button type="button" style="position:fixed;left:0;top:80vh;width:100%;height:15vh" onclick="report('ping')">Ping</button>
+</form>
+<script>
+for (const id of ['a', 'b', 'c']) {
+  const el = document.getElementById(id);
+  el.addEventListener('input', () => report(id + ' input'));
+  el.addEventListener('change', () => report(id + ' change ' + el.files.length));
+  el.addEventListener('cancel', () => report(id + ' cancel'));
+}
+document.getElementById('bb').onclick = () => document.getElementById('b').click();
+for (const ev of ['focus', 'blur']) window.addEventListener(ev, e => { if (e.target === window) report('window ' + ev); });
+</script></body>`,
 	// An article among a site's furniture, for the content endpoints
 	// (PROJ-20): a nav, a cookie banner, a sidebar, hidden and transparent
 	// text, a page-filled password, a closed shadow root and an iframe.

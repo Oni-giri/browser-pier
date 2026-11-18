@@ -187,7 +187,7 @@ func TestChooserListDoesntCountAsDriving(t *testing.T) {
 	}
 }
 
-func TestChooserDuringHandoff(t *testing.T) {
+func TestChooserAnswerRefusedDuringHandoff(t *testing.T) {
 	f := newFixture(t)
 	s := f.start(f.all, "google", "visual")
 	f.putUpload("google", "report.pdf", "%PDF")
