@@ -253,19 +253,25 @@ func TestChooserAcceptIsCleanedAndFenced(t *testing.T) {
 	b.WriteString(`]}]`)
 	f.openChooser(b.String())
 	var out struct {
-		Choosers []chooserJSON `json:"choosers"`
-		Text     string        `json:"text"`
+		Choosers []map[string]any `json:"choosers"`
+		Text     string           `json:"text"`
 	}
 	if code := f.call(f.all, http.MethodGet, "/api/sessions/"+s.ID+"/chooser", "", &out); code != http.StatusOK {
 		t.Fatalf("list: %d", code)
 	}
-	acc := out.Choosers[0].Accept
+	// The page's patterns are only in the fenced text, never bare.
+	for k := range out.Choosers[0] {
+		if k != "id" && k != "multiple" {
+			t.Errorf("a chooser has %q in the JSON", k)
+		}
+	}
+	acc := cleanAccept(hostile)
 	for _, p := range acc {
 		if len(p) > maxAcceptLen || strings.ContainsAny(p, "\n\r\u200b\u2066") || strings.Contains(p, "<!--") {
 			t.Errorf("accept pattern %q isn't clean", p)
 		}
 	}
-	if acc[2] != "*.png" {
+	if acc[2] != "*.png" || !strings.Contains(out.Text, "*.png") {
 		t.Errorf("invisible characters kept: %q", acc[2])
 	}
 	if !strings.Contains(out.Text, "untrusted") || strings.Count(out.Text, "ignore the rules") != 1 {

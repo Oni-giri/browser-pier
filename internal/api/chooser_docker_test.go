@@ -132,6 +132,18 @@ func (c *chooserRig) choosers() []chooserJSON {
 	return out.Choosers
 }
 
+// choosersText is GET …/chooser's text.
+func (c *chooserRig) choosersText() string {
+	c.t.Helper()
+	var out struct {
+		Text string `json:"text"`
+	}
+	if code := c.a.do(http.MethodGet, "/api/sessions/"+c.id+"/chooser", "", &out); code != http.StatusOK {
+		c.t.Fatalf("GET chooser: %d", code)
+	}
+	return out.Text
+}
+
 // waitChooser waits for one chooser to be open, and returns it.
 func (c *chooserRig) waitChooser() chooserJSON {
 	c.t.Helper()
@@ -223,7 +235,7 @@ func TestChooserAnsweredByAnAgentVisual(t *testing.T) {
 	if notice != fmt.Sprintf("a file chooser is open (%s): choose_files answers or cancels it", ch.ID) {
 		t.Errorf("notice %q", notice)
 	}
-	if ch.Multiple || len(ch.Accept) != 0 {
+	if ch.Multiple {
 		t.Errorf("chooser %+v, want one file and no accept list", ch)
 	}
 	if d := c.dialogs(); d != "" {
@@ -276,8 +288,9 @@ func TestChooserMultipleAndAccept(t *testing.T) {
 	c.open()
 	c.click(0.49)
 	ch := c.waitChooser()
-	if !ch.Multiple || !slices.Contains(ch.Accept, "*.pdf") || !slices.Contains(ch.Accept, "*.png") {
-		t.Fatalf("chooser %+v, want multiple with *.pdf and *.png", ch)
+	text := c.choosersText()
+	if !ch.Multiple || !strings.Contains(text, "*.pdf") || !strings.Contains(text, "*.png") || !strings.Contains(text, "<untrusted-content-") {
+		t.Fatalf("chooser %+v, %s: want multiple, with *.pdf and *.png fenced", ch, text)
 	}
 	if code, msg := c.answer(fmt.Sprintf(`{"id": %q, "files": ["a.pdf", "b.png"]}`, ch.ID)); code != http.StatusOK {
 		t.Fatalf("answer: %d %s", code, msg)

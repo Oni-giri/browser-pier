@@ -39,12 +39,13 @@ const (
 	maxChooserFiles = 10
 )
 
-// chooserJSON is one open chooser. Accept comes from the page: cleaned,
-// capped, and fenced in the answer's text.
+// chooserJSON is one open chooser. Its accept list comes from the page:
+// cleaned and capped here, and given to agents only fenced, in the
+// answer's text, never as bare JSON strings.
 type chooserJSON struct {
-	ID       string   `json:"id"`
-	Multiple bool     `json:"multiple"`
-	Accept   []string `json:"accept"`
+	ID       string `json:"id"`
+	Multiple bool   `json:"multiple"`
+	accept   []string
 }
 
 var errNoPortal = errors.New("the file chooser portal isn't running in this browser; a page's file chooser shows the browser's own dialog")
@@ -64,7 +65,11 @@ func (a *API) choosersOf(ctx context.Context, s sessions.Session) ([]chooserJSON
 		return nil, fmt.Errorf("the browser answered %d", resp.StatusCode)
 	}
 	var in struct {
-		Choosers []chooserJSON `json:"choosers"`
+		Choosers []struct {
+			ID       string   `json:"id"`
+			Multiple bool     `json:"multiple"`
+			Accept   []string `json:"accept"`
+		} `json:"choosers"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 256<<10)).Decode(&in); err != nil {
 		return nil, err
@@ -74,7 +79,7 @@ func (a *API) choosersOf(ctx context.Context, s sessions.Session) ([]chooserJSON
 		if !chooserID.MatchString(c.ID) {
 			continue
 		}
-		out = append(out, chooserJSON{ID: c.ID, Multiple: c.Multiple, Accept: cleanAccept(c.Accept)})
+		out = append(out, chooserJSON{ID: c.ID, Multiple: c.Multiple, accept: cleanAccept(c.Accept)})
 	}
 	a.noteOpened(s, out)
 	return out, nil
@@ -122,8 +127,8 @@ func choosersText(sessionID string, cs []chooserJSON) string {
 			how = fmt.Sprintf("up to %d files", maxChooserFiles)
 		}
 		fmt.Fprintf(&b, "%s: %s\n", c.ID, how)
-		if len(c.Accept) > 0 {
-			fmt.Fprintf(&accepts, "%s: %s\n", c.ID, strings.Join(c.Accept, " "))
+		if len(c.accept) > 0 {
+			fmt.Fprintf(&accepts, "%s: %s\n", c.ID, strings.Join(c.accept, " "))
 		}
 	}
 	if accepts.Len() > 0 {
