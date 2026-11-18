@@ -455,8 +455,8 @@ func TestHumanTypingThroughMCPIsCapped(t *testing.T) {
 }
 
 // open_url opens the address through the browser's address bar
-// (PROJ-164): the browser gets the URL, a refusal comes back as the tool's
-// error, and human pace keeps type_text's cap.
+// (PROJ-164): the browser gets the URL, and a refusal comes back as the
+// tool's error.
 func TestOpenURL(t *testing.T) {
 	f := newFixture(t)
 	cs := f.connect(f.all, versions[0], nil)
@@ -479,16 +479,14 @@ func TestOpenURL(t *testing.T) {
 	if isErr, out := try(map[string]any{"url": "javascript:alert(1)"}); !isErr || !strings.Contains(out, "only http and https") {
 		t.Errorf("javascript: %v %s", isErr, out)
 	}
-	long := "https://example.com/" + strings.Repeat("a", 140)
-	if isErr, out := try(map[string]any{"url": long}); !isErr || !strings.Contains(out, "at most 150") {
-		t.Errorf("160 characters at human pace: %v %s", isErr, out)
-	}
-	if isErr, out := try(map[string]any{"url": long, "pace": "instant"}); isErr {
-		t.Errorf("160 characters at instant pace: %s", out)
+	// The URL goes in at once at either pace: no 150-character cap.
+	long := "https://example.com/" + strings.Repeat("a", 280)
+	if isErr, out := try(map[string]any{"url": long}); isErr {
+		t.Errorf("300 characters at human pace: %s", out)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	want := []string{`{"url":"https://example.com/a"}`, `{"url":"https://example.com/covered"}`, `{"url":"` + long + `","pace":"instant"}`}
+	want := []string{`{"url":"https://example.com/a"}`, `{"url":"https://example.com/covered"}`, `{"url":"` + long + `"}`}
 	if !slices.Equal(f.opens, want) {
 		t.Errorf("the browser was asked to open %q", f.opens)
 	}

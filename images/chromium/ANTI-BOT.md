@@ -142,7 +142,7 @@ PROJ-151 left a residual: behind a page whose key handler takes more than about 
 | Shape | Lost | Notes |
 |---|---|---|
 | `open`, instant pace, `slow=400`, a focused field | **0 of 20** | the page saw no key and its field stayed empty; about 0.9 s a call for a 60-character address |
-| `open`, human pace, `slow=400` | **0 of 3** | the same; 15–16 s a call, nearly all of it typing the address at a typist's pace |
+| `open`, human pace, `slow=400` | **0 of 3** | the same; 15–16 s a call with the address typed at a typist's pace (before the review; now it goes in at 12 ms a key, see below) |
 | `ctrl+l`, `type`, Return through `/computer`, instant pace, `slow=400` (the same test with the old calls) | **lost at once** | the page took 17 keys and its field had `http://host.d` |
 | `open` at 640×480 and 1920×1080, `slow=400`, each pace | 0 of 2 each | the address bar is where the entrypoint computes it |
 | A page's `alert()` open | opens | the dialog is drawn inside the window, below the toolbar; opening dismisses it |
@@ -152,11 +152,13 @@ PROJ-151 left a residual: behind a page whose key handler takes more than about 
 
 **What a page can see.** Nothing of the address: the keys go to the browser's own address bar, never to the page. Before that, at human pace, the pointer glides from wherever it was to the toolbar, so the page sees it move and leave the viewport, then loses the focus (`blur`), as when a person reaches for the address bar; at instant pace it sees no move, only the blur. The new page loads with the focus (`document.hasFocus()` true). `TestVisualModeLooksLikeAPerson` now opens its detector page both ways, with `open` at human pace and with `ctrl+l`: nothing automated either way, and the page focused both times. One difference showed in that run: opened with `open`, the page's first script saw its real window size (1440×868); opened with `ctrl+l` it saw 0×0, the signal PROJ-65 is about. One run each, so this isn't a finding yet.
 
+**After the code review** (same day): the address now goes in at 12 ms a key at either pace (only the glide, the pause and the held button and keys are a hand's), since no page sees those keys and a person often pastes an address; a human-paced open takes about 2 s instead of 15. The last look comes after the hand's pause, just before the press. After the click, which window has the keyboard is read before every 64 characters and before Delete and Return, and the open stops if it changed. It refuses on a Chromium other than 156, whose address bar hasn't been measured. Checked by hand with the window-tree reader: a tab's hover card over the address bar (the pointer resting on a tab) and the address bar's own suggestions are drawn inside the browser window, not as windows of their own; neither stops `open`, and an instant open through a hover card reached the address bar.
+
 **Residuals, accepted:**
 - **Delete before Return.** It drops an inline completion the address bar may have added after the typed text (the cause of the two autocomplete losses in PROJ-151's table). A person seldom presses it, but the key goes to the address bar, which no page sees.
-- **The address is typed, not pasted.** A person often pastes a long address; at human pace `open` types it key by key at a typist's rhythm, which takes about 0.25 s a character (so 150 characters at most through MCP). No page sees those keys either, so this costs time, not looks.
-- **The layout is Chromium 156's.** The address bar's place is computed (y = 63, the middle of x = 121 to width − 85), not found on the screen; `TestOpenAtEveryScreenSize` fails if a later Chromium moves it.
-- **A window that opens between the look and the press.** At human pace the window tree is read again once the pointer is over the address bar, just before the press; a pop-up opening in the few milliseconds between that look and the press would still take the click.
+- **The address goes in at 12 ms a key**, faster than anyone types, at both paces. No page sees those keys, only the address bar; the search engine's suggest service may see what is typed (PROJ-191).
+- **The layout is Chromium 156's.** The address bar's place is computed (y = 63, the middle of x = 121 to width − 85), not found on the screen. On another Chromium `open` refuses (409) rather than click blind, and `TestOpenAtEveryScreenSize` fails until it is measured again.
+- **A window that opens between a look and the run after it.** Each look at the screen and the xdotool run it allows are separate: a pop-up opening in those few milliseconds would still take the press (before the click) or up to 64 characters of the address (after it); the next look stops the rest, and Return is never pressed into it.
 
 ## Fixed along the way
 

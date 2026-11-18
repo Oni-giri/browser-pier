@@ -33,7 +33,7 @@ func (s *Server) addTools(srv *sdk.Server) {
 	sdk.AddTool(srv, &sdk.Tool{Name: "click", Description: "Click at a point of the last screenshot (Visual mode; in API mode too, at a point a page tool gives, such as a Cloudflare checkbox's). At human pace (the default) the pointer glides there, as a hand would, and lands within about 3 screen pixels of the point, so aim at the target's middle. If the click started a download, the answer says so: downloaded name (size), or download in progress when it isn't finished within download_wait_ms (3 s by default)."}, s.click)
 	sdk.AddTool(srv, &sdk.Tool{Name: "type_text", Description: "Type text into whatever has focus, as a keyboard would (Visual mode). At human pace (the default) that takes about 0.25 s a character, so at most 150 characters per call; split longer text, or use pace instant."}, s.typeText)
 	sdk.AddTool(srv, &sdk.Tool{Name: "press_keys", Description: "Press keys or combinations, such as Return, Tab, ctrl+a or ctrl+shift+t (Visual mode). If they started a download, the answer says so, as click's does. " + shortcutNote}, s.pressKeys)
-	sdk.AddTool(srv, &sdk.Tool{Name: "open_url", Description: "Open an http(s) URL in the browser window in front (Visual mode): BrowserPier clicks its address bar, selects what is there, types the URL and presses Return, as a person does. Use it rather than press_keys ctrl+l and type_text: a busy page can take keys typed after ctrl+l, never these, as the click puts the focus in the address bar without asking the page. It doesn't wait for the page: take a screenshot (or set screenshot) to see where it landed. Refused while the browser is full screen, or a pop-up window, menu or bubble covers the address bar: the answer says which. At human pace (the default) the URL is typed at about 0.25 s a character, so at most 150 characters; set pace instant for a longer one."}, s.openURL)
+	sdk.AddTool(srv, &sdk.Tool{Name: "open_url", Description: "Open an http(s) URL in the browser window in front (Visual mode): BrowserPier clicks its address bar, selects what is there, types the URL and presses Return, as a person does. Use it rather than press_keys ctrl+l and type_text: a busy page can take keys typed after ctrl+l, never these, as the click puts the focus in the address bar without asking the page. It doesn't wait for the page: take a screenshot (or set screenshot) to see where it landed. Refused while the browser is full screen, or a pop-up window, menu or bubble covers the address bar, and stopped before Return if another window takes the keyboard while the URL is typed: the answer says which. At human pace (the default) the pointer glides there and the click and keys are held as a hand's; the URL itself always goes in at once, as a paste would. At most 2000 characters."}, s.openURL)
 	sdk.AddTool(srv, &sdk.Tool{Name: "scroll", Description: "Scroll at a point by whole notches: positive down or right, negative up or left (Visual mode)."}, s.scroll)
 	sdk.AddTool(srv, &sdk.Tool{Name: "drag", Description: "Drag from one point to another with the mouse button held (Visual mode)."}, s.drag)
 	sdk.AddTool(srv, &sdk.Tool{Name: "wait", Description: "Wait for the page, up to 10 seconds."}, s.wait)
@@ -390,12 +390,10 @@ type openArgs struct {
 }
 
 // openURL opens an address through the address bar (PROJ-164).
+// The URL is typed at 12 ms a key at either pace (only the pointer and
+// the held keys around it go at a hand's pace), so it isn't held to
+// type_text's cap.
 func (s *Server) openURL(ctx context.Context, req *sdk.CallToolRequest, in openArgs) (*sdk.CallToolResult, any, error) {
-	if humanPace(in.Pace) {
-		if err := tooLongToType("url", utf8.RuneCountInString(in.URL), false); err != nil {
-			return nil, nil, err
-		}
-	}
 	var sc screen
 	if in.Screenshot { // the size only matters for the screenshot after
 		var err error
