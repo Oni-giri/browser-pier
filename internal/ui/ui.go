@@ -17,6 +17,7 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/handoff"
+	"github.com/Oni-giri/browser-pier/internal/recording"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/settings"
 	"github.com/Oni-giri/browser-pier/internal/static"
@@ -57,6 +58,8 @@ type Options struct {
 	SetRAMLimit func(percent int)
 	// Version is BrowserPier's, written into exports.
 	Version string
+	// Recordings are the session recordings (PROJ-23); nil for none.
+	Recordings *recording.Store
 }
 
 // UI is the web UI for the signed-in admin.

@@ -404,13 +404,13 @@ func TestTheIndexSaysWhyEachGapIsThere(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st.Limits = func() Limits { return Limits{Retention: time.Hour, Cap: used + 20200, KeepFree: 0} }
+	st.SetLimits(Limits{Retention: time.Hour, Cap: used + 20200, KeepFree: 0})
 	r.Set(sess, prof, true, "")
 	lostW := fb.next(t)
 	go func() { _, _ = lostW.Write(testInit); _, _ = lostW.Write(frag('l', 300)) }()
 	time.Sleep(100 * time.Millisecond)
 	big.abort()
-	st.Limits = func() Limits { return DefaultLimits }
+	st.SetLimits(DefaultLimits)
 	feed(t, st, fb.next(t), 6, 2)
 	r.End(sess) // the browser stops
 	time.Sleep(20 * time.Millisecond)
@@ -503,7 +503,7 @@ func TestDiskCapTakesFromTheBiggestProfile(t *testing.T) {
 		st := NewStore(filepath.Join(t.TempDir(), "recordings"), slog.New(slog.DiscardHandler))
 		st.Free = func() (int64, error) { return 1 << 40, nil }
 		seg := int64(len(testInit) + len(frag('d', 1000)))
-		st.Limits = func() Limits { return Limits{Retention: time.Hour * 24, Cap: 5 * seg, KeepFree: 0} }
+		st.SetLimits(Limits{Retention: time.Hour * 24, Cap: 5 * seg, KeepFree: 0})
 		now := time.Now()
 		quiet, busy := "quiet", "busy"
 		qs, bs := "cccccccccccccccccccccccc", "dddddddddddddddddddddddd"
@@ -530,7 +530,7 @@ func TestDiskCapTakesFromTheBiggestProfile(t *testing.T) {
 		const disk = 1 << 20
 		floor := int64(disk - 3000)
 		st.Free = func() (int64, error) { total, _ := st.usageLocked(); return disk - total, nil }
-		st.Limits = func() Limits { return Limits{Retention: time.Hour, Cap: 1 << 30, KeepFree: floor} }
+		st.SetLimits(Limits{Retention: time.Hour, Cap: 1 << 30, KeepFree: floor})
 		d, err := st.create(prof, sess, slices2(testInit, frag('d', 1000)))
 		if err != nil {
 			t.Fatal(err)
@@ -555,7 +555,7 @@ func TestDiskCapTakesFromTheBiggestProfile(t *testing.T) {
 	})
 	t.Run("a segment that can't fit is lost and the session goes on", func(t *testing.T) {
 		r, st, fb, _ := newTestRecorder(t)
-		st.Limits = func() Limits { return Limits{Retention: time.Hour, Cap: 10, KeepFree: 0} }
+		st.SetLimits(Limits{Retention: time.Hour, Cap: 10, KeepFree: 0})
 		r.Set(sess, prof, true, "")
 		w := fb.next(t)
 		go func() { _, _ = w.Write(testInit); _, _ = w.Write(frag('l', 300)) }()
@@ -563,7 +563,7 @@ func TestDiskCapTakesFromTheBiggestProfile(t *testing.T) {
 		if total, _ := st.Usage(); total != 0 {
 			t.Fatalf("%d bytes written without room", total)
 		}
-		st.Limits = func() Limits { return DefaultLimits }
+		st.SetLimits(DefaultLimits)
 		feed(t, st, w2, 1, 2)
 		r.End(sess)
 		waitFor(t, "the recording", func() bool { ix, _ := st.Get(prof, sess); return len(ix.Gaps) > 0 })

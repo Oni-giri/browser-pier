@@ -1,6 +1,7 @@
 package recording
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -136,10 +138,9 @@ func checkProfile(profile string) error {
 // BrowserPier gives them. The folder is made with the first segment, so
 // with recording off everywhere it never exists.
 type Store struct {
-	dir string
-	log *slog.Logger
-	// Limits returns the admin's current limits.
-	Limits func() Limits
+	dir    string
+	log    *slog.Logger
+	limits atomic.Pointer[Limits]
 	// Free returns the bytes free on the data dir's disk.
 	Free func() (int64, error)
 	now  func() time.Time
@@ -156,10 +157,31 @@ type Store struct {
 // NewStore returns the store for dir. Nothing is created until a segment is written.
 func NewStore(dir string, log *slog.Logger) *Store {
 	s := &Store{dir: dir, log: log, now: time.Now,
-		Limits: func() Limits { return DefaultLimits },
-		cat:    map[string]map[string]*Index{}, pending: map[string]int64{}, writing: map[string]int{}, seq: map[string]int{}}
+		cat: map[string]map[string]*Index{}, pending: map[string]int64{}, writing: map[string]int{}, seq: map[string]int{}}
+	s.SetLimits(DefaultLimits)
 	s.Free = func() (int64, error) { return diskFree(dir) }
 	return s
+}
+
+// SetLimits applies the admin's limits from now on; the next Sweep
+// applies a shorter retention to what is there.
+func (s *Store) SetLimits(l Limits) { s.limits.Store(&l) }
+
+// Limits are the limits in force.
+func (s *Store) Limits() Limits { return *s.limits.Load() }
+
+// Run sweeps every so often until ctx ends.
+func (s *Store) Run(ctx context.Context, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.Sweep()
+		}
+	}
 }
 
 // diskFree is what the disk holding dir (or its nearest parent that

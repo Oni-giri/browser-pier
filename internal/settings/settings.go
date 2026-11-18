@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/profiles"
+	"github.com/Oni-giri/browser-pier/internal/recording"
 )
 
 // Settings are the admin's defaults.
@@ -29,12 +30,36 @@ type Settings struct {
 	// share of the host's: 1 to 100, or 0 for not set here (the
 	// BROWSERPIER_RAM_LIMIT_PERCENT default then applies).
 	RAMLimitPercent int
+	// RecordingRetentionDays is how long session recordings are kept
+	// (PROJ-23), from recording.MinRetentionDays to MaxRetentionDays; 0
+	// for the default.
+	RecordingRetentionDays int
+	// RecordingCapMiB is what all recordings may hold together, in MiB,
+	// from recording.MinCapMiB to MaxCapMiB; 0 for the default.
+	RecordingCapMiB int
+}
+
+// RecordingLimits are the recordings' limits these settings give.
+func (s Settings) RecordingLimits() recording.Limits {
+	days, capMiB := s.RecordingRetentionDays, s.RecordingCapMiB
+	if days == 0 {
+		days = recording.DefaultRetentionDays
+	}
+	if capMiB == 0 {
+		capMiB = recording.DefaultCapMiB
+	}
+	return recording.Limits{
+		Retention: time.Duration(days) * 24 * time.Hour,
+		Cap:       int64(capMiB) << 20,
+		KeepFree:  recording.KeepFree,
+	}
 }
 
 // defaults are the settings before the admin changes any.
 func defaults() Settings {
 	p := profiles.New("")
-	return Settings{DefaultPolicy: p.HandoffPolicy, DefaultAutoStop: p.AutoStop, DefaultBlockAds: p.BlockAds}
+	return Settings{DefaultPolicy: p.HandoffPolicy, DefaultAutoStop: p.AutoStop, DefaultBlockAds: p.BlockAds,
+		RecordingRetentionDays: recording.DefaultRetentionDays, RecordingCapMiB: recording.DefaultCapMiB}
 }
 
 // NewProfile is profiles.New with these defaults applied.
@@ -55,6 +80,12 @@ func (s Settings) Validate() error {
 	if s.RAMLimitPercent < 0 || s.RAMLimitPercent > 100 {
 		return fmt.Errorf("RAM limit %d%%: want 1 to 100, or 0 for the default", s.RAMLimitPercent)
 	}
+	if d := s.RecordingRetentionDays; d != 0 && (d < recording.MinRetentionDays || d > recording.MaxRetentionDays) {
+		return fmt.Errorf("keep recordings for %d days: want %d to %d", s.RecordingRetentionDays, recording.MinRetentionDays, recording.MaxRetentionDays)
+	}
+	if c := s.RecordingCapMiB; c != 0 && (c < recording.MinCapMiB || c > recording.MaxCapMiB) {
+		return fmt.Errorf("recordings cap %d MiB: want %d MiB to %d MiB", s.RecordingCapMiB, recording.MinCapMiB, recording.MaxCapMiB)
+	}
 	return nil
 }
 
@@ -65,6 +96,8 @@ const (
 	keyProxy    = "ui.default_proxy"
 	keyRAM      = "ui.ram_limit_percent"
 	keyBlockAds = "ui.default_block_ads"
+	keyRecDays  = "ui.recording_retention_days"
+	keyRecCap   = "ui.recording_cap_mib"
 )
 
 // Store keeps the settings in the database's settings table.
@@ -74,8 +107,8 @@ func New(db *sql.DB) *Store { return &Store{db: db} }
 
 // Get returns the settings, with the defaults for any never saved.
 func (s *Store) Get(ctx context.Context) (Settings, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT key, value FROM settings WHERE key IN (?, ?, ?, ?, ?)`,
-		keyPolicy, keyAutoStop, keyProxy, keyRAM, keyBlockAds)
+	rows, err := s.db.QueryContext(ctx, `SELECT key, value FROM settings WHERE key IN (?, ?, ?, ?, ?, ?, ?)`,
+		keyPolicy, keyAutoStop, keyProxy, keyRAM, keyBlockAds, keyRecDays, keyRecCap)
 	if err != nil {
 		return Settings{}, err
 	}
@@ -105,6 +138,14 @@ func (s *Store) Get(ctx context.Context) (Settings, error) {
 			if out.DefaultBlockAds, err = strconv.ParseBool(v); err != nil {
 				return Settings{}, fmt.Errorf("stored setting %s: %w", k, err)
 			}
+		case keyRecDays:
+			if out.RecordingRetentionDays, err = strconv.Atoi(v); err != nil {
+				return Settings{}, fmt.Errorf("stored setting %s: %w", k, err)
+			}
+		case keyRecCap:
+			if out.RecordingCapMiB, err = strconv.Atoi(v); err != nil {
+				return Settings{}, fmt.Errorf("stored setting %s: %w", k, err)
+			}
 		}
 	}
 	return out, rows.Err()
@@ -126,6 +167,8 @@ func (s *Store) Save(ctx context.Context, set Settings) error {
 		{keyProxy, set.DefaultProxy},
 		{keyRAM, strconv.Itoa(set.RAMLimitPercent)},
 		{keyBlockAds, strconv.FormatBool(set.DefaultBlockAds)},
+		{keyRecDays, strconv.Itoa(set.RecordingRetentionDays)},
+		{keyRecCap, strconv.Itoa(set.RecordingCapMiB)},
 	} {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`, kv[0], kv[1]); err != nil {
 			return err
