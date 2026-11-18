@@ -48,9 +48,11 @@ RUN apt-get update \
 # switch must appear in the binary as a whole NUL-terminated string, and each
 # switch chromiumArgs passes must be in this list (TestSwitchListMatchesFlags).
 # The same for each feature in its --disable-features (PROJ-160): an unknown
-# feature name is ignored too. A feature's name is stored whole, or as its
-# constant's name ("kName"), which Chromium's BASE_FEATURE reads from its
-# second character on.
+# feature name is ignored too. Each is listed in the one form its name is
+# stored in: whole, or, for a feature declared with Chromium's newer
+# BASE_FEATURE that names it from its constant, as "kName" (the name is read
+# from its second character). That a string is there is necessary, not
+# sufficient: TestBrowserEnvironment/back checks the switch takes effect.
 # Chromium's interface languages (chromium-l10n): without them it runs in
 # en-US whatever LANGUAGE says, and Intl's locale contradicts
 # navigator.languages, which matches the exit location.
@@ -64,7 +66,7 @@ RUN for el in ximagesrc videoconvert videoscale x264enc mp4mux fdsink; do gst-in
                disable-features; do \
       LC_ALL=C grep -qaxF -- "$sw" /tmp/strings || { echo "chromium binary lacks --$sw"; exit 1; }; done \
  && for feature in BackForwardCache; do \
-      LC_ALL=C grep -qaxE -- "k?$feature" /tmp/strings || { echo "chromium binary lacks the feature $feature"; exit 1; }; done \
+      LC_ALL=C grep -qaxF -- "$feature" /tmp/strings || { echo "chromium binary lacks the feature $feature"; exit 1; }; done \
  && rm /tmp/strings
 
 # WebGL renders on Mesa's llvmpipe (PROJ-148): ANGLE loads libGL.so.1, the
