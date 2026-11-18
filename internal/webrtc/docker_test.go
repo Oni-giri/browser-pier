@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/db"
 	"github.com/Oni-giri/browser-pier/internal/docker"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
+	"github.com/Oni-giri/browser-pier/internal/recording"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
@@ -39,9 +41,51 @@ func TestRealBrowserReachesAViewer(t *testing.T) {
 	t.Logf("%d RTP packets in 3 s", n)
 }
 
+// TestWatchingWhileRecording: the live view gets its frames as before
+// while the same browser is recorded, two pipelines at once (PROJ-23).
+func TestWatchingWhileRecording(t *testing.T) {
+	m, name := startBrowserWith(t, true)
+	s, _ := m.Live(name)
+	_, release, err := m.Attach(context.Background(), s.ID, "tok", "claude") // an agent at work: recording
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if !m.Recording(s.ID) {
+		t.Fatal("not recording while the agent is connected")
+	}
+	relay, err := New(Options{Port: 0, IPs: []string{"127.0.0.1"}}, m.Layout().ControlSocket, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = relay.Close() }()
+	if n := watch(t, relay, name, pion.Configuration{}); n < 30 {
+		t.Fatalf("only %d RTP packets in 3 s while recording", n)
+	} else {
+		t.Logf("%d RTP packets in 3 s while recording", n)
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		if out, _ := exec.Command("docker", "exec", "browserpier-"+name, "sh", "-c", "cat /proc/[0-9]*/cmdline 2>/dev/null | tr '\\0' ' '").Output(); strings.Contains(string(out), "mp4mux") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no recording pipeline ran beside the live one")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
 // startBrowser starts a real browser for a new profile, stopped when the
 // test ends.
 func startBrowser(t *testing.T) (*sessions.Manager, string) {
+	t.Helper()
+	return startBrowserWith(t, false)
+}
+
+// startBrowserWith is startBrowser, with the profile's Record sessions
+// setting and a real recorder when record is set.
+func startBrowserWith(t *testing.T, record bool) (*sessions.Manager, string) {
 	t.Helper()
 	image := os.Getenv("BROWSERPIER_TEST_IMAGE")
 	if image == "" {
@@ -73,6 +117,13 @@ func startBrowser(t *testing.T) (*sessions.Manager, string) {
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", "browserpier-"+name).Run() })
 	p := profiles.New(name)
 	p.Width, p.Height = 1280, 800
+	p.Record = record
+	if record {
+		store := recording.NewStore(filepath.Join(dir, "recordings"), slog.New(slog.DiscardHandler))
+		rec := recording.NewRecorder(store, m.RecordStream, slog.New(slog.DiscardHandler))
+		t.Cleanup(rec.Close)
+		m.SetRecorder(rec, store)
+	}
 	if _, err := m.Profiles().Create(ctx, p); err != nil {
 		t.Fatal(err)
 	}
