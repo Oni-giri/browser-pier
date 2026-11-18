@@ -21,6 +21,8 @@ type fakeChooser struct {
 	mu      sync.Mutex
 	open    string
 	answers []string
+	// inputs is what the live view sent the browser as mouse and keys.
+	inputs []string
 }
 
 func (c *fakeChooser) register(mux *http.ServeMux) {
@@ -29,6 +31,14 @@ func (c *fakeChooser) register(mux *http.ServeMux) {
 		defer c.mu.Unlock()
 		_, _ = io.WriteString(w, `{"choosers":`+c.open+`}`)
 	})
+	mux.HandleFunc("POST /input/events", func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		c.mu.Lock()
+		c.inputs = append(c.inputs, string(b))
+		c.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc("POST /chooser/restart", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc("POST /chooser/{id}", func(w http.ResponseWriter, r *http.Request) {
 		c.mu.Lock()
@@ -218,4 +228,17 @@ func TestChooserUploadNeedsAnOpenChooser(t *testing.T) {
 	if got := f.choosers.got(); len(got) != 0 {
 		t.Fatalf("answered: %q", got)
 	}
+}
+
+// keys is the key events the live view sent the browser.
+func (c *fakeChooser) keys() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []string
+	for _, in := range c.inputs {
+		if strings.Contains(in, `"key`) {
+			out = append(out, in)
+		}
+	}
+	return out
 }

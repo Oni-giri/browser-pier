@@ -203,6 +203,22 @@ func TestChooserModal(t *testing.T) {
 	}
 	desk.Eval(`document.getElementById("take").click()`)
 	untilFor(t, desk, 15*time.Second, "the modal never opened in the live view", open)
+	// The keyboard went to the browser with control; while the modal is
+	// up its keys stay in the modal: a letter and Esc reach neither the
+	// browser nor the live view's own Esc (which releases the keyboard).
+	press := func(k, code string, vk int) {
+		for _, typ := range []string{"keyDown", "keyUp"} {
+			desk.Call("Input.dispatchKeyEvent", map[string]any{"type": typ, "key": k, "code": code, "windowsVirtualKeyCode": vk, "text": map[bool]string{true: k, false: ""}[typ == "keyDown" && len(k) == 1]})
+		}
+	}
+	press("a", "KeyA", 65)
+	press("Escape", "Escape", 27)
+	time.Sleep(time.Second)
+	if got := f.choosers.keys(); len(got) != 0 {
+		t.Fatalf("keys reached the browser through the modal: %q", got)
+	}
+	is(t, desk, open, true)
+	is(t, desk, `document.getElementById("note").textContent.includes("Keyboard released")`, false)
 	is(t, desk, `document.querySelectorAll("#chooser input[type=checkbox]").length`, float64(3))
 	is(t, desk, `document.querySelector("#chooser h2").textContent`, "Choose files for the page")
 	desk.Eval(`document.querySelectorAll("#chooser input[type=checkbox]")[0].click(); document.querySelectorAll("#chooser input[type=checkbox]")[1].click()`)
