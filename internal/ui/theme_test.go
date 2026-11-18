@@ -96,6 +96,37 @@ func TestNoticesAreNeverOrange(t *testing.T) {
 	}
 }
 
+// The orange pill is the Needs-you status. A setting that's missing (no
+// handoff PIN yet) waits for nobody, so its pill is the plain grey one.
+func TestOrangePillOnlyForNeedsYou(t *testing.T) {
+	pill := regexp.MustCompile(`<span class="([^"]*)">([^<]*)<`)
+	files, err := fs.Glob(embedded, "templates/*.html")
+	if err != nil || len(files) == 0 {
+		t.Fatal("no templates", err)
+	}
+	for _, name := range files {
+		b, err := embedded.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range pill.FindAllStringSubmatch(string(b), -1) {
+			classes := strings.Fields(m[1])
+			if slices.Contains(classes, "pill") && slices.Contains(classes, "help") && m[2] != "Needs you" {
+				t.Errorf("%s: %s: the orange pill is only for Needs you", name, m[0])
+			}
+		}
+	}
+	// Rendered, with no PIN set yet: the PIN pills are there and grey.
+	f := newFixture(t)
+	for path, label := range map[string]string{"/agents": "No PIN", "/settings": "Not set"} {
+		r := f.get(path)
+		want(t, r, http.StatusOK, `<span class="pill">`+label+`</span>`)
+		if strings.Contains(r.body, "pill help") {
+			t.Errorf("%s is orange with nobody needed", path)
+		}
+	}
+}
+
 func (f *fixture) setTheme(v string) {
 	u, _ := url.Parse(f.srv.URL)
 	f.client.Jar.SetCookies(u, []*http.Cookie{{Name: theme.Cookie, Value: v, Path: "/"}})
