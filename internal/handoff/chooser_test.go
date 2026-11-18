@@ -205,7 +205,7 @@ func TestHandoffChooserIsTheLinksOwn(t *testing.T) {
 	if _, err := f.svc.Finish(ctx, hh, Done, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.m.TakeControl(h.SessionID, sessions.AdminHolder("admin")); err != nil { // someone in the live view now
+	if err := f.m.TakeControl(h.SessionID, sessions.AdminHolder); err != nil { // someone in the live view now
 		t.Fatal(err)
 	}
 	for _, p := range []reply{
@@ -262,7 +262,7 @@ func TestHandoffChooserOnlyWhileTheLinkHasControl(t *testing.T) {
 	phone := browser()
 	f.openLink(phone, token)
 	base := "/h/" + token + "/chooser"
-	if err := f.m.TakeControl(h.SessionID, sessions.AdminHolder("admin")); err != nil {
+	if err := f.m.TakeControl(h.SessionID, sessions.AdminHolder); err != nil {
 		t.Fatal(err)
 	}
 	for what, p := range map[string]reply{

@@ -2,7 +2,6 @@ package sessions
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"sync"
 	"time"
@@ -79,43 +78,50 @@ func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, f
 // paused, so it always succeeds.
 //
 // holder names who takes it, opaque here: the live view's viewer passes
-// the signed-in admin's or the handoff link's (PROJ-184), and what only
+// the admin's (AdminHolder) or the handoff link's (PROJ-184), and what only
 // the person in control may do (HumanInput, ControlledBy) checks it. An
-// empty holder can't take control.
+// empty holder can't take control (ErrNoHolder).
 func (m *Manager) TakeControl(id, holder string) error {
+	_, err := m.TakeControlTurn(id, holder)
+	return err
+}
+
+// TakeControlTurn is TakeControl, and returns this turn's number, for
+// HoldsTurn and ReleaseTurn: a live view releases only its own turn.
+func (m *Manager) TakeControlTurn(id, holder string) (uint64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if holder == "" {
-		return errors.New("sessions: TakeControl needs a holder")
+		return 0, ErrNoHolder
 	}
 	l := m.findLocked(id)
 	if l == nil || (l.sess.State != Running && l.sess.State != NeedsHelp) {
-		return ErrNotRunning
+		return 0, ErrNotRunning
 	}
 	now := m.now()
 	breakOff := false
 	if l.sess.State == Running {
 		if len(l.conns) > 0 {
-			return ErrAgentDriving
+			return 0, ErrAgentDriving
 		}
 		for ls := range l.leases {
 			if !ls.breakable || now.Sub(ls.started) < takeOverAfter {
-				return ErrAgentDriving
+				return 0, ErrAgentDriving
 			}
 			breakOff = true
 		}
 		for in := range l.inputs {
 			if now.Sub(in.started) < takeOverAfter {
-				return ErrAgentDriving
+				return 0, ErrAgentDriving
 			}
 			breakOff = true
 		}
 		if !breakOff && now.Sub(l.lastAgentInput) < agentQuiet {
-			return ErrAgentDriving
+			return 0, ErrAgentDriving
 		}
 	}
 	if l.human {
-		return ErrHumanDriving // one person at a time
+		return 0, ErrHumanDriving // one person at a time
 	}
 	l.human, l.holder = true, holder
 	// Recording stops here, under m.mu and before anything else: no
@@ -123,6 +129,8 @@ func (m *Manager) TakeControl(id, holder string) error {
 	// which the live view needs before it forwards any input, can't see
 	// human until it has.
 	m.personTookLocked(l)
+	l.controlTurn++
+	turn := l.controlTurn
 	l.generation++
 	l.lastActivity = now
 	m.restartChoosers(l.sess.Profile)
@@ -141,10 +149,10 @@ func (m *Manager) TakeControl(id, holder string) error {
 	if len(l.inputs) > 0 || len(l.leases) > 0 {
 		m.waitLeasesLocked(l)
 		if m.findLocked(id) != l || !l.sess.State.Live() {
-			return ErrNotRunning // stopped meanwhile
+			return 0, ErrNotRunning // stopped meanwhile
 		}
 	}
-	return nil
+	return turn, nil
 }
 
 // HumanInput records that the person in control used the browser. It
@@ -169,26 +177,53 @@ func (m *Manager) HumanInput(id, holder string) (done func(), err error) {
 	}), nil
 }
 
-// ReleaseControl hands the browser back to agents, whatever ends the
-// person's control: they hand back, a handoff ends, the live view goes.
-// First it empties the browser's clipboard and PRIMARY selection
-// (PROJ-194), so no agent can paste what the person put there, copied or
-// selected in the page: it waits for their input under way and a moment
-// more (clipboardSettle), refuses more, and only then lets agents in. If
-// the clipboard can't be emptied, that is logged and the browser handed
-// back all the same. A browser that is stopping keeps its clipboard: the
-// container takes it along, or, if the stop fails, runStop empties it
-// before agents get the browser back. Recording (PROJ-23) stays off
-// throughout, and the
-// gate is asked again only as agents get the browser back. It returns
-// once agents have the browser.
+// ReleaseControl hands the browser back to agents, whoever held it: a
+// handoff's end, or the profile page's Hand back (releaseLocked). It
+// returns once agents have the browser.
 func (m *Manager) ReleaseControl(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	l := m.findLocked(id)
-	if l == nil || !l.human {
-		return
+	if l := m.findLocked(id); l != nil && l.human {
+		m.releaseLocked(id, l)
 	}
+}
+
+// ReleaseTurn hands the browser back to agents if turn (from
+// TakeControlTurn) still has it, and reports whether it did. A live view
+// whose control ended behind its back (a handoff finished, Hand back from
+// another page) releases nothing of whoever took it next.
+func (m *Manager) ReleaseTurn(id string, turn uint64) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l := m.findLocked(id)
+	if l == nil || !l.human || l.controlTurn != turn {
+		return false
+	}
+	m.releaseLocked(id, l)
+	return true
+}
+
+// HoldsTurn reports whether turn (from TakeControlTurn) still has control.
+func (m *Manager) HoldsTurn(id string, turn uint64) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l := m.findLocked(id)
+	return l != nil && l.human && l.controlTurn == turn && (l.sess.State == Running || l.sess.State == NeedsHelp)
+}
+
+// releaseLocked ends a person's control, whatever ends it: they hand
+// back, a handoff ends, the live view goes. First it empties the
+// browser's clipboard and PRIMARY selection (PROJ-194), so no agent can
+// paste what the person put there, copied or selected in the page: it
+// waits for their input under way and a moment more (clipboardSettle),
+// refuses more, and only then lets agents in. If the clipboard can't be
+// emptied, that is logged and the browser handed back all the same. A
+// browser that is stopping keeps its clipboard: the container takes it
+// along, or, if the stop fails, runStop empties it before agents get the
+// browser back. Recording (PROJ-23) stays off throughout, and the gate is
+// asked again only as agents get the browser back. It drops m.mu while
+// it empties the clipboard, and returns once agents have the browser.
+func (m *Manager) releaseLocked(id string, l *live) {
 	if l.releasing {
 		// Another hand-back is emptying the clipboard: done when it is.
 		for m.findLocked(id) == l && l.human {
@@ -276,14 +311,11 @@ func (l *live) controlledByLocked(holder string) bool {
 	return l.human && holder != "" && l.holder == holder && (l.sess.State == Running || l.sess.State == NeedsHelp)
 }
 
-// AdminHolder is the holder of control for the admin's live view in one
-// signed-in browser (auth.AdminSession.ID, a hash, never the cookie).
-func AdminHolder(adminSession string) string {
-	if adminSession == "" {
-		return ""
-	}
-	return "admin " + adminSession
-}
+// AdminHolder is the holder of control for the admin's live view, in any
+// of the admin's signed-in browsers: one account, so a browser signed in
+// again while its live view stays open keeps answering its file
+// choosers. Which view holds control is the turn's (TakeControlTurn).
+const AdminHolder = "admin"
 
 // HandoffHolder is the holder of control for a handoff link's holder.
 func HandoffHolder(handoff string) string {

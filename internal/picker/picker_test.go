@@ -161,7 +161,7 @@ func TestOnlyTheHolderAnswers(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := New(m, fs, slog.New(slog.DiscardHandler))
-	phone, admin := holder, sessions.AdminHolder("abc")
+	phone, admin := holder, sessions.AdminHolder
 
 	show := func(who string) int {
 		w := httptest.NewRecorder()

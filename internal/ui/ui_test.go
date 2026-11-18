@@ -47,6 +47,7 @@ type fixture struct {
 	choosers *fakeChooser
 	// holder is the signed-in client's holder of control (PROJ-184).
 	holder string
+	admin  *auth.Admin
 	ram    int
 	free   int64 // what the host has available, for HostFree
 	// emptied counts the browser's clipboard emptyings (PROJ-194).
@@ -115,11 +116,11 @@ func newFixture(t *testing.T) *fixture {
 	f.srv = httptest.NewServer(new(http.CrossOriginProtection).Handler(mux))
 	t.Cleanup(f.srv.Close)
 
-	cookie, as, err := admin.NewSession(ctx, false, "test")
+	cookie, _, err := admin.NewSession(ctx, false, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.holder = sessions.AdminHolder(as.ID)
+	f.holder, f.admin = sessions.AdminHolder, admin
 	jar, _ := cookiejar.New(nil)
 	u, _ := url.Parse(f.srv.URL)
 	jar.SetCookies(u, []*http.Cookie{{Name: auth.CookieName, Value: cookie, Path: "/"}})

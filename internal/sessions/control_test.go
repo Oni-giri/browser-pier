@@ -77,7 +77,7 @@ func TestTakeAndReleaseControl(t *testing.T) {
 func TestControlHasOneHolder(t *testing.T) {
 	f := newFixture(t)
 	s := f.start(f.m)
-	phone, admin := HandoffHolder("h1"), AdminHolder("abc")
+	phone, admin := HandoffHolder("h1"), AdminHolder
 	if err := f.m.TakeControl(s.ID, ""); err == nil {
 		t.Fatal("control taken with no holder")
 	}
@@ -92,7 +92,7 @@ func TestControlHasOneHolder(t *testing.T) {
 	} else {
 		done()
 	}
-	for _, other := range []string{admin, "", AdminHolder(""), HandoffHolder("h2")} {
+	for _, other := range []string{admin, "", HandoffHolder(""), HandoffHolder("h2")} {
 		if f.m.ControlledBy(s.ID, other) {
 			t.Fatalf("%q counts as in control while %q holds it", other, phone)
 		}
@@ -112,6 +112,41 @@ func TestControlHasOneHolder(t *testing.T) {
 	}
 	if !f.m.ControlledBy(s.ID, admin) || f.m.ControlledBy(s.ID, phone) {
 		t.Fatal("control didn't move to the admin alone")
+	}
+}
+
+// TestReleaseTurnIsOnlyItsOwn (PROJ-184, review S1): a turn released
+// behind a live view's back (a handoff finished) and taken by the next
+// person, even with the same holder, is no longer that view's: it can't
+// release the next one's.
+func TestReleaseTurnIsOnlyItsOwn(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	if _, err := f.m.TakeControlTurn(s.ID, ""); !errors.Is(err, ErrNoHolder) {
+		t.Fatalf("no holder: %v", err)
+	}
+	old, err := f.m.TakeControlTurn(s.ID, AdminHolder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.m.HoldsTurn(s.ID, old) {
+		t.Fatal("the turn isn't held")
+	}
+	f.m.ReleaseControl(s.ID) // a handoff's end, or Hand back
+	for _, next := range []string{HandoffHolder("h1"), AdminHolder} {
+		turn, err := f.m.TakeControlTurn(s.ID, next)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f.m.HoldsTurn(s.ID, old) || f.m.ReleaseTurn(s.ID, old) {
+			t.Fatalf("an old turn held or released %q's", next)
+		}
+		if !f.m.ControlledBy(s.ID, next) || !f.m.HoldsTurn(s.ID, turn) {
+			t.Fatalf("%q lost control to an old turn", next)
+		}
+		if !f.m.ReleaseTurn(s.ID, turn) || f.m.ControlledBy(s.ID, next) {
+			t.Fatalf("%q couldn't release its own turn", next)
+		}
 	}
 }
 

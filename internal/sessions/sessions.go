@@ -43,6 +43,9 @@ var (
 	// ErrAgentDriving: a person can't take control while an agent is
 	// connected or has just sent input.
 	ErrAgentDriving = errors.New("an agent is driving this browser")
+	// ErrNoHolder: TakeControl was called without saying who takes it, a
+	// wiring mistake (PROJ-184).
+	ErrNoHolder = errors.New("sessions: control taken with no holder")
 	// ErrHumanDriving: an agent can't act while a person has control.
 	ErrHumanDriving = errors.New("a person is driving this browser")
 	// ErrInputBusy: an agent's input action is still under way in this

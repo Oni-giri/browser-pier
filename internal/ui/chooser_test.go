@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
@@ -213,9 +215,7 @@ func TestLiveViewChooser(t *testing.T) {
 
 // TestLiveViewChooserOnlyForTheHolder (PROJ-184): while a handoff link's
 // holder has control, the admin's live view can't see, answer or upload
-// to the chooser, and nothing it sends is stored or reaches the browser;
-// nor can another of the admin's signed-in browsers while this one has
-// it.
+// to the chooser, and nothing it sends is stored or reaches the browser.
 func TestLiveViewChooserOnlyForTheHolder(t *testing.T) {
 	f := newFixture(t)
 	f.profile("google")
@@ -240,18 +240,13 @@ func TestLiveViewChooserOnlyForTheHolder(t *testing.T) {
 		}
 	}
 
-	// Another of the admin's browsers drives, then the link's phone.
-	if err := f.m.TakeControl(s.ID, sessions.AdminHolder("another signed-in browser")); err != nil {
-		t.Fatal(err)
-	}
-	refused("while another signed-in browser has control")
-	f.m.ReleaseControl(s.ID)
+	// The link's phone drives.
 	if err := f.m.TakeControl(s.ID, sessions.HandoffHolder("h1")); err != nil {
 		t.Fatal(err)
 	}
 	refused("while the handoff link has control")
 
-	// This browser takes control: it answers.
+	// The admin's live view takes control: it answers.
 	f.m.ReleaseControl(s.ID)
 	if err := f.m.TakeControl(s.ID, f.holder); err != nil {
 		t.Fatal(err)
@@ -261,6 +256,28 @@ func TestLiveViewChooserOnlyForTheHolder(t *testing.T) {
 	if got := f.choosers.got(); len(got) != 1 || got[0] != filesJSON("cv.pdf") {
 		t.Fatalf("the browser got %q", got)
 	}
+
+	// Signed out and in again (in another tab) while the live view keeps
+	// control: its choosers still answer (review N2).
+	u, _ := url.Parse(f.srv.URL)
+	var old string
+	for _, c := range f.client.Jar.Cookies(u) {
+		if c.Name == auth.CookieName {
+			old = c.Value
+		}
+	}
+	if err := f.admin.EndSession(context.Background(), old); err != nil {
+		t.Fatal(err)
+	}
+	cookie, _, err := f.admin.NewSession(context.Background(), false, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.client.Jar, _ = cookiejar.New(nil)
+	f.client.Jar.SetCookies(u, []*http.Cookie{{Name: auth.CookieName, Value: cookie, Path: "/"}})
+	f.choosers.set(`[{"id":"c2","multiple":false,"accept":[],"left_ms":300000}]`)
+	want(t, f.get(base), http.StatusOK, `data-id="c2"`)
+	want(t, f.post(base, url.Values{"id": {"c2"}, "cancel": {"1"}}), http.StatusNoContent)
 }
 
 // An upload names a chooser that is open, or nothing is stored.

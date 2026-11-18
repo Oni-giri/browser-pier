@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/handoff"
 	"github.com/Oni-giri/browser-pier/internal/recording"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
@@ -188,8 +187,8 @@ func (u *UI) handBack(w http.ResponseWriter, r *http.Request) {
 }
 
 // chooser serves the live view's file chooser routes (PROJ-181) for the
-// profile's running browser; the picker checks that this signed-in
-// browser's live view has control of it, not a handoff link (PROJ-184).
+// profile's running browser; the picker checks that the admin's live
+// view has control of it, not a handoff link (PROJ-184).
 func (u *UI) chooser(serve func(http.ResponseWriter, *http.Request, sessions.Session, string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		s, ok := u.m.Live(r.PathValue("name"))
@@ -197,7 +196,6 @@ func (u *UI) chooser(serve func(http.ResponseWriter, *http.Request, sessions.Ses
 			http.Error(w, "The browser isn't running.", http.StatusConflict)
 			return
 		}
-		a, _ := auth.SessionFromContext(r.Context())
-		serve(w, r, s, sessions.AdminHolder(a.ID))
+		serve(w, r, s, sessions.AdminHolder)
 	}
 }
