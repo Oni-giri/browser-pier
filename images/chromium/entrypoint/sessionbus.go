@@ -168,22 +168,19 @@ func stopBrowser(p *process, cdp string, timeout time.Duration, portal *portal, 
 }
 
 // startChooser starts the session bus and the file chooser portal on it.
-// Either failing is logged and leaves the browser with its own dialogs,
-// as before the portal: a browser that starts beats one that refuses on
-// an odd host. The control socket's /chooser then answers 503.
-func startChooser(ctx context.Context, log *slog.Logger, cfg config) (*sessionBus, *portal) {
+// Either failing fails the browser's start (PROJ-181): Chromium's own
+// dialog, its fallback, browses the whole container (PROJ-183).
+func startChooser(ctx context.Context, log *slog.Logger, cfg config) (*sessionBus, *portal, error) {
 	bus, err := startSessionBus(ctx, os.Getuid())
 	if err != nil {
-		log.Warn("no session bus: pages' file choosers show Chromium's own dialog", "err", err)
-		return nil, nil
+		return nil, nil, fmt.Errorf("the session bus for the file chooser portal: %w", err)
 	}
 	p, err := startPortal(log, bus.address(), cfg.ChooserTimeout, newXFocus(log, cfg.Width, cfg.Height))
 	if err != nil {
-		log.Warn("no file chooser portal: pages' file choosers show Chromium's own dialog", "err", err)
 		bus.stop()
-		return nil, nil
+		return nil, nil, fmt.Errorf("the file chooser portal: %w", err)
 	}
-	return bus, p
+	return bus, p, nil
 }
 
 // waitEnd waits until Chromium exits (false) or a stop is asked for

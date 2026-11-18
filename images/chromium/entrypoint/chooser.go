@@ -72,6 +72,7 @@ type chooserReq struct {
 	accept   []string
 	opened   time.Time
 	timer    stopper
+	deadline time.Time // when the timer cancels it
 }
 
 // stopper is a timer as the clock gives it.
@@ -186,6 +187,7 @@ func (c *chooser) openFile(sender string, opts map[string]dbus.Variant) (dbus.Ob
 }
 
 func (c *chooser) startTimerLocked(r *chooserReq) {
+	r.deadline = c.now().Add(c.timeout)
 	r.timer = c.after(c.timeout, func() {
 		c.mu.Lock()
 		defer c.mu.Unlock()
@@ -256,12 +258,29 @@ func (c *chooser) browserExited() {
 	}
 }
 
+// restart gives every open chooser its whole time limit again: control
+// of the browser changed hands (PROJ-181), and whoever has it now gets
+// the time to answer.
+func (c *chooser) restart() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, r := range c.open {
+		if r.timer != nil {
+			r.timer.Stop()
+		}
+		c.startTimerLocked(r)
+	}
+	return len(c.open)
+}
+
 // chooserInfo is one open chooser as the control socket lists it.
 type chooserInfo struct {
 	ID       string   `json:"id"`
 	Multiple bool     `json:"multiple"`
 	Accept   []string `json:"accept"`
 	AgeMS    int64    `json:"age_ms"`
+	// LeftMS is how long until the time limit cancels it.
+	LeftMS int64 `json:"left_ms"`
 }
 
 // list is the open choosers, oldest first.
@@ -271,7 +290,8 @@ func (c *chooser) list() []chooserInfo {
 	out := make([]chooserInfo, 0, len(c.open))
 	now := c.now()
 	for _, r := range c.open {
-		out = append(out, chooserInfo{ID: r.id, Multiple: r.multiple, Accept: append([]string{}, r.accept...), AgeMS: now.Sub(r.opened).Milliseconds()})
+		out = append(out, chooserInfo{ID: r.id, Multiple: r.multiple, Accept: append([]string{}, r.accept...), AgeMS: now.Sub(r.opened).Milliseconds(),
+			LeftMS: max(0, r.deadline.Sub(now).Milliseconds())})
 	}
 	sortChoosers(out)
 	return out

@@ -29,22 +29,21 @@ func TestLoadConfigDefaults(t *testing.T) {
 
 func TestLoadConfigFromEnv(t *testing.T) {
 	c, err := loadConfig(env(map[string]string{
-		"BROWSERPIER_SCREEN":              "1280x800",
-		"BROWSERPIER_PROFILE_DIR":         "/p",
-		"BROWSERPIER_CONTROL_SOCKET":      "/s/c.sock",
-		"BROWSERPIER_STOP_TIMEOUT":        "45s",
-		"BROWSERPIER_CHOOSER_TIMEOUT":     "3s",
-		"BROWSERPIER_FILE_CHOOSER_PORTAL": "true",
-		"BROWSERPIER_MOUNT_CHECK":         "s1",
-		"BROWSERPIER_LOCAL_NETWORK":       "true",
-		"BROWSERPIER_HOST_IPS":            "203.0.113.4, 2001:db8::4",
-		"BROWSERPIER_BLOCK_ADS":           "true",
-		"BROWSERPIER_BLOCKLIST_FILE":      "/s/list.txt",
+		"BROWSERPIER_SCREEN":          "1280x800",
+		"BROWSERPIER_PROFILE_DIR":     "/p",
+		"BROWSERPIER_CONTROL_SOCKET":  "/s/c.sock",
+		"BROWSERPIER_STOP_TIMEOUT":    "45s",
+		"BROWSERPIER_CHOOSER_TIMEOUT": "3s",
+		"BROWSERPIER_MOUNT_CHECK":     "s1",
+		"BROWSERPIER_LOCAL_NETWORK":   "true",
+		"BROWSERPIER_HOST_IPS":        "203.0.113.4, 2001:db8::4",
+		"BROWSERPIER_BLOCK_ADS":       "true",
+		"BROWSERPIER_BLOCKLIST_FILE":  "/s/list.txt",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := config{Width: 1280, Height: 800, ProfileDir: "/p", ControlSocket: "/s/c.sock", StopTimeout: 45 * time.Second, MountCheck: "s1", ProxyFile: "/run/browserpier/proxy.json", LocalNetwork: true, BlockAds: true, BlockFile: "/s/list.txt", ChooserTimeout: 3 * time.Second, FileChooserPortal: true,
+	want := config{Width: 1280, Height: 800, ProfileDir: "/p", ControlSocket: "/s/c.sock", StopTimeout: 45 * time.Second, MountCheck: "s1", ProxyFile: "/run/browserpier/proxy.json", LocalNetwork: true, BlockAds: true, BlockFile: "/s/list.txt", ChooserTimeout: 3 * time.Second,
 		HostIPs: []netip.Addr{netip.MustParseAddr("203.0.113.4"), netip.MustParseAddr("2001:db8::4")}}
 	if !reflect.DeepEqual(c, want) {
 		t.Fatalf("got %+v, want %+v", c, want)
@@ -60,7 +59,6 @@ func TestLoadConfigRejectsBadValues(t *testing.T) {
 		{"BROWSERPIER_STOP_TIMEOUT": "soon"},
 		{"BROWSERPIER_STOP_TIMEOUT": "0s"},
 		{"BROWSERPIER_CHOOSER_TIMEOUT": "10ms"},
-		{"BROWSERPIER_FILE_CHOOSER_PORTAL": "yes please"},
 		{"BROWSERPIER_CHOOSER_TIMEOUT": "2h"},
 		{"BROWSERPIER_PROFILE_DIR": ""},
 		{"BROWSERPIER_CONTROL_SOCKET": ""},

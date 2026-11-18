@@ -676,6 +676,34 @@ func TestBrowserEnvironment(t *testing.T) {
 	}
 }
 
+// TestNoPortalNoBrowser (PROJ-181): a browser whose session bus can't
+// start doesn't start, rather than fall back to Chromium's GTK dialog,
+// which lets whoever drives it hand a page any file in the container
+// (PROJ-183). Here the bus's folder is taken by one of the wrong mode.
+func TestNoPortalNoBrowser(t *testing.T) {
+	image := testImage(t)
+	seccomp, err := filepath.Abs("seccomp.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid := docker(t, "run", "--rm", "--entrypoint", "id", image, "-u")
+	name := fmt.Sprintf("bp-test-%d", time.Now().UnixNano())
+	run := append([]string{"run", "-d", "--name", name, "--security-opt", "seccomp=" + seccomp}, appArmor(t, image, seccomp)...)
+	docker(t, append(run, "--shm-size=1g", "-v", newVolume(t)+":/profile", "-v", t.TempDir()+":/run/browserpier",
+		"--mount", "type=tmpfs,destination=/tmp/browserpier-bus-"+uid+",tmpfs-mode=0755", image)...)
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
+	for deadline := time.Now().Add(60 * time.Second); docker(t, "inspect", "-f", "{{.State.Running}}", name) == "true"; time.Sleep(250 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the browser kept running without its session bus")
+		}
+	}
+	out, _ := exec.Command("docker", "logs", name).CombinedOutput()
+	logs := string(out)
+	if code := docker(t, "inspect", "-f", "{{.State.ExitCode}}", name); code == "0" || !strings.Contains(logs, "session bus") || strings.Contains(logs, `msg=ready`) {
+		t.Fatalf("exit %s, want a failure naming the session bus, before ready:\n%s", code, logs)
+	}
+}
+
 // TestSessionBus (PROJ-152): the browser container's session bus and
 // file chooser portal. The bus runs, listens on one path socket in a
 // 0700 folder and nowhere else (no TCP, no abstract socket); only
@@ -683,7 +711,7 @@ func TestBrowserEnvironment(t *testing.T) {
 // image; Chromium's renderers can't reach the socket; the sandbox holds.
 func TestSessionBus(t *testing.T) {
 	image := testImage(t)
-	b := startBrowserEnv(t, image, newVolume(t), "BROWSERPIER_FILE_CHOOSER_PORTAL=true")
+	b := startBrowser(t, image, newVolume(t)) // the defaults: the portal is always on (PROJ-181)
 	sh := func(script string) string {
 		t.Helper()
 		return docker(t, "exec", b.name, "sh", "-c", script)
@@ -797,25 +825,5 @@ func TestSessionBus(t *testing.T) {
 	}
 	if logs := b.logs(); strings.Contains(logs, "no session bus") || strings.Contains(logs, "no file chooser portal") {
 		t.Errorf("the portal didn't start:\n%s", logs)
-	}
-}
-
-// TestNoSessionBusByDefault (PROJ-152): with
-// BROWSERPIER_FILE_CHOOSER_PORTAL unset, nothing of the portal runs: no
-// bus process or folder, and the control socket's /chooser says it is off.
-func TestNoSessionBusByDefault(t *testing.T) {
-	image := testImage(t)
-	b := startBrowser(t, image, newVolume(t))
-	if out := docker(t, "exec", b.name, "sh", "-c", "ls -d /tmp/browserpier-bus-* 2>/dev/null; for p in /proc/[0-9]*; do tr '\\0' ' ' < $p/cmdline 2>/dev/null | grep -q '^dbus-daemon' && echo ${p#/proc/}; done; true"); out != "" {
-		t.Errorf("the portal is off, yet: %s", out)
-	}
-	resp, err := b.http.Get("http://control/chooser")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(body), "BROWSERPIER_FILE_CHOOSER_PORTAL") {
-		t.Errorf("GET /chooser: %d %s", resp.StatusCode, body)
 	}
 }

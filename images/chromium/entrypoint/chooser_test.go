@@ -270,6 +270,37 @@ func TestChooserTimesOut(t *testing.T) {
 	}
 }
 
+// TestChooserTimerRestarts (PROJ-181): when control changes hands, every
+// open chooser gets its whole time limit again, and the listing says how
+// long is left.
+func TestChooserTimerRestarts(t *testing.T) {
+	c, bus, clock, _ := testChooser(t)
+	if _, err := c.openFile(browserSender, opts("handle_token", "tok")); err != nil {
+		t.Fatal(err)
+	}
+	clock.advance(4 * time.Minute)
+	if l := c.list(); len(l) != 1 || l[0].LeftMS != time.Minute.Milliseconds() {
+		t.Fatalf("after 4 min: %+v", l)
+	}
+	if n := c.restart(); n != 1 {
+		t.Fatalf("restarted %d", n)
+	}
+	if l := c.list(); len(l) != 1 || l[0].LeftMS != (5*time.Minute).Milliseconds() || l[0].AgeMS != (4*time.Minute).Milliseconds() {
+		t.Fatalf("after the restart: %+v", l)
+	}
+	clock.advance(4*time.Minute + 59*time.Second)
+	if len(c.list()) != 1 || len(bus.got()) != 0 {
+		t.Fatal("cancelled by the old timer")
+	}
+	clock.advance(time.Second)
+	if len(c.list()) != 0 || len(bus.got()) != 1 || bus.got()[0].code != respCancelled {
+		t.Fatalf("not cancelled 5 min after the restart: %+v", bus.got())
+	}
+	if n := c.restart(); n != 0 {
+		t.Fatalf("restarted %d with none open", n)
+	}
+}
+
 func TestChooserRequestsEndWithTheBrowser(t *testing.T) {
 	c, bus, _, _ := testChooser(t)
 	for _, tok := range []string{"a", "b", "c"} {
@@ -519,7 +550,7 @@ func TestChooserRoutes(t *testing.T) {
 	if len(out.Choosers) != 1 || out.Choosers[0]["id"] != "c1" || out.Choosers[0]["multiple"] != true {
 		t.Fatalf("GET /chooser: %+v", out)
 	}
-	for _, k := range []string{"id", "multiple", "accept", "age_ms"} {
+	for _, k := range []string{"id", "multiple", "accept", "age_ms", "left_ms"} {
 		if _, ok := out.Choosers[0][k]; !ok {
 			t.Errorf("no %s in %v", k, out.Choosers[0])
 		}
@@ -531,6 +562,9 @@ func TestChooserRoutes(t *testing.T) {
 		}
 		_ = resp.Body.Close()
 		return resp.StatusCode
+	}
+	if s := post("restart", ``); s != 204 {
+		t.Fatalf("restart: %d", s)
 	}
 	if s := post("c9", `{"files":["a.txt"]}`); s != 404 {
 		t.Fatalf("unknown id: %d", s)

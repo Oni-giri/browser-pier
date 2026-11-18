@@ -242,11 +242,13 @@ func (properties) Set(intf, name string, _ dbus.Variant) *dbus.Error {
 
 // registerChooser serves the control socket's chooser routes:
 //
-//	GET  /chooser        the open file choosers: id, multiple, accept, age_ms
-//	POST /chooser/{id}   {"files": ["name", …]} or {"cancel": true}
+//	GET  /chooser          the open file choosers: id, multiple, accept, age_ms, left_ms
+//	POST /chooser/{id}     {"files": ["name", …]} or {"cancel": true}
+//	POST /chooser/restart  every open chooser's time limit starts again
+//	                       (control changed hands)
 //
-// Both answer 503, saying why (off, or failed to start), when the portal
-// isn't running.
+// They answer 503 when the portal isn't running (a test's control socket;
+// a browser whose portal can't start doesn't start, see main.go).
 func registerChooser(mux *http.ServeMux, p *portal, why string) {
 	off := func(w http.ResponseWriter) bool {
 		if p == nil {
@@ -261,6 +263,15 @@ func registerChooser(mux *http.ServeMux, p *portal, why string) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"choosers": p.chooser.list()})
+	})
+	mux.HandleFunc("POST /chooser/restart", func(w http.ResponseWriter, _ *http.Request) {
+		if off(w) {
+			return
+		}
+		if n := p.chooser.restart(); n > 0 {
+			p.chooser.log.Info("file choosers' time limit restarted: control changed hands", "open", n)
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("POST /chooser/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if off(w) {
