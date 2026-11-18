@@ -11,7 +11,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"os/exec"
@@ -434,7 +436,7 @@ func TestChooserDuringHandoff(t *testing.T) {
 	if _, err := c.a.m.Profiles().Update(context.Background(), p); err != nil {
 		t.Fatal(err)
 	}
-	content, _ := randomFile(t, 1000)
+	content, sum := randomFile(t, 1000)
 	c.upload("cv.pdf", content)
 	c.open()
 	c.click(0.09)
@@ -451,6 +453,61 @@ func TestChooserDuringHandoff(t *testing.T) {
 	if code, msg := c.answer(fmt.Sprintf(`{"id": %q, "files": ["cv.pdf"]}`, ch.ID)); code != http.StatusConflict {
 		t.Fatalf("the agent's answer during a handoff: %d %s", code, msg)
 	}
+
+	// The person opens the link and has control (the live view takes it,
+	// as the handoff page's does): the modal lists the uploads, and
+	// "Upload from this device" answers the chooser (PROJ-181).
+	link := h.URL[strings.Index(h.URL, "/h/"):]
+	jar, _ := cookiejar.New(nil)
+	phone := &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	person := func(method, path, ctype string, body io.Reader) (int, string) {
+		t.Helper()
+		req, _ := http.NewRequest(method, c.a.base+link+path, body)
+		if ctype != "" {
+			req.Header.Set("Content-Type", ctype)
+		}
+		resp, err := phone.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		return resp.StatusCode, string(b)
+	}
+	if code, _ := person(http.MethodGet, "", "", nil); code != http.StatusSeeOther {
+		t.Fatalf("opening the link: %d", code)
+	}
+	if err := c.a.m.TakeControl(c.id); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := person(http.MethodGet, "/chooser", "", nil); code != http.StatusOK || !strings.Contains(body, `value="cv.pdf"`) || !strings.Contains(body, fmt.Sprintf(`data-id="%s"`, ch.ID)) {
+		t.Fatalf("the modal: %d %s", code, body)
+	}
+	photo, photoSum := randomFile(t, 300<<10)
+	var form bytes.Buffer
+	mw := multipart.NewWriter(&form)
+	_ = mw.WriteField("id", ch.ID)
+	part, _ := mw.CreateFormFile("file", "IMG_2207.jpg")
+	_, _ = part.Write(photo)
+	_ = mw.Close()
+	if code, body := person(http.MethodPost, "/chooser/upload", mw.FormDataContentType(), &form); code != http.StatusNoContent {
+		t.Fatalf("upload from this device: %d %s", code, body)
+	}
+	c.waitEvent("a change 1")
+	if cs := c.choosers(); len(cs) != 0 {
+		t.Fatalf("still open after the person's answer: %+v", cs)
+	}
+	logged := map[string]bool{}
+	for _, e := range c.a.m.Activity(c.id) {
+		logged[e.What] = true
+		if strings.Contains(e.What, "IMG_2207") {
+			t.Errorf("the activity log names the person's file: %q", e.What)
+		}
+	}
+	if !logged["A person chose 1 file"] {
+		t.Errorf("activity %+v", c.a.m.Activity(c.id))
+	}
+
 	hh, err := c.a.ho.Get(context.Background(), h.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -458,11 +515,119 @@ func TestChooserDuringHandoff(t *testing.T) {
 	if _, err := c.a.ho.Finish(context.Background(), hh, "done", ""); err != nil {
 		t.Fatal(err)
 	}
-	// Still open at hand-back; the agent answers it now.
+	// Handed back: the link opens nothing more, and the agent's route
+	// works again, on the next chooser.
+	if code, _ := person(http.MethodGet, "/chooser", "", nil); code != http.StatusForbidden {
+		t.Fatalf("the person's route after hand-back: %d", code)
+	}
+	c.click(0.29)
+	ch = c.waitChooser()
 	if code, msg := c.answer(fmt.Sprintf(`{"id": %q, "files": ["cv.pdf"]}`, ch.ID)); code != http.StatusOK {
 		t.Fatalf("after hand-back: %d %s", code, msg)
 	}
+	c.waitEvent("b change 1")
+	// The form gets the person's file and the agent's.
+	c.click(0.67)
+	for deadline := time.Now().Add(10 * time.Second); len(c.site.Uploads()) < 2; time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the form posted %+v", c.site.Uploads())
+		}
+	}
+	got := map[string]string{}
+	for _, u := range c.site.Uploads() {
+		got[u.Field+" "+u.Name] = u.SHA256
+	}
+	if got["a IMG_2207.jpg"] != photoSum || got["b cv.pdf"] != sum {
+		t.Fatalf("the site got %+v", c.site.Uploads())
+	}
+}
+
+// TestChooserTakesNoTypedPath is PROJ-183's acceptance test, with the
+// default settings: in Visual mode, a page's file chooser can't be handed
+// /profile/Local State (or anything outside the uploads) by typing its
+// path, as an agent would into Chromium's GTK dialog, through the REST
+// /computer or /type routes (MCP's Visual tools use them), nor by naming
+// it in an answer. An upload still goes through.
+func TestChooserTakesNoTypedPath(t *testing.T) {
+	c := newChooserRig(t)
+	content, sum := randomFile(t, 2000)
+	c.upload("doc.pdf", content)
+	c.open()
+	c.click(0.09)
+	ch := c.waitChooser()
+	const secret = "/profile/Local State"
+	for _, body := range []string{
+		`{"action": "key", "keys": "ctrl+l", "pace": "instant"}`,
+		fmt.Sprintf(`{"action": "type", "text": %q, "pace": "instant"}`, secret),
+		`{"action": "key", "keys": "Return", "pace": "instant"}`,
+	} {
+		c.post("/computer", body)
+	}
+	c.post("/type", fmt.Sprintf(`{"text": %q, "pace": "instant"}`, secret+"\n"))
+	if code, msg := c.answer(fmt.Sprintf(`{"id": %q, "files": [%q]}`, ch.ID, secret)); code != http.StatusBadRequest {
+		t.Fatalf("naming the path in an answer: %d %s", code, msg)
+	}
+	time.Sleep(time.Second)
+	if d := c.dialogs(); d != "" {
+		t.Fatalf("a native dialog is on the display: %s", d)
+	}
+	for _, e := range c.site.Events() {
+		if strings.HasPrefix(e, "a change") || strings.HasPrefix(e, "a input") {
+			t.Fatalf("the page received a file: %q", c.site.Events())
+		}
+	}
+	if cs := c.choosers(); len(cs) != 1 || cs[0].ID != ch.ID {
+		t.Fatalf("the chooser: %+v", cs)
+	}
+	if code, msg := c.answer(fmt.Sprintf(`{"id": %q, "cancel": true}`, ch.ID)); code != http.StatusOK {
+		t.Fatalf("cancel: %d %s", code, msg)
+	}
+	c.waitEvent("a cancel")
+	c.click(0.67) // Send: nothing in the input
+	for deadline := time.Now().Add(10 * time.Second); len(c.site.Uploads()) == 0; time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			break // a form with no file may post no part at all
+		}
+	}
+	for _, u := range c.site.Uploads() {
+		if u.Size > 0 || u.Name != "" {
+			t.Fatalf("the site got a file after the typed path: %+v", c.site.Uploads())
+		}
+	}
+	// An upload still goes through, answered by the agent (Send left the
+	// page: back to it).
+	n := len(c.site.Uploads())
+	pings := func() (k int) {
+		for _, e := range c.site.Events() {
+			if e == "ping" {
+				k++
+			}
+		}
+		return k
+	}
+	before := pings()
+	c.open()
+	for deadline := time.Now().Add(30 * time.Second); pings() == before; time.Sleep(300 * time.Millisecond) {
+		c.click(0.87)
+		if time.Now().After(deadline) {
+			t.Fatal("the page never loaded again")
+		}
+	}
+	c.click(0.09)
+	ch = c.waitChooser()
+	if code, msg := c.answer(fmt.Sprintf(`{"id": %q, "files": ["doc.pdf"]}`, ch.ID)); code != http.StatusOK {
+		t.Fatalf("answer: %d %s", code, msg)
+	}
 	c.waitEvent("a change 1")
+	c.click(0.67)
+	for deadline := time.Now().Add(10 * time.Second); len(c.site.Uploads()) == n; time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the form never posted the upload")
+		}
+	}
+	if u := c.site.Uploads()[len(c.site.Uploads())-1]; u.Field != "a" || u.Name != "doc.pdf" || u.SHA256 != sum {
+		t.Fatalf("the site got %+v", c.site.Uploads())
+	}
 }
 
 func TestSaveAsLandsInDownloads(t *testing.T) {

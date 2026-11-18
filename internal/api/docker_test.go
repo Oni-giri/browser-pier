@@ -30,6 +30,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/domainset"
 	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/handoff"
+	"github.com/Oni-giri/browser-pier/internal/picker"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/recording"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
@@ -155,11 +156,17 @@ func newRealAPIEnv(t *testing.T, env ...string) agent {
 	}
 	web := auth.NewWeb(admin, tokens, log, auth.WebOptions{CookieSecure: "auto"})
 	mux := http.NewServeMux()
-	a := New(m, web, files.New(m.Layout().FilesDir, 0, os.Getuid(), os.Getgid()), log, "")
+	fs := files.New(m.Layout().FilesDir, 0, os.Getuid(), os.Getgid())
+	a := New(m, web, fs, log, "")
 	handoffs := handoff.New(d, m, log)
 	t.Cleanup(handoffs.Close)
 	a.SetHandoffs(handoffs)
 	a.Register(mux)
+	// The handoff page's routes, for the person's side of a file chooser
+	// (PROJ-181); its live view isn't needed here.
+	hw := handoff.NewWeb(handoffs, web, nil, m, log)
+	hw.SetPicker(picker.New(m, fs, log))
+	hw.Register(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return agent{t: t, base: srv.URL, token: secret, m: m, ho: handoffs}
