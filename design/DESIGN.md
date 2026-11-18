@@ -73,6 +73,7 @@ The header is frosted: `rgba(255,255,255,0.72)` with `backdrop-filter: blur(14px
 - Buttons: radius 8, min height 32–36. Primary is `ink` with `inset 0 1px 0 rgba(255,255,255,0.12)`; secondary is white with the `line` ring.
 - Pills and chips: radius 999, 12px/500, tint background plus a 6px dot.
 - Dialogs: centred modal, radius 16, scrim `rgba(15,23,42,0.32–0.4)`. No side sheets.
+- Notices: a note or caution inside a card or dialog ("Set a handoff PIN", "Keep the archive safe", "Applies the next time it starts") is neutral: a `well` background with `ink-2` text, in both themes, 13px, radius 8, padding 10×12. Never orange, since nothing is waiting for a person; never red, since nothing failed. Errors from a form use the `red` tint.
 
 **Layout:** content max width 1320px with 28px side padding. Pages use a 12-column bento grid with a 14px gap; cells span with `grid-column: span N` and go full width under 960px.
 
@@ -80,7 +81,7 @@ The header is frosted: `rgba(255,255,255,0.72)` with `backdrop-filter: blur(14px
 
 The whole UI rests on one split: **blue is the agents' side, orange is you.**
 
-- **Orange means "a human is needed", and nothing else.** Needs-you statuses, the header chip, the emphasis card. Profile icons, charts and illustrations never use orange.
+- **Orange means "a human is needed", and nothing else.** Needs-you statuses, the header chip, the emphasis card. Profile icons, charts and illustrations never use orange, and neither do warnings and cautions that don't wait for a person (they are neutral notices).
 - **Blue is the machine and your action on it.** The page, links, focus, and "Take control". "Take control" and "Unlock and take control" carry a blue glow (`0 8px 22px -6px rgba(47,107,255,0.6)`), so orange (the request) → blue (your answer) reads as one move.
 - **The page light follows the human.** When at least one profile needs you, the page gets a warm light near where you're needed (`radial-gradient(760px 420px at 24% -150px, rgba(255,106,61,0.20), transparent 70%)` on app pages, behind the phone on the landing page) alongside the agents' blue light. With nothing waiting, both lights are blue (the cyan right-hand light from the base recipe).
 - **The emphasis surface is warm frosted glass:** `linear-gradient(180deg, rgba(255,234,223,0.94) 0, rgba(255,247,243,0.9) 120px, rgba(255,255,255,0.9) 240px)` with `backdrop-filter: blur(16px) saturate(140%)`, ring `rgba(255,106,61,0.38)` and glow `0 22px 48px -20px rgba(255,106,61,0.55)`. One per screen.
