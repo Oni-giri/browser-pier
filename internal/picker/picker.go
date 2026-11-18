@@ -211,6 +211,12 @@ func (p *Picker) Upload(w http.ResponseWriter, r *http.Request, s sessions.Sessi
 			http.Error(w, "Send the chooser's id, then the file.", http.StatusBadRequest)
 			return
 		}
+		// The upload answers a chooser: one must be open, before up to
+		// 100 MiB is stored (and older files evicted for it).
+		if !p.open(r, s, id) {
+			http.Error(w, "That file chooser closed: the page closed it, or its time ran out.", http.StatusConflict)
+			return
+		}
 		f, _, err := p.files.Upload(s.Profile, part.FileName(), part, p.max)
 		switch {
 		case errors.Is(err, files.ErrBadName):
@@ -242,6 +248,20 @@ func (p *Picker) Upload(w http.ResponseWriter, r *http.Request, s sessions.Sessi
 		p.answer(w, r, s, id, []string{f.Name})
 		return
 	}
+}
+
+// open reports whether chooser id is open in s's browser.
+func (p *Picker) open(r *http.Request, s sessions.Session, id string) bool {
+	cs, err := p.m.Choosers(r.Context(), s.Profile)
+	if err != nil {
+		return false
+	}
+	for _, c := range cs {
+		if c.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // limit is the most one upload may be: MaxUpload, or the files cap.

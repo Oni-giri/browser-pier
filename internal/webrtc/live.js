@@ -212,13 +212,19 @@
     if (!control) { closeChooser(); return; }
     let r;
     try { r = await fetch(chooserURL, { cache: "no-store" }); } catch (_) { return; }
-    if (r.status === 204 || r.status === 409) { closeChooser(); return; }
+    if (r.status === 204 || r.status === 409 || r.status === 403) { closeChooser(); return; }
     if (r.status !== 200 || !control || chooserBusy) return;
     const t = document.createElement("template");
     t.innerHTML = await r.text();
     const form = t.content.querySelector("form.chooser");
-    // The same chooser stays as it is, with what you've picked.
-    if (!form || (chooserBox.open && form.dataset.id === chooserShown)) return;
+    if (!form) return;
+    // The same chooser stays as it is, with what you've picked; only the
+    // time it has left is new.
+    if (chooserBox.open && form.dataset.id === chooserShown) {
+      const note = chooserBox.querySelector(".chooser-note"), fresh = form.querySelector(".chooser-note");
+      if (note && fresh) note.textContent = fresh.textContent;
+      return;
+    }
     chooserShown = form.dataset.id;
     chooserBox.replaceChildren(form);
     wireChooser(form);

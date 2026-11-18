@@ -198,3 +198,24 @@ func TestLiveViewChooser(t *testing.T) {
 		t.Fatalf("answered after hand-back: %q", got)
 	}
 }
+
+// An upload names a chooser that is open, or nothing is stored.
+func TestChooserUploadNeedsAnOpenChooser(t *testing.T) {
+	f := newFixture(t)
+	f.profile("google")
+	s, _, err := f.m.Start(context.Background(), "google", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.TakeControl(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.choosers.set(`[{"id":"c1","multiple":false,"accept":[],"left_ms":300000}]`)
+	want(t, f.uploadFrom("/profiles/google/chooser/upload", "c9", "x.pdf", []byte("x")), http.StatusConflict, "closed")
+	if _, err := os.Stat(filepath.Join(f.m.Layout().FilesDir("google"), "uploads", "x.pdf")); !os.IsNotExist(err) {
+		t.Fatalf("stored with no chooser open: %v", err)
+	}
+	if got := f.choosers.got(); len(got) != 0 {
+		t.Fatalf("answered: %q", got)
+	}
+}

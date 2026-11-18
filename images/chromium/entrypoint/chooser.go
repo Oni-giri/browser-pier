@@ -191,7 +191,9 @@ func (c *chooser) startTimerLocked(r *chooserReq) {
 	r.timer = c.after(c.timeout, func() {
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		if c.open[r.id] != r {
+		// Gone, or restarted while this timer was waiting for the lock:
+		// a new timer has its own deadline.
+		if c.open[r.id] != r || c.now().Before(r.deadline) {
 			return
 		}
 		c.log.Info("a file chooser was cancelled: nobody answered it", "id", r.id, "after", c.timeout)

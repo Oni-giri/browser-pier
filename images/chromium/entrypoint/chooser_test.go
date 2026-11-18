@@ -595,3 +595,22 @@ func TestChooserRoutes(t *testing.T) {
 		t.Fatalf("no portal: %d", resp.StatusCode)
 	}
 }
+
+// A timer that fires while a restart holds the lock cancels nothing: the
+// chooser has its whole time again.
+func TestChooserOldTimerAfterARestart(t *testing.T) {
+	c, bus, clock, _ := testChooser(t)
+	if _, err := c.openFile(browserSender, opts("handle_token", "tok")); err != nil {
+		t.Fatal(err)
+	}
+	clock.mu.Lock()
+	old := clock.timers[len(clock.timers)-1].f
+	clock.mu.Unlock()
+	clock.advance(5*time.Minute - time.Second)
+	c.restart()
+	clock.advance(time.Second)
+	old() // the first timer's callback, run late as if it had raced the restart
+	if len(c.list()) != 1 || len(bus.got()) != 0 {
+		t.Fatalf("the old timer cancelled a restarted chooser: %+v", bus.got())
+	}
+}
