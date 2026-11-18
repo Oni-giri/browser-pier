@@ -47,7 +47,8 @@ func busSocket(dir string) string { return filepath.Join(dir, "bus") }
 // busConfig is the bus's dbus-daemon configuration: one path socket in
 // dir, EXTERNAL authentication, no service directory (so nothing is ever
 // started on demand), and a policy that lets the connections, all of the
-// browser's uid, call each other. No connection may eavesdrop.
+// browser's uid, call each other, and own no well-known name but the
+// portal's (the portal takes it first). No connection may eavesdrop.
 func busConfig(dir string) string {
 	return `<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
@@ -58,7 +59,7 @@ func busConfig(dir string) string {
   <policy context="default">
     <allow send_destination="*" eavesdrop="false"/>
     <allow receive_sender="*"/>
-    <allow own="*"/>
+    <allow own="` + portalName + `"/>
   </policy>
 </busconfig>
 `
@@ -214,4 +215,13 @@ func busGone(b *sessionBus) bool {
 	default:
 		return false
 	}
+}
+
+// chromiumEnv is Chromium's environment: the entrypoint's own, the
+// display, the location's, and the bus's address. The address goes to
+// Chromium only, never into the entrypoint's environment (base), which
+// Xvfb, JWM, xdotool and GStreamer get.
+func chromiumEnv(base, geo []string, bus *sessionBus) []string {
+	env := append(append([]string{}, base...), "DISPLAY="+display)
+	return append(append(env, geo...), bus.env()...)
 }

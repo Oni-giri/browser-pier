@@ -69,7 +69,14 @@ func pageToolWith[In any](a *API, f pageFunc[In], notice bool) http.HandlerFunc 
 		var pe *pagetools.Error
 		switch {
 		case errors.As(err, &pe):
-			writeError(w, pe.Status, pe.Msg)
+			msg := pe.Msg
+			if notice {
+				// A step that failed after one that opened a chooser.
+				if line := a.chooserNotice(r.Context(), s); line != "" {
+					msg += "\n" + line
+				}
+			}
+			writeError(w, pe.Status, msg)
 			return
 		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 			return // the client went away

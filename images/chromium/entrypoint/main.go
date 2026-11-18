@@ -153,9 +153,7 @@ func run(log *slog.Logger) error {
 	defer portal.close()
 
 	chromium := exec.Command(chromiumBinary, chromiumArgs(cfg, smallShm())...)
-	// The bus's address goes to Chromium only (bus.env), never to the
-	// entrypoint's own environment, which xdotool and GStreamer inherit.
-	chromium.Env = append(append(append(os.Environ(), "DISPLAY="+display), where.env()...), bus.env()...)
+	chromium.Env = chromiumEnv(os.Environ(), where.env(), bus)
 	fatal, err := watchFatal(chromium)
 	if err != nil {
 		return fmt.Errorf("start Chromium: %w", err)

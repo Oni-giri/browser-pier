@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -27,6 +28,9 @@ func TestBusConfigListensOnOnePathSocket(t *testing.T) {
 	listens := regexp.MustCompile(`<listen>([^<]*)</listen>`).FindAllStringSubmatch(conf, -1)
 	if len(listens) != 1 || listens[0][1] != "unix:path="+dir+"/bus" {
 		t.Fatalf("listen %q, want one unix:path= in %s", listens, dir)
+	}
+	if !strings.Contains(conf, `<allow own="org.freedesktop.portal.Desktop"/>`) || strings.Count(conf, "own=") != 1 {
+		t.Errorf("the bus lets connections own more than the portal's name:\n%s", conf)
 	}
 	for _, bad := range []string{"tcp:", "abstract=", "<servicedir", "standard_session_servicedirs", "<include", "<allow user", "eavesdrop=\"true\"", "--fork", "<fork"} {
 		if strings.Contains(conf, bad) {
@@ -62,6 +66,22 @@ func TestBusEnvIsOnlyTheAddress(t *testing.T) {
 	// inherit, never has it (main.go gives it to Chromium's Env only).
 	if _, ok := os.LookupEnv("DBUS_SESSION_BUS_ADDRESS"); ok {
 		t.Skip("this test runs on a desktop with a session bus; the check is for the container")
+	}
+}
+
+func TestChromiumEnvAloneHasTheBus(t *testing.T) {
+	base := []string{"PATH=/usr/bin", "HOME=/tmp/home"}
+	bus := &sessionBus{dir: "/tmp/browserpier-bus-1000"}
+	env := chromiumEnv(base, []string{"TZ=Europe/Riga"}, bus)
+	if !slices.Contains(env, "DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/browserpier-bus-1000/bus") || !slices.Contains(env, "DISPLAY=:99") || !slices.Contains(env, "TZ=Europe/Riga") {
+		t.Fatalf("Chromium's env %q", env)
+	}
+	if len(base) != 2 || slices.ContainsFunc(base, func(e string) bool { return strings.HasPrefix(e, "DBUS_") }) {
+		t.Fatalf("the entrypoint's own environment changed: %q", base)
+	}
+	// Off (no bus): nothing about a bus at all.
+	if slices.ContainsFunc(chromiumEnv(base, nil, nil), func(e string) bool { return strings.HasPrefix(e, "DBUS_") }) {
+		t.Fatal("a bus address with no bus")
 	}
 }
 

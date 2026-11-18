@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +12,8 @@ import (
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/files"
+	"github.com/Oni-giri/browser-pier/internal/pagetools"
+	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
 // putUpload writes name into the profile's uploads, as upload_file does.
@@ -399,5 +403,32 @@ func TestChooserPortalOff(t *testing.T) {
 	}
 	if code, h, _ := f.computer(s.ID, `{"action": "click", "x": 10, "y": 10}`); code != http.StatusNoContent || h.Get(ChooserHeader) != "" {
 		t.Fatalf("click: %d %q", code, h.Get(ChooserHeader))
+	}
+}
+
+// An act step that fails after one that opened a chooser: the error ends
+// with the notice too.
+func TestChooserNoticeOnAFailedAct(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.all, "google", "api")
+	f.openChooser(`[{"id":"c4","multiple":false,"accept":[]}]`)
+	failing := func(*pagetools.Tools, context.Context, sessions.Session, pagetools.Caller, struct{}) (string, error) {
+		return "", &pagetools.Error{Status: http.StatusConflict, Msg: "step 2 failed"}
+	}
+	mux := http.NewServeMux()
+	mux.Handle("POST /x/{id}", f.api.agent(pageToolNotice(f.api, failing)))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/x/"+s.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+f.all)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]string
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict || out["error"] != "step 2 failed\na file chooser is open (c4): choose_files answers or cancels it" {
+		t.Fatalf("%d %q", resp.StatusCode, out["error"])
 	}
 }

@@ -40,8 +40,8 @@ RUN apt-get update \
       apparmor \
  && rm -rf /var/lib/apt/lists/* /tmp/no-terminal.deb \
  && for t in x-terminal-emulator xterm urxvt rxvt gnome-terminal konsole; do \
-      ! command -v "$t" >/dev/null || { echo "a terminal emulator was installed: $t"; exit 1; }; done \
- && command -v dbus-daemon >/dev/null || { echo "dbus-daemon is missing"; exit 1; }
+      ! command -v "$t" >/dev/null || { echo "a terminal emulator was installed: $t"; exit 1; }; done
+RUN command -v dbus-daemon >/dev/null || { echo "dbus-daemon is missing"; exit 1; }
 # The session bus (entrypoint/sessionbus.go) is the entrypoint's own
 # dbus-daemon, and the file chooser portal on it is the entrypoint
 # (portal.go). Nothing else may answer for the portal: no

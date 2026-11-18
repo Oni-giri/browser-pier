@@ -113,7 +113,7 @@ type Manager struct {
 	// chooserPortal turns on the browser containers' file chooser portal
 	// (BROWSERPIER_FILE_CHOOSER_PORTAL, PROJ-152).
 	chooserPortal bool
-	hostIPs      string // the Docker host's own addresses, comma separated
+	hostIPs       string // the Docker host's own addresses, comma separated
 	// blocklist returns the ad and tracker list's file for a browser
 	// container, nil for none (SetBlocklist).
 	blocklist func() []byte

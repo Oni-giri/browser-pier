@@ -22,7 +22,13 @@ import (
 // walk up the parents the check reads it again, and a caller that exited
 // meanwhile (its pid possibly reused) is refused. On older kernels there
 // is only the ProcessID; then the walk is bracketed by the process's start
-// time instead.
+// time instead. That fallback has a known limit: the bus records the pid
+// when the connection is made, so a process of the browser's uid that
+// connects, hands the socket to a child and exits leaves a connection
+// whose recorded pid a later Chromium descendant may reuse, and the check
+// would pass. The pidfd path refuses it (the pidfd says the process
+// exited). Accepted as defence in depth: the bus already admits only the
+// browser's uid, and no agent code runs in the container.
 
 // callerCreds is what the bus says about a caller.
 type callerCreds struct {
