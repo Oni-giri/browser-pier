@@ -45,6 +45,7 @@ const (
 var readMethods = map[string]bool{
 	"org.freedesktop.DBus.ListNames":      true,
 	ifProperties + ".Get":                 true, // only readProps
+	ifAccessible + ".GetChildAtIndex":     true,
 	ifAccessible + ".GetChildren":         true,
 	ifAccessible + ".GetRole":             true,
 	ifAccessible + ".GetState":            true,
@@ -57,10 +58,11 @@ var readMethods = map[string]bool{
 
 // readProps is the properties the reader gets.
 var readProps = map[[2]string]bool{
-	{ifAccessible, "Name"}:     true,
-	{ifAccessible, "Parent"}:   true,
-	{ifText, "CharacterCount"}: true,
-	{ifValue, "CurrentValue"}:  true,
+	{ifAccessible, "Name"}:       true,
+	{ifAccessible, "Parent"}:     true,
+	{ifAccessible, "ChildCount"}: true,
+	{ifText, "CharacterCount"}:   true,
+	{ifValue, "CurrentValue"}:    true,
 }
 
 // ReadMethods lists the methods, for docs and tests.
@@ -273,11 +275,10 @@ func (r *treeReader) prop(ctx context.Context, dest string, path dbus.ObjectPath
 	return v.Value(), nil
 }
 
-// connect makes sure there is a connection to the bus, with r.mu held.
+// connect opens this read's connection to the bus, with r.mu held. Each
+// read has its own (about a millisecond to open): a read cut short leaves
+// calls in flight, and the next read mustn't inherit them.
 func (r *treeReader) connect() error {
-	if r.conn != nil {
-		return nil
-	}
 	c, err := r.dial(r.addr)
 	if err != nil {
 		return fmt.Errorf("can't reach the accessibility bus: %w", err)
@@ -286,8 +287,7 @@ func (r *treeReader) connect() error {
 	return nil
 }
 
-// drop forgets a connection that failed, with r.mu held, so the next read
-// connects again.
+// drop closes this read's connection, with r.mu held.
 func (r *treeReader) drop() {
 	if r.conn != nil {
 		r.conn.close()
@@ -358,7 +358,7 @@ func (r *treeReader) findDoc(ctx context.Context) (app string, doc dbus.ObjectPa
 	if err != nil {
 		return "", "", extents{}, err
 	}
-	docs := r.showingDocs(ctx, app, win)
+	docs, firstErr := r.showingDocs(ctx, app, win)
 	if ctx.Err() != nil {
 		return "", "", extents{}, ctx.Err()
 	}
@@ -370,9 +370,28 @@ func (r *treeReader) findDoc(ctx context.Context) (app string, doc dbus.ObjectPa
 		}
 	}
 	if doc == "" {
+		if firstErr != nil {
+			return "", "", extents{}, firstErr // not "no page" when the bus failed
+		}
 		return "", "", extents{}, errNoPage
 	}
 	return app, doc, best, nil
+}
+
+// findDocAgain is findDoc, looking once more a moment later if no page
+// is showing: while Chromium rebuilds a big page's tree, its document can
+// be briefly unmarked.
+func (r *treeReader) findDocAgain(ctx context.Context) (string, dbus.ObjectPath, extents, error) {
+	app, doc, ext, err := r.findDoc(ctx)
+	if errors.Is(err, errNoPage) {
+		select {
+		case <-ctx.Done():
+			return "", "", extents{}, err
+		case <-time.After(250 * time.Millisecond):
+		}
+		app, doc, ext, err = r.findDoc(ctx)
+	}
+	return app, doc, ext, err
 }
 
 // findApp finds Chromium on the bus: the connection whose application
@@ -440,12 +459,18 @@ const maxChromeNodes = 2000
 
 // showingDocs lists the showing documents in the window, without going
 // into any: hidden views and documents (other tabs') aren't descended.
-func (r *treeReader) showingDocs(ctx context.Context, app string, win dbus.ObjectPath) []dbus.ObjectPath {
+func (r *treeReader) showingDocs(ctx context.Context, app string, win dbus.ObjectPath) (docs []dbus.ObjectPath, firstErr error) {
 	var (
 		mu      sync.Mutex
-		docs    []dbus.ObjectPath
 		visited int
 	)
+	fail := func(err error) {
+		mu.Lock()
+		if firstErr == nil {
+			firstErr = err
+		}
+		mu.Unlock()
+	}
 	level := []dbus.ObjectPath{win}
 	for len(level) > 0 && ctx.Err() == nil {
 		var next []dbus.ObjectPath
@@ -464,11 +489,16 @@ func (r *treeReader) showingDocs(ctx context.Context, app string, win dbus.Objec
 			go func() {
 				defer func() { <-sem; wg.Done() }()
 				st, err := r.states(ctx, app, p)
-				if err != nil || !has(st, stateShowing) || has(st, stateDefunct) {
+				if err != nil {
+					fail(err)
+					return
+				}
+				if !has(st, stateShowing) || has(st, stateDefunct) {
 					return
 				}
 				role, err := r.role(ctx, app, p)
 				if err != nil {
+					fail(err)
 					return
 				}
 				if role == roleDocumentWeb {
@@ -479,6 +509,7 @@ func (r *treeReader) showingDocs(ctx context.Context, app string, win dbus.Objec
 				}
 				kids, err := r.children(ctx, app, p)
 				if err != nil {
+					fail(err)
 					return
 				}
 				mu.Lock()
@@ -493,7 +524,7 @@ func (r *treeReader) showingDocs(ctx context.Context, app string, win dbus.Objec
 		wg.Wait()
 		level = next
 	}
-	return docs
+	return docs, firstErr
 }
 
 // docInfo reads a document's URL and title.
@@ -527,23 +558,47 @@ type walk struct {
 	mu    sync.Mutex
 	cond  *sync.Cond
 	nodes []walkNode
-	// inView and later are nodes waiting to be read: the children of
-	// showing nodes first, so what is on screen is read before the rest
-	// when the read is cut off.
-	inView, later []int
+	// inView and later are what is waiting to be read, as stacks: the
+	// page is read depth first, in document order, a node's children
+	// before its next sibling. Showing nodes' children go on inView, the
+	// others' on later, read once inView is empty: a read cut short has
+	// what is on screen.
+	inView, later []job
 	busy          int
 	cut           string
 	failed        error
 }
 
+// job is a node to read, or a cursor over a big parent's children,
+// which makes them one at a time as it is taken: a node made is one of
+// the read's limit, so 20,000 children mustn't be made at once.
+type job struct {
+	node   int
+	cursor bool
+	next   int // the cursor's next child
+	count  int // the parent's children
+}
+
 type walkNode struct {
 	treeNode
-	path    dbus.ObjectPath
-	parent  int // index in nodes, -1 for the document
-	read    bool
-	kids    []int
-	pending bool
+	// path is the object's; "" until a child of a big parent is found by
+	// its index.
+	path   dbus.ObjectPath
+	parent int // index in nodes, -1 for the document
+	index  int // its index in its parent, when path is ""
+	read   bool
+	kids   []int
+	// kidShowing: a child read so far was showing; offAfter: one read
+	// after it wasn't, so the rest of a big parent's children are likely
+	// off screen too, and wait in later.
+	kidShowing, offAfter bool
 }
+
+// fewKids is how many children a node may have for GetChildren to list
+// them: Chromium takes seconds to list thousands (4 s for 20,000), where
+// asking for each by its index takes a fraction of a millisecond, so a
+// big parent's children are asked for one by one, as the limits allow.
+const fewKids = 64
 
 func (w *walk) setCut(why string) {
 	if w.cut == "" {
@@ -551,12 +606,12 @@ func (w *walk) setCut(why string) {
 	}
 }
 
-// read walks the document's subtree, breadth first with the showing
-// parts first, inFlight nodes at a time, within the limits.
+// read walks the document's subtree, depth first with the showing parts
+// first, inFlight nodes at a time, within the limits.
 func (w *walk) read(doc dbus.ObjectPath) {
 	w.cond = sync.NewCond(&w.mu)
 	w.nodes = []walkNode{{treeNode: treeNode{Depth: 0}, path: doc, parent: -2}}
-	w.inView = []int{0}
+	w.inView = []job{{node: 0}}
 	var wg sync.WaitGroup
 	for range inFlight {
 		wg.Add(1)
@@ -575,35 +630,104 @@ func (w *walk) read(doc dbus.ObjectPath) {
 	stop()
 }
 
+// newNode makes node i's child, if the limits allow, reporting whether
+// they did.
+func (w *walk) newNode(i int, path dbus.ObjectPath, index int) (int, bool) {
+	if w.nodes[i].Depth+1 > w.limits.Depth {
+		w.setCut("depth")
+		return 0, false
+	}
+	if len(w.nodes) >= w.limits.Nodes {
+		w.setCut("nodes")
+		return 0, false
+	}
+	j := len(w.nodes)
+	w.nodes = append(w.nodes, walkNode{treeNode: treeNode{Depth: w.nodes[i].Depth + 1}, path: path, parent: i, index: index})
+	w.nodes[i].kids = append(w.nodes[i].kids, j)
+	return j, true
+}
+
+// take takes the next node to read, with w.mu held; ok is false when the
+// walk is over. A cursor makes its next child here.
+func (w *walk) take() (i int, ok bool) {
+	for {
+		if w.ctx.Err() != nil || w.failed != nil {
+			return 0, false
+		}
+		var jb job
+		fromView := false
+		switch {
+		case len(w.inView) > 0:
+			jb, w.inView = w.inView[len(w.inView)-1], w.inView[:len(w.inView)-1]
+			fromView = true
+		case len(w.later) > 0:
+			jb, w.later = w.later[len(w.later)-1], w.later[:len(w.later)-1]
+		case w.busy == 0:
+			w.cond.Broadcast()
+			return 0, false
+		default:
+			w.cond.Wait()
+			continue
+		}
+		if !jb.cursor {
+			return jb.node, true
+		}
+		if jb.next >= jb.count {
+			continue
+		}
+		if fromView && w.nodes[jb.node].offAfter {
+			// The rest of a big parent's children, past one off
+			// screen, wait with what isn't showing.
+			w.later = append(w.later, jb)
+			continue
+		}
+		j, made := w.newNode(jb.node, "", jb.next)
+		if !made {
+			continue
+		}
+		jb.next++
+		stack := &w.later
+		if fromView {
+			stack = &w.inView
+		}
+		*stack = append(*stack, jb, job{node: j})
+	}
+}
+
 func (w *walk) worker() {
 	for {
 		w.mu.Lock()
-		var i int
-		for {
-			if w.ctx.Err() != nil || w.failed != nil {
-				w.mu.Unlock()
-				return
-			}
-			if len(w.inView) > 0 {
-				i, w.inView = w.inView[0], w.inView[1:]
-				break
-			}
-			if len(w.later) > 0 {
-				i, w.later = w.later[0], w.later[1:]
-				break
-			}
-			if w.busy == 0 {
-				w.cond.Broadcast()
-				w.mu.Unlock()
-				return
-			}
-			w.cond.Wait()
+		i, ok := w.take()
+		if !ok {
+			w.mu.Unlock()
+			return
 		}
 		w.busy++
-		path, depth := w.nodes[i].path, w.nodes[i].Depth
+		path := w.nodes[i].path
+		var parentPath dbus.ObjectPath
+		if path == "" {
+			parentPath = w.nodes[w.nodes[i].parent].path
+		}
+		index := w.nodes[i].index
 		w.mu.Unlock()
 
-		n, kids, err := w.r.readNode(w.ctx, w.app, path, w.limits.String)
+		var err error
+		if path == "" {
+			// A child of a big parent, by its index.
+			var k objRef
+			if err = w.r.call(w.ctx, w.app, parentPath, ifAccessible+".GetChildAtIndex", []any{int32(index)}, &k); err == nil {
+				path = k.Path
+				if path == nullPath || path == "" {
+					path, err = "", errors.New("no such child")
+				}
+			}
+		}
+		var n treeNode
+		var kids []objRef
+		count := 0
+		if err == nil {
+			n, kids, count, err = w.r.readNode(w.ctx, w.app, path, w.limits.String)
+		}
 
 		w.mu.Lock()
 		w.busy--
@@ -612,31 +736,39 @@ func (w *walk) worker() {
 			w.failed = err // the document itself
 		case err == nil:
 			n.ID = string(path)
-			n.Depth = depth
-			n.Kids = len(kids)
+			n.Depth = w.nodes[i].Depth
+			n.Kids = count
+			w.nodes[i].path = path
 			w.nodes[i].treeNode = n
 			w.nodes[i].read = true
 			showing := has(n.States, stateShowing)
+			if pa := w.nodes[i].parent; pa >= 0 {
+				if showing {
+					w.nodes[pa].kidShowing = true
+				} else if w.nodes[pa].kidShowing {
+					w.nodes[pa].offAfter = true
+				}
+			}
+			stack := &w.later
+			if showing {
+				stack = &w.inView
+			}
+			if kids == nil && count > 0 {
+				*stack = append(*stack, job{node: i, cursor: true, count: count})
+			}
+			var added []int
 			for _, k := range kids {
 				if k.Path == nullPath || k.Path == "" {
 					continue
 				}
-				if depth+1 > w.limits.Depth {
-					w.setCut("depth")
+				j, made := w.newNode(i, k.Path, 0)
+				if !made {
 					break
 				}
-				if len(w.nodes) >= w.limits.Nodes {
-					w.setCut("nodes")
-					break
-				}
-				j := len(w.nodes)
-				w.nodes = append(w.nodes, walkNode{treeNode: treeNode{Depth: depth + 1}, path: k.Path, parent: i})
-				w.nodes[i].kids = append(w.nodes[i].kids, j)
-				if showing {
-					w.inView = append(w.inView, j)
-				} else {
-					w.later = append(w.later, j)
-				}
+				added = append(added, j)
+			}
+			for x := len(added) - 1; x >= 0; x-- { // the first child on top
+				*stack = append(*stack, job{node: added[x]})
 			}
 		}
 		w.cond.Broadcast()
@@ -646,28 +778,38 @@ func (w *walk) worker() {
 
 // readNode reads one element: role, states, name, extents and children,
 // and for fields and landmarks what judges them.
-func (r *treeReader) readNode(ctx context.Context, app string, path dbus.ObjectPath, limit int) (treeNode, []objRef, error) {
-	var n treeNode
+//
+// It lists the children when there are at most fewKids, and otherwise
+// only counts them (kids is nil), for the walk to ask for each by index.
+func (r *treeReader) readNode(ctx context.Context, app string, path dbus.ObjectPath, limit int) (n treeNode, kids []objRef, count int, err error) {
 	role, err := r.role(ctx, app, path)
 	if err != nil {
-		return n, nil, err
+		return n, nil, 0, err
 	}
 	n.Role = role
 	if n.States, err = r.states(ctx, app, path); err != nil {
-		return n, nil, err
+		return n, nil, 0, err
 	}
 	name, err := r.name(ctx, app, path)
 	if err != nil {
-		return n, nil, err
+		return n, nil, 0, err
 	}
 	n.Name = capBytes(name, limit)
 	e, err := r.extents(ctx, app, path)
 	if err == nil {
 		n.X, n.Y, n.W, n.H = e.X, e.Y, e.W, e.H
 	}
-	kids, err := r.children(ctx, app, path)
+	v, err := r.prop(ctx, app, path, ifAccessible, "ChildCount")
 	if err != nil {
-		return n, nil, err
+		return n, nil, 0, err
+	}
+	c, _ := v.(int32)
+	count = int(max(c, 0))
+	if count > 0 && count <= fewKids {
+		if kids, err = r.children(ctx, app, path); err != nil {
+			return n, nil, 0, err
+		}
+		count = len(kids)
 	}
 	switch role {
 	case rolePasswordText:
@@ -697,7 +839,7 @@ func (r *treeReader) readNode(ctx context.Context, app string, path dbus.ObjectP
 			}
 		}
 	}
-	return n, kids, nil
+	return n, kids, count, nil
 }
 
 // attrs reads the object attributes in attrKeys.
@@ -782,20 +924,24 @@ func (r *treeReader) serveTree(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
+	defer r.drop()
 	ctx, cancel := context.WithTimeout(req.Context(), limits.Time)
 	defer cancel()
-	app, doc, ext, err := r.findDoc(ctx)
+	app, doc, ext, err := r.findDocAgain(ctx)
 	if err != nil {
 		r.fail(w, req, err)
 		return
 	}
+	// The URL and title first: once the time is up, Chromium may still
+	// be busy with the walk's last calls.
+	info := r.docInfo(ctx, app, doc, ext, limits.String)
 	wk := &walk{r: r, ctx: ctx, app: app, limits: limits}
 	wk.read(doc)
 	if wk.failed != nil {
 		r.fail(w, req, wk.failed)
 		return
 	}
-	out := treeRead{Doc: r.docInfo(context.WithoutCancel(ctx), app, doc, ext, limits.String), ScreenWidth: r.width, ScreenHeight: r.height, Nodes: wk.output(), Cut: wk.cut}
+	out := treeRead{Doc: info, ScreenWidth: r.width, ScreenHeight: r.height, Nodes: wk.output(), Cut: wk.cut}
 	if ctx.Err() != nil && req.Context().Err() == nil {
 		out.Cut = "time"
 	}
@@ -807,8 +953,7 @@ func (r *treeReader) serveTree(w http.ResponseWriter, req *http.Request) {
 }
 
 // fail answers a read that failed: the bus's error, which can quote the
-// page (a name), goes to the orchestrator, which fences it. A failed
-// connection is dropped, for the next read to make anew.
+// page (a name), goes to the orchestrator, which fences it.
 func (r *treeReader) fail(w http.ResponseWriter, req *http.Request, err error) {
 	switch {
 	case req.Context().Err() != nil:
@@ -820,7 +965,6 @@ func (r *treeReader) fail(w http.ResponseWriter, req *http.Request, err error) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	r.drop()
 	http.Error(w, "reading the accessibility bus failed: "+err.Error(), http.StatusBadGateway)
 }
 
@@ -904,9 +1048,10 @@ func (r *treeReader) serveNode(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
+	defer r.drop()
 	ctx, cancel := context.WithTimeout(req.Context(), r.limits.Time)
 	defer cancel()
-	nowApp, doc, docExt, err := r.findDoc(ctx)
+	nowApp, doc, docExt, err := r.findDocAgain(ctx)
 	if err != nil {
 		r.fail(w, req, err)
 		return

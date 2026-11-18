@@ -107,12 +107,23 @@ func (f *fakeBus) call(ctx context.Context, dest string, path dbus.ObjectPath, m
 				p = string(nullPath)
 			}
 			return []any{dbus.MakeVariant([]any{f.app, dbus.ObjectPath(p)})}, nil
+		case iface == ifAccessible && prop == "ChildCount":
+			return []any{dbus.MakeVariant(int32(len(o.kids)))}, nil
 		case iface == ifText && prop == "CharacterCount":
 			return []any{dbus.MakeVariant(int32(len([]rune(o.text))))}, nil
 		}
 		f.t.Errorf("the reader asked for %s.%s", iface, prop)
 		return nil, errors.New("refused")
+	case ifAccessible + ".GetChildAtIndex":
+		i := int(args[0].(int32))
+		if i < 0 || i >= len(o.kids) {
+			return []any{[]any{f.app, nullPath}}, nil
+		}
+		return []any{[]any{f.app, dbus.ObjectPath(o.kids[i])}}, nil
 	case ifAccessible + ".GetChildren":
+		if len(o.kids) > fewKids {
+			f.t.Errorf("GetChildren on %s, which has %d children: Chromium takes seconds to list that many", path, len(o.kids))
+		}
 		var kids [][]any
 		for _, k := range o.kids {
 			kids = append(kids, []any{f.app, dbus.ObjectPath(k)})
@@ -443,5 +454,54 @@ func TestTreeNodeReadsTheElementAgain(t *testing.T) {
 		if n := getNode(t, r, c[0], c[1]); !n.Stale {
 			t.Errorf("%v: %+v, want stale", c, n)
 		}
+	}
+}
+
+// TestTreeReadsWhatIsOnScreenFirst: a long list scrolled to its top. In
+// the time a read has, it reads the items on screen whole, links and
+// all, before the thousands below the fold, which it asks for by index.
+func TestTreeReadsWhatIsOnScreenFirst(t *testing.T) {
+	f := browserBus(t)
+	f.add(p+"500", &fakeObj{role: 31, states: show(), ext: extents{8, 200, 100, 22}, parent: p + "31"})
+	for i := range 3000 {
+		li := fmt.Sprintf("%s%d", p, 10000+i)
+		st := uint64(1 << stateVisible)
+		if i < 30 {
+			st = show()
+		}
+		f.add(li, &fakeObj{role: 32, states: st, parent: p + "500"})
+		f.add(li+"1", &fakeObj{role: 88, name: fmt.Sprintf("Item %d", i), states: st, parent: li})
+		f.add(li+"11", &fakeObj{role: 116, name: fmt.Sprintf("Item %d", i), states: st, parent: li + "1"})
+	}
+	f.delay = time.Millisecond
+	out, code := getTree(t, newTestReader(f), "?ms=500")
+	if code != http.StatusOK || out.Cut != "time" {
+		t.Fatalf("%d, cut %q, %d nodes", code, out.Cut, len(out.Nodes))
+	}
+	links := map[string]bool{}
+	for _, n := range out.Nodes {
+		if n.Role == 88 {
+			links[n.Name] = true
+		}
+	}
+	for i := range 30 {
+		if !links[fmt.Sprintf("Item %d", i)] {
+			t.Fatalf("item %d, on screen, wasn't read whole (%d nodes, %d links)", i, len(out.Nodes), len(links))
+		}
+	}
+	t.Logf("%d nodes, %d links in 500 ms", len(out.Nodes), len(links))
+
+	// A node limit makes the list's items as it reads them, not all at
+	// once: the first items come whole.
+	f.delay = 0
+	out, _ = getTree(t, newTestReader(f), "?nodes=200")
+	links = map[string]bool{}
+	for _, n := range out.Nodes {
+		if n.Role == 88 {
+			links[n.Name] = true
+		}
+	}
+	if out.Cut != "nodes" || !links["Item 0"] || !links["Item 29"] {
+		t.Fatalf("200 nodes: cut %q, links %v", out.Cut, links)
 	}
 }

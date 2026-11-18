@@ -137,7 +137,7 @@ func (r reader) get(ctx context.Context, target string, out any) error {
 			// API-mode container.
 			return &ReadError{Status: http.StatusConflict, Msg: "this browser doesn't publish its element tree (restart it in Visual mode, on a browser image from BrowserPier 0.4 or later)"}
 		}
-		return &ReadError{Status: http.StatusConflict, Msg: "no page is showing in the browser window; take a screenshot"}
+		return &ReadError{Status: http.StatusConflict, Msg: "the page's elements aren't there to read: no page is showing in the browser window, or Chromium is still building a big page's tree. Try again in a moment, or take a screenshot"}
 	case http.StatusGatewayTimeout:
 		return &ReadError{Status: http.StatusGatewayTimeout, Msg: "reading the page's elements took too long; the page may be very large or busy. Take a screenshot instead"}
 	default:

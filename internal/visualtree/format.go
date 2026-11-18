@@ -2,6 +2,7 @@ package visualtree
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -80,6 +81,10 @@ type page struct {
 	// node.
 	containers map[int]string
 }
+
+// listMarker matches the marker Chromium gives a list item as text of
+// its own: a bullet, or a number or letter and a dot.
+var listMarker = regexp.MustCompile(`^([•◦▪‣⁃·–-]|[0-9]+[.)]|[a-zA-Z][.)]|[ivxlcdmIVXLCDM]+[.)])$`)
 
 // clean makes page text one line: no line breaks, runs of spaces
 // collapsed, no object replacement characters (Chromium's stand-in for
@@ -212,6 +217,9 @@ func build(t *Tree) *page {
 				p.items[j].rawLen += len(nd.Name)
 				continue
 			}
+		}
+		if nd.Role == roleStatic && parentOK(i) && nodes[pi].Role == roleListItem && listMarker.MatchString(clean(nd.Name)) {
+			continue // a list item's bullet or number
 		}
 		var raw string
 		switch nd.Role {
