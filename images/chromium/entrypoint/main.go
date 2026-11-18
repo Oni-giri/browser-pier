@@ -138,8 +138,17 @@ func run(log *slog.Logger) error {
 		return err
 	}
 
+	// The session bus and the file chooser portal come up before
+	// Chromium, which looks for the portal once, as it starts. Without
+	// them the browser starts all the same, with its own dialogs.
+	bus, portal := startChooser(ctx, log, cfg)
+	defer bus.stop()
+	defer portal.close()
+
 	chromium := exec.Command(chromiumBinary, chromiumArgs(cfg, smallShm())...)
-	chromium.Env = append(append(os.Environ(), "DISPLAY="+display), where.env()...)
+	// The bus's address goes to Chromium only (bus.env), never to the
+	// entrypoint's own environment, which xdotool and GStreamer inherit.
+	chromium.Env = append(append(append(os.Environ(), "DISPLAY="+display), where.env()...), bus.env()...)
 	fatal, err := watchFatal(chromium)
 	if err != nil {
 		return fmt.Errorf("start Chromium: %w", err)
@@ -149,6 +158,7 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("start Chromium: %w", err)
 	}
+	portal.setBrowser(chromium.Process.Pid)
 	client := &http.Client{Timeout: time.Second}
 	if err := waitFor(ctx, browser, 30*time.Second, func() bool {
 		resp, err := client.Get("http://" + cdpAddr + "/json/version")
@@ -158,13 +168,13 @@ func run(log *slog.Logger) error {
 		_ = resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
 	}); err != nil {
-		_ = closeChromium(browser, cdpAddr, cfg.StopTimeout)
+		_ = stopBrowser(browser, cdpAddr, cfg.StopTimeout, portal, bus)
 		return fmt.Errorf("chromium: %w%s", err, fatal.reason(true))
 	}
 
 	ln, err := listenControl(cfg.ControlSocket)
 	if err != nil {
-		_ = closeChromium(browser, cdpAddr, cfg.StopTimeout)
+		_ = stopBrowser(browser, cdpAddr, cfg.StopTimeout, portal, bus)
 		return err
 	}
 	defer func() { _ = os.Remove(cfg.ControlSocket) }()
@@ -173,22 +183,25 @@ func run(log *slog.Logger) error {
 			&streamer{command: func() *exec.Cmd { return exec.Command("gst-launch-1.0", streamArgs()...) }},
 			&streamer{command: func() *exec.Cmd { return exec.Command("gst-launch-1.0", recordArgs(cfg.Width, cfg.Height)...) },
 				contentType: "video/mp4", wait: 2 * time.Second},
-			newVisual(cfg.Width, cfg.Height), fwd, where),
+			newVisual(cfg.Width, cfg.Height), fwd, where, portal),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() { _ = srv.Serve(ln) }()
 	log.Info("ready", "screen", fmt.Sprintf("%dx%d", cfg.Width, cfg.Height), "control_socket", cfg.ControlSocket)
 
-	select {
-	case <-browser.done:
+	if !waitEnd(ctx, log, browser, bus) {
 		_ = srv.Close()
-		return fmt.Errorf("chromium exited on its own: %s%s", describe(browser.status), fatal.reason(false))
-	case <-ctx.Done():
+		portal.browserExited()
+		why := ""
+		if busGone(bus) {
+			why = " (the session bus had exited, and Chromium aborts without it)"
+		}
+		return fmt.Errorf("chromium exited on its own: %s%s%s", describe(browser.status), why, fatal.reason(false))
 	}
 
 	log.Info("stopping: closing Chromium", "timeout", cfg.StopTimeout)
 	_ = srv.Close()
-	if err := closeChromium(browser, cdpAddr, cfg.StopTimeout); err != nil {
+	if err := stopBrowser(browser, cdpAddr, cfg.StopTimeout, portal, bus); err != nil {
 		return err
 	}
 	log.Info("Chromium closed", "status", describe(browser.status))

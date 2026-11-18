@@ -49,7 +49,7 @@ func fakeCDP(t *testing.T) *httptest.Server {
 
 func TestControlRelaysCDP(t *testing.T) {
 	cdp := fakeCDP(t)
-	ctl := httptest.NewServer(newControlHandler(cdp.Listener.Addr().String(), http.NotFoundHandler(), http.NotFoundHandler(), nil, nil, geo{}))
+	ctl := httptest.NewServer(newControlHandler(cdp.Listener.Addr().String(), http.NotFoundHandler(), http.NotFoundHandler(), nil, nil, geo{}, nil))
 	defer ctl.Close()
 
 	req, _ := http.NewRequest(http.MethodGet, ctl.URL+"/cdp/json/version", nil)
@@ -67,7 +67,7 @@ func TestControlRelaysCDP(t *testing.T) {
 
 func TestControlRelaysWebSocketUpgrade(t *testing.T) {
 	cdp := fakeCDP(t)
-	ctl := httptest.NewServer(newControlHandler(cdp.Listener.Addr().String(), http.NotFoundHandler(), http.NotFoundHandler(), nil, nil, geo{}))
+	ctl := httptest.NewServer(newControlHandler(cdp.Listener.Addr().String(), http.NotFoundHandler(), http.NotFoundHandler(), nil, nil, geo{}, nil))
 	defer ctl.Close()
 
 	conn, err := net.Dial("tcp", ctl.Listener.Addr().String())
@@ -97,7 +97,7 @@ func TestStreamOneReaderAtATime(t *testing.T) {
 	s := &streamer{command: func() *exec.Cmd {
 		return exec.Command("sh", "-c", `printf 'frame' >&3; exec sleep 30`)
 	}}
-	ctl := httptest.NewServer(newControlHandler("127.0.0.1:1", s, http.NotFoundHandler(), nil, nil, geo{}))
+	ctl := httptest.NewServer(newControlHandler("127.0.0.1:1", s, http.NotFoundHandler(), nil, nil, geo{}, nil))
 	defer ctl.Close()
 
 	resp, err := http.Get(ctl.URL + "/stream")
@@ -142,7 +142,7 @@ func TestRecordOneReaderAtATime(t *testing.T) {
 	rec := &streamer{contentType: "video/mp4", wait: 300 * time.Millisecond, command: func() *exec.Cmd {
 		return exec.Command("sh", "-c", `printf 'ftyp' >&3; exec sleep 30`)
 	}}
-	ctl := httptest.NewServer(newControlHandler("127.0.0.1:1", http.NotFoundHandler(), rec, nil, nil, geo{}))
+	ctl := httptest.NewServer(newControlHandler("127.0.0.1:1", http.NotFoundHandler(), rec, nil, nil, geo{}, nil))
 	defer ctl.Close()
 
 	resp, err := http.Get(ctl.URL + "/record")
