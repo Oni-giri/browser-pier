@@ -37,6 +37,7 @@ var toolArgs = map[string]map[string]any{
 	"zoom":             {"session_id": "s1", "x": 0, "y": 0, "width": 10, "height": 10},
 	"list_files":       {"profile": "google"},
 	"upload_file":      {"session_id": "s1", "name": "a.txt", "content_base64": "aGk="},
+	"choose_files":     {"session_id": "s1", "id": "c1", "files": []string{"a.txt"}},
 	"snapshot":         {"session_id": "s1"},
 	"find":             {"session_id": "s1", "text": "x"},
 	"navigate":         {"session_id": "s1", "url": "https://example.com/"},

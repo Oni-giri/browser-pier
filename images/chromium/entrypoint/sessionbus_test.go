@@ -261,7 +261,7 @@ func TestPortalOnARealBus(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer other.stop(9, time.Second)
-	p.setBrowser(other.cmd.Process.Pid)
+	p.setBrowser(other.pid)
 	if _, err := open(); err == nil {
 		t.Fatal("a process that isn't under the browser was answered")
 	}

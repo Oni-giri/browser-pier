@@ -158,7 +158,7 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("start Chromium: %w", err)
 	}
-	portal.setBrowser(chromium.Process.Pid)
+	portal.setBrowser(browser.pid)
 	client := &http.Client{Timeout: time.Second}
 	if err := waitFor(ctx, browser, 30*time.Second, func() bool {
 		resp, err := client.Get("http://" + cdpAddr + "/json/version")
@@ -313,6 +313,7 @@ func closeChromium(p *process, cdp string, timeout time.Duration) error {
 // process is a child started through the reaper.
 type process struct {
 	cmd    *exec.Cmd
+	pid    int
 	done   chan struct{}
 	status syscall.WaitStatus // valid once done is closed
 }
@@ -331,11 +332,11 @@ func spawn(cmd *exec.Cmd) (*process, error) {
 	if !out || !errOut {
 		return nil, errors.New("spawn: output must go to a file")
 	}
-	exited, err := procs.start(cmd)
+	exited, pid, err := procs.startPid(cmd)
 	if err != nil {
 		return nil, err
 	}
-	p := &process{cmd: cmd, done: make(chan struct{})}
+	p := &process{cmd: cmd, pid: pid, done: make(chan struct{})}
 	go func() {
 		p.status = <-exited
 		close(p.done)

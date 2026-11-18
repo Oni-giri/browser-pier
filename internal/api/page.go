@@ -21,7 +21,7 @@ func (a *API) registerPageTools(mux Router) {
 	mux.Handle("POST /api/sessions/{id}/snapshot", t(pageTool(a, (*pagetools.Tools).Snapshot)))
 	mux.Handle("POST /api/sessions/{id}/find", t(pageTool(a, (*pagetools.Tools).Find)))
 	mux.Handle("POST /api/sessions/{id}/navigate", t(pageTool(a, (*pagetools.Tools).Navigate)))
-	mux.Handle("POST /api/sessions/{id}/act", t(pageTool(a, (*pagetools.Tools).Act)))
+	mux.Handle("POST /api/sessions/{id}/act", t(pageToolNotice(a, (*pagetools.Tools).Act)))
 	mux.Handle("POST /api/sessions/{id}/wait", t(pageTool(a, (*pagetools.Tools).WaitFor)))
 	mux.Handle("GET /api/sessions/{id}/tabs", t(pageTool(a, (*pagetools.Tools).Tabs)))
 	mux.Handle("POST /api/sessions/{id}/tabs", t(pageTool(a, (*pagetools.Tools).Tabs)))
@@ -36,7 +36,15 @@ type pageFunc[In any] func(*pagetools.Tools, context.Context, sessions.Session, 
 // pageTool serves one page tool: the session as the token may see it
 // (404 otherwise), the input as JSON (an empty body is the defaults), and
 // the tool's text or its error.
-func pageTool[In any](a *API, f pageFunc[In]) http.HandlerFunc {
+func pageTool[In any](a *API, f pageFunc[In]) http.HandlerFunc { return pageToolWith(a, f, false) }
+
+// pageToolNotice is pageTool for a tool that acts (act): its text ends
+// with the file chooser notice when a chooser is open after it.
+func pageToolNotice[In any](a *API, f pageFunc[In]) http.HandlerFunc {
+	return pageToolWith(a, f, true)
+}
+
+func pageToolWith[In any](a *API, f pageFunc[In], notice bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		s, ok := a.session(w, r)
 		if !ok {
@@ -68,6 +76,11 @@ func pageTool[In any](a *API, f pageFunc[In]) http.HandlerFunc {
 		case err != nil:
 			a.pageInternal(w, s, "a page tool", err)
 			return
+		}
+		if notice {
+			if line := a.chooserNotice(r.Context(), s); line != "" {
+				out += "\n" + line
+			}
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"text": out})
 	}
