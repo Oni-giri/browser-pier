@@ -1,6 +1,6 @@
 # Browser image
 
-`ghcr.io/oni-giri/browser-pier-chromium`: headful Chromium on Xvfb with a minimal desktop (JWM and a taskbar, `jwmrc`), xdotool for OS-level input and GStreamer sidecars that stream the display as H.264, live and, for session recordings, as fragmented MP4. See SPEC.md §3 for why it's built this way.
+`ghcr.io/oni-giri/browser-pier-chromium`: headful Chromium on Xvfb with a minimal desktop (JWM and a taskbar, `jwmrc`), xdotool for OS-level input, GStreamer sidecars that stream the display as H.264, live and, for session recordings, as fragmented MP4, and in Visual mode a private accessibility bus that the entrypoint reads the page's element tree from. See SPEC.md §3 for why it's built this way.
 
 ```sh
 make image-chromium   # build from the repo root
@@ -36,6 +36,7 @@ Settings, all optional:
 | `BROWSERPIER_GEOIP_URL` | none | Endpoint to look up the exit location (`country_iso`, `time_zone`); empty for no lookup. |
 | `BROWSERPIER_GEO_COUNTRY`, `BROWSERPIER_GEO_TZ` | none | The location the profile ran with last time; the zone is kept while the country is the same. |
 | `BROWSERPIER_TZ_OVERRIDE`, `BROWSERPIER_LOCALE_OVERRIDE` | none | The profile's manual time zone and language; they win. |
+| `BROWSERPIER_MODE` | `api` | `visual` runs Visual mode's accessibility bus (a private `dbus-daemon` on a path socket in `/tmp/browserpier-a11y-<uid>/`, started before Chromium and stopped after it), adds `--force-renderer-accessibility=basic`, points Chromium at the bus (`AT_SPI_BUS_ADDRESS`, `ACCESSIBILITY_ENABLED=1`) and serves `/tree` (PROJ-150). `api` changes nothing. |
 | `BROWSERPIER_MOUNT_CHECK` | none | When set, both `/profile` and the control socket's folder must hold a `.browserpier-mount` file with this value, or the entrypoint exits 1 before touching the profile. The orchestrator sets it so a wrong host path can't open an empty profile. |
 
 The container exits 0 only after a graceful stop: Chromium closed through CDP's `Browser.close` in time, so the profile is safely on disk. It exits 1 if Chromium crashed, failed to start, had to be killed, or had to be stopped with SIGTERM because CDP didn't answer (which can lose the last few seconds of cookie writes); the last log line says which.
@@ -53,6 +54,8 @@ HTTP over the Unix socket:
 | `POST /input/type` | `{"text"}`, up to 2000 characters, through xdotool; `\n` presses Enter. |
 | `POST /input/events` | The live view's mouse and keyboard: a JSON array of `{"t": "move", "x", "y"}`, `{"t": "down"/"up", "b": 1-3}`, `{"t": "wheel", "dx", "dy"}`, `{"t": "keydown"/"keyup", "k": "<X keysym>"}`, fed to one long-running `xdotool`. |
 | `POST /input/release` | Lets go of any key or button the live view still holds. |
+| `GET /tree` | Visual mode only: the active tab's page from the accessibility bus, as JSON (document URL, title and box; each node's AT-SPI path, parent, depth, role and state numbers, name, a field's text, boxes in screen pixels, a few attributes; a password field's `filled`, never its text). `?nodes=`, `?depth=`, `?string=` and `?ms=` lower the limits (20,000 nodes, depth 128, 1,000 bytes, 2 s); a read cut short says why in `cut`. 404 when no page is showing, 504 when nothing was read in time, 502 when the bus fails. One read at a time. Read-only: see `readMethods` in `entrypoint/tree.go`. |
+| `GET /tree/node` | Visual mode only: `?app=&doc=&id=`, one element read again for a click by ref: its role, states, name and box now, `stale` if it or its document is gone, and what Chromium's hit test finds at its centre when it isn't the element. |
 | `GET /geo` | The location the browser runs with: country, time zone, locale, Accept-Language list, and where they came from. |
 | `GET /proxy/stats` | Bytes sent and received through the proxy, when there is one. |
 | `GET /stream` | The display as an H.264 Annex-B byte stream (constrained baseline, 30 fps, keyframe every 2 s), one reader at a time (409 otherwise). The encoder runs only while it's read. |

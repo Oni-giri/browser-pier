@@ -214,6 +214,8 @@ Leave `BROWSERPIER_LISTEN` and `BROWSERPIER_WEBRTC_PORT` alone with this compose
 | `BROWSERPIER_BROWSER_APPARMOR` | unset | The browser containers' AppArmor profile. Unset, BrowserPier picks one: see [AppArmor](#apparmor). Set, that profile is used as it is, unchecked: `browserpier`, `unconfined`, or one of your own. A named profile that isn't loaded makes every browser fail to start, with an error saying so. |
 | `BROWSERPIER_STOP_BROWSERS_ON_EXIT` | `false` | `true` stops every browser when BrowserPier stops. Otherwise they keep running through an update. |
 
+BrowserPier sets the browser containers' own settings itself, from each profile and session; they aren't for `.env`. One of them says what a browser runs for its session's mode: `BROWSERPIER_MODE` (`api` or `visual`). A Visual-mode browser runs a private accessibility bus inside its container and Chromium's accessibility, for `visual_snapshot` and clicks by ref (PROJ-150); an API-mode one runs neither. It is fixed when the session starts. The full list is in `images/chromium/README.md`.
+
 ## Updating and backups
 
 Set `BROWSERPIER_VERSION` in `.env` to the new release (see the [releases](https://github.com/Oni-giri/browser-pier/releases) and `CHANGELOG.md`), or to `latest` to follow every release, then:

@@ -3,6 +3,7 @@ package visualtree
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -35,8 +36,6 @@ func tree(nodes ...Node) *Tree {
 	}
 	return &Tree{Doc: doc(), ScreenWidth: 1440, ScreenHeight: 900, Nodes: nodes}
 }
-
-func at(x, y int) (int, int, int, int) { return x, y, 40, 20 }
 
 func node(parent int, role uint32, states uint64, name string, x, y int) Node {
 	return Node{Parent: parent, Role: role, States: states, Name: name, X: x, Y: y, W: 40, H: 20}
@@ -211,13 +210,7 @@ func TestFormatHostileStrings(t *testing.T) {
 	}
 }
 
-func errorsAs(err error, e **Error) bool {
-	x, ok := err.(*Error)
-	if ok {
-		*e = x
-	}
-	return ok
-}
+func errorsAs(err error, e **Error) bool { return errors.As(err, e) }
 
 // serveTree serves GET /tree on a Unix socket, as the browser does.
 func serveTree(t *testing.T, body string) string {

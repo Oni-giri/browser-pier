@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -223,8 +224,8 @@ func dialBus(addr string) (busConn, error) {
 	case err = <-done:
 	case <-time.After(connectTimeout):
 		_ = c.Close()
-		<-done
-		err = fmt.Errorf("no answer within %s", connectTimeout)
+		// The handshake ends with the close: its error says how far it got.
+		err = fmt.Errorf("no answer within %s: %w", connectTimeout, <-done)
 	}
 	if err != nil {
 		_ = c.Close()
@@ -251,9 +252,12 @@ func (r *treeReader) call(ctx context.Context, dest string, path dbus.ObjectPath
 		return fmt.Errorf("%w: %s", errNotRead, method)
 	}
 	if method == ifProperties+".Get" {
+		if len(args) != 2 {
+			return fmt.Errorf("%w: property %v", errNotRead, args)
+		}
 		iface, _ := args[0].(string)
 		prop, _ := args[1].(string)
-		if len(args) != 2 || !readProps[[2]string{iface, prop}] {
+		if !readProps[[2]string{iface, prop}] {
 			return fmt.Errorf("%w: property %v", errNotRead, args)
 		}
 	}
@@ -715,7 +719,7 @@ func (w *walk) worker() {
 		if path == "" {
 			// A child of a big parent, by its index.
 			var k objRef
-			if err = w.r.call(w.ctx, w.app, parentPath, ifAccessible+".GetChildAtIndex", []any{int32(index)}, &k); err == nil {
+			if err = w.r.call(w.ctx, w.app, parentPath, ifAccessible+".GetChildAtIndex", []any{i32(index)}, &k); err == nil {
 				path = k.Path
 				if path == nullPath || path == "" {
 					path, err = "", errors.New("no such child")
@@ -825,7 +829,7 @@ func (r *treeReader) readNode(ctx context.Context, app string, path dbus.ObjectP
 	case roleEntry, roleText, roleComboBox, roleSpinButton:
 		n.Attrs = r.attrs(ctx, app, path, limit)
 		var text string
-		if r.call(ctx, app, path, ifText+".GetText", []any{int32(0), int32(limit)}, &text) == nil {
+		if r.call(ctx, app, path, ifText+".GetText", []any{int32(0), i32(limit)}, &text) == nil {
 			n.Text = capBytes(text, limit)
 		}
 	case roleLandmark, roleDialog, roleForm:
@@ -872,7 +876,7 @@ func (w *walk) output() []treeNode {
 		}
 		at := parent
 		if i != 0 {
-			n.treeNode.Parent = parent
+			n.Parent = parent
 			out = append(out, n.treeNode)
 			at = len(out) - 1
 		}
@@ -1147,4 +1151,9 @@ func (r *treeReader) hit(ctx context.Context, app string, doc, path dbus.ObjectP
 	name, _ := r.name(ctx, app, got.Path)
 	at.Name = capBytes(name, r.limits.String)
 	return at
+}
+
+// i32 is n as D-Bus's int32, clamped.
+func i32(n int) int32 {
+	return int32(max(min(n, math.MaxInt32), 0)) //nolint:gosec // clamped above
 }

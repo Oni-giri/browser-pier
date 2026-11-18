@@ -616,13 +616,8 @@ func takeDownloadWait(body []byte) ([]byte, *int, error) {
 	return out, &ms, err
 }
 
-// act runs one input action through the control socket and logs it, or
-// writes why it didn't run.
-func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, path string, body []byte) bool {
-	return a.actNoted(w, r, s, path, body, describeInput(path, body))
-}
-
-// actNoted is act, logging note for the action.
+// actNoted runs one input action through the control socket and logs it
+// as note, or writes why it didn't run.
 func (a *API) actNoted(w http.ResponseWriter, r *http.Request, s sessions.Session, path string, body []byte, note string) bool {
 	ctx, done, err := a.m.AgentInput(r.Context(), s.ID)
 	if errors.Is(err, sessions.ErrInputBusy) {
