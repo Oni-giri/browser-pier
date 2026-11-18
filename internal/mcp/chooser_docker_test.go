@@ -29,7 +29,6 @@ func TestChooserAnsweredByAnAgentAPI(t *testing.T) {
 		}
 		return out
 	}
-	env.m.SetFileChooserPortal(true)
 	tool("start_browser", map[string]any{"profile": env.name})
 	live, _ := env.m.Live(env.name)
 	id := live.ID

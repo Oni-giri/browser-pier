@@ -130,7 +130,6 @@ func run(log *slog.Logger) error {
 	}
 	defer mgr.Close()
 	mgr.SetGeoURL(cfg.GeoIPURL)
-	mgr.SetFileChooserPortal(cfg.FileChooserPortal)
 	// The ad and tracker lists: what was downloaded before is read now,
 	// so browsers block from the first start; downloads happen in the
 	// background and never hold a start up.

@@ -27,7 +27,6 @@ func TestChooseFiles(t *testing.T) {
 	if !listed {
 		t.Fatal("choose_files isn't listed")
 	}
-	f.m.SetFileChooserPortal(true)
 	call(t, cs, "start_browser", map[string]any{"profile": "google"})
 	s, _ := f.m.Live("google")
 	dir := filepath.Join(f.m.Layout().FilesDir("google"), files.Uploads)

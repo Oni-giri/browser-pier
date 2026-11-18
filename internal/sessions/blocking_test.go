@@ -192,26 +192,3 @@ func TestExemptHostRefusesPublicSuffixesAndWarnsWhenFull(t *testing.T) {
 		t.Errorf("%d warnings, want 1:\n%s", n, logs.String())
 	}
 }
-
-// The file chooser portal (PROJ-152) is off unless the orchestrator's
-// setting turns it on, and the browser is told which.
-func TestFileChooserPortalSetting(t *testing.T) {
-	ctx := context.Background()
-	f := newFixture(t)
-	env := func(s Session) string {
-		c, _ := f.rt.Container(s.ContainerID)
-		return strings.Join(c.Spec.Env, "\n")
-	}
-	s := f.start(f.m)
-	if f.m.FileChooserPortal() || !strings.Contains(env(s), "BROWSERPIER_FILE_CHOOSER_PORTAL=false") {
-		t.Fatalf("by default: %v, env %s", f.m.FileChooserPortal(), env(s))
-	}
-	if _, err := f.m.Stop(ctx, s.ID); err != nil {
-		t.Fatal(err)
-	}
-	f.m.SetFileChooserPortal(true)
-	s = f.start(f.m)
-	if !strings.Contains(env(s), "BROWSERPIER_FILE_CHOOSER_PORTAL=true") {
-		t.Fatalf("turned on: env %s", env(s))
-	}
-}

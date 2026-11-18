@@ -95,11 +95,6 @@ type Config struct {
 	// (BROWSERPIER_STOP_BROWSERS_ON_EXIT), as Umbrel expects of an app.
 	// Otherwise they keep running for the next one, through an update.
 	StopBrowsersOnExit bool
-	// FileChooserPortal (BROWSERPIER_FILE_CHOOSER_PORTAL, off by default)
-	// answers pages' file choosers through the browser container's portal
-	// instead of Chromium's GTK dialog (PROJ-152). Off until the person's
-	// picker exists (PROJ-181), which turns it on and removes the setting.
-	FileChooserPortal bool
 	// TrustedProxies are the networks whose X-Forwarded-For and
 	// X-Forwarded-Proto are believed (BROWSERPIER_TRUSTED_PROXIES: CIDRs,
 	// comma-separated, or "private"). Empty trusts none.
@@ -276,10 +271,6 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	stopOnExit := get("BROWSERPIER_STOP_BROWSERS_ON_EXIT", "false")
 	if c.StopBrowsersOnExit, err = strconv.ParseBool(stopOnExit); err != nil {
 		return Config{}, fmt.Errorf("BROWSERPIER_STOP_BROWSERS_ON_EXIT: want true or false, got %q", stopOnExit)
-	}
-	portal := get("BROWSERPIER_FILE_CHOOSER_PORTAL", "false")
-	if c.FileChooserPortal, err = strconv.ParseBool(portal); err != nil {
-		return Config{}, fmt.Errorf("BROWSERPIER_FILE_CHOOSER_PORTAL: want true or false, got %q", portal)
 	}
 	if c.TrustedProxies, err = parseProxies(get("BROWSERPIER_TRUSTED_PROXIES", "")); err != nil {
 		return Config{}, err

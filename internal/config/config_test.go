@@ -27,9 +27,6 @@ func TestLoadDefaults(t *testing.T) {
 	if c.StopBrowsersOnExit {
 		t.Error("browsers stop on exit by default")
 	}
-	if c.FileChooserPortal {
-		t.Error("the file chooser portal is on by default")
-	}
 }
 
 func TestLoadFromEnv(t *testing.T) {
@@ -39,7 +36,6 @@ func TestLoadFromEnv(t *testing.T) {
 		"BROWSERPIER_HOST_DATA_DIR":         "/home/u/bp",
 		"BROWSERPIER_BROWSER_IMAGE":         "example/chromium:test",
 		"BROWSERPIER_STOP_BROWSERS_ON_EXIT": "true",
-		"BROWSERPIER_FILE_CHOOSER_PORTAL":   "true",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -56,16 +52,12 @@ func TestLoadFromEnv(t *testing.T) {
 	if !c.StopBrowsersOnExit {
 		t.Error("StopBrowsersOnExit not set")
 	}
-	if !c.FileChooserPortal {
-		t.Error("FileChooserPortal not set")
-	}
 }
 
 func TestLoadRejectsBadValues(t *testing.T) {
 	for name, vars := range map[string]map[string]string{
 		"listen without port": {"BROWSERPIER_LISTEN": "localhost"},
 		"listen bad port":     {"BROWSERPIER_LISTEN": ":http-ish"},
-		"portal not a bool":   {"BROWSERPIER_FILE_CHOOSER_PORTAL": "maybe"},
 		"listen port range":   {"BROWSERPIER_LISTEN": ":70000"},
 		"relative host dir":   {"BROWSERPIER_HOST_DATA_DIR": "data"},
 		"bad proxy":           {"BROWSERPIER_TRUSTED_PROXIES": "10.0.0.0/33"},
