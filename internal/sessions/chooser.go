@@ -25,7 +25,8 @@ var (
 	// ErrChooserClosed: no open chooser has that id (answered, cancelled,
 	// closed by the page, or timed out).
 	ErrChooserClosed = errors.New("that file chooser closed")
-	// ErrNoPortal: the browser has no portal (an image from before it).
+	// ErrNoPortal: the browser has no portal (an image from before it,
+	// which answers 404, or 503).
 	ErrNoPortal = errors.New("this browser has no file chooser portal")
 )
 
@@ -42,6 +43,11 @@ func (m *Manager) Choosers(ctx context.Context, profile string) ([]Chooser, erro
 		} `json:"choosers"`
 	}
 	if err := m.control(ctx, profile, http.MethodGet, "/chooser", nil, &in); err != nil {
+		// An image from before the portal has no such route: a browser
+		// kept running through an update, until it restarts.
+		if ce := (*controlError)(nil); errors.As(err, &ce) && ce.status == http.StatusNotFound {
+			return nil, ErrNoPortal
+		}
 		return nil, chooserError(err)
 	}
 	out := make([]Chooser, 0, len(in.Choosers))

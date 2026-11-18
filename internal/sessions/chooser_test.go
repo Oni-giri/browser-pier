@@ -120,3 +120,13 @@ func TestChooserTimerRestartsWhenControlChangesHands(t *testing.T) {
 		t.Fatal("a person has control after hand-back")
 	}
 }
+
+// An image from before the portal has no /chooser: it says so as no
+// portal, not as an error to log on every poll.
+func TestChoosersOnAnImageWithoutThePortal(t *testing.T) {
+	f := newFixture(t) // its control socket serves /healthz only
+	s := f.start(f.m)
+	if cs, err := f.m.Choosers(context.Background(), s.Profile); !errors.Is(err, ErrNoPortal) || len(cs) != 0 {
+		t.Fatalf("Choosers: %+v %v", cs, err)
+	}
+}

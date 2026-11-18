@@ -40,12 +40,10 @@ func TestSizesAndTimes(t *testing.T) {
 	}
 }
 
-// TestUploadOver100MiB: a person's upload is capped at 100 MiB, as an
-// agent's is (lowered here, so the test sends kilobytes, not 100 MiB).
-func TestUploadOver100MiB(t *testing.T) {
-	if MaxUpload != 100<<20 {
-		t.Fatalf("MaxUpload is %d, want 100 MiB", MaxUpload)
-	}
+// rig is a running session whose stand-in browser serves ctl, with a
+// person in control.
+func rig(t *testing.T, ctl *http.ServeMux) (*sessions.Manager, sessions.Session) {
+	t.Helper()
 	ctx := context.Background()
 	dir, err := os.MkdirTemp("", "pk") // short, for the socket's path
 	if err != nil {
@@ -58,14 +56,9 @@ func TestUploadOver100MiB(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = d.Close() })
 	rt := sessionstest.New(dir)
-	ctl := http.NewServeMux()
 	ctl.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok\n") })
-	var answered atomic.Int32
-	ctl.HandleFunc("POST /chooser/restart", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
-	ctl.HandleFunc("POST /chooser/{id}", func(w http.ResponseWriter, _ *http.Request) { answered.Add(1); w.WriteHeader(http.StatusNoContent) })
 	rt.Control = ctl
-	log := slog.New(slog.DiscardHandler)
-	m, err := sessions.NewManager(d, rt, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)
+	m, err := sessions.NewManager(d, rt, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,6 +73,24 @@ func TestUploadOver100MiB(t *testing.T) {
 	if err := m.TakeControl(s.ID); err != nil {
 		t.Fatal(err)
 	}
+	return m, s
+}
+
+// TestUploadOver100MiB: a person's upload is capped at 100 MiB, as an
+// agent's is (lowered here, so the test sends kilobytes, not 100 MiB).
+func TestUploadOver100MiB(t *testing.T) {
+	if MaxUpload != 100<<20 {
+		t.Fatalf("MaxUpload is %d, want 100 MiB", MaxUpload)
+	}
+	ctl := http.NewServeMux()
+	var answered atomic.Int32
+	ctl.HandleFunc("POST /chooser/restart", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	ctl.HandleFunc("POST /chooser/{id}", func(w http.ResponseWriter, _ *http.Request) { answered.Add(1); w.WriteHeader(http.StatusNoContent) })
+	ctl.HandleFunc("GET /chooser", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"choosers":[{"id":"c1","multiple":false,"left_ms":1000}]}`)
+	})
+	m, s := rig(t, ctl)
+	log := slog.New(slog.DiscardHandler)
 	p := New(m, files.New(m.Layout().FilesDir, 0, os.Getuid(), os.Getgid()), log)
 	p.max = 4096
 	send := func(n int) int {
@@ -106,5 +117,24 @@ func TestUploadOver100MiB(t *testing.T) {
 	}
 	if code := send(4096); code != http.StatusNoContent || answered.Load() != 1 {
 		t.Fatalf("at the cap: %d, %d answers", code, answered.Load())
+	}
+}
+
+// TestShowOnABrowserWithoutThePortal: a browser kept running through an
+// update, on an image without the portal, shows no modal, quietly: the
+// page asks every second.
+func TestShowOnABrowserWithoutThePortal(t *testing.T) {
+	m, s := rig(t, http.NewServeMux())
+	var logs bytes.Buffer
+	p := New(m, files.New(m.Layout().FilesDir, 0, os.Getuid(), os.Getgid()), slog.New(slog.NewTextHandler(&logs, nil)))
+	for range 3 {
+		w := httptest.NewRecorder()
+		p.Show(w, httptest.NewRequest(http.MethodGet, "/chooser", nil), s)
+		if w.Code != http.StatusNoContent {
+			t.Fatalf("Show: %d %s", w.Code, w.Body)
+		}
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("logged: %s", logs.String())
 	}
 }
