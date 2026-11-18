@@ -627,22 +627,29 @@ func TestBrowserEnvironment(t *testing.T) {
 		if sb := line("Sandboxed"); sb != "true" {
 			t.Errorf("chrome://gpu says the GPU process is Sandboxed: %q, want true", sb)
 		}
-		// Checked in /proc too: no new privileges, and two seccomp
-		// filters, the container's and Chromium's GPU policy, as renderers
-		// have; with the container's alone it's 1.
+		// Checked in /proc too, for every GPU process (one restarting
+		// would make two): no new privileges, and two seccomp filters, the
+		// container's and Chromium's GPU policy, as renderers have; with
+		// the container's alone it's 1.
 		status := docker(t, "exec", b.name, "sh", "-c", `for d in /proc/[0-9]*; do
 			case $(tr '\0' ' ' < $d/cmdline 2>/dev/null) in /usr/lib/chromium/*--type=gpu-process*)
-				grep -aE '^(NoNewPrivs|Seccomp|Seccomp_filters):' $d/status;; esac; done`)
-		field := func(name string) int {
-			m := regexp.MustCompile(`(?m)^` + name + `:\s*(\d+)`).FindStringSubmatch(status)
-			if m == nil {
-				return -1
-			}
-			n, _ := strconv.Atoi(m[1])
-			return n
+				echo "pid ${d#/proc/}"; grep -aE '^(NoNewPrivs|Seccomp|Seccomp_filters):' $d/status;; esac; done`)
+		procs := regexp.MustCompile(`(?m)^pid `).Split(status, -1)[1:]
+		if len(procs) == 0 {
+			t.Errorf("no GPU process in /proc:\n%s", status)
 		}
-		if field("NoNewPrivs") != 1 || field("Seccomp") != 2 || field("Seccomp_filters") < 2 {
-			t.Errorf("the GPU process isn't under the container's and Chromium's seccomp filters with no new privileges:\n%s", status)
+		for _, proc := range procs {
+			field := func(name string) int {
+				m := regexp.MustCompile(`(?m)^` + name + `:\s*(\d+)`).FindStringSubmatch(proc)
+				if m == nil {
+					return -1
+				}
+				n, _ := strconv.Atoi(m[1])
+				return n
+			}
+			if field("NoNewPrivs") != 1 || field("Seccomp") != 2 || field("Seccomp_filters") < 2 {
+				t.Errorf("a GPU process isn't under the container's and Chromium's seccomp filters with no new privileges:\npid %s", proc)
+			}
 		}
 		t.Logf("GPU process: %s", strings.Join(strings.Fields(status), " "))
 	})
