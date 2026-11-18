@@ -138,10 +138,17 @@ func run(log *slog.Logger) error {
 		return err
 	}
 
-	// The session bus and the file chooser portal come up before
-	// Chromium, which looks for the portal once, as it starts. Without
-	// them the browser starts all the same, with its own dialogs.
-	bus, portal := startChooser(ctx, log, cfg)
+	// The session bus and the file chooser portal, when turned on, come
+	// up before Chromium, which looks for the portal once, as it starts.
+	// Off, or failing, the browser starts all the same, with its own
+	// dialogs.
+	var bus *sessionBus
+	var portal *portal
+	portalOff := "the file chooser portal is off in this browser (BROWSERPIER_FILE_CHOOSER_PORTAL)"
+	if cfg.FileChooserPortal {
+		bus, portal = startChooser(ctx, log, cfg)
+		portalOff = "the file chooser portal isn't running in this browser"
+	}
 	defer bus.stop()
 	defer portal.close()
 
@@ -183,7 +190,7 @@ func run(log *slog.Logger) error {
 			&streamer{command: func() *exec.Cmd { return exec.Command("gst-launch-1.0", streamArgs()...) }},
 			&streamer{command: func() *exec.Cmd { return exec.Command("gst-launch-1.0", recordArgs(cfg.Width, cfg.Height)...) },
 				contentType: "video/mp4", wait: 2 * time.Second},
-			newVisual(cfg.Width, cfg.Height), fwd, where, portal),
+			newVisual(cfg.Width, cfg.Height), fwd, where, portal, portalOff),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() { _ = srv.Serve(ln) }()

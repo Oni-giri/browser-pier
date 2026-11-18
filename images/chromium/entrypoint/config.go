@@ -45,6 +45,10 @@ type config struct {
 	// read from BlockFile (BROWSERPIER_BLOCKLIST_FILE). Off by default.
 	BlockAds  bool
 	BlockFile string
+	// FileChooserPortal (BROWSERPIER_FILE_CHOOSER_PORTAL, off by default)
+	// starts the session bus and the file chooser portal; off, nothing of
+	// them runs and Chromium shows its own dialogs, as before PROJ-152.
+	FileChooserPortal bool
 	// ChooserTimeout (BROWSERPIER_CHOOSER_TIMEOUT) is how long a page's
 	// file chooser waits for an answer before it is cancelled.
 	ChooserTimeout time.Duration
@@ -98,6 +102,9 @@ func loadConfig(lookup func(string) (string, bool)) (config, error) {
 	}
 	if c.StopTimeout, err = time.ParseDuration(get("BROWSERPIER_STOP_TIMEOUT", "20s")); err != nil || c.StopTimeout <= 0 {
 		return config{}, fmt.Errorf("BROWSERPIER_STOP_TIMEOUT: want a positive duration such as 20s, got %q", get("BROWSERPIER_STOP_TIMEOUT", ""))
+	}
+	if c.FileChooserPortal, err = strconv.ParseBool(get("BROWSERPIER_FILE_CHOOSER_PORTAL", "false")); err != nil {
+		return config{}, fmt.Errorf("BROWSERPIER_FILE_CHOOSER_PORTAL: want true or false, got %q", get("BROWSERPIER_FILE_CHOOSER_PORTAL", ""))
 	}
 	if c.ChooserTimeout, err = time.ParseDuration(get("BROWSERPIER_CHOOSER_TIMEOUT", "5m")); err != nil || c.ChooserTimeout < time.Second || c.ChooserTimeout > time.Hour {
 		return config{}, fmt.Errorf("BROWSERPIER_CHOOSER_TIMEOUT: want a duration between 1s and 1h, such as 5m, got %q", get("BROWSERPIER_CHOOSER_TIMEOUT", ""))

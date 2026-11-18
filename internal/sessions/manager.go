@@ -110,6 +110,9 @@ type Manager struct {
 	readyTimeout time.Duration
 	now          func() time.Time
 	geoURL       string // where browsers look up their exit location; "" for nowhere
+	// chooserPortal turns on the browser containers' file chooser portal
+	// (BROWSERPIER_FILE_CHOOSER_PORTAL, PROJ-152).
+	chooserPortal bool
 	hostIPs      string // the Docker host's own addresses, comma separated
 	// blocklist returns the ad and tracker list's file for a browser
 	// container, nil for none (SetBlocklist).
@@ -310,6 +313,14 @@ func (m *Manager) Profiles() *profiles.Store { return m.profiles }
 // SetGeoURL sets the echoip-style endpoint browsers look up their exit
 // location with ("" turns the lookup off). Call it before Start.
 func (m *Manager) SetGeoURL(u string) { m.geoURL = u }
+
+// SetFileChooserPortal turns the browsers' file chooser portal on or off
+// (BROWSERPIER_FILE_CHOOSER_PORTAL). Call it before Start; a browser
+// keeps the setting it started with.
+func (m *Manager) SetFileChooserPortal(on bool) { m.chooserPortal = on }
+
+// FileChooserPortal reports whether browsers start with the portal.
+func (m *Manager) FileChooserPortal() bool { return m.chooserPortal }
 
 // SetHostIPs gives the Docker host's own addresses (its public IP, say),
 // which pages may reach only with the profile's local-network opt-in, as
@@ -519,6 +530,7 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 			"BROWSERPIER_LOCAL_NETWORK=" + strconv.FormatBool(p.LocalNetwork),
 			"BROWSERPIER_HOST_IPS=" + m.hostIPs,
 			"BROWSERPIER_BLOCK_ADS=" + strconv.FormatBool(blocking),
+			"BROWSERPIER_FILE_CHOOSER_PORTAL=" + strconv.FormatBool(m.chooserPortal),
 		},
 	}
 	var cid string

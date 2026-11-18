@@ -30,7 +30,7 @@ import (
 //	GET /proxy/stats   bytes through the upstream proxy, connections refused, and blocked for the ad list
 //	POST /proxy/blocking/off, POST /proxy/exempt   the ad list's controls (block.go)
 //	GET /chooser, POST /chooser/{id}   the page's file choosers (portal.go)
-func newControlHandler(cdp string, stream, record http.Handler, vis *visual, fwd *forwarder, where geo, portal *portal) http.Handler {
+func newControlHandler(cdp string, stream, record http.Handler, vis *visual, fwd *forwarder, where geo, portal *portal, portalOff string) http.Handler {
 	target := &url.URL{Scheme: "http", Host: cdp}
 	relay := &httputil.ReverseProxy{Rewrite: func(pr *httputil.ProxyRequest) {
 		// SetURL also sets Host to the loopback address, which Chromium requires.
@@ -54,7 +54,7 @@ func newControlHandler(cdp string, stream, record http.Handler, vis *visual, fwd
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(where)
 	})
-	registerChooser(mux, portal)
+	registerChooser(mux, portal, portalOff)
 	if fwd != nil {
 		mux.HandleFunc("GET /proxy/stats", fwd.stats)
 		if fwd.block != nil {

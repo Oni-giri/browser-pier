@@ -500,7 +500,7 @@ func TestChooserRoutes(t *testing.T) {
 	c, bus, _, _ := testChooser(t)
 	upload(t, c, "a.txt", "a")
 	mux := http.NewServeMux()
-	registerChooser(mux, &portal{chooser: c})
+	registerChooser(mux, &portal{chooser: c}, "off")
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	if _, err := c.openFile(browserSender, opts("handle_token", "t1", "multiple", true,
@@ -549,7 +549,7 @@ func TestChooserRoutes(t *testing.T) {
 	}
 
 	off := http.NewServeMux()
-	registerChooser(off, nil)
+	registerChooser(off, nil, "off")
 	srv2 := httptest.NewServer(off)
 	defer srv2.Close()
 	resp, err = http.Get(srv2.URL + "/chooser")

@@ -38,7 +38,15 @@ type chooserRig struct {
 
 func newChooserRig(t *testing.T, env ...string) *chooserRig {
 	t.Helper()
+	return newChooserRigPortal(t, true, env...)
+}
+
+// newChooserRigPortal is newChooserRig with the portal on or off
+// (BROWSERPIER_FILE_CHOOSER_PORTAL).
+func newChooserRigPortal(t *testing.T, portal bool, env ...string) *chooserRig {
+	t.Helper()
 	a := newRealAPIEnv(t, env...)
+	a.m.SetFileChooserPortal(portal)
 	site := browsertest.NewPageSite(t, browsertest.SiteHost(t))
 	name := fmt.Sprintf("ch%d", time.Now().UnixNano()%1e9)
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", "browserpier-"+name).Run() })
@@ -547,4 +555,39 @@ func TestChooserStaysQuiet(t *testing.T) {
 	if !quiet {
 		t.Log("see the batch's hits above")
 	}
+}
+
+// TestChooserPortalOffByDefault: with the setting off (the default),
+// the browser is as before the portal: no session bus, Chromium's own
+// dialog, and the chooser routes say the portal is off.
+func TestChooserPortalOffByDefault(t *testing.T) {
+	c := newChooserRigPortal(t, false)
+	c.open()
+	if out, _ := exec.Command("docker", "exec", "browserpier-"+c.name, "sh", "-c", "ls /tmp | grep browserpier-bus; for p in /proc/[0-9]*; do tr '\\0' ' ' < $p/cmdline 2>/dev/null | grep -q '^dbus-daemon' && echo dbus; done; true").Output(); strings.TrimSpace(string(out)) != "" {
+		t.Fatalf("a session bus with the portal off: %s", out)
+	}
+	var out map[string]string
+	if code := c.a.do(http.MethodGet, "/api/sessions/"+c.id+"/chooser", "", &out); code != http.StatusServiceUnavailable || !strings.Contains(out["error"], "BROWSERPIER_FILE_CHOOSER_PORTAL") {
+		t.Fatalf("GET chooser: %d %v", code, out)
+	}
+	resp, err := browsertest.ControlClient(c.a.m.Layout().ControlSocket(c.name)).Get("http://control/chooser")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(msg), "off") {
+		t.Fatalf("the browser's /chooser: %d %s", resp.StatusCode, msg)
+	}
+	if h := c.click(0.09); h.Get(ChooserHeader) != "" {
+		t.Fatalf("a notice with the portal off: %q", h.Get(ChooserHeader))
+	}
+	for deadline := time.Now().Add(10 * time.Second); c.dialogs() == ""; time.Sleep(100 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("no GTK dialog with the portal off")
+		}
+	}
+	t.Logf("dialog: %s", c.dialogs())
+	c.post("/computer", `{"action": "key", "keys": "Escape", "pace": "instant"}`)
+	c.waitEvent("a cancel")
 }

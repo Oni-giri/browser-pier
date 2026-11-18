@@ -48,10 +48,16 @@ type chooserJSON struct {
 	accept   []string
 }
 
+// errPortalOff is the answer while BROWSERPIER_FILE_CHOOSER_PORTAL is off.
+var errPortalOff = errors.New("the file chooser portal is off (BROWSERPIER_FILE_CHOOSER_PORTAL): a page's file chooser shows the browser's own dialog; set an input's files with act's upload step, or ask a person (request_handoff)")
+
 var errNoPortal = errors.New("the file chooser portal isn't running in this browser; a page's file chooser shows the browser's own dialog")
 
 // choosersOf asks the session's browser for its open choosers.
 func (a *API) choosersOf(ctx context.Context, s sessions.Session) ([]chooserJSON, error) {
+	if !a.m.FileChooserPortal() {
+		return nil, errPortalOff
+	}
 	resp, err := a.control(ctx, s.Profile, http.MethodGet, "/chooser", nil)
 	if err != nil {
 		return nil, err
@@ -203,7 +209,7 @@ func (a *API) listChoosers(w http.ResponseWriter, r *http.Request) {
 	}
 	cs, err := a.choosersOf(r.Context(), s)
 	switch {
-	case errors.Is(err, errNoPortal):
+	case errors.Is(err, errNoPortal), errors.Is(err, errPortalOff):
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	case err != nil:
@@ -226,6 +232,12 @@ type chooseJSON struct {
 func (a *API) choose(w http.ResponseWriter, r *http.Request) {
 	var in chooseJSON
 	if !readJSON(w, r, &in) {
+		return
+	}
+	if !a.m.FileChooserPortal() {
+		if _, ok := a.session(w, r); ok {
+			writeError(w, http.StatusServiceUnavailable, errPortalOff.Error())
+		}
 		return
 	}
 	switch {

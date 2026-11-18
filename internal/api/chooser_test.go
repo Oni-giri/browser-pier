@@ -24,7 +24,9 @@ func (f *fixture) putUpload(profile, name, content string) {
 	}
 }
 
+// openChooser turns the portal on and gives the fake browser choosers.
 func (f *fixture) openChooser(list string) {
+	f.m.SetFileChooserPortal(true)
 	f.b.mu.Lock()
 	defer f.b.mu.Unlock()
 	f.b.choosers = list
@@ -309,6 +311,7 @@ func jsonString(s string) string {
 
 func TestChooserNoticeOnActions(t *testing.T) {
 	f := newFixture(t)
+	f.m.SetFileChooserPortal(true)
 	s := f.start(f.all, "google", "visual")
 	code, h, _ := f.computer(s.ID, `{"action": "click", "x": 10, "y": 10}`)
 	if code != http.StatusNoContent || h.Get(ChooserHeader) != "" {
@@ -368,5 +371,33 @@ func TestChooserActivityLog(t *testing.T) {
 	}
 	if strings.Contains(got, "*.pdf") || strings.Contains(got, "secret-name") {
 		t.Fatalf("the log quotes the page or a name: %s", got)
+	}
+}
+
+// TestChooserPortalOff: with BROWSERPIER_FILE_CHOOSER_PORTAL off (the
+// default), the routes say so and ask nothing of the browser, and no
+// action's answer carries a notice.
+func TestChooserPortalOff(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.all, "google", "visual")
+	f.putUpload("google", "report.pdf", "%PDF")
+	f.b.mu.Lock()
+	f.b.choosers = `[{"id":"c1","multiple":false,"accept":[]}]`
+	f.b.mu.Unlock()
+	var out map[string]string
+	if code := f.call(f.all, http.MethodGet, "/api/sessions/"+s.ID+"/chooser", "", &out); code != http.StatusServiceUnavailable || !strings.Contains(out["error"], "BROWSERPIER_FILE_CHOOSER_PORTAL") {
+		t.Fatalf("GET: %d %v", code, out)
+	}
+	if code := f.call(f.all, http.MethodPost, "/api/sessions/"+s.ID+"/chooser", `{"id": "c1", "files": ["report.pdf"]}`, &out); code != http.StatusServiceUnavailable || !strings.Contains(out["error"], "off") {
+		t.Fatalf("POST: %d %v", code, out)
+	}
+	if code := f.call(f.scoped, http.MethodPost, "/api/sessions/"+f.start(f.all, "github", "visual").ID+"/chooser", `{"id": "c1", "cancel": true}`, nil); code != http.StatusNotFound {
+		t.Fatalf("another profile's session: %d", code)
+	}
+	if got := f.chosen(); len(got) != 0 {
+		t.Fatalf("the browser was asked: %q", got)
+	}
+	if code, h, _ := f.computer(s.ID, `{"action": "click", "x": 10, "y": 10}`); code != http.StatusNoContent || h.Get(ChooserHeader) != "" {
+		t.Fatalf("click: %d %q", code, h.Get(ChooserHeader))
 	}
 }

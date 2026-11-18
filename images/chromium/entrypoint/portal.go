@@ -245,11 +245,12 @@ func (properties) Set(intf, name string, _ dbus.Variant) *dbus.Error {
 //	GET  /chooser        the open file choosers: id, multiple, accept, age_ms
 //	POST /chooser/{id}   {"files": ["name", …]} or {"cancel": true}
 //
-// Both answer 503 when the portal isn't running.
-func registerChooser(mux *http.ServeMux, p *portal) {
+// Both answer 503, saying why (off, or failed to start), when the portal
+// isn't running.
+func registerChooser(mux *http.ServeMux, p *portal, why string) {
 	off := func(w http.ResponseWriter) bool {
 		if p == nil {
-			http.Error(w, "the file chooser portal isn't running in this browser", http.StatusServiceUnavailable)
+			http.Error(w, why, http.StatusServiceUnavailable)
 			return true
 		}
 		return false
