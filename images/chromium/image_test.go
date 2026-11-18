@@ -621,20 +621,15 @@ func TestBrowserEnvironment(t *testing.T) {
 		if g := line("GPU process crash count"); g != "0" {
 			t.Errorf("GPU process crash count: %q", g)
 		}
-		// Chromium 156 here reports its GPU process unsandboxed whether
-		// WebGL is on SwiftShader or llvmpipe: it has the container's
-		// seccomp filter but not Chromium's own (ANTI-BOT.md, PROJ-165).
-		// Pinned, so a change either way is noticed.
-		switch sb := line("Sandboxed"); sb {
-		case "false":
-			t.Log("GPU process: Sandboxed false, as before PROJ-148 (PROJ-165)")
-		case "true":
-			t.Error("chrome://gpu now says the GPU process is sandboxed: tighten this test to require it (PROJ-165)")
-		default:
-			t.Errorf("chrome://gpu's Sandboxed line is %q; has the report changed?", sb)
+		// The GPU process has Chromium's own seccomp sandbox (PROJ-165):
+		// before it, chrome://gpu said Sandboxed false, with SwiftShader as
+		// with llvmpipe, as Mesa's threads kept the sandbox from starting.
+		if sb := line("Sandboxed"); sb != "true" {
+			t.Errorf("chrome://gpu says the GPU process is Sandboxed: %q, want true", sb)
 		}
-		// What it does have: a process of its own, no new privileges, and
-		// at least the container's seccomp filter.
+		// Checked in /proc too: no new privileges, and two seccomp
+		// filters, the container's and Chromium's GPU policy, as renderers
+		// have; with the container's alone it's 1.
 		status := docker(t, "exec", b.name, "sh", "-c", `for d in /proc/[0-9]*; do
 			case $(tr '\0' ' ' < $d/cmdline 2>/dev/null) in /usr/lib/chromium/*--type=gpu-process*)
 				grep -aE '^(NoNewPrivs|Seccomp|Seccomp_filters):' $d/status;; esac; done`)
@@ -646,8 +641,8 @@ func TestBrowserEnvironment(t *testing.T) {
 			n, _ := strconv.Atoi(m[1])
 			return n
 		}
-		if field("NoNewPrivs") != 1 || field("Seccomp") != 2 || field("Seccomp_filters") < 1 {
-			t.Errorf("the GPU process isn't under a seccomp filter with no new privileges:\n%s", status)
+		if field("NoNewPrivs") != 1 || field("Seccomp") != 2 || field("Seccomp_filters") < 2 {
+			t.Errorf("the GPU process isn't under the container's and Chromium's seccomp filters with no new privileges:\n%s", status)
 		}
 		t.Logf("GPU process: %s", strings.Join(strings.Fields(status), " "))
 	})
@@ -822,10 +817,13 @@ func TestBrowserEnvironment(t *testing.T) {
 }
 
 // checkGPUProcess fails if the GPU process failed to start or crashed: then
-// Chromium starts it again and again, and falls back to no WebGL.
+// Chromium starts it again and again, and falls back to no WebGL. That
+// includes its sandbox failing to start, which is fatal to it.
 func checkGPUProcess(t *testing.T, logs string) {
 	t.Helper()
-	for _, bad := range []string{"Exiting GPU process due to errors during initialization", "GPU process exited unexpectedly", "GPU process isn't usable"} {
+	for _, bad := range []string{"Exiting GPU process due to errors during initialization", "GPU process exited unexpectedly", "GPU process isn't usable",
+		// The GPU sandbox couldn't start (PROJ-165).
+		"InitializeSandbox() called with multiple threads"} {
 		if strings.Contains(logs, bad) {
 			t.Fatalf("the GPU process failed (%s):\n%s", bad, logs)
 		}
