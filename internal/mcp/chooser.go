@@ -17,7 +17,7 @@ import (
 // cancels it.
 func (s *Server) addChooserTools(srv *sdk.Server) {
 	sdk.AddTool(srv, &sdk.Tool{Name: "choose_files", Description: "Answer a page's file chooser, either mode: when a click opens one (a file input, or a page's own upload button), no dialog shows; the answer of that action, or the next, ends with a file chooser is open (c3), and list_files lists the open ones with what they accept. " +
-		"Give the chooser's id and the names of files you put in the uploads with upload_file (one file unless the chooser takes several, at most 10); an empty files list cancels it. Only uploads can be chosen. An unanswered chooser is cancelled after 5 minutes. Refused while a person has the browser."}, s.chooseFiles)
+		"Give the chooser's id and the names of files you put in the uploads with upload_file (one file unless the chooser takes several, at most 10); an empty files list cancels it. Only uploads can be chosen. An unanswered chooser is cancelled after 5 minutes. Refused while a person has the browser: they answer it themselves, from the uploads or their own device (request_handoff with reason file_upload asks them to)."}, s.chooseFiles)
 }
 
 type chooseArgs struct {
