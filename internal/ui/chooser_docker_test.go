@@ -11,8 +11,8 @@ package ui
 import (
 	"context"
 	"crypto/rand"
-	"encoding/hex"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
