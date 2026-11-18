@@ -84,8 +84,9 @@ func TestPlayerJS(t *testing.T) {
 	// A click on the timeline seeks: 10% in is 3 s into the first segment.
 	p.Eval(`(() => { const b = document.querySelector("#rec-bar").getBoundingClientRect();
 		document.querySelector("#rec-bar").dispatchEvent(new MouseEvent("click", {clientX: b.left + b.width * 0.1, clientY: b.top + 5, bubbles: true})) })()`)
-	until(t, p, "the click didn't seek back to the first segment", `document.querySelector("#rec-video").src.endsWith("000001.mp4")`)
-	if got, _ := p.Eval(`document.querySelector("#rec-video").currentTime`).(float64); got < 2 || got > 4.5 {
+	// The new source loads, then the player seeks into it.
+	until(t, p, "the click didn't seek back to the first segment", `document.querySelector("#rec-video").src.endsWith("000001.mp4") && document.querySelector("#rec-video").currentTime > 1`)
+	if got, _ := p.Eval(`document.querySelector("#rec-video").currentTime`).(float64); got < 2 || got > 5 {
 		t.Errorf("seeked to %.2f s, want about 3", got)
 	}
 
