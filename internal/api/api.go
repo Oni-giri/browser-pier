@@ -26,6 +26,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/settings"
+	"github.com/Oni-giri/browser-pier/internal/visualtree"
 )
 
 // API is the agent-facing HTTP API.
@@ -38,6 +39,7 @@ type API struct {
 	log      *slog.Logger
 	public   string // BROWSERPIER_PUBLIC_URL, if set
 	tools    *pagetools.Tools
+	tree     *visualtree.Tools // Visual mode's element tree (PROJ-150)
 }
 
 func New(m *sessions.Manager, web *auth.Web, fs *files.Store, log *slog.Logger, publicURL string) *API {
@@ -46,7 +48,7 @@ func New(m *sessions.Manager, web *auth.Web, fs *files.Store, log *slog.Logger, 
 	if fs != nil {
 		m.OnEnd(fs.Forget) // what download notices keep about a session
 	}
-	return &API{m: m, web: web, files: fs, log: log, public: strings.TrimRight(publicURL, "/"), tools: tools}
+	return &API{m: m, web: web, files: fs, log: log, public: strings.TrimRight(publicURL, "/"), tools: tools, tree: visualtree.New(m)}
 }
 
 // SetSettings makes profiles created through the API start from the
@@ -73,6 +75,7 @@ func (a *API) Register(mux Router) {
 	mux.Handle("DELETE /api/profiles/{name}/files/{file}", t(a.deleteFile))
 	mux.Handle("POST /api/sessions/{id}/cdp-ticket", t(a.cdpTicket))
 	a.registerPageTools(mux)
+	a.registerVisualTree(mux)
 	if a.handoffs != nil {
 		a.registerHandoffs(mux)
 	}
@@ -550,6 +553,7 @@ func (a *API) input(path string) http.HandlerFunc {
 		}
 		var mark *files.Mark
 		var wait time.Duration
+		var rc *refClick
 		if path == "/input/click" {
 			// A click may start a download (PROJ-116); the browser
 			// doesn't take download_wait_ms, which is BrowserPier's.
@@ -562,17 +566,30 @@ func (a *API) input(path string) http.HandlerFunc {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
+			// A click by a Visual-mode ref (PROJ-150) clicks the
+			// element's centre as it is now.
+			if body, rc, ok = a.takeRef(w, r, s, body); !ok {
+				return
+			}
 			mark = a.markDownloads(s)
 			if ms != nil {
 				mark.Expect(wait)
 			}
 		}
-		if !a.act(w, r, s, path, body) {
+		note := describeInput(path, body)
+		if rc != nil {
+			note = describeRefClick(rc.ref, body)
+		}
+		if !a.actNoted(w, r, s, path, body, note) {
 			return
 		}
 		if mark != nil {
 			mark.Ended()
 			a.reportDownloads(w, r, s, mark, wait)
+		}
+		if rc != nil {
+			writeJSON(w, http.StatusOK, map[string]string{"text": rc.clickedText()})
+			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
@@ -602,6 +619,11 @@ func takeDownloadWait(body []byte) ([]byte, *int, error) {
 // act runs one input action through the control socket and logs it, or
 // writes why it didn't run.
 func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, path string, body []byte) bool {
+	return a.actNoted(w, r, s, path, body, describeInput(path, body))
+}
+
+// actNoted is act, logging note for the action.
+func (a *API) actNoted(w http.ResponseWriter, r *http.Request, s sessions.Session, path string, body []byte, note string) bool {
 	ctx, done, err := a.m.AgentInput(r.Context(), s.ID)
 	if errors.Is(err, sessions.ErrInputBusy) {
 		writeError(w, http.StatusConflict, "another input is still running in this browser; wait for it to finish, then send this one")
@@ -640,8 +662,15 @@ func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, pa
 		writeError(w, resp.StatusCode, strings.TrimSpace(string(msg)))
 		return false
 	}
-	a.m.Note(s.ID, tok.Name, describeInput(path, body))
+	a.m.Note(s.ID, tok.Name, note)
 	return true
+}
+
+// describeRefClick puts a click by ref in words for the activity log: the
+// ref only, never the element's name, which is page text.
+func describeRefClick(ref string, body []byte) string {
+	what, _, _ := strings.Cut(describeInput("/input/click", body), " at ")
+	return what + " " + ref
 }
 
 // describeInput puts an input action in words for the activity log.
