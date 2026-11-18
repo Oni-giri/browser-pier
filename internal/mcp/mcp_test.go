@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -45,6 +46,7 @@ type fixture struct {
 	mu     sync.Mutex
 	clicks []string // what the fake browser was asked to click
 	types  []string // and to type
+	opens  []string // and to open
 	// onClick, if set, runs as the fake browser clicks: a download, say.
 	onClick func()
 	// pageURL is the one tab's address, as /json/list answers it (a
@@ -147,6 +149,17 @@ func (f *fixture) browser() http.Handler {
 		f.mu.Lock()
 		f.types = append(f.types, string(b))
 		f.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /input/open", func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		f.mu.Lock()
+		f.opens = append(f.opens, string(b))
+		f.mu.Unlock()
+		if strings.Contains(string(b), "covered") {
+			http.Error(w, "a pop-up window covers the browser's address bar: finish in it or close it", http.StatusConflict)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("POST /input/click", func(w http.ResponseWriter, r *http.Request) {
@@ -438,6 +451,46 @@ func TestHumanTypingThroughMCPIsCapped(t *testing.T) {
 	// Visual-mode browser refuses it for what it is).
 	if _, out := try("act", map[string]any{"steps": []any{step(strings.Repeat("a", 100), ""), step(strings.Repeat("b", 60), "instant")}}); strings.Contains(out, "at most 150") {
 		t.Errorf("act, 100 characters at human pace: %s", out)
+	}
+}
+
+// open_url opens the address through the browser's address bar
+// (PROJ-164): the browser gets the URL, a refusal comes back as the tool's
+// error, and human pace keeps type_text's cap.
+func TestOpenURL(t *testing.T) {
+	f := newFixture(t)
+	cs := f.connect(f.all, versions[0], nil)
+	s, _, _ := f.m.Start(context.Background(), "google", "")
+	try := func(args map[string]any) (bool, string) {
+		t.Helper()
+		args["session_id"] = s.ID
+		res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "open_url", Arguments: args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.IsError, res.Content[0].(*sdk.TextContent).Text
+	}
+	if isErr, out := try(map[string]any{"url": "https://example.com/a"}); isErr || !strings.Contains(out, "Opened it in the address bar") {
+		t.Fatalf("open: %v %s", isErr, out)
+	}
+	if isErr, out := try(map[string]any{"url": "https://example.com/covered"}); !isErr || !strings.Contains(out, "pop-up window covers") {
+		t.Errorf("covered: %v %s", isErr, out)
+	}
+	if isErr, out := try(map[string]any{"url": "javascript:alert(1)"}); !isErr || !strings.Contains(out, "only http and https") {
+		t.Errorf("javascript: %v %s", isErr, out)
+	}
+	long := "https://example.com/" + strings.Repeat("a", 140)
+	if isErr, out := try(map[string]any{"url": long}); !isErr || !strings.Contains(out, "at most 150") {
+		t.Errorf("160 characters at human pace: %v %s", isErr, out)
+	}
+	if isErr, out := try(map[string]any{"url": long, "pace": "instant"}); isErr {
+		t.Errorf("160 characters at instant pace: %s", out)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	want := []string{`{"url":"https://example.com/a"}`, `{"url":"https://example.com/covered"}`, `{"url":"` + long + `","pace":"instant"}`}
+	if !slices.Equal(f.opens, want) {
+		t.Errorf("the browser was asked to open %q", f.opens)
 	}
 }
 

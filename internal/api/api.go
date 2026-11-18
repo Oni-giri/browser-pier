@@ -661,6 +661,15 @@ func describeInput(path string, body []byte) string {
 		var d struct{ From, To struct{ X, Y int } }
 		_ = json.Unmarshal(body, &d)
 		return fmt.Sprintf("Dragged from %d, %d to %d, %d", d.From.X, d.From.Y, d.To.X, d.To.Y)
+	case "/input/open":
+		// As navigate logs it: the origin, not the path or query, which
+		// may carry a one-time link's token.
+		var o struct{ URL string }
+		_ = json.Unmarshal(body, &o)
+		if u, err := url.Parse(o.URL); err == nil && u.Host != "" {
+			return "Opened " + u.Scheme + "://" + u.Host + " in the address bar"
+		}
+		return "Opened an address in the address bar"
 	}
 	if path == "/input/type" {
 		var t struct{ Text string }

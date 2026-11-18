@@ -280,7 +280,7 @@ type call struct {
 func (t *Tools) begin(ctx context.Context, s sessions.Session, who Caller, allow *cdp.AllowList) (*call, error) {
 	switch {
 	case s.Mode != profiles.ModeAPI:
-		return nil, &Error{Status: http.StatusConflict, Msg: "the page tools are for API-mode sessions; this one is in Visual mode, where nothing may attach to the page over CDP. Use screenshot, click and type_text, or restart the browser with mode api"}
+		return nil, &Error{Status: http.StatusConflict, Msg: "the page tools are for API-mode sessions; this one is in Visual mode, where nothing may attach to the page over CDP. Use screenshot, click and type_text (open_url to open a URL), or restart the browser with mode api"}
 	case s.State == sessions.NeedsHelp:
 		return nil, &Error{Status: http.StatusConflict, Msg: sessions.ErrHandedOver.Error()}
 	case s.State != sessions.Running:

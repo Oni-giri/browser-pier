@@ -163,7 +163,7 @@ func (b *browser) handler() http.Handler {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
-	for _, p := range []string{"click", "type", "scroll", "key", "drag"} {
+	for _, p := range []string{"click", "type", "scroll", "key", "drag", "open"} {
 		mux.HandleFunc("POST /input/"+p, input)
 	}
 	return mux

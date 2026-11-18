@@ -2,20 +2,25 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"image"
 	"image/png"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	"golang.org/x/net/idna"
+
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
+	"github.com/Oni-giri/browser-pier/internal/weburl"
 )
 
 // maxPause caps a wait action.
@@ -28,7 +33,7 @@ type pointJSON struct {
 
 // computerRequest is one Visual-mode action. Coordinates are screen pixels.
 type computerRequest struct {
-	Action string `json:"action"` // click, type, scroll, key, drag, wait or zoom
+	Action string `json:"action"` // click, type, scroll, key, drag, open, wait or zoom
 	X      *int   `json:"x"`
 	Y      *int   `json:"y"`
 	Button string `json:"button"`
@@ -40,9 +45,11 @@ type computerRequest struct {
 	Keys json.RawMessage `json:"keys"`
 	From *pointJSON      `json:"from"`
 	To   *pointJSON      `json:"to"`
-	MS   int             `json:"ms"`
-	W    int             `json:"w"`
-	H    int             `json:"h"`
+	// URL is the address open opens (PROJ-164).
+	URL string `json:"url"`
+	MS  int    `json:"ms"`
+	W   int    `json:"w"`
+	H   int    `json:"h"`
 	// Screenshot returns the screen after the action, Width wide if set.
 	Screenshot bool `json:"screenshot"`
 	Width      int  `json:"width"`
@@ -57,8 +64,11 @@ type computerRequest struct {
 }
 
 // downloads reports whether an action may start a download, so its
-// notice is looked for: a click on a link, or a key (Return on one).
-func (c computerRequest) downloads() bool { return c.Action == "click" || c.Action == "key" }
+// notice is looked for: a click on a link, a key (Return on one), or an
+// address that is a file.
+func (c computerRequest) downloads() bool {
+	return c.Action == "click" || c.Action == "key" || c.Action == "open"
+}
 
 // inputBody is what the control socket takes for an input action, or an
 // error saying what is missing.
@@ -123,8 +133,17 @@ func (c computerRequest) inputBody() (path string, body any, err error) {
 			return "", nil, fmt.Errorf("drag: want from and to, each {x, y}")
 		}
 		return "/input/drag", drag{*c.From, *c.To, c.Button, c.Pace}, nil
+	case "open":
+		u, err := weburl.Check(c.URL)
+		if err != nil {
+			return "", nil, err
+		}
+		return "/input/open", struct {
+			URL  string `json:"url"`
+			Pace string `json:"pace,omitempty"`
+		}{u, c.Pace}, nil
 	}
-	return "", nil, fmt.Errorf("action %q: want click, type, scroll, key, drag, wait or zoom", c.Action)
+	return "", nil, fmt.Errorf("action %q: want click, type, scroll, key, drag, open, wait or zoom", c.Action)
 }
 
 // computer runs one Visual-mode action: input through xdotool, a wait,
@@ -183,6 +202,10 @@ func (a *API) computer(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.internal(w, "encoding an action", err)
 		return
+	}
+	if c.Action == "open" {
+		u, _ := weburl.Check(c.URL) // checked by inputBody
+		a.openingDirectly(r.Context(), s, u)
 	}
 	var mark *files.Mark
 	if c.downloads() {
@@ -344,4 +367,24 @@ func describeKeys(raw json.RawMessage) string {
 		shown[i] = strings.Join(parts, "+")
 	}
 	return "Pressed " + strings.Join(shown, ", ")
+}
+
+// openingDirectly lets the host of an address the agent opens through
+// the address bar past the session's ad and tracker list, as navigate
+// does (SPEC §3, Egress): BrowserPier knows the address was asked for.
+func (a *API) openingDirectly(ctx context.Context, s sessions.Session, raw string) {
+	if !s.BlockAds {
+		return
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return
+	}
+	host := u.Hostname()
+	if h, err := idna.Lookup.ToASCII(host); err == nil {
+		host = h
+	}
+	if err := a.m.ExemptHost(ctx, s.ID, host); err != nil {
+		a.log.Debug("couldn't exempt a host from the ad and tracker list", "session", s.ID, "err", err)
+	}
 }

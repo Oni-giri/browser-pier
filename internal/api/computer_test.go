@@ -107,6 +107,51 @@ func TestComputerForwardsInput(t *testing.T) {
 	}
 }
 
+// TestComputerOpen: open sends the browser the address as navigate would
+// open it, and refuses what navigate refuses, before the browser sees it
+// (PROJ-164). The log names its origin only.
+func TestComputerOpen(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.all, "google", "visual")
+	for body, want := range map[string]string{
+		`{"action": "open", "url": "https://example.com/a b?q=1"}`:               `/input/open {"url":"https://example.com/a%20b?q=1"}`,
+		`{"action": "open", "url": " HTTP://Example.com/x ", "pace": "instant"}`: `/input/open {"url":"http://Example.com/x","pace":"instant"}`,
+	} {
+		if code, _, raw := f.computer(s.ID, body); code != http.StatusNoContent {
+			t.Fatalf("%s: %d %s", body, code, raw)
+		}
+		if got := f.lastInput(); got != want {
+			t.Errorf("%s: forwarded %s, want %s", body, got, want)
+		}
+	}
+	f.b.mu.Lock()
+	sent := len(f.b.inputs)
+	f.b.mu.Unlock()
+	for body, want := range map[string]string{
+		`{"action": "open"}`: "url: ",
+		`{"action": "open", "url": "javascript:alert(1)"}`:                                   "only http and https",
+		`{"action": "open", "url": "file:///etc/passwd"}`:                                    "only http and https",
+		`{"action": "open", "url": "https://me:pw@example.com/"}`:                            "user name or password",
+		`{"action": "open", "url": "https:///x"}`:                                            "no host",
+		`{"action": "open", "url": "https://example.com/", "pace": 1}`:                       "",
+		`{"action": "open", "url": "https://example.com/` + strings.Repeat("a", 8200) + `"}`: "too long",
+	} {
+		code, _, raw := f.computer(s.ID, body)
+		if code != http.StatusBadRequest || !strings.Contains(string(raw), want) {
+			t.Errorf("%.60s: %d %s", body, code, raw)
+		}
+	}
+	f.b.mu.Lock()
+	if len(f.b.inputs) != sent {
+		t.Errorf("refused addresses reached the browser: %q", f.b.inputs[sent:])
+	}
+	f.b.mu.Unlock()
+	got := strings.Join(f.whats(s.ID), "\n")
+	if !strings.Contains(got, "claude: Opened https://example.com in the address bar") || strings.Contains(got, "/a") || strings.Contains(got, "q=1") {
+		t.Fatalf("activity:\n%s", got)
+	}
+}
+
 func TestComputerScreenshotAfterAction(t *testing.T) {
 	f := newFixture(t)
 	s := f.start(f.all, "google", "visual")
