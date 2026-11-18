@@ -23,12 +23,11 @@ const takeOverAfter = 3 * time.Second
 // It is a lease, held by the token tokenID: call done once the browser
 // has answered. A handoff (Needs help), a stop or the token's revocation
 // (DisconnectToken, with ErrRevoked) cancels the context it returns, so
-// an action
-// that takes a while (typing at human pace, PROJ-113) breaks off at once,
-// and waits for leases to end before the person gets the browser; it
-// refuses new ones. The browser lets go of what the action held as it
-// answers, so the person gets it at most tens of milliseconds after the
-// break. A person can take control from the live view once one has run
+// an action that takes a while (typing at human pace, PROJ-113) breaks
+// off at once. A handoff or a stop also waits for leases to end before
+// the person gets the browser, and refuses new ones; a revocation doesn't
+// wait. The browser lets go of what the action held as it answers, so the
+// person gets it at most tens of milliseconds after the break. A person can take control from the live view once one has run
 // for takeOverAfter, which breaks it off the same way; not before, nor
 // for agentQuiet after it ends.
 func (m *Manager) AgentInput(ctx context.Context, id, tokenID string) (context.Context, func(), error) {
