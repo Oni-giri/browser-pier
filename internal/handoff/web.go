@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
+	"github.com/Oni-giri/browser-pier/internal/picker"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/static"
@@ -76,7 +77,13 @@ type Web struct {
 	// links for many profiles mustn't add up to many guesses at it. Its
 	// limit is higher, so one profile's attacker rarely blocks the rest.
 	pinAll *auth.Lockout
+	// picker answers a page's file chooser for the link's holder
+	// (PROJ-181); nil refuses it.
+	picker *picker.Picker
 }
+
+// SetPicker lets the link's holder answer the page's file choosers.
+func (w *Web) SetPicker(p *picker.Picker) { w.picker = p }
 
 func NewWeb(svc *Service, web *auth.Web, live *webrtc.Handler, m *sessions.Manager, log *slog.Logger) *Web {
 	return &Web{svc: svc, web: web, live: live, m: m, log: log,
@@ -93,6 +100,9 @@ func (w *Web) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /h/{token}/offer", w.offer)
 	mux.HandleFunc("GET /h/{token}/status", w.status)
 	mux.HandleFunc("POST /h/{token}/finish", w.finish)
+	mux.HandleFunc("GET /h/{token}/chooser", w.chooser(func(p *picker.Picker) chooserRoute { return p.Show }))
+	mux.HandleFunc("POST /h/{token}/chooser", w.chooser(func(p *picker.Picker) chooserRoute { return p.Answer }))
+	mux.HandleFunc("POST /h/{token}/chooser/upload", w.chooser(func(p *picker.Picker) chooserRoute { return p.Upload }))
 	mux.HandleFunc("GET /static/handoff.js", func(rw http.ResponseWriter, r *http.Request) {
 		rw.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		static.Header(rw, r, pageJSTag)
@@ -362,6 +372,28 @@ func (w *Web) offer(rw http.ResponseWriter, r *http.Request) {
 		},
 		Opened: func(v *webrtc.Viewer) { w.svc.track(id, v) },
 	})
+}
+
+type chooserRoute = func(http.ResponseWriter, *http.Request, sessions.Session)
+
+// chooser serves the handoff page's file chooser routes (PROJ-181): only
+// to the browser holding the link, only while it is open, and only for
+// the link's own session, so its profile's uploads and nothing else. The
+// picker checks that a person has control of it.
+func (w *Web) chooser(route func(*picker.Picker) chooserRoute) http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+		h, err := w.svc.ByToken(r.Context(), r.PathValue("token"))
+		if err != nil || h.Status.Final() || !w.holder(r, h) {
+			http.Error(rw, "This link isn't open here.", http.StatusForbidden)
+			return
+		}
+		s, ok := w.m.Live(h.Profile)
+		if !ok || s.ID != h.SessionID {
+			http.Error(rw, "The browser isn't running.", http.StatusConflict)
+			return
+		}
+		route(w.picker)(rw, r, s)
+	}
 }
 
 func (w *Web) status(rw http.ResponseWriter, r *http.Request) {

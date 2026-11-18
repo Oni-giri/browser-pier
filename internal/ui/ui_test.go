@@ -20,7 +20,9 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/db"
+	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/handoff"
+	"github.com/Oni-giri/browser-pier/internal/picker"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/recording"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
@@ -39,8 +41,11 @@ type fixture struct {
 	settings   *settings.Store
 	srv        *httptest.Server
 	client     *http.Client
-	ram        int
-	free       int64 // what the host has available, for HostFree
+	files      *files.Store
+	// choosers is the browser's file chooser portal (chooser_test.go).
+	choosers *fakeChooser
+	ram      int
+	free     int64 // what the host has available, for HostFree
 	// emptied counts the browser's clipboard emptyings (PROJ-194).
 	emptied atomic.Int32
 }
@@ -77,6 +82,8 @@ func newFixture(t *testing.T) *fixture {
 		emptied.Add(1)
 		w.WriteHeader(http.StatusNoContent)
 	})
+	choosers := &fakeChooser{open: `[]`}
+	choosers.register(ctl)
 	rt.Control = ctl
 	m, err := sessions.NewManager(d, rt, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)
 	if err != nil {
@@ -92,11 +99,12 @@ func newFixture(t *testing.T) *fixture {
 	}
 	tokens := auth.NewTokens(d)
 	web := auth.NewWeb(admin, tokens, log, auth.WebOptions{CookieSecure: "auto"})
-	f := &fixture{t: t, m: m, handoffs: handoff.New(d, m, log), web: web, tokens: tokens, settings: settings.New(d)}
+	fs := files.New(m.Layout().FilesDir, 1<<20, os.Getuid(), os.Getgid()) // a 1 MiB cap
+	f := &fixture{t: t, m: m, handoffs: handoff.New(d, m, log), web: web, tokens: tokens, settings: settings.New(d), files: fs, choosers: choosers}
 	emptied = &f.emptied
 	f.recordings = recording.NewStore(filepath.Join(dir, "recordings"), log)
 	app := New(m, web, f.handoffs, f.settings, log, Options{HostMemory: 16 << 30, HostFree: func() int64 { return f.free }, SetRAMLimit: func(p int) { f.ram = p },
-		Recordings: f.recordings})
+		Recordings: f.recordings, Picker: picker.New(m, fs, log)})
 	mux := http.NewServeMux()
 	web.Register(mux)
 	app.Register(mux)
