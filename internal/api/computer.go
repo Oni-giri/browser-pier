@@ -9,13 +9,10 @@ import (
 	"image/png"
 	"io"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
-
-	"golang.org/x/net/idna"
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/files"
@@ -376,15 +373,7 @@ func (a *API) openingDirectly(ctx context.Context, s sessions.Session, raw strin
 	if !s.BlockAds {
 		return
 	}
-	u, err := url.Parse(raw)
-	if err != nil {
-		return
-	}
-	host := u.Hostname()
-	if h, err := idna.Lookup.ToASCII(host); err == nil {
-		host = h
-	}
-	if err := a.m.ExemptHost(ctx, s.ID, host); err != nil {
+	if err := a.m.ExemptURL(ctx, s.ID, raw); err != nil {
 		a.log.Debug("couldn't exempt a host from the ad and tracker list", "session", s.ID, "err", err)
 	}
 }

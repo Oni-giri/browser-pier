@@ -116,6 +116,8 @@ func TestComputerOpen(t *testing.T) {
 	for body, want := range map[string]string{
 		`{"action": "open", "url": "https://example.com/a b?q=1"}`:               `/input/open {"url":"https://example.com/a%20b?q=1"}`,
 		`{"action": "open", "url": " HTTP://Example.com/x ", "pace": "instant"}`: `/input/open {"url":"http://Example.com/x","pace":"instant"}`,
+		// A space in the query reaches the browser encoded, as navigate sends it.
+		`{"action": "open", "url": "https://example.com/?q=a b"}`: `/input/open {"url":"https://example.com/?q=a%20b"}`,
 	} {
 		if code, _, raw := f.computer(s.ID, body); code != http.StatusNoContent {
 			t.Fatalf("%s: %d %s", body, code, raw)

@@ -9,8 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/net/idna"
-
 	"github.com/Oni-giri/browser-pier/internal/cdp"
 	"github.com/Oni-giri/browser-pier/internal/fence"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
@@ -183,15 +181,7 @@ func (t *Tools) openingDirectly(ctx context.Context, s sessions.Session, raw str
 	if !s.BlockAds {
 		return
 	}
-	u, err := url.Parse(raw)
-	if err != nil {
-		return
-	}
-	host := u.Hostname()
-	if a, err := idna.Lookup.ToASCII(host); err == nil {
-		host = a
-	}
-	if err := t.m.ExemptHost(ctx, s.ID, host); err != nil {
+	if err := t.m.ExemptURL(ctx, s.ID, raw); err != nil {
 		t.log.Debug("couldn't exempt a host from the ad and tracker list", "session", s.ID, "err", err)
 	}
 }
