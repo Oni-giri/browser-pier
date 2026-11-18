@@ -145,7 +145,11 @@ func run(log *slog.Logger) error {
 		return fmt.Errorf("start Chromium: %w", err)
 	}
 	browser, err := spawn(chromium)
-	fatal.started()
+	pid := 0
+	if err == nil {
+		pid = chromium.Process.Pid
+	}
+	fatal.started(pid)
 	if err != nil {
 		return fmt.Errorf("start Chromium: %w", err)
 	}
@@ -158,8 +162,9 @@ func run(log *slog.Logger) error {
 		_ = resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
 	}); err != nil {
+		ended := time.Now()
 		_ = closeChromium(browser, cdpAddr, cfg.StopTimeout)
-		return fmt.Errorf("chromium: %w%s", err, fatal.reason(true))
+		return fmt.Errorf("chromium: %w%s", err, fatal.reason(true, ended))
 	}
 
 	ln, err := listenControl(cfg.ControlSocket)
@@ -182,7 +187,7 @@ func run(log *slog.Logger) error {
 	select {
 	case <-browser.done:
 		_ = srv.Close()
-		return fmt.Errorf("chromium exited on its own: %s%s", describe(browser.status), fatal.reason(false))
+		return fmt.Errorf("chromium exited on its own: %s%s", describe(browser.status), fatal.reason(false, time.Now()))
 	case <-ctx.Done():
 	}
 
