@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BrowserPier · Recordings (light)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<!--
+  PROJ-23: session recordings. Five pieces on one sheet, each where it lives:
+  1. the recording indicator beside the status, on the profile page (the live view);
+  2. the Recordings cell in the profile page's side column;
+  3. the player, /profiles/{name}/recordings/{session};
+  4. the line on the handoff page while a person has control;
+  5. the Record sessions setting in Edit settings, and the limits in Settings.
+  Static: no stand-in runtime. The tokens are DESIGN.md's; light theme.
+-->
+<style>
+:root{
+  --page:#EAF1FF;--surface:#FFFFFF;--well:#F1F5F9;--line-soft:#EEF2F7;--line:#E2E8F0;
+  --ink:#0F172A;--ink-body:#334155;--ink-2:#475569;--ink-3:#64748B;
+  --blue:#2F6BFF;--blue-text:#1D4ED8;--blue-tint:#EEF3FF;--green-text:#15803D;--green-tint:#ECFDF3;--red-text:#B91C1C;
+  --seg-on:#FFFFFF;--seg-ring:#E2E8F0;--hatch:#CBD5E1;
+  --ring1:rgba(37,64,140,.07);--ring2:rgba(37,64,140,.06);--ring3:rgba(37,64,140,.20);
+  --radius:16px;--card:0 0 0 1px var(--ring1),0 1px 2px var(--ring2),0 10px 28px -12px var(--ring3)}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.5 Geist,system-ui,sans-serif}
+.wrap{max-width:1320px;margin:0 auto;padding:22px 28px 60px;display:grid;gap:28px}
+h1{margin:0;font-size:22px;font-weight:600;letter-spacing:-.6px}
+h2.sheet{margin:0 0 10px;font-size:12px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3)}
+.cell{background:var(--surface);border-radius:var(--radius);box-shadow:var(--card);padding:18px 20px}
+.cell-title{margin:0 0 12px;font-size:14px;font-weight:500;color:var(--ink-2);display:flex;align-items:center;gap:8px}
+.cell-title .grow{flex:1}
+.caption{font-size:12px;color:var(--ink-3)}
+.row{display:flex;flex-wrap:wrap;align-items:center;gap:10px 12px}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:500}
+.pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.pill.running{background:var(--green-tint);color:var(--green-text)}
+/* Recording is the agents' side: blue, never orange (a person) or red (failure). */
+.pill.rec{background:var(--blue-tint);color:var(--blue-text)}
+.pill.rec::before{background:var(--blue)}
+.pill.rec.paused{background:var(--well);color:var(--ink-2)}
+.pill.rec.paused::before{background:transparent;box-shadow:inset 0 0 0 1.5px var(--ink-3)}
+.btn{min-height:32px;padding:0 12px;border:0;border-radius:8px;background:var(--surface);box-shadow:0 0 0 1px var(--line);color:var(--ink);font:500 13px Geist,system-ui,sans-serif;display:inline-flex;align-items:center;gap:6px;text-decoration:none;cursor:pointer}
+.btn.danger-text{color:var(--red-text)}
+.btn.icon{width:36px;justify-content:center;padding:0}
+.rows{list-style:none;margin:0;padding:0}
+.rows li{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--line-soft)}
+.rows li:first-child{border-top:0;padding-top:0}
+.rows b{font-weight:500}
+.num{font-variant-numeric:tabular-nums}
+.grow{flex:1}
+.muted{color:var(--ink-3)}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}
+/* Player */
+.stage{background:#0F172A;border-radius:12px;aspect-ratio:16/10;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden}
+.stage .page{width:70%;height:70%;background:#FFFFFF;border-radius:6px;box-shadow:0 0 0 1px #E2E8F0}
+.stage .gapnote{position:absolute;inset:auto 16px 16px 16px;padding:10px 14px;border-radius:10px;background:rgba(15,23,42,.86);color:#E2E8F0;font-size:13px}
+.controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;margin-top:12px}
+.seg{display:inline-flex;gap:2px;padding:3px;background:var(--well);border-radius:9px}
+.seg span{min-height:26px;padding:0 10px;display:flex;align-items:center;border-radius:7px;font-size:13px;color:var(--ink-body)}
+.seg span.on{background:var(--seg-on);box-shadow:0 0 0 1px var(--seg-ring);color:var(--ink);font-weight:500}
+.check{display:inline-flex;align-items:center;gap:8px;font-size:13px}
+.time{font-variant-numeric:tabular-nums;font-size:13px;color:var(--ink-2)}
+/* The timeline: recorded stretches in blue, gaps hatched in slate with their reason. */
+.timeline{position:relative;height:28px;margin-top:14px;border-radius:7px;background:var(--well);overflow:hidden}
+.timeline i{position:absolute;top:0;bottom:0;display:block}
+.timeline i.rec{background:var(--blue);opacity:.85}
+.timeline i.gap{background:repeating-linear-gradient(135deg,var(--hatch) 0 4px,transparent 4px 8px)}
+.timeline .head{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--ink);border-radius:1px}
+.legend{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12px;color:var(--ink-2)}
+.legend li{display:flex;align-items:center;gap:6px}
+.legend i{width:14px;height:10px;border-radius:3px;display:block}
+.legend i.rec{background:var(--blue);opacity:.85}
+.legend i.gap{background:repeating-linear-gradient(135deg,var(--hatch) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px var(--line)}
+.marks{position:relative;height:16px;font-size:11px;color:var(--ink-3)}
+.marks span{position:absolute;transform:translateX(-50%)}
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px 16px;margin:0}
+.facts dt{font-size:12px;color:var(--ink-3)}.facts dd{margin:0;font-variant-numeric:tabular-nums}
+.phone{max-width:390px;padding:10px 12px;display:flex;align-items:center;gap:10px;background:var(--surface);border-radius:12px;box-shadow:0 0 0 1px var(--line)}
+.dot{width:8px;height:8px;border-radius:50%;flex:none}
+.field{display:grid;gap:6px;max-width:460px}
+.input{min-height:36px;padding:0 10px;border-radius:8px;box-shadow:0 0 0 1px var(--line);background:var(--surface);color:var(--ink);font:14px Geist,system-ui,sans-serif;border:0;width:120px}
+@media (max-width:700px){.wrap{padding:16px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<section>
+  <h2 class="sheet">1 · Recording indicator, profile page header</h2>
+  <div class="cell">
+    <div class="row"><span class="muted">Profiles /</span><h1>google</h1><span class="pill running">Running</span><span class="pill rec" title="What agents do is recorded for the admin.">Recording</span></div>
+    <p class="caption" style="margin:10px 0 0">While an agent acts. Shown only when the profile's Record sessions setting is on.</p>
+    <div class="row" style="margin-top:16px"><span class="muted">Profiles /</span><h1>google</h1><span class="pill running">Running</span><span class="pill rec paused">Recording paused</span></div>
+    <p class="caption" style="margin:10px 0 0">On, but nothing is recorded now: no agent is acting, a person has control, or a handoff is open. The live view's hint says the same while you drive: “You have control. Nothing is recorded meanwhile.”</p>
+  </div>
+</section>
+
+<section class="two">
+  <div>
+    <h2 class="sheet">2 · Recordings cell, profile page side column</h2>
+    <div class="cell">
+      <h3 class="cell-title">Recordings <span class="grow"></span><span class="caption">kept 7 days</span></h3>
+      <ul class="rows">
+        <li><div class="grow"><b>Today, 14:02</b><div class="caption num">4 min 12 s recorded · 3.1 MB</div></div><a class="btn" href="#player">Play</a></li>
+        <li><div class="grow"><b>Today, 09:40</b><div class="caption num">58 s recorded · 0.6 MB</div></div><a class="btn" href="#player">Play</a></li>
+        <li><div class="grow"><b>Mon 16 Nov, 18:21</b><div class="caption num">12 min 3 s recorded · 9.8 MB</div></div><a class="btn" href="#player">Play</a></li>
+      </ul>
+      <div class="row" style="margin-top:12px"><span class="caption grow">Only you can play these. Agents can't read or turn off recordings.</span><button class="btn danger-text" type="button">Delete all</button></div>
+    </div>
+  </div>
+  <div>
+    <h2 class="sheet">2 · Empty and off</h2>
+    <div class="cell" style="margin-bottom:14px">
+      <h3 class="cell-title">Recordings</h3>
+      <p class="caption" style="margin:0">Nothing recorded yet. Agents are recorded while they act, never while a person has control.</p>
+    </div>
+    <div class="cell">
+      <h3 class="cell-title">Recordings</h3>
+      <p class="caption" style="margin:0">Off for this profile. Turn on Record sessions in Edit settings to keep what agents do.</p>
+    </div>
+  </div>
+</section>
+
+<section id="player">
+  <h2 class="sheet">3 · Player, /profiles/google/recordings/{session}</h2>
+  <div class="cell">
+    <div class="row" style="margin-bottom:14px">
+      <span class="muted">Profiles / google /</span><h1>Recording, today 14:02</h1><span class="grow"></span>
+      <button class="btn danger-text" type="button">Delete recording</button>
+    </div>
+    <div class="stage"><div class="page"></div>
+      <div class="gapnote"><b>A person had control here.</b> Nothing was recorded from 14:04:31 to 14:05:10.</div>
+    </div>
+    <div class="controls">
+      <button class="btn icon" type="button" aria-label="Pause">❚❚</button>
+      <span class="time">14:03:48 · 1:46 of 4:12</span>
+      <span class="grow"></span>
+      <span class="seg" role="group" aria-label="Speed"><span>1×</span><span class="on">2×</span><span>4×</span><span>8×</span></span>
+      <label class="check"><input type="checkbox" checked> Skip gaps</label>
+    </div>
+    <div class="timeline" aria-label="Timeline: click to seek">
+      <i class="rec" style="left:0;width:22%"></i><i class="gap" style="left:22%;width:6%" title="Nothing changed on screen"></i>
+      <i class="rec" style="left:28%;width:18%"></i><i class="gap" style="left:46%;width:14%" title="A person had control (not recorded)"></i>
+      <i class="rec" style="left:60%;width:26%"></i><i class="gap" style="left:86%;width:4%" title="The agent was idle"></i>
+      <i class="rec" style="left:90%;width:10%"></i><span class="head" style="left:40%"></span>
+    </div>
+    <div class="marks"><span style="left:23%">still</span><span style="left:53%">person</span><span style="left:88%">idle</span></div>
+    <ul class="legend">
+      <li><i class="rec"></i>Recorded</li>
+      <li><i class="gap"></i>Not recorded: a person had control · a handoff was open · the agent was idle · nothing changed · lost (no room or a broken stream)</li>
+    </ul>
+    <dl class="facts" style="margin-top:16px">
+      <div><dt>Started</dt><dd>Today, 14:02:10</dd></div>
+      <div><dt>Ended</dt><dd>Today, 14:09:55</dd></div>
+      <div><dt>Recorded</dt><dd>4 min 12 s in 11 parts</dd></div>
+      <div><dt>Size</dt><dd>3.1 MB</dd></div>
+    </dl>
+    <p class="caption" style="margin:12px 0 0">The screen as the display showed it, while agents acted, at 5 frames a second. Gaps are skipped unless you turn Skip gaps off; the timeline marks each with its reason. Keys 1 to 4 set the speed, space plays and pauses.</p>
+  </div>
+</section>
+
+<section class="two">
+  <div>
+    <h2 class="sheet">4 · Handoff page, while you have control</h2>
+    <div class="phone"><span class="dot" style="background:var(--blue)"></span><span style="font-size:13px"><b style="font-weight:500">You're driving.</b> <span class="muted">Enter the 2FA code Google just sent.</span></span></div>
+    <p class="caption" style="max-width:390px">Under the note field, for a profile that records: <span style="color:var(--ink-2)">“Recording is paused while you have control.”</span></p>
+  </div>
+  <div>
+    <h2 class="sheet">5 · Settings</h2>
+    <div class="cell" style="margin-bottom:14px">
+      <label class="check"><input type="checkbox"> Record sessions</label>
+      <p class="caption" style="margin:6px 0 0 24px">Keep what agents do on screen, for you to replay. Only while an agent acts, never while a person has control. Off by default; agents can't change it.</p>
+    </div>
+    <div class="cell">
+      <h3 class="cell-title">Recordings</h3>
+      <div class="row"><label class="field">Keep for <span class="row"><input class="input num" value="7"> days</span></label><label class="field">Space for all recordings <span class="row"><input class="input num" value="2048"> MB</span></label></div>
+      <p class="caption" style="margin:8px 0 0">1 to 90 days. Always leaves 1 GB free on the disk; when either limit is reached, the profile holding the most gives up its oldest recording first. Using 412 MB now.</p>
+    </div>
+  </div>
+</section>
+
+</div>
+</body>
+</html>
