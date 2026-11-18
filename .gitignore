@@ -31,3 +31,4 @@ coverage.*
 
 # A stray go build of images/chromium/entrypoint lands here.
 /entrypoint
+/browserpier
