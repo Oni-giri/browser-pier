@@ -142,11 +142,11 @@ Until PROJ-165 the GPU process, which handles pages' WebGL calls, shaders and co
 
 Starting the sandbox early can't work without widening Chromium's GPU policy, which is Chromium's code: ANGLE opens its own connection to the X display as GL starts, and the sandbox no longer lets it.
 
-**What the image does.** The entrypoint gives Chromium `LP_NUM_THREADS=0` (llvmpipe rasterises on the GL thread itself) and `MESA_SHADER_CACHE_DISABLE=true` (Mesa's on-disk shader cache sat under the container's `HOME`, lost with the container, and the sandbox would keep it from opening its files; Chromium's own `GPUCache` in the profile is unchanged), and passes `--gpu-sandbox-failures-fatal=yes`, so a GPU process that can't sandbox itself exits instead of running on: after its restarts Chromium falls back to a GPU process without GL, sandboxed, and pages get no WebGL. The image build fails if Mesa's `libgallium` doesn't read either setting. `seccomp.json` and the AppArmor profile are unchanged, and llvmpipe's JIT works inside Chromium's GPU policy. `chrome://gpu` now says `Sandboxed: true`, the GPU process's `/proc` status `Seccomp_filters: 2`, and `TestBrowserEnvironment/gpu` requires both; the Docker tests fail on the warning above too.
+**What the image does.** The entrypoint gives Chromium `LP_NUM_THREADS=0` (llvmpipe rasterises on the GL thread itself) and `MESA_SHADER_CACHE_DISABLE=true` (Mesa's on-disk shader cache sat under the container's `HOME`, lost with the container, and the sandbox would keep it from opening its files; Chromium's own `GPUCache` in the profile is unchanged), and passes `--gpu-sandbox-failures-fatal=yes`, so a GPU process that can't sandbox itself exits instead of running on: after its restarts Chromium falls back to a GPU process without GL, sandboxed, and pages get no WebGL. The image build fails if Mesa's `libgallium` doesn't know either setting (their names aren't in it); whether they work, the Docker test shows. If the sandbox fails at run time anyway, the entrypoint logs one warning, `the GPU process couldn't start its sandbox, so it exits; Chromium will run it without GL, and pages get no WebGL`, on Chromium's first `InitializeSandbox() called with multiple threads in process gpu-process` line, so the admin reads it in the browser's log; nothing attaches to the page for it. `seccomp.json` and the AppArmor profile are unchanged, and llvmpipe's JIT works inside Chromium's GPU policy. `chrome://gpu` now says `Sandboxed: true`, the GPU process's `/proc` status `Seccomp_filters: 2`, and `TestBrowserEnvironment/gpu` requires both; the Docker tests fail on the warning above too.
 
 **Fingerprint.** Unchanged: the renderer string, WebGL parameters and extensions don't depend on llvmpipe's thread count, and `navigator.hardwareConcurrency` follows the CPUs. A page could only see that WebGL draws more slowly.
 
-**Cost**, `TestMeasureWebGLCost` with the same 40-triangle WebGL page, before and after:
+**Cost**, `TestMeasureWebGLCost` with the same 40-triangle WebGL page (light: the old setup had cores to spare, so its 63 fps is the frame cap) and with 3,000 triangles (`MEASURE_TRIANGLES=3000`, which kept every core busy before), before and after:
 
 | | Before (llvmpipe, threads) | After (one thread, sandboxed) |
 |---|---|---|
@@ -154,13 +154,15 @@ Starting the sandbox early can't work without widening Chromium's GPU policy, wh
 | Idle page: CPU, memory | 7%, 220 MB | 7%, 222 MB |
 | WebGL page | 63 fps, 244% CPU, 297 MB | 29–34 fps, 117–119% CPU, 289–290 MB |
 | WebGL page, watched | 268% CPU | 139–141% CPU |
+| WebGL page, 3,000 triangles | 4.2 fps, 568% CPU | 0.8 fps, 107% CPU |
+| … watched | 560% CPU | 125% CPU |
 | Heavy site, scrolled | 19% CPU | 19–20% CPU |
 | Heavy site, watched | 35% CPU | 36% CPU |
 | GPU process | 24 threads | 11 threads |
 
-So a page that keeps WebGL busy draws at about half the frame rate, for half the CPU: WebGL gets one core instead of every core, which also leaves the others to the host's other browsers. Ordinary pages, which are composited in software and don't touch llvmpipe, cost the same. **Decision: go**: the GPU process parses what pages send it, and AGENTS.md's rule is that Chromium keeps its sandbox.
+WebGL gets one core instead of every core. On the light page that halves the frame rate and the CPU; on a scene that used every core it is about as many times slower as the host has cores (5 times here, on 6; more on a bigger host), for a fifth of the CPU. That also leaves the other cores to the host's other browsers. Ordinary pages, which are composited in software and don't touch llvmpipe, cost the same. **Decision: go**: the GPU process parses what pages send it, and AGENTS.md's rule is that Chromium keeps its sandbox.
 
-**Not run here:** arm64, the Umbrel, and the `browserpier` and Docker-default AppArmor profiles (this rootless Podman has no AppArmor), as for PROJ-148; and a desktop VM with Debian's Chromium on llvmpipe, to compare. `TestBrowserEnvironment`, `TestWebGLRendererIsStable`, the login tests, `TestLoginSurvivesImageUpgrade` from the 0.3.0 image (SwiftShader), `TestSeccompAllowsOnlySandboxNamespaces` and `TestAppArmorProfile` pass.
+**Not run here:** **arm64** can't run on this amd64 VM, so whether Mesa on arm64 starts no thread before the sandbox is unchecked. If it does start one, `--gpu-sandbox-failures-fatal` means pages there get no WebGL at all rather than an unsandboxed GPU process; CI builds the arm64 image (and its library check) under emulation but runs no Docker test on it. Run `TestBrowserEnvironment` and `TestWebGLRendererIsStable` on an arm64 host (the Umbrel, if it's arm64) before a release ships this: PROJ-187, with PROJ-148's arm64 check. Also not run: the Umbrel, the `browserpier` and Docker-default AppArmor profiles (this rootless Podman has no AppArmor), as for PROJ-148; and a desktop VM with Debian's Chromium on llvmpipe, to compare. `TestBrowserEnvironment`, `TestWebGLRendererIsStable`, the login tests, `TestLoginSurvivesImageUpgrade` from the 0.3.0 image (SwiftShader), `TestSeccompAllowsOnlySandboxNamespaces` and `TestAppArmorProfile` pass.
 
 ## Continue where you left off (PROJ-112)
 

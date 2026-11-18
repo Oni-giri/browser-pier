@@ -69,8 +69,10 @@ func chromiumArgs(c config, smallShm bool) []string {
 // llvmpipe would start one rasteriser thread per CPU, and Mesa's shader
 // disk cache a writer thread, and Chromium's GPU sandbox can only start
 // in a single-threaded process. With no rasteriser threads llvmpipe draws
-// on the GL thread itself: WebGL gets one core instead of all of them,
-// which halves a busy WebGL page's frame rate and its CPU (ANTI-BOT.md).
+// on the GL thread itself: WebGL gets one core instead of all of them.
+// That halves a light WebGL page's frame rate and CPU, and makes a scene
+// that kept every core busy up to the host's core count slower
+// (ANTI-BOT.md).
 // The disk cache is lost with the container anyway, and the sandbox
 // would keep it from opening its files.
 func chromiumEnv() []string {
