@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -336,6 +337,10 @@ func (a *Admin) useCode(ctx context.Context, tx *sql.Tx, st twoStepState, code s
 	return ErrWrongCode
 }
 
+// testHookBeforeCodeTx, set by a test, runs between reading the state
+// and the transaction, to line parallel sign-ins up there.
+var testHookBeforeCodeTx atomic.Pointer[func()]
+
 // finishSignIn is the second step: with the proof from the password step
 // and a right code, it records the code's use and makes the session in
 // one transaction, so a code whose use can't be written opens nothing.
@@ -351,6 +356,9 @@ func (a *Admin) finishSignIn(ctx context.Context, proof, code string, kind codeK
 	}
 	if kind == codeNone {
 		return "", AdminSession{}, ErrWrongCode
+	}
+	if hook := testHookBeforeCodeTx.Load(); hook != nil {
+		(*hook)()
 	}
 	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {

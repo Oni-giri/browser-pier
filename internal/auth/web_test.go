@@ -729,6 +729,23 @@ func TestTwoStepPasswordAloneSignsNothingIn(t *testing.T) {
 
 func TestTwoStepParallelCodeMakesOneSession(t *testing.T) {
 	f := newTwoStepFixture(t, trustLoopback())
+	f.web.codeAccount = NewLockout(100, time.Hour, time.Hour) // let all 20 reach the database
+	// Line all 20 up after they read the state, before any writes: the
+	// worst case, where only the guarded update of the last step can
+	// tell them apart.
+	var arrived sync.WaitGroup
+	arrived.Add(20)
+	lined := make(chan struct{})
+	go func() { arrived.Wait(); close(lined) }()
+	hook := func() {
+		arrived.Done()
+		select {
+		case <-lined:
+		case <-time.After(5 * time.Second):
+		}
+	}
+	testHookBeforeCodeTx.Store(&hook)
+	t.Cleanup(func() { testHookBeforeCodeTx.Store(nil) })
 	browsers := make([]*http.Client, 20)
 	for i := range browsers {
 		browsers[i] = f.browser()
