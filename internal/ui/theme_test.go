@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -58,6 +59,39 @@ func TestTemplateStylesAreTokens(t *testing.T) {
 			if colourLiteral.MatchString(s) {
 				t.Errorf("%s: %s: use a token from app.css", name, s)
 			}
+		}
+	}
+}
+
+// Orange means a person is needed (DESIGN.md). A notice is a note or a
+// caution in a form or a dialog, never a request for a person, so no
+// template marks one warm and no rule for a notice reaches for orange.
+func TestNoticesAreNeverOrange(t *testing.T) {
+	classAttr := regexp.MustCompile(`class="([^"]*)"`)
+	files, err := fs.Glob(embedded, "templates/*.html")
+	if err != nil || len(files) == 0 {
+		t.Fatal("no templates", err)
+	}
+	for _, name := range files {
+		b, err := embedded.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range classAttr.FindAllStringSubmatch(string(b), -1) {
+			classes := strings.Fields(m[1])
+			if slices.Contains(classes, "notice") && slices.Contains(classes, "warn") {
+				t.Errorf("%s: %s: a notice is neutral; orange is only for a person needed", name, m[0])
+			}
+		}
+	}
+	b, err := embedded.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rule := range strings.Split(string(b), "}") {
+		sel, decl, ok := strings.Cut(rule, "{")
+		if ok && strings.Contains(sel, ".notice") && strings.Contains(decl, "orange") {
+			t.Errorf("app.css: %s{%s}: a notice is never orange", strings.TrimSpace(sel), decl)
 		}
 	}
 }
