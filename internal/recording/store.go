@@ -68,6 +68,8 @@ type Index struct {
 	Session  string    `json:"session"`
 	Segments []Segment `json:"segments"`
 	Gaps     []Gap     `json:"gaps,omitempty"`
+	// size is index.json's own, counted against the cap with the segments.
+	size int64
 }
 
 // Start is when the first segment began.
@@ -152,12 +154,17 @@ type Store struct {
 	pending map[string]int64             // bytes of segments being written, by profile
 	writing map[string]int               // sessions with a segment being written
 	seq     map[string]int               // the last segment number used, by session
+	drafts  map[*draft]struct{}          // segments being written
+	// noRoomWarned: a refusal for room was logged since the last write
+	// that had room, so the next isn't.
+	noRoomWarned bool
 }
 
 // NewStore returns the store for dir. Nothing is created until a segment is written.
 func NewStore(dir string, log *slog.Logger) *Store {
 	s := &Store{dir: dir, log: log, now: time.Now,
-		cat: map[string]map[string]*Index{}, pending: map[string]int64{}, writing: map[string]int{}, seq: map[string]int{}}
+		cat: map[string]map[string]*Index{}, pending: map[string]int64{}, writing: map[string]int{}, seq: map[string]int{},
+		drafts: map[*draft]struct{}{}}
 	s.SetLimits(DefaultLimits)
 	s.Free = func() (int64, error) { return diskFree(dir) }
 	return s
@@ -292,7 +299,7 @@ func (s *Store) loadIndexLocked(root *os.Root, profile, id string) *Index {
 	if err != nil || json.Unmarshal(b, &ix) != nil {
 		return nil
 	}
-	ix.Profile, ix.Session = profile, id
+	ix.Profile, ix.Session, ix.size = profile, id, int64(len(b))
 	listed := map[string]bool{}
 	kept := ix.Segments[:0]
 	for _, seg := range ix.Segments {
@@ -342,7 +349,7 @@ func (s *Store) usageLocked() (total int64, by map[string]int64) {
 	by = map[string]int64{}
 	for p, sessions := range s.cat {
 		for _, ix := range sessions {
-			by[p] += ix.Bytes()
+			by[p] += ix.Bytes() + ix.size
 		}
 	}
 	for p, n := range s.pending {
@@ -363,10 +370,13 @@ func (s *Store) Usage() (total int64, byProfile map[string]int64) {
 
 // reserve makes room for n more bytes of profile's segment being written:
 // within the cap, and leaving KeepFree on the disk. When either is
-// reached, the profile holding the most gives up its oldest segment, again
-// until there is room; one with only a segment being written gives up
-// nothing, so a busy profile can't wipe a quiet one's recordings. It
-// reports false when there is no room.
+// reached, recordings give way, oldest first from the profile holding the
+// most (among those with a whole segment to give: one whose bytes are all
+// in a segment being written gives nothing, so a busy profile can't wipe a
+// quiet one's recordings), but only when giving way can make the room:
+// when the disk is short because of other data, removing every recording
+// wouldn't reach the floor, so nothing is removed and the write is
+// refused, with one warning. It reports false when there is no room.
 func (s *Store) reserve(profile string, n int64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -379,11 +389,29 @@ func (s *Store) reserve(profile string, n int64) bool {
 		}
 		if total+n <= lim.Cap && free-n >= lim.KeepFree {
 			s.pending[profile] += n
+			s.noRoomWarned = false
 			return true
 		}
-		// The profile holding the most, by name on a tie.
-		var most string
+		// What could give way: every whole segment.
+		var givable int64
+		for _, sessions := range s.cat {
+			for _, ix := range sessions {
+				givable += ix.Bytes()
+			}
+		}
+		if total-givable+n > lim.Cap || free+givable-n < lim.KeepFree {
+			if !s.noRoomWarned {
+				s.noRoomWarned = true
+				s.log.Warn("no room for a recording segment, even without the recordings there are; nothing was removed",
+					"free", free, "keep_free", lim.KeepFree, "recordings", total, "cap", lim.Cap)
+			}
+			return false
+		}
+		most := ""
 		for p, b := range by {
+			if !s.hasSegmentLocked(p) {
+				continue
+			}
 			if most == "" || b > by[most] || (b == by[most] && p < most) {
 				most = p
 			}
@@ -392,6 +420,36 @@ func (s *Store) reserve(profile string, n int64) bool {
 			return false
 		}
 	}
+}
+
+// trimLocked makes recordings fit the cap again, the same way reserve
+// makes room, after the admin lowered it.
+func (s *Store) trimLocked() {
+	lim := s.Limits()
+	for {
+		total, by := s.usageLocked()
+		if total <= lim.Cap {
+			return
+		}
+		most := ""
+		for p, b := range by {
+			if s.hasSegmentLocked(p) && (most == "" || b > by[most] || (b == by[most] && p < most)) {
+				most = p
+			}
+		}
+		if most == "" || !s.dropOldestLocked(most, "") {
+			return
+		}
+	}
+}
+
+func (s *Store) hasSegmentLocked(profile string) bool {
+	for _, ix := range s.cat[profile] {
+		if len(ix.Segments) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // dropOldestLocked removes profile's oldest segment, leaving a gap with
@@ -450,6 +508,7 @@ func (s *Store) writeIndexLocked(ix *Index) error {
 	if err := s.root.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
+	ix.size = int64(len(b))
 	return s.root.Rename(tmp, dir+"/"+indexFile)
 }
 
@@ -460,6 +519,9 @@ type draft struct {
 	name             string // the final name, 000001.mp4
 	f                *os.File
 	bytes            int64 // written so far, all reserved
+	// doomed: the admin deleted the recording while this was written;
+	// commit removes it instead.
+	doomed bool
 }
 
 // create starts a session's next segment, reserving its first n bytes.
@@ -509,7 +571,9 @@ func (s *Store) createReserved(profile, session string) (*draft, error) {
 		return nil, err
 	}
 	s.writing[session]++
-	return &draft{s: s, profile: profile, session: session, name: name, f: f}, nil
+	d := &draft{s: s, profile: profile, session: session, name: name, f: f}
+	s.drafts[d] = struct{}{}
+	return d, nil
 }
 
 func (s *Store) unreserve(profile string, n int64) {
@@ -551,13 +615,17 @@ func (d *draft) abort() {
 		_ = s.root.Remove(d.profile + "/" + d.session + "/" + d.name + tempSuffix)
 	}
 	s.unreserveLocked(d.profile, d.bytes)
+	delete(s.drafts, d)
 	s.doneWritingLocked(d.profile, d.session)
 }
 
 func (s *Store) doneWritingLocked(profile, session string) {
 	if s.writing[session]--; s.writing[session] <= 0 {
 		delete(s.writing, session)
-		if ix := s.cat[profile][session]; ix == nil && s.root != nil {
+		if ix := s.cat[profile][session]; ix != nil && len(ix.Segments) == 0 && s.root != nil {
+			// Deleted while it was written: nothing left to keep.
+			s.saveOrRemoveLocked(ix)
+		} else if ix == nil && s.root != nil {
 			// Nothing was ever kept for this session: no folder either.
 			if names, _ := readDirNames(s.root, profile+"/"+session); len(names) == 0 {
 				_ = s.root.Remove(profile + "/" + session)
@@ -578,8 +646,13 @@ func (d *draft) commit(start, end time.Time, gaps []Gap) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer s.doneWritingLocked(d.profile, d.session)
+	delete(s.drafts, d)
 	s.unreserveLocked(d.profile, d.bytes)
 	dir := d.profile + "/" + d.session
+	if d.doomed {
+		_ = s.root.Remove(dir + "/" + d.name + tempSuffix)
+		return nil
+	}
 	if err := errors.Join(syncErr, closeErr); err != nil {
 		_ = s.root.Remove(dir + "/" + d.name + tempSuffix)
 		return err
@@ -620,6 +693,7 @@ func (s *Store) Sweep() {
 	defer s.mu.Unlock()
 	if s.root != nil {
 		s.sweepLocked()
+		s.trimLocked()
 	}
 }
 
@@ -716,34 +790,43 @@ func (s *Store) Open(profile, session, file string) (*os.File, Segment, error) {
 	return nil, Segment{}, ErrNotFound
 }
 
-// Delete removes one session's recording. A segment being written is
-// removed when it ends.
+// Delete removes one session's recording, the segment being written
+// included: it is removed instead of kept when it ends. What the session
+// records afterwards is a new recording.
 func (s *Store) Delete(profile, session string) error {
 	if err := checkIDs(profile, session); err != nil {
 		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	doomed := s.doomLocked(profile, session)
 	ix := s.cat[profile][session]
-	if ix == nil || s.root == nil {
+	if (ix == nil || len(ix.Segments) == 0) && !doomed {
 		return ErrNotFound
 	}
-	for len(ix.Segments) > 0 {
-		if !s.dropOldestInLocked(ix) {
-			return fmt.Errorf("removing a segment of recording %s", session)
+	if ix == nil {
+		return nil
+	}
+	for _, seg := range ix.Segments {
+		if err := s.root.Remove(profile + "/" + session + "/" + seg.File); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("removing a segment of recording %s: %w", session, err)
 		}
 	}
+	ix.Segments, ix.Gaps = nil, nil
+	s.saveOrRemoveLocked(ix)
 	return nil
 }
 
-func (s *Store) dropOldestInLocked(ix *Index) bool {
-	seg := ix.Segments[0]
-	if err := s.root.Remove(ix.Profile + "/" + ix.Session + "/" + seg.File); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return false
+// doomLocked marks the session's segments being written (every session
+// of the profile for session ""), and reports whether there were any.
+func (s *Store) doomLocked(profile, session string) bool {
+	found := false
+	for d := range s.drafts {
+		if d.profile == profile && (session == "" || d.session == session) {
+			d.doomed, found = true, true
+		}
 	}
-	ix.Segments = ix.Segments[1:]
-	s.saveOrRemoveLocked(ix)
-	return true
+	return found
 }
 
 // DeleteAll removes every recording of a profile.
@@ -752,6 +835,7 @@ func (s *Store) DeleteAll(profile string) error {
 		return err
 	}
 	s.mu.Lock()
+	s.doomLocked(profile, "")
 	ids := make([]string, 0, len(s.cat[profile]))
 	for id := range s.cat[profile] {
 		ids = append(ids, id)

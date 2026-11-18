@@ -393,24 +393,21 @@ func TestTheIndexSaysWhyEachGapIsThere(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	go func() { _, _ = w.Write(frag('m', 400)) }() // the screen changes
 	feed(t, st, fb.next(t), 5, 2)
-	// No room: another profile holds the most, all of it a segment still
-	// being written, so nothing can give way. The next segment is lost,
-	// and the session goes on.
+	// No room: the disk is short because of other data, which removing
+	// recordings can't free. The next segment is lost, nothing recorded
+	// goes, and the session goes on.
 	r.Set(sess, prof, false, Idle)
 	waitFor(t, "segment 5", func() bool { ix, _ := st.Get(prof, sess); return len(ix.Segments) == 5 })
 	time.Sleep(20 * time.Millisecond)
-	used, _ := st.Usage()
-	big, err := st.create("big", "ffffffffffffffffffffffff", slices2(testInit, frag('B', 20000)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	st.SetLimits(Limits{Retention: time.Hour, Cap: used + 20200, KeepFree: 0})
+	st.Free = func() (int64, error) { return 100 << 20, nil }
 	r.Set(sess, prof, true, "")
 	lostW := fb.next(t)
 	go func() { _, _ = lostW.Write(testInit); _, _ = lostW.Write(frag('l', 300)) }()
 	time.Sleep(100 * time.Millisecond)
-	big.abort()
-	st.SetLimits(DefaultLimits)
+	if ix, _ := st.Get(prof, sess); len(ix.Segments) != 5 {
+		t.Fatalf("%d segments left after a refusal for room, want the 5 there were", len(ix.Segments))
+	}
+	st.Free = func() (int64, error) { return 1 << 40, nil }
 	feed(t, st, fb.next(t), 6, 2)
 	r.End(sess) // the browser stops
 	time.Sleep(20 * time.Millisecond)
@@ -503,7 +500,8 @@ func TestDiskCapTakesFromTheBiggestProfile(t *testing.T) {
 		st := NewStore(filepath.Join(t.TempDir(), "recordings"), slog.New(slog.DiscardHandler))
 		st.Free = func() (int64, error) { return 1 << 40, nil }
 		seg := int64(len(testInit) + len(frag('d', 1000)))
-		st.SetLimits(Limits{Retention: time.Hour * 24, Cap: 5 * seg, KeepFree: 0})
+		// Five segments and the two indexes.
+		st.SetLimits(Limits{Retention: time.Hour * 24, Cap: 5*seg + 1000, KeepFree: 0})
 		now := time.Now()
 		quiet, busy := "quiet", "busy"
 		qs, bs := "cccccccccccccccccccccccc", "dddddddddddddddddddddddd"
@@ -521,8 +519,8 @@ func TestDiskCapTakesFromTheBiggestProfile(t *testing.T) {
 		if len(ix.Segments) != 4 || ix.Segments[0].File != "000002.mp4" {
 			t.Fatalf("busy segments %+v, want the oldest gone", ix.Segments)
 		}
-		if total, _ := st.Usage(); total > 5*seg {
-			t.Fatalf("usage %d over the cap %d", total, 5*seg)
+		if total, _ := st.Usage(); total > 5*seg+1000 {
+			t.Fatalf("usage %d over the cap %d", total, 5*seg+1000)
 		}
 	})
 	t.Run("free space floor", func(t *testing.T) {

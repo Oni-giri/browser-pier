@@ -176,7 +176,7 @@ func (u *UI) saveSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if u.o.Recordings != nil {
 		u.o.Recordings.SetLimits(st.RecordingLimits())
-		u.o.Recordings.Sweep() // a shorter retention applies now
+		u.o.Recordings.Sweep() // a shorter retention, or less space, applies now
 	}
 	if ramChanged && u.o.SetRAMLimit != nil {
 		u.o.SetRAMLimit(st.RAMLimitPercent)

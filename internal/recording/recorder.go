@@ -25,6 +25,15 @@ const (
 	stillBytes = 160
 	// retryAfter is the wait after a cut or no room before trying again.
 	retryAfter = 30 * time.Second
+	// MaxSegments caps a session's segments: about 3.5 days of steady
+	// work at one a SegmentLength. maxSegmentsPerMinute caps how fast
+	// they come: a stream that ends at once, again and again, would
+	// otherwise grow the index and the folder by the second.
+	MaxSegments          = 10000
+	maxSegmentsPerMinute = 20
+	// shortStream: a stream that ends by itself sooner than this backs
+	// the next one off, doubling up to retryAfter.
+	shortStream = 3 * time.Second
 )
 
 // Recorder records the screens of the sessions the session manager says
@@ -37,6 +46,7 @@ type Recorder struct {
 
 	segmentLength, stillAfter, retryAfter time.Duration
 	maxSegment, perMinute                 int64
+	maxSegments, segmentsPerMinute        int
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -52,7 +62,7 @@ func NewRecorder(store *Store, dial Dialer, log *slog.Logger) *Recorder {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Recorder{store: store, dial: dial, log: log, now: time.Now,
 		segmentLength: SegmentLength, stillAfter: stillAfter, retryAfter: retryAfter,
-		maxSegment: MaxSegment, perMinute: MaxPerMinute,
+		maxSegment: MaxSegment, perMinute: MaxPerMinute, maxSegments: MaxSegments, segmentsPerMinute: maxSegmentsPerMinute,
 		ctx: ctx, cancel: cancel, sessions: map[string]*session{}}
 }
 
@@ -83,8 +93,12 @@ type session struct {
 	// The current minute's bytes, against the per-minute cap.
 	minute      time.Time
 	minuteBytes int64
+	minuteSegs  int
 	warned      map[string]bool
 	dialFails   int
+	// segments counts the session's segments so far; shortStreams the
+	// streams in a row that ended by themselves too soon.
+	segments, shortStreams int
 }
 
 // Set tells the recorder whether session id, of profile, may be recorded
@@ -123,6 +137,20 @@ func (r *Recorder) Set(id, profile string, allow bool, why Reason) {
 	}
 	s.mu.Unlock()
 	s.poke()
+}
+
+// Losing reports whether session id may be recorded but nothing is kept
+// for now: no room, a broken stream or a cap.
+func (r *Recorder) Losing(id string) bool {
+	r.mu.Lock()
+	s := r.sessions[id]
+	r.mu.Unlock()
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.allow && !s.open && s.gapWhy == Lost
 }
 
 // Allowed reports whether session id may be recorded now.
@@ -252,7 +280,7 @@ func (s *session) lost(at time.Time) {
 // countMinute counts n bytes against the per-minute cap.
 func (s *session) countMinute(at time.Time, n, limit int64) bool {
 	if at.Sub(s.minute) >= time.Minute {
-		s.minute, s.minuteBytes = at, 0
+		s.minute, s.minuteBytes, s.minuteSegs = at, 0, 0
 	}
 	if s.minuteBytes+n > limit {
 		return false
@@ -355,14 +383,17 @@ func (r *Recorder) stream(ctx context.Context, s *session, epoch uint64) time.Du
 		if ctx.Err() != nil {
 			return 0
 		}
-		// The pipeline of the last stream may still be on its way out.
+		// The pipeline of the last stream may still be on its way out
+		// (409): try again at once, every 50 ms for a second, then back off.
 		s.dialFails++
-		if s.dialFails >= 8 {
-			r.warnOnce(s, "dial", "can't open the browser's recording stream; will keep trying", "err", err)
+		if s.dialFails <= 20 {
+			return 50 * time.Millisecond
 		}
-		return min(250*time.Millisecond<<min(s.dialFails, 5), 5*time.Second)
+		r.warnOnce(s, "dial", "can't open the browser's recording stream; will keep trying", "err", err)
+		return min(250*time.Millisecond<<min(s.dialFails-20, 5), 5*time.Second)
 	}
 	s.dialFails = 0
+	opened := r.now()
 	defer func() { _ = body.Close() }()
 	stop := context.AfterFunc(ctx, func() { _ = body.Close() })
 	defer stop()
@@ -413,7 +444,14 @@ func (r *Recorder) stream(ctx context.Context, s *session, epoch uint64) time.Du
 				return r.retryAfter
 			}
 			s.lost(at)
-			return time.Second
+			// The pipeline ended by itself. One that ends at once, again
+			// and again, is backed off.
+			if at.Sub(opened) >= shortStream {
+				s.shortStreams = 0
+				return time.Second
+			}
+			s.shortStreams++
+			return min(time.Second<<min(s.shortStreams, 6), r.retryAfter)
 		}
 		// Checked once the fragment is whole: one that ended after the
 		// gate said no is dropped, and the segment ends before it.
@@ -436,6 +474,16 @@ func (r *Recorder) stream(ctx context.Context, s *session, epoch uint64) time.Du
 				return 0 // the screen changed: a new segment, from a new keyframe
 			}
 			// The stream's first fragment, which holds its keyframe.
+			if s.segments >= r.maxSegments {
+				r.warnOnce(s, "segments", "a session reached its cap on recording segments; nothing more of it is recorded", "cap", r.maxSegments)
+				s.lost(at)
+				return time.Hour
+			}
+			if !s.countSegmentLocked(at, r.segmentsPerMinute) {
+				r.warnOnce(s, "segment-rate", "a recording stream started too many segments in a minute; it was cut and will be tried again later")
+				s.lost(at)
+				return time.Minute
+			}
 			if !s.countMinuteLocked(at, int64(len(init)+len(frag.data)), r.perMinute) {
 				r.warnOnce(s, "minute", "a recording stream went over its per-minute cap; it was cut and will be tried again later")
 				s.lost(at)
@@ -450,6 +498,7 @@ func (r *Recorder) stream(ctx context.Context, s *session, epoch uint64) time.Du
 				return r.retryAfter
 			}
 			start, last = at, at
+			s.segments++
 			s.begin(at)
 			continue
 		}
@@ -457,8 +506,11 @@ func (r *Recorder) stream(ctx context.Context, s *session, epoch uint64) time.Du
 			if at.Sub(start) < r.segmentLength {
 				r.warnOnce(s, "segment", "a recording segment reached its cap before its time; the next one starts at once", "cap", r.maxSegment)
 			}
-			end("")
-			return 0 // the next segment starts at once, from a new keyframe
+			// The next segment starts at once, from a new keyframe: what
+			// comes between (this fragment, and the new pipeline's start)
+			// is a Restart gap.
+			end(Restart)
+			return 0
 		}
 		if !s.countMinuteLocked(at, int64(len(frag.data)), r.perMinute) {
 			end(Lost)
@@ -480,6 +532,20 @@ func (r *Recorder) stream(ctx context.Context, s *session, epoch uint64) time.Du
 			closedStill = true
 		}
 	}
+}
+
+// countSegmentLocked counts a new segment against the per-minute cap.
+func (s *session) countSegmentLocked(at time.Time, limit int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if at.Sub(s.minute) >= time.Minute {
+		s.minute, s.minuteBytes, s.minuteSegs = at, 0, 0
+	}
+	if s.minuteSegs >= limit {
+		return false
+	}
+	s.minuteSegs++
+	return true
 }
 
 func (s *session) countMinuteLocked(at time.Time, n, limit int64) bool {

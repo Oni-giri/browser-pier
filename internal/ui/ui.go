@@ -60,6 +60,9 @@ type Options struct {
 	Version string
 	// Recordings are the session recordings (PROJ-23); nil for none.
 	Recordings *recording.Store
+	// Recorder says whether a session that may be recorded is kept for now
+	// (no room, a broken stream); nil for always.
+	Recorder interface{ Losing(id string) bool }
 }
 
 // UI is the web UI for the signed-in admin.

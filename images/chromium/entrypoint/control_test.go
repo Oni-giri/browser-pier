@@ -139,7 +139,7 @@ func TestStreamArgsWriteH264ToFD3(t *testing.T) {
 }
 
 func TestRecordOneReaderAtATime(t *testing.T) {
-	rec := &streamer{contentType: "video/mp4", command: func() *exec.Cmd {
+	rec := &streamer{contentType: "video/mp4", wait: 300 * time.Millisecond, command: func() *exec.Cmd {
 		return exec.Command("sh", "-c", `printf 'ftyp' >&3; exec sleep 30`)
 	}}
 	ctl := httptest.NewServer(newControlHandler("127.0.0.1:1", http.NotFoundHandler(), rec, nil, nil, geo{}))
@@ -166,7 +166,17 @@ func TestRecordOneReaderAtATime(t *testing.T) {
 		t.Fatalf("second reader got %d, want 409", second.StatusCode)
 	}
 
+	// The next reader, coming as the last one leaves, waits for its
+	// pipeline to be gone rather than being refused.
 	_ = resp.Body.Close()
+	next, err := http.Get(ctl.URL + "/record")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.StatusCode != http.StatusOK {
+		t.Fatalf("the next reader got %d, want 200 once the last pipeline is gone", next.StatusCode)
+	}
+	_ = next.Body.Close()
 	deadline := time.Now().Add(5 * time.Second)
 	for rec.busy.Load() {
 		if time.Now().After(deadline) {

@@ -123,10 +123,27 @@ type streamer struct {
 	busy        atomic.Bool
 	command     func() *exec.Cmd // writes the stream to fd 3
 	contentType string           // "" for video/h264
+	// wait is how long a new reader waits for the last one's pipeline to
+	// be gone before it is refused: the recorder opens the next segment's
+	// stream as it closes the last.
+	wait time.Duration
+}
+
+// claim takes the stream for this reader, waiting up to s.wait for the
+// last reader's pipeline to exit.
+func (s *streamer) claim(r *http.Request) bool {
+	deadline := time.Now().Add(s.wait)
+	for !s.busy.CompareAndSwap(false, true) {
+		if !time.Now().Before(deadline) || r.Context().Err() != nil {
+			return false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return true
 }
 
 func (s *streamer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if !s.busy.CompareAndSwap(false, true) {
+	if !s.claim(r) {
 		http.Error(w, "stream already in use", http.StatusConflict)
 		return
 	}

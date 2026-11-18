@@ -172,7 +172,7 @@ func run(log *slog.Logger) error {
 		Handler: newControlHandler(cdpAddr,
 			&streamer{command: func() *exec.Cmd { return exec.Command("gst-launch-1.0", streamArgs()...) }},
 			&streamer{command: func() *exec.Cmd { return exec.Command("gst-launch-1.0", recordArgs(cfg.Width, cfg.Height)...) },
-				contentType: "video/mp4"},
+				contentType: "video/mp4", wait: 2 * time.Second},
 			newVisual(cfg.Width, cfg.Height), fwd, where),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

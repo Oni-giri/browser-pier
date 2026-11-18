@@ -168,7 +168,14 @@ func TestRecordingShowsWhatTheAgentDid(t *testing.T) {
 	// Something moving on screen for a while, as an agent at work makes it.
 	p.Eval(`document.body.insertAdjacentHTML('beforeend', '<div id=clock style="font:40px sans-serif"></div>');
 		setInterval(() => document.getElementById('clock').textContent = Date.now(), 100)`)
-	time.Sleep(8 * time.Second)
+	// Past one segment's length, to see what a rotation loses.
+	time.Sleep(recording.SegmentLength + 5*time.Second)
+	// Then still, and a change: how soon after it is it recorded again?
+	p.Eval(`clearInterval(1); for (let i = 1; i < 100; i++) clearInterval(i)`)
+	time.Sleep(6 * time.Second)
+	changed := time.Now()
+	p.Eval(`document.body.style.background = '#2f6bff'; document.getElementById('clock').textContent = 'changed'`)
+	time.Sleep(3 * time.Second)
 	acted := time.Now()
 	done()
 	stopCleanly(t, r.m, s.ID)
@@ -191,6 +198,33 @@ func TestRecordingShowsWhatTheAgentDid(t *testing.T) {
 	}
 	for _, seg := range ix.Segments {
 		checkMP4(t, r.segment(t, s.ID, seg))
+	}
+	// A rotation's gap: from the end of the first segment to the start of
+	// the second, marked as a restart.
+	if len(ix.Segments) < 3 {
+		t.Fatalf("%d segments, want a rotation and a segment after the still stretch", len(ix.Segments))
+	}
+	rotation := ix.Segments[1].Start.Sub(ix.Segments[0].End)
+	var after time.Duration = -1
+	for _, seg := range ix.Segments {
+		if seg.Start.After(changed.Add(-500 * time.Millisecond)) {
+			after = seg.Start.Sub(changed)
+			break
+		}
+	}
+	t.Logf("MEASURE a rotation loses %s; a change after a still stretch is recorded from %s after it", rotation, after)
+	if rotation > 1500*time.Millisecond {
+		t.Errorf("a rotation loses %s", rotation)
+	}
+	if after < 0 || after > 1500*time.Millisecond {
+		t.Errorf("the change after a still stretch was recorded from %s after it", after)
+	}
+	restart := false
+	for _, g := range ix.Gaps {
+		restart = restart || (g.Reason == recording.Restart && !g.Start.Before(ix.Segments[0].End))
+	}
+	if !restart {
+		t.Errorf("no restart gap for the rotation: %+v", ix.Gaps)
 	}
 
 	// After a stop and a start: still listed, it plays, and the login is kept.

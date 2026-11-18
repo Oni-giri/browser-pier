@@ -239,6 +239,7 @@ func run(log *slog.Logger) error {
 		RAMLimitFromEnv: cfg.RAMLimitFromEnv,
 		Version:         version,
 		Recordings:      recStore,
+		Recorder:        recorder,
 		SetRAMLimit: func(percent int) {
 			if total > 0 {
 				mgr.SetMemoryLimit(total*int64(percent)/100, perBrowser)

@@ -54,6 +54,7 @@ var reasonLabels = map[recording.Reason]string{
 	recording.Lost:    "Lost: no room, or the stream broke",
 	recording.Off:     "Recording was off",
 	recording.Paused:  "Recording was paused",
+	recording.Restart: "A new part was starting",
 }
 
 type playerData struct {

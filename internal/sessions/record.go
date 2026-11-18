@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/recording"
@@ -41,9 +40,9 @@ func (m *Manager) RecordStream(ctx context.Context, profile string) (io.ReadClos
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
+		// The status alone: the container's words don't go to the log.
 		_ = resp.Body.Close()
-		return nil, fmt.Errorf("recording stream: %s: %s", resp.Status, strings.TrimSpace(string(msg)))
+		return nil, fmt.Errorf("recording stream: %d", resp.StatusCode)
 	}
 	return resp.Body, nil
 }

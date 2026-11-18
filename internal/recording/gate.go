@@ -40,6 +40,9 @@ const (
 	Off Reason = "off"
 	// Paused: BrowserPier paused recording itself (Manager.PauseRecording).
 	Paused Reason = "paused"
+	// Restart: one segment ended and the next was starting (a new
+	// pipeline and keyframe, under a second).
+	Restart Reason = "restart"
 )
 
 // Gate is everything that decides whether a session's screen may be

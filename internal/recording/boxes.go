@@ -76,6 +76,9 @@ func sanitize(typ string) string {
 	return string(b)
 }
 
+// maxSkipped is how many skippable boxes in a row a stream may send.
+const maxSkipped = 8
+
 // skippable boxes may come between the ones that matter; they aren't kept.
 func skippable(typ string) bool {
 	switch typ {
@@ -89,13 +92,17 @@ func skippable(typ string) bool {
 func readInit(r io.Reader) ([]byte, error) {
 	var out []byte
 	want := "ftyp"
-	for {
+	for skipped := 0; ; skipped++ {
+		if skipped > maxSkipped {
+			return nil, fmt.Errorf("%w: more than %d boxes to skip in a row", errStream, maxSkipped)
+		}
 		typ, box, err := readBox(r, maxInit-int64(len(out)))
 		if err != nil {
 			return nil, err
 		}
 		switch {
 		case typ == want:
+			skipped = -1
 			out = append(out, box...)
 			if want == "moov" {
 				return out, nil
@@ -117,12 +124,15 @@ type fragment struct {
 // readFragment reads the next moof and the mdat after it, of at most
 // limit bytes together.
 func readFragment(r io.Reader, limit int64) (fragment, error) {
-	for {
+	for skipped := 0; ; skipped++ {
 		typ, moof, err := readBox(r, min(limit, maxMoof))
 		if err != nil {
 			return fragment{}, err
 		}
 		if skippable(typ) {
+			if skipped >= maxSkipped {
+				return fragment{}, fmt.Errorf("%w: more than %d boxes to skip in a row", errStream, maxSkipped)
+			}
 			continue
 		}
 		if typ != "moof" {

@@ -30,6 +30,8 @@ type profilePageData struct {
 	RetentionDays int
 	// liveRec is the live session's recording so far, for LogLink.
 	liveRec *recording.Index
+	// Losing: the session may be recorded, but nothing is kept for now.
+	Losing bool
 }
 
 // LogLink is the player at the moment of an agent log entry, while the
@@ -49,7 +51,7 @@ func (d profilePageData) RecordingLabel() string {
 	switch {
 	case !d.Live() || !d.Session.Record:
 		return ""
-	case d.Session.Recording:
+	case d.Session.Recording && !d.Losing:
 		return "Recording"
 	}
 	return "Recording paused"
@@ -109,6 +111,7 @@ func (u *UI) profileData(ctx context.Context, r *http.Request, name string) (pro
 	if u.o.Recordings != nil {
 		d.RetentionDays = int(u.o.Recordings.Limits().Retention / (24 * time.Hour))
 		if d.Live() {
+			d.Losing = u.o.Recorder != nil && d.Session.Recording && u.o.Recorder.Losing(d.Session.ID)
 			if ix, err := u.o.Recordings.Get(name, d.Session.ID); err == nil {
 				d.liveRec = &ix
 			}
