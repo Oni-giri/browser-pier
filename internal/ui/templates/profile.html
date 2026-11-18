@@ -93,6 +93,7 @@
 {{if or .Record .Recordings}}
 <section class="cell" aria-labelledby="rec-title">
   <div class="cell-head"><h2 class="cell-title" id="rec-title">Recordings</h2>{{if .RetentionDays}}<span class="caption">kept {{.RetentionDays}} {{plural .RetentionDays "day" "days"}}</span>{{end}}</div>
+  {{with .RecordingLabel}}<p class="small" style="margin:0 0 12px"><span class="pill rec{{if ne . "Recording"}} paused{{end}}">{{if eq . "Recording"}}Recording now{{else}}Paused{{end}}</span> <span class="muted">{{if eq . "Recording"}}while the agent acts.{{else}}Resumes when an agent acts, never while a person has control.{{end}}</span></p>{{end}}
   {{if .Recordings}}
   <ul class="rows recs">{{range .Recordings}}<li><div class="grow"><b style="font-weight:500">{{day .Start}}</b><div class="caption num">{{length .Recorded}} recorded · {{mb .Bytes}}</div></div><a class="btn small" href="{{.URL}}">Play</a></li>{{end}}</ul>
   <form class="recs-foot" method="post" action="/profiles/{{.Name}}/recordings/delete" data-busy="Deleting…"><span class="caption grow">Only you can play these. Agents can't read or turn off recordings.</span><button class="btn small danger-text" type="submit">Delete all</button></form>

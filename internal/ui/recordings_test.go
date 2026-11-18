@@ -172,3 +172,32 @@ func TestRecordSessionsSettingAndLimits(t *testing.T) {
 		t.Fatalf("limits in force %+v", l)
 	}
 }
+
+func TestTheSideSaysWhetherItRecords(t *testing.T) {
+	f := newFixture(t)
+	p := f.m.Profiles()
+	f.profile("google")
+	pr, _ := p.Get(context.Background(), "google")
+	pr.Record = true
+	if _, err := p.Update(context.Background(), pr); err != nil {
+		t.Fatal(err)
+	}
+	s, _, err := f.m.Start(context.Background(), "google", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want(t, f.get("/profiles/google"), http.StatusOK, "Recording paused", "Resumes when an agent acts", "Nothing is recorded while you have control")
+	rec := &uiRecorder{}
+	f.m.SetRecorder(rec, f.recordings)
+	_, done, err := f.m.AgentInput(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer done()
+	want(t, f.get("/profiles/google/side"), http.StatusOK, "Recording now")
+}
+
+type uiRecorder struct{}
+
+func (uiRecorder) Set(string, string, bool, recording.Reason) {}
+func (uiRecorder) End(string)                                 {}
