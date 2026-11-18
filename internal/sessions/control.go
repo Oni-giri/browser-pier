@@ -49,6 +49,7 @@ func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, f
 		l.inputs = map[*lease]struct{}{}
 	}
 	l.inputs[in] = struct{}{}
+	m.agentActedLocked(l)
 	return cctx, sync.OnceFunc(func() {
 		cancel(context.Canceled)
 		m.mu.Lock()
@@ -57,6 +58,7 @@ func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, f
 		// event, not after the action began.
 		now := m.now()
 		l.lastActivity, l.lastAgentInput = now, now
+		m.agentActedLocked(l)
 		m.inputsDone.Broadcast()
 		m.mu.Unlock()
 	}), nil
@@ -106,6 +108,11 @@ func (m *Manager) TakeControl(id string) error {
 		return ErrHumanDriving // one person at a time
 	}
 	l.human = true
+	// Recording stops here, under m.mu and before anything else: no
+	// fragment the browser sends from now on is kept, and HumanInput,
+	// which the live view needs before it forwards any input, can't see
+	// human until it has.
+	m.personTookLocked(l)
 	l.generation++
 	l.lastActivity = now
 	if breakOff {
@@ -149,6 +156,7 @@ func (m *Manager) ReleaseControl(id string) {
 	if l := m.findLocked(id); l != nil && l.human {
 		l.human = false
 		l.lastActivity = m.now()
+		m.regateLocked(l)
 	}
 }
 

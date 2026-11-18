@@ -23,6 +23,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/docker"
 	"github.com/Oni-giri/browser-pier/internal/fence"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
+	"github.com/Oni-giri/browser-pier/internal/recording"
 	"github.com/Oni-giri/browser-pier/internal/scrub"
 )
 
@@ -142,6 +143,11 @@ type Manager struct {
 	// mark is stored, so no second caller types before it is.
 	markMu sync.Mutex
 
+	// rec records screens and recStore keeps the recordings
+	// (SetRecorder); nil for none.
+	rec      Recorder
+	recStore *recording.Store
+
 	// admit is held from checking there is room for a new browser to
 	// recording its session, so two starts can't both squeeze in.
 	admit sync.Mutex
@@ -183,6 +189,21 @@ type live struct {
 	exemptFull atomic.Bool
 	// activity is what agents did, oldest first; it goes with the session.
 	activity []Activity
+	// record is the profile's Record sessions setting, as of the start or
+	// the admin's last change (RefreshRecording).
+	record bool
+	// agentAt is when an agent last began or ended an action (a CDP
+	// connection, a page call, an input action), for the recording's
+	// tail; zero once a person takes the browser.
+	agentAt time.Time
+	// recPauses counts PauseRecording holds.
+	recPauses int
+	// recAllow and recWhy are what the recorder was last told
+	// (regateLocked); recTimer looks again when the tail ends.
+	recAllow bool
+	recWhy   recording.Reason
+	recEver  bool // the recorder was told yes once
+	recTimer *time.Timer
 }
 
 // conn is one agent connection to a browser; cancelling it closes it.
@@ -415,6 +436,7 @@ func (m *Manager) begin(ctx context.Context, profile string, mode profiles.Mode,
 	}
 	l := newLive(s)
 	l.lastActivity = now
+	l.record = p.Record
 	m.live[profile] = l
 	return l, p, nil
 }
@@ -876,6 +898,7 @@ func (m *Manager) end(l *live, lastLog string, final func(*Session)) {
 	l.sess.LastLog = sc.String(lastLog)
 	l.sess.Error = sc.String(l.sess.Error)
 	l.sess.UpdatedAt = m.now()
+	m.regateLocked(l)
 	s := l.sess
 	m.mu.Unlock()
 	m.removeProxyFile(s.Profile)
@@ -895,7 +918,14 @@ func (m *Manager) end(l *live, lastLog string, final func(*Session)) {
 	l.disconnectLocked()
 	l.cancelAllLocked(ErrStopping)
 	hooks := slices.Clone(m.onEnd)
+	if l.recTimer != nil {
+		l.recTimer.Stop()
+		l.recTimer = nil
+	}
 	m.mu.Unlock()
+	if m.rec != nil {
+		m.rec.End(s.ID)
+	}
 	for _, f := range hooks {
 		f(s.ID)
 	}
@@ -921,6 +951,7 @@ func (m *Manager) update(l *live, change func(*Session)) error {
 		m.log.Error("saving session state", "session", before.ID, "err", err)
 		return err
 	}
+	m.regateLocked(l)
 	return nil
 }
 
@@ -942,6 +973,7 @@ func (l *live) snapshotLocked() Session {
 	}
 	sort.Strings(s.InUseBy)
 	s.HumanControl, s.Viewers = l.human, l.viewers
+	s.Record, s.Recording = l.record, l.recAllow
 	return s
 }
 
@@ -967,6 +999,7 @@ func (m *Manager) Attach(ctx context.Context, id, tokenID, agent string) (contex
 	}
 	l.conns[c] = struct{}{}
 	l.lastActivity = m.now()
+	m.agentActedLocked(l)
 	var once sync.Once
 	return cctx, func() {
 		once.Do(func() {
@@ -974,6 +1007,9 @@ func (m *Manager) Attach(ctx context.Context, id, tokenID, agent string) (contex
 			m.mu.Lock()
 			delete(l.conns, c)
 			l.lastActivity = m.now()
+			if m.live[l.sess.Profile] == l {
+				m.agentActedLocked(l)
+			}
 			m.mu.Unlock()
 		})
 	}, nil
@@ -1078,6 +1114,7 @@ func (m *Manager) stopIf(ctx context.Context, id string, cond func(*live) bool) 
 		prev := l.sess.State
 		l.sess.State = Stopping
 		l.sess.UpdatedAt = m.now()
+		m.regateLocked(l)
 		if err := updateSession(context.Background(), m.db, l.sess); err != nil {
 			// Stopping anyway beats refusing; the final state is saved with retries.
 			m.log.Error("saving session state", "session", id, "err", err)
@@ -1147,6 +1184,7 @@ func (m *Manager) runStop(l *live, attempt *stopAttempt, cid string, prev State)
 			if l.sess.State == Stopping {
 				l.sess.State = prev
 				l.sess.UpdatedAt = m.now()
+				m.regateLocked(l)
 				if err := updateSession(context.Background(), m.db, l.sess); err != nil {
 					m.log.Error("saving session state", "session", l.sess.ID, "err", err)
 				}
@@ -1181,6 +1219,9 @@ func (m *Manager) SetNeedsHelp(id string, needsHelp bool) (Session, error) {
 			l.sess = before
 			return before, err
 		}
+		// Recording stops before anything else, and before the handoff
+		// can open: the person's input mustn't be kept.
+		m.personTookLocked(l)
 		if to == NeedsHelp {
 			// The agent is paused while a person has the browser: its
 			// connections close, and new ones are refused until hand-back.
@@ -1256,14 +1297,30 @@ func (m *Manager) DeleteProfile(ctx context.Context, name string) error {
 		}
 		moved = false
 	}
-	if err := m.profiles.Delete(ctx, name); err != nil {
+	putBack := func() {
 		if moved {
 			if rerr := os.Rename(tomb, dir); rerr != nil {
 				m.log.Error("putting the profile folder back", "profile", name, "err", rerr)
 			}
 		}
+	}
+	// Its recordings go with it, moved aside the same way.
+	restoreRec, removeRec := func() error { return nil }, func() {}
+	if m.recStore != nil {
+		var err error
+		if restoreRec, removeRec, err = m.recStore.MoveAside(name, newID()); err != nil {
+			putBack()
+			return err
+		}
+	}
+	if err := m.profiles.Delete(ctx, name); err != nil {
+		putBack()
+		if rerr := restoreRec(); rerr != nil {
+			m.log.Error("putting the profile's recordings back", "profile", name, "err", rerr)
+		}
 		return err
 	}
+	removeRec()
 	if moved {
 		if err := os.RemoveAll(tomb); err != nil {
 			m.log.Warn("removing a deleted profile's folder; will retry at the next start", "profile", name, "err", err)

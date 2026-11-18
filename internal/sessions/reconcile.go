@@ -21,6 +21,21 @@ import (
 // containers with no live session are stopped.
 func (m *Manager) Reconcile(ctx context.Context) error {
 	m.removeTombstones()
+	if m.recStore != nil {
+		// Recordings of profiles that are gone go, with half-written
+		// segments and those past the retention.
+		ps, err := m.profiles.List(ctx)
+		if err != nil {
+			return err
+		}
+		names := make([]string, len(ps))
+		for i, p := range ps {
+			names[i] = p.Name
+		}
+		if err := m.recStore.Reconcile(names); err != nil {
+			m.log.Warn("checking the recordings folder", "err", err)
+		}
+	}
 	containers, err := m.rt.List(ctx)
 	if err != nil {
 		return err
@@ -55,6 +70,11 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			delete(byID, c.ID)
 		}
 		l := newLive(s)
+		if p, err := m.profiles.Get(ctx, s.Profile); err == nil {
+			// Recorded again by the same rules: a Needs help session
+			// isn't, and a running one only from the agent's next action.
+			l.record = p.Record
+		}
 		switch {
 		case !ok:
 			m.mu.Unlock()

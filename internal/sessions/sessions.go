@@ -85,6 +85,10 @@ type Session struct {
 	HumanControl bool
 	// Viewers counts open live views. Not stored.
 	Viewers int
+	// Record is the profile's Record sessions setting as the session
+	// applies it, and Recording whether its screen is being recorded
+	// right now (PROJ-23). Admin only: never shown to agents. Not stored.
+	Record, Recording bool
 }
 
 func newID() string {
