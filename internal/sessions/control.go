@@ -116,6 +116,7 @@ func (m *Manager) TakeControl(id string) error {
 	m.personTookLocked(l)
 	l.generation++
 	l.lastActivity = now
+	m.restartChoosers(l.sess.Profile)
 	if breakOff {
 		// New agent input and page calls are refused from now on
 		// (l.human); what is under way breaks off. Every lease left here
@@ -206,6 +207,7 @@ func (m *Manager) ReleaseControl(id string) {
 	}
 	l.human, l.releasing = false, false
 	l.lastActivity = m.now()
+	m.restartChoosers(l.sess.Profile)
 	// Only now, the clipboard emptied and agents let back in, may the
 	// gate record again (PROJ-23): never while the person's control is
 	// still ending. A session stopped meanwhile has nothing to record.

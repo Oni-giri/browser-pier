@@ -1263,6 +1263,9 @@ func (m *Manager) SetNeedsHelp(id string, needsHelp bool) (Session, error) {
 		if to == Running {
 			l.lastActivity = m.now() // idle time starts at hand-back
 		}
+		// A file chooser open at either end passes to the person, or back
+		// to the agent, with its whole time limit (PROJ-181).
+		m.restartChoosers(l.sess.Profile)
 	default:
 		return l.sess, ErrNotRunning
 	}

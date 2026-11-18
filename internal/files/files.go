@@ -121,6 +121,32 @@ func (s *Store) List(profile string) ([]File, error) {
 	return out, nil
 }
 
+// ListUploads returns the profile's uploads that a file chooser can be
+// answered with, newest first: regular files with a valid name (not an
+// upload under way, which starts with a dot), as Uploaded checks them.
+func (s *Store) ListUploads(profile string) ([]File, error) {
+	root, err := s.open(profile, Uploads)
+	if errors.Is(err, ErrNotFound) {
+		return []File{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	all, err := regularFiles(root)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]File, 0, len(all))
+	for _, f := range all {
+		if ValidName(f.Name) {
+			out = append(out, f)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Modified.After(out[j].Modified) })
+	return out, nil
+}
+
 func regularFiles(root *os.Root) ([]File, error) {
 	d, err := root.Open(".")
 	if err != nil {

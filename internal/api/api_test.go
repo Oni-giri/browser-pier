@@ -154,6 +154,8 @@ func (b *browser) handler() http.Handler {
 		}
 		_, _ = io.WriteString(w, `{"choosers":`+list+`}`)
 	})
+	// Control changing hands restarts the choosers' time limit (PROJ-181).
+	mux.HandleFunc("POST /chooser/restart", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc("POST /chooser/{id}", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		b.mu.Lock()
