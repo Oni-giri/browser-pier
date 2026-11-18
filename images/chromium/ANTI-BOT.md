@@ -86,7 +86,7 @@ What varies: the LLVM version (and Mesa's, in `chrome://gpu`) changes with the i
 
 **WebGL1 and WebGL2** both give a context and draw a triangle that reads back exactly (`51,204,102,255` with `readPixels`), and a WebGL canvas shows on the X display, which screenshots and the live stream read, with or without `--disable-gpu-compositing` (`TestBrowserEnvironment/webgl` and `webgl on screen`).
 
-**Sandbox.** `chrome://sandbox` still says "You are adequately sandboxed" (namespaces and seccomp-BPF). `seccomp.json` and the AppArmor profile are unchanged, and llvmpipe's JIT works under BrowserPier's seccomp profile (the AppArmor profiles weren't checked, see below). The GPU process is in a process of its own (`In-process GPU: false`) and has never crashed in these runs. `chrome://gpu` says `Sandboxed: false` for it, **with SwiftShader too**: its `/proc` status shows only the container's seccomp filter (`Seccomp_filters: 1`), where renderers have Chromium's as well (2). Nothing here changed that; `--gpu-sandbox-start-early` sandboxes it, but GL then fails to start and pages get no WebGL. PROJ-165 looks into it. AppArmor: this rootless Podman has none (it refuses `apparmor=browserpier`; `unconfined` is the same as its default), so only "no AppArmor" ran here; the `browserpier` and Docker-default choices weren't.
+**Sandbox.** `chrome://sandbox` still says "You are adequately sandboxed" (namespaces and seccomp-BPF). `seccomp.json` and the AppArmor profile are unchanged, and llvmpipe's JIT works under BrowserPier's seccomp profile (the AppArmor profiles weren't checked, see below). The GPU process is in a process of its own (`In-process GPU: false`) and has never crashed in these runs. `chrome://gpu` said `Sandboxed: false` for it, **with SwiftShader too**: its `/proc` status showed only the container's seccomp filter (`Seccomp_filters: 1`), where renderers have Chromium's as well (2). Nothing in PROJ-148 changed that; PROJ-165 did (below). AppArmor: this rootless Podman has none (it refuses `apparmor=browserpier`; `unconfined` is the same as its default), so only "no AppArmor" ran here; the `browserpier` and Docker-default choices weren't.
 
 **Cost**, `TestMeasureWebGLCost` (`go test -tags 'docker measure' -run TestMeasureWebGLCost -v ./images/chromium/`), a 1280×800 screen, 20-second samples of the container's cgroup (memory as `docker stats` counts it, which the RAM limit uses; CPU in percent of one core). The WebGL page redraws 40 large, blended, full-window triangles a frame; the heavy site is a long Wikipedia article scrolled through Visual mode every half second; "watched" reads the live stream at the same time.
 
@@ -104,7 +104,7 @@ The frame rates here were counted over the 20-second window plus the readings th
 
 With 3,000 triangles every core is busy either way: SwiftShader drew 2 frames a second, llvmpipe 4. So llvmpipe draws WebGL faster for less CPU, and the container's memory stays where it was, well inside SPEC §3's 1–2 GB a browser. Compositing pages in software as well cut the CPU of scrolling an ordinary page by about 40% against compositing them through llvmpipe (and by three quarters against SwiftShader, which composited every page), so the image passes `--disable-gpu-compositing` too.
 
-**Threads.** llvmpipe starts one rasteriser thread per CPU the process may run on (6 here; 2 with Chromium pinned to two CPUs), where SwiftShader started 6 whatever the pinning. Pinned to two CPUs, llvmpipe drew the WebGL page at 60 fps for 183% CPU, SwiftShader at 24 fps for 187%; `LP_NUM_THREADS=1` cut llvmpipe to 36 fps and saved 7 MB. The threads sleep unless a page draws WebGL, and a container's CPU limit caps what they can take in total, so `LP_NUM_THREADS` isn't set. It doesn't show in the renderer string; a page sees only `navigator.hardwareConcurrency`, which follows the CPUs and not llvmpipe, and how fast it draws.
+**Threads.** llvmpipe starts one rasteriser thread per CPU the process may run on (6 here; 2 with Chromium pinned to two CPUs), where SwiftShader started 6 whatever the pinning. Pinned to two CPUs, llvmpipe drew the WebGL page at 60 fps for 183% CPU, SwiftShader at 24 fps for 187%; `LP_NUM_THREADS=1` cut llvmpipe to 36 fps and saved 7 MB. The threads sleep unless a page draws WebGL, and a container's CPU limit caps what they can take in total, so PROJ-148 left `LP_NUM_THREADS` unset; PROJ-165 sets it to 0 for the GPU sandbox (below). It doesn't show in the renderer string; a page sees only `navigator.hardwareConcurrency`, which follows the CPUs and not llvmpipe, and how fast it draws.
 
 **Detection pages**, Visual mode (the address bar through xdotool, screenshots; each page's text read over CDP only after it had shown its results), same connection, before and after:
 
@@ -123,6 +123,44 @@ What CreepJS still counts in "like headless" is `noWebShare`, `noContentIndex`, 
 **Not run here, so unverified:** arm64 (CI builds the arm64 image under emulation, and the build-time library check runs there; no Docker test has run on arm64, so WebGL on llvmpipe there is unchecked, and since there's no fallback, an arm64 failure would mean no WebGL at all: run `TestBrowserEnvironment` and `TestWebGLRendererIsStable` on an arm64 host or the Umbrel before a release ships this), the Umbrel, llvmpipe's JIT under the `browserpier` and Docker-default AppArmor profiles (CI's Docker job, on Docker with AppArmor, covers one of them once the branch runs there), and PROJ-15's OVH datacenter address. The **go** above is for amd64 without AppArmor.
 
 `TestVisualModeLooksLikeAPerson`, `TestPageToolsStayQuiet`, `TestContentStaysQuiet`, the login tests and `TestMeasureWindowAtLoad` (window 1280×768 and `availHeight` 768 in all 70 loads, as in PROJ-29's table) pass unchanged.
+
+## The GPU process's own sandbox (PROJ-165)
+
+Until PROJ-165 the GPU process, which handles pages' WebGL calls, shaders and compositing, ran under the container's seccomp filter, with no capabilities and no new privileges, but without Chromium's own GPU seccomp policy: `chrome://gpu` said `Sandboxed: false`, with SwiftShader as with llvmpipe. Measured on 2026-11-18, same host and Chromium 156.0.8078.79 as above.
+
+**Why.** On Linux Chromium starts the GPU process's sandbox after GL has started (the late start is its default outside ChromeOS), and `SandboxLinux::InitializeSandbox` can only start it in a single-threaded process. In a GPU process with other threads it logs `WARNING:sandbox/policy/linux/sandbox_linux.cc:405] InitializeSandbox() called with multiple threads in process gpu-process.` and goes on without it; for every other process type that's fatal. Here GL starting meant Mesa starting threads: llvmpipe's rasterisers (`llvmpipe-0` to `llvmpipe-5`, one per CPU) and the shader disk cache's writer (`chromiu:disk$0`). SwiftShader, before PROJ-148, started its own worker threads the same way. So it isn't Debian's build, the zygote, the container's `seccomp.json`, `/dev/shm` or the missing `/dev/dri`: a Linux desktop whose Mesa driver starts threads as GL starts would be the same (not checked on a desktop VM here; the code path is Chromium's own).
+
+**What was tried**, each with a second Chromium in a running container, its GPU process's threads and `Seccomp_filters` read from `/proc`:
+
+| Chromium's environment and switches | GPU process | WebGL |
+|---|---|---|
+| as before | 24 threads, `Seccomp_filters: 1`, the warning above | llvmpipe |
+| `LP_NUM_THREADS=0` | 12 threads (the disk-cache one still there), 1 filter, the warning | llvmpipe |
+| `LP_NUM_THREADS=0 MESA_SHADER_CACHE_DISABLE=true` (chosen) | 11 threads, **2 filters**, `Activated seccomp-bpf sandbox for process type: gpu-process` | llvmpipe, draws and reads back |
+| `--gpu-sandbox-start-early` | sandboxed before GL, then `ANGLE Display::initialize error 12289: Could not open the default X display`, GL fails | none |
+| `--gpu-sandbox-failures-fatal=yes`, no settings | `FATAL: Current process is not mono-threaded!` after 30 tries, three crashes, then a GPU process without GL, sandboxed | none |
+
+Starting the sandbox early can't work without widening Chromium's GPU policy, which is Chromium's code: ANGLE opens its own connection to the X display as GL starts, and the sandbox no longer lets it.
+
+**What the image does.** The entrypoint gives Chromium `LP_NUM_THREADS=0` (llvmpipe rasterises on the GL thread itself) and `MESA_SHADER_CACHE_DISABLE=true` (Mesa's on-disk shader cache sat under the container's `HOME`, lost with the container, and the sandbox would keep it from opening its files; Chromium's own `GPUCache` in the profile is unchanged), and passes `--gpu-sandbox-failures-fatal=yes`, so a GPU process that can't sandbox itself exits instead of running on: after its restarts Chromium falls back to a GPU process without GL, sandboxed, and pages get no WebGL. The image build fails if Mesa's `libgallium` doesn't read either setting. `seccomp.json` and the AppArmor profile are unchanged, and llvmpipe's JIT works inside Chromium's GPU policy. `chrome://gpu` now says `Sandboxed: true`, the GPU process's `/proc` status `Seccomp_filters: 2`, and `TestBrowserEnvironment/gpu` requires both; the Docker tests fail on the warning above too.
+
+**Fingerprint.** Unchanged: the renderer string, WebGL parameters and extensions don't depend on llvmpipe's thread count, and `navigator.hardwareConcurrency` follows the CPUs. A page could only see that WebGL draws more slowly.
+
+**Cost**, `TestMeasureWebGLCost` with the same 40-triangle WebGL page, before and after:
+
+| | Before (llvmpipe, threads) | After (one thread, sandboxed) |
+|---|---|---|
+| First page loaded, from `docker run` | 1.9 s | 1.2–1.8 s |
+| Idle page: CPU, memory | 7%, 220 MB | 7%, 222 MB |
+| WebGL page | 63 fps, 244% CPU, 297 MB | 29–34 fps, 117–119% CPU, 289–290 MB |
+| WebGL page, watched | 268% CPU | 139–141% CPU |
+| Heavy site, scrolled | 19% CPU | 19–20% CPU |
+| Heavy site, watched | 35% CPU | 36% CPU |
+| GPU process | 24 threads | 11 threads |
+
+So a page that keeps WebGL busy draws at about half the frame rate, for half the CPU: WebGL gets one core instead of every core, which also leaves the others to the host's other browsers. Ordinary pages, which are composited in software and don't touch llvmpipe, cost the same. **Decision: go**: the GPU process parses what pages send it, and AGENTS.md's rule is that Chromium keeps its sandbox.
+
+**Not run here:** arm64, the Umbrel, and the `browserpier` and Docker-default AppArmor profiles (this rootless Podman has no AppArmor), as for PROJ-148; and a desktop VM with Debian's Chromium on llvmpipe, to compare. `TestBrowserEnvironment`, `TestWebGLRendererIsStable`, the login tests, `TestLoginSurvivesImageUpgrade` from the 0.3.0 image (SwiftShader), `TestSeccompAllowsOnlySandboxNamespaces` and `TestAppArmorProfile` pass.
 
 ## Continue where you left off (PROJ-112)
 
