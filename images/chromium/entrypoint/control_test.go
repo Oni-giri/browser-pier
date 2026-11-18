@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -48,7 +49,7 @@ func fakeCDP(t *testing.T) *httptest.Server {
 
 func TestControlRelaysCDP(t *testing.T) {
 	cdp := fakeCDP(t)
-	ctl := httptest.NewServer(newControlHandler(cdp.Listener.Addr().String(), http.NotFoundHandler(), nil, nil, geo{}))
+	ctl := httptest.NewServer(newControlHandler(cdp.Listener.Addr().String(), http.NotFoundHandler(), http.NotFoundHandler(), nil, nil, geo{}))
 	defer ctl.Close()
 
 	req, _ := http.NewRequest(http.MethodGet, ctl.URL+"/cdp/json/version", nil)
@@ -66,7 +67,7 @@ func TestControlRelaysCDP(t *testing.T) {
 
 func TestControlRelaysWebSocketUpgrade(t *testing.T) {
 	cdp := fakeCDP(t)
-	ctl := httptest.NewServer(newControlHandler(cdp.Listener.Addr().String(), http.NotFoundHandler(), nil, nil, geo{}))
+	ctl := httptest.NewServer(newControlHandler(cdp.Listener.Addr().String(), http.NotFoundHandler(), http.NotFoundHandler(), nil, nil, geo{}))
 	defer ctl.Close()
 
 	conn, err := net.Dial("tcp", ctl.Listener.Addr().String())
@@ -96,7 +97,7 @@ func TestStreamOneReaderAtATime(t *testing.T) {
 	s := &streamer{command: func() *exec.Cmd {
 		return exec.Command("sh", "-c", `printf 'frame' >&3; exec sleep 30`)
 	}}
-	ctl := httptest.NewServer(newControlHandler("127.0.0.1:1", s, nil, nil, geo{}))
+	ctl := httptest.NewServer(newControlHandler("127.0.0.1:1", s, http.NotFoundHandler(), nil, nil, geo{}))
 	defer ctl.Close()
 
 	resp, err := http.Get(ctl.URL + "/stream")
@@ -134,5 +135,65 @@ func TestStreamArgsWriteH264ToFD3(t *testing.T) {
 		if !strings.Contains(args, want) {
 			t.Errorf("pipeline %q lacks %q", args, want)
 		}
+	}
+}
+
+func TestRecordOneReaderAtATime(t *testing.T) {
+	rec := &streamer{contentType: "video/mp4", command: func() *exec.Cmd {
+		return exec.Command("sh", "-c", `printf 'ftyp' >&3; exec sleep 30`)
+	}}
+	ctl := httptest.NewServer(newControlHandler("127.0.0.1:1", http.NotFoundHandler(), rec, nil, nil, geo{}))
+	defer ctl.Close()
+
+	resp, err := http.Get(ctl.URL + "/record")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "video/mp4" {
+		t.Errorf("Content-Type = %q, want video/mp4", ct)
+	}
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(resp.Body, buf); err != nil || string(buf) != "ftyp" {
+		t.Fatalf("read %q, %v", buf, err)
+	}
+	// The live stream is its own pipeline: recording doesn't hold it.
+	second, err := http.Get(ctl.URL + "/record")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = second.Body.Close()
+	if second.StatusCode != http.StatusConflict {
+		t.Fatalf("second reader got %d, want 409", second.StatusCode)
+	}
+
+	_ = resp.Body.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for rec.busy.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("recording pipeline still running 5s after the reader left")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestRecordArgsAreFixedWordsAndTheScreenSize(t *testing.T) {
+	args := recordArgs(1440, 900)
+	joined := strings.Join(args, " ")
+	for _, want := range []string{"ximagesrc display-name=:99", "show-pointer=true", "framerate=5/1",
+		"width=1080,height=674", "x264enc pass=qual", "mp4mux fragment-duration=200 streamable=true", "fdsink fd=3"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("pipeline %q lacks %q", joined, want)
+		}
+	}
+	// Only the size varies, and only with the screen: words from a fixed
+	// alphabet, nothing a request could put there.
+	word := regexp.MustCompile(`^[-a-zA-Z0-9=:/,!_.]+$`)
+	for _, a := range args {
+		if !word.MatchString(a) {
+			t.Errorf("argument %q isn't a fixed word", a)
+		}
+	}
+	if w, h := recordSize(1281, 721); w != 960 || h != 540 {
+		t.Errorf("recordSize(1281, 721) = %d, %d, want even 960, 540", w, h)
 	}
 }

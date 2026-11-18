@@ -171,6 +171,8 @@ func run(log *slog.Logger) error {
 	srv := &http.Server{
 		Handler: newControlHandler(cdpAddr,
 			&streamer{command: func() *exec.Cmd { return exec.Command("gst-launch-1.0", streamArgs()...) }},
+			&streamer{command: func() *exec.Cmd { return exec.Command("gst-launch-1.0", recordArgs(cfg.Width, cfg.Height)...) },
+				contentType: "video/mp4"},
 			newVisual(cfg.Width, cfg.Height), fwd, where),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
