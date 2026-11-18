@@ -9,6 +9,7 @@ COPY go.mod go.sum* ./
 RUN go mod download
 COPY internal/motion ./internal/motion
 COPY internal/domainset ./internal/domainset
+COPY internal/weburl ./internal/weburl
 COPY images/chromium/entrypoint ./images/chromium/entrypoint
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w" -o /out/entrypoint ./images/chromium/entrypoint

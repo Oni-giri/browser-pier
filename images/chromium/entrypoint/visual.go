@@ -51,6 +51,9 @@ type visual struct {
 	// early with ctx's error if ctx ends first.
 	now   func() time.Time
 	sleep func(ctx context.Context, d time.Duration) error
+	// windows lists the windows showing at a point (windowsAtPoint),
+	// replaced in tests.
+	windows func(ctx context.Context, x, y int) ([]shownWindow, error)
 }
 
 // shortcutGap is the least time between an agent's key call that ends on
@@ -135,7 +138,7 @@ const (
 
 func newVisual(width, height int) *visual {
 	return &visual{width: width, height: height, run: runCommand, output: runStdout, mot: motion.NewRandom(), live: newLiveInput(width, height),
-		clip: clipState{hold: holdClipboard, read: readSelection}, now: time.Now, sleep: sleepCtx}
+		clip: clipState{hold: holdClipboard, read: readSelection}, now: time.Now, sleep: sleepCtx, windows: windowsAtPoint}
 }
 
 func (v *visual) register(mux *http.ServeMux) {
@@ -146,6 +149,7 @@ func (v *visual) register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /input/scroll", v.scroll)
 	mux.HandleFunc("POST /input/key", v.key)
 	mux.HandleFunc("POST /input/drag", v.drag)
+	mux.HandleFunc("POST /input/open", v.open)
 	if v.live != nil {
 		mux.HandleFunc("POST /input/events", v.live.events)
 		mux.HandleFunc("POST /input/release", v.live.release)
@@ -292,13 +296,18 @@ func (v *visual) click(w http.ResponseWriter, r *http.Request) {
 		if !now {
 			args = v.humanClick(from(), c)
 		}
-		return []xcmd{{args, release}}
+		return []xcmd{{args: args, release: release}}
 	})
 }
 
 // xcmd is one xdotool run and, if it fails or is cut short, the commands
-// that let go of whatever it may have left held.
-type xcmd struct{ args, release []string }
+// that let go of whatever it may have left held; or, with check, a look
+// at the screen in between runs, which may refuse the rest (a refusal
+// answers 409).
+type xcmd struct {
+	args, release []string
+	check         func(ctx context.Context) error
+}
 
 // keyboard is what an action does with the keyboard, for shortcutGap.
 type keyboard int
@@ -344,7 +353,21 @@ func (v *visual) perform(w http.ResponseWriter, r *http.Request, kb keyboard, bu
 	}()
 	for _, c := range build(func() hand { return v.pointer(ctx) }) {
 		err := ctx.Err()
-		if err == nil {
+		switch {
+		case err != nil:
+		case c.check != nil:
+			if err = c.check(ctx); err != nil {
+				var no refusal
+				if errors.As(err, &no) {
+					http.Error(w, no.Error(), http.StatusConflict)
+					return
+				}
+				// Nothing is held between runs: no release to run.
+				http.Error(w, "input failed: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			continue
+		default:
 			v.noteMove(c.args)
 			_, err = v.run(ctx, "xdotool", c.args...)
 		}
@@ -494,7 +517,7 @@ func (v *visual) humanType(text string) []xcmd {
 			if len(held) > 0 {
 				release = append([]string{"keyup"}, held...)
 			}
-			cmds = append(cmds, xcmd{args, release})
+			cmds = append(cmds, xcmd{args: args, release: release})
 		}
 		args, held, keys = nil, nil, 0
 	}
@@ -656,7 +679,7 @@ func (v *visual) scroll(w http.ResponseWriter, r *http.Request) {
 	v.perform(w, r, pointerAction, func(from func() hand) []xcmd {
 		// The wheel's notches are clicks, pressed and released inside
 		// xdotool: nothing stays held between commands.
-		return []xcmd{{v.humanScroll(from(), s), nil}}
+		return []xcmd{{args: v.humanScroll(from(), s)}}
 	})
 }
 
@@ -828,11 +851,11 @@ func (v *visual) key(w http.ResponseWriter, r *http.Request) {
 	// pace: a list's pauses make an instant run longer than it was.
 	release := append([]string{"keyup"}, combos...)
 	if now {
-		v.perform(w, r, kb, func(func() hand) []xcmd { return []xcmd{{instantKeys(combos), release}} })
+		v.perform(w, r, kb, func(func() hand) []xcmd { return []xcmd{{args: instantKeys(combos), release: release}} })
 		return
 	}
 	v.perform(w, r, kb, func(func() hand) []xcmd {
-		return []xcmd{{v.humanKeys(combos), release}}
+		return []xcmd{{args: v.humanKeys(combos), release: release}}
 	})
 }
 
@@ -902,13 +925,13 @@ func (v *visual) drag(w http.ResponseWriter, r *http.Request) {
 		if !now {
 			args = v.humanDrag(from(), d)
 		}
-		return []xcmd{{args, release}}
+		return []xcmd{{args: args, release: release}}
 	})
 }
 
 // input runs one xdotool command at instant pace.
 func (v *visual) input(w http.ResponseWriter, r *http.Request, kb keyboard, args []string) {
-	v.perform(w, r, kb, func(func() hand) []xcmd { return []xcmd{{args, nil}} })
+	v.perform(w, r, kb, func(func() hand) []xcmd { return []xcmd{{args: args}} })
 }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
