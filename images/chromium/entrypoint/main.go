@@ -138,8 +138,19 @@ func run(log *slog.Logger) error {
 		return err
 	}
 
+	// Visual mode's accessibility bus comes up before Chromium, which
+	// connects to it as it starts (PROJ-150); API mode has none.
+	var bus *a11yBus
+	if cfg.Visual {
+		if bus, err = startA11yBus(ctx, log, os.Getuid()); err != nil {
+			return err
+		}
+		// Stopped after Chromium has closed: run closes Chromium itself
+		// before returning, and deferred calls run after.
+		defer bus.stop()
+	}
 	chromium := exec.Command(chromiumBinary, chromiumArgs(cfg, smallShm())...)
-	chromium.Env = append(append(os.Environ(), "DISPLAY="+display), where.env()...)
+	chromium.Env = append(os.Environ(), chromiumEnv(cfg, where, bus.address())...)
 	fatal, err := watchFatal(chromium)
 	if err != nil {
 		return fmt.Errorf("start Chromium: %w", err)
@@ -158,37 +169,39 @@ func run(log *slog.Logger) error {
 		_ = resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
 	}); err != nil {
-		_ = closeChromium(browser, cdpAddr, cfg.StopTimeout)
+		_ = stopBrowser(browser, cdpAddr, cfg.StopTimeout, bus)
 		return fmt.Errorf("chromium: %w%s", err, fatal.reason(true))
 	}
 
 	ln, err := listenControl(cfg.ControlSocket)
 	if err != nil {
-		_ = closeChromium(browser, cdpAddr, cfg.StopTimeout)
+		_ = stopBrowser(browser, cdpAddr, cfg.StopTimeout, bus)
 		return err
 	}
 	defer func() { _ = os.Remove(cfg.ControlSocket) }()
+	vis := newVisual(cfg.Width, cfg.Height)
+	if bus != nil {
+		vis.tree = newTreeReader(bus.address(), cfg.Width, cfg.Height)
+	}
 	srv := &http.Server{
 		Handler: newControlHandler(cdpAddr,
 			&streamer{command: func() *exec.Cmd { return exec.Command("gst-launch-1.0", streamArgs()...) }},
 			&streamer{command: func() *exec.Cmd { return exec.Command("gst-launch-1.0", recordArgs(cfg.Width, cfg.Height)...) },
 				contentType: "video/mp4", wait: 2 * time.Second},
-			newVisual(cfg.Width, cfg.Height), fwd, where),
+			vis, fwd, where),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() { _ = srv.Serve(ln) }()
 	log.Info("ready", "screen", fmt.Sprintf("%dx%d", cfg.Width, cfg.Height), "control_socket", cfg.ControlSocket)
 
-	select {
-	case <-browser.done:
+	if exited := waitEnd(ctx, log, browser, bus); exited {
 		_ = srv.Close()
 		return fmt.Errorf("chromium exited on its own: %s%s", describe(browser.status), fatal.reason(false))
-	case <-ctx.Done():
 	}
 
 	log.Info("stopping: closing Chromium", "timeout", cfg.StopTimeout)
 	_ = srv.Close()
-	if err := closeChromium(browser, cdpAddr, cfg.StopTimeout); err != nil {
+	if err := stopBrowser(browser, cdpAddr, cfg.StopTimeout, bus); err != nil {
 		return err
 	}
 	log.Info("Chromium closed", "status", describe(browser.status))

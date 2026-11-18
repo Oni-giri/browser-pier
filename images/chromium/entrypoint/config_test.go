@@ -101,3 +101,64 @@ func TestChromiumArgs(t *testing.T) {
 		t.Error("small /dev/shm: want --disable-dev-shm-usage")
 	}
 }
+
+func TestLoadConfigMode(t *testing.T) {
+	for mode, visual := range map[string]bool{"": false, "api": false, "visual": true} {
+		vars := map[string]string{}
+		if mode != "" {
+			vars["BROWSERPIER_MODE"] = mode
+		}
+		c, err := loadConfig(env(vars))
+		if err != nil || c.Visual != visual {
+			t.Errorf("BROWSERPIER_MODE=%q: visual %t, %v", mode, c.Visual, err)
+		}
+	}
+	if _, err := loadConfig(env(map[string]string{"BROWSERPIER_MODE": "Visual"})); err == nil {
+		t.Error("BROWSERPIER_MODE=Visual: want an error")
+	}
+}
+
+// TestChromiumArgsByMode: API mode's command line and environment are
+// what they were before PROJ-150, byte for byte; Visual mode's differ by
+// the accessibility switch and the bus's two variables only.
+func TestChromiumArgsByMode(t *testing.T) {
+	api := config{Width: 1280, Height: 800, ProfileDir: "/profile"}
+	before := []string{
+		"--user-data-dir=/profile",
+		"--remote-debugging-port=9222",
+		"--password-store=basic",
+		"--disable-blink-features=AutomationControlled",
+		"--use-angle=swiftshader",
+		"--enable-unsafe-swiftshader",
+		"--proxy-server=socks5://127.0.0.1:1080",
+		"--proxy-bypass-list=<-loopback>",
+		"--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1",
+		"--webrtc-ip-handling-policy=disable_non_proxied_udp",
+		"--disable-component-update",
+		"--disable-background-networking",
+		"--no-first-run",
+		"--no-default-browser-check",
+		"--hide-crash-restore-bubble",
+		"--noerrdialogs",
+		"--window-position=0,0",
+		"--window-size=1280,768",
+	}
+	if got := chromiumArgs(api, false); !slices.Equal(got, before) {
+		t.Fatalf("API mode:\n got  %q\n want %q", got, before)
+	}
+	where := geo{TimeZone: "Europe/Riga", Locale: "lv-LV"}
+	envBefore := []string{"DISPLAY=:99", "TZ=Europe/Riga", "LANGUAGE=lv_LV:lv", "LANG=lv_LV.UTF-8"}
+	if got := chromiumEnv(api, where, ""); !slices.Equal(got, envBefore) {
+		t.Fatalf("API mode's environment: %q", got)
+	}
+
+	vis := api
+	vis.Visual = true
+	if got := chromiumArgs(vis, false); !slices.Equal(got, append(slices.Clone(before), "--force-renderer-accessibility")) {
+		t.Fatalf("Visual mode: %q", got)
+	}
+	got := chromiumEnv(vis, where, "unix:path=/tmp/browserpier-a11y-1000/bus")
+	if want := append(slices.Clone(envBefore), "AT_SPI_BUS_ADDRESS=unix:path=/tmp/browserpier-a11y-1000/bus", "ACCESSIBILITY_ENABLED=1"); !slices.Equal(got, want) {
+		t.Fatalf("Visual mode's environment: %q", got)
+	}
+}

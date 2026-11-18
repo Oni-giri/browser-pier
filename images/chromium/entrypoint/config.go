@@ -45,6 +45,11 @@ type config struct {
 	// read from BlockFile (BROWSERPIER_BLOCKLIST_FILE). Off by default.
 	BlockAds  bool
 	BlockFile string
+	// Visual (BROWSERPIER_MODE=visual; api, the default, is false) runs
+	// the accessibility bus and Chromium's accessibility, for Visual
+	// mode's element tree (PROJ-150). A session's mode is fixed when it
+	// starts, so the state never changes during one.
+	Visual bool
 }
 
 func loadConfig(lookup func(string) (string, bool)) (config, error) {
@@ -82,6 +87,13 @@ func loadConfig(lookup func(string) (string, bool)) (config, error) {
 	}
 	if c.BlockAds, err = strconv.ParseBool(get("BROWSERPIER_BLOCK_ADS", "false")); err != nil {
 		return config{}, fmt.Errorf("BROWSERPIER_BLOCK_ADS: want true or false, got %q", get("BROWSERPIER_BLOCK_ADS", ""))
+	}
+	switch mode := get("BROWSERPIER_MODE", "api"); mode {
+	case "api":
+	case "visual":
+		c.Visual = true
+	default:
+		return config{}, fmt.Errorf("BROWSERPIER_MODE: want api or visual, got %q", mode)
 	}
 	for _, s := range strings.Split(get("BROWSERPIER_HOST_IPS", ""), ",") {
 		if s = strings.TrimSpace(s); s == "" {

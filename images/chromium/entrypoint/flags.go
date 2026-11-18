@@ -45,5 +45,24 @@ func chromiumArgs(c config, smallShm bool) []string {
 	if smallShm {
 		args = append(args, "--disable-dev-shm-usage")
 	}
+	if c.Visual {
+		// Visual mode's element tree (PROJ-150): Chromium publishes its
+		// accessibility tree, the page's included, on the accessibility
+		// bus. Without this switch it publishes the window frames only,
+		// with no children, even to a reader on the bus.
+		args = append(args, "--force-renderer-accessibility")
+	}
 	return args
+}
+
+// chromiumEnv is what Chromium's environment adds to the entrypoint's:
+// the display, the location's (geo.env), and in Visual mode the
+// accessibility bus's (a11yEnv). API mode's is what it was before
+// PROJ-150.
+func chromiumEnv(c config, where geo, bus string) []string {
+	env := append([]string{"DISPLAY=" + display}, where.env()...)
+	if c.Visual {
+		env = append(env, a11yEnv(bus)...)
+	}
+	return env
 }
