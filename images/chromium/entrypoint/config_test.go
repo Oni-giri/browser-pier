@@ -69,6 +69,17 @@ func TestLoadConfigRejectsBadValues(t *testing.T) {
 	}
 }
 
+// TestChromiumEnv: Mesa starts no thread before Chromium's GPU sandbox
+// does, which it can only do in a single-threaded process (PROJ-165).
+func TestChromiumEnv(t *testing.T) {
+	env := chromiumEnv()
+	for _, want := range []string{"LP_NUM_THREADS=0", "MESA_SHADER_CACHE_DISABLE=true"} {
+		if !slices.Contains(env, want) {
+			t.Errorf("Chromium's environment lacks %s: %v", want, env)
+		}
+	}
+}
+
 func TestChromiumArgs(t *testing.T) {
 	c := config{Width: 1280, Height: 800, ProfileDir: "/profile"}
 	args := chromiumArgs(c, false)
@@ -85,6 +96,8 @@ func TestChromiumArgs(t *testing.T) {
 		// WebGL on llvmpipe (PROJ-148).
 		"--ignore-gpu-blocklist",
 		"--disable-gpu-compositing",
+		// The GPU process never runs without its own sandbox (PROJ-165).
+		"--gpu-sandbox-failures-fatal=yes",
 	} {
 		if !slices.Contains(args, want) {
 			t.Errorf("missing %s", want)
@@ -97,6 +110,9 @@ func TestChromiumArgs(t *testing.T) {
 			// with no SwiftShader to fall back on.
 			"--disable-gpu-sandbox", "--in-process-gpu", "--disable-seccomp-filter-sandbox",
 			"--disable-gpu", "--use-gl=swiftshader", "--use-angle=swiftshader", "--enable-unsafe-swiftshader",
+			// The GPU sandbox starts after GL, not before it, where GL
+			// can't reach the X display (PROJ-165).
+			"--gpu-sandbox-start-early",
 		} {
 			// A switch alone or with a value; --disable-gpu-compositing
 			// isn't --disable-gpu.
@@ -106,6 +122,11 @@ func TestChromiumArgs(t *testing.T) {
 		}
 		if strings.Contains(strings.ToLower(a), "swiftshader") {
 			t.Errorf("must not pass %s: WebGL runs on llvmpipe", a)
+		}
+	}
+	for _, a := range args {
+		if strings.HasPrefix(a, "--gpu-sandbox-failures-fatal=") && a != "--gpu-sandbox-failures-fatal=yes" {
+			t.Errorf("%s: the GPU sandbox failing must be fatal", a)
 		}
 	}
 	if slices.Contains(args, "--disable-dev-shm-usage") {

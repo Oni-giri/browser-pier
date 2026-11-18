@@ -139,7 +139,7 @@ func run(log *slog.Logger) error {
 	}
 
 	chromium := exec.Command(chromiumBinary, chromiumArgs(cfg, smallShm())...)
-	chromium.Env = append(append(os.Environ(), "DISPLAY="+display), where.env()...)
+	chromium.Env = append(append(append(os.Environ(), "DISPLAY="+display), where.env()...), chromiumEnv()...)
 	fatal, err := watchFatal(chromium)
 	if err != nil {
 		return fmt.Errorf("start Chromium: %w", err)

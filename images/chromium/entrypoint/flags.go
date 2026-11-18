@@ -27,6 +27,15 @@ func chromiumArgs(c config, smallShm bool) []string {
 		// whose GPU it blocks: cheaper than compositing every page through
 		// llvmpipe, and WebGL still renders on it (ANTI-BOT.md, PROJ-148).
 		"--disable-gpu-compositing",
+		// Chromium starts the GPU process's own seccomp sandbox after GL
+		// has started, and only if the process is still single-threaded
+		// then; otherwise it runs on without it, under the container's
+		// filter alone (PROJ-165). chromiumEnv keeps Mesa from starting
+		// threads that early; this makes a GPU process that still has
+		// them exit instead, so it never runs unsandboxed. If that kept
+		// happening, Chromium would fall back to a GPU process without GL,
+		// sandboxed, and pages would get no WebGL.
+		"--gpu-sandbox-failures-fatal=yes",
 		// Every connection goes through the forwarder, which refuses the
 		// local network unless the profile allows it (egress.go). With a
 		// single proxy and no DIRECT fallback, if it's down nothing goes out.
@@ -53,4 +62,17 @@ func chromiumArgs(c config, smallShm bool) []string {
 		args = append(args, "--disable-dev-shm-usage")
 	}
 	return args
+}
+
+// chromiumEnv is what Chromium's environment adds to the container's.
+// Mesa reads both settings in the GPU process, as GL starts (PROJ-165):
+// llvmpipe would start one rasteriser thread per CPU, and Mesa's shader
+// disk cache a writer thread, and Chromium's GPU sandbox can only start
+// in a single-threaded process. With no rasteriser threads llvmpipe draws
+// on the GL thread itself: WebGL gets one core instead of all of them,
+// which halves a busy WebGL page's frame rate and its CPU (ANTI-BOT.md).
+// The disk cache is lost with the container anyway, and the sandbox
+// would keep it from opening its files.
+func chromiumEnv() []string {
+	return []string{"LP_NUM_THREADS=0", "MESA_SHADER_CACHE_DISABLE=true"}
 }
