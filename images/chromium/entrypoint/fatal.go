@@ -22,16 +22,31 @@ type fatalLine struct {
 	buf    []byte // the line being written
 	last   string // FATAL
 	error  string // ERROR
+	// warn, if set, is told once when the GPU process can't start its
+	// sandbox (gpuSandboxFailed).
+	warn      func(msg string)
+	gpuWarned bool
 }
 
-// watchFatal points cmd's output at a pipe read by a fatalLine. Call
-// started once cmd has started.
-func watchFatal(cmd *exec.Cmd) (*fatalLine, error) {
+// gpuSandboxFailed is how Chromium says the GPU process can't start its
+// seccomp sandbox: in a WARNING without --gpu-sandbox-failures-fatal, in
+// an ERROR just before the FATAL "Current process is not mono-threaded!"
+// with it (PROJ-165). The FATAL line doesn't name the process; this does.
+const gpuSandboxFailed = "InitializeSandbox() called with multiple threads in process gpu-process"
+
+// gpuSandboxWarning is what the admin reads in the browser's log then:
+// the browser keeps running, but without WebGL, and the page can't say so.
+const gpuSandboxWarning = "the GPU process couldn't start its sandbox, so it exits; Chromium will run it without GL, and pages get no WebGL"
+
+// watchFatal points cmd's output at a pipe read by a fatalLine, which
+// tells warn (if not nil) what an admin should know. Call started once cmd
+// has started.
+func watchFatal(cmd *exec.Cmd, warn func(msg string)) (*fatalLine, error) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
-	f := &fatalLine{w: w, copied: make(chan struct{})}
+	f := &fatalLine{w: w, copied: make(chan struct{}), warn: warn}
 	cmd.Stdout, cmd.Stderr = w, w
 	go func() {
 		_, _ = io.Copy(io.MultiWriter(os.Stderr, f), r)
@@ -54,9 +69,14 @@ func (f *fatalLine) Write(p []byte) (int, error) {
 		if i < 0 {
 			break
 		}
-		if m := chromiumLine(string(f.buf[:i]), "FATAL"); m != "" {
+		line := string(f.buf[:i])
+		if !f.gpuWarned && f.warn != nil && strings.Contains(line, gpuSandboxFailed) {
+			f.gpuWarned = true
+			f.warn(gpuSandboxWarning)
+		}
+		if m := chromiumLine(line, "FATAL"); m != "" {
 			f.last = m
-		} else if m := chromiumLine(string(f.buf[:i]), "ERROR"); m != "" {
+		} else if m := chromiumLine(line, "ERROR"); m != "" {
 			f.error = m
 		}
 		f.buf = f.buf[i+1:]
