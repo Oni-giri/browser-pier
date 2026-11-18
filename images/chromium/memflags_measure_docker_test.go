@@ -30,24 +30,30 @@ import (
 //
 //	go test -tags 'docker measure' -run TestMeasureMemoryFlags -v -timeout 90m ./images/chromium/
 //
-// Each run passes Chromium more switches than the image does, through a
-// wrapper mounted over its binary that appends MEASURE_CHROMIUM_FLAGS; the
+// Each run sets Chromium's features itself, whatever the image passes,
+// through a wrapper mounted over its binary: it drops the entrypoint's
+// --disable-features and appends MEASURE_CHROMIUM_FLAGS. So a case with no
+// flags runs with Chromium's defaults, the cache on, on any image. The
 // binary itself is the image's, copied out once to MEASURE_DIR (default
 // the user cache directory: it's 300 MB, too much for a tmpfs /tmp).
 //
 // "bfcache" opens /hello, then the same tab goes to /heavy (MEASURE_MB MB
 // held by the page, 200 by default), then to /hello again, and the
 // container's memory is read every 5 s for MEASURE_SECONDS (240), then
-// Back. Once with the image's switches, once with the cache off; with
+// Back. Once with Chromium's defaults, once with the cache off; with
 // /hello on the same site as /heavy and on another (another address of
 // the test site); in Visual mode (xdotool, no CDP client) and in API mode
 // (a CDP client attached throughout, Page.navigate and history.back()).
 // "spare" reads the memory of a browser idle on /hello for 60 s, with and
-// without SpareRendererForSitePerProcess, MEASURE_RUNS (3) times each.
+// without SpareRendererForSitePerProcess, MEASURE_RUNS (3) times each, the
+// back/forward cache off in both, as in the image.
+// "reasons" records what Back tells a page with the cache on and off: one
+// the cache can keep (/back/a), and two it can't (/back/unload,
+// /back/no-store), in Visual mode.
 // "lastwins" checks what Chromium does with two --disable-features
 // switches. MEASURE_PARTS picks the parts (all by default), and
 // MEASURE_CASES, a regular expression, bfcache's runs by their name in the
-// log ("visual, other site, (the image's)").
+// log ("visual, other site, (Chromium's defaults)").
 func TestMeasureMemoryFlags(t *testing.T) {
 	image := testImage(t)
 	s := browsertest.NewSite(t, browsertest.SiteHost(t))
@@ -59,7 +65,7 @@ func TestMeasureMemoryFlags(t *testing.T) {
 	wrap := chromiumWrapper(t, image)
 	parts := os.Getenv("MEASURE_PARTS")
 	if parts == "" {
-		parts = "bfcache,spare,lastwins"
+		parts = "bfcache,spare,reasons,lastwins"
 	}
 	window := time.Duration(envInt("MEASURE_SECONDS", 240)) * time.Second
 	mb := envInt("MEASURE_MB", 200)
@@ -175,12 +181,26 @@ func TestMeasureMemoryFlags(t *testing.T) {
 
 	if strings.Contains(parts, "spare") {
 		summary = append(summary, "", "| flags | run | idle 60 s on /hello, MiB | renderers |")
-		for _, flags := range []string{"", "--disable-features=SpareRendererForSitePerProcess"} {
+		for _, flags := range []string{"--disable-features=BackForwardCache", "--disable-features=BackForwardCache,SpareRendererForSitePerProcess"} {
 			for i := range envInt("MEASURE_RUNS", 3) {
 				b := start(flags)
 				open(drive(b, "visual"), s.URL+"/hello", "/hello")
 				time.Sleep(60 * time.Second)
 				summary = append(summary, fmt.Sprintf("| %s | %d | %d | %s |", orNone(flags), i+1, memMiB(b), renderers(b)))
+				t.Logf("stop: exit %s", b.stop())
+			}
+		}
+	}
+
+	if strings.Contains(parts, "reasons") {
+		summary = append(summary, "", "| page | flags | Back to it |")
+		for _, page := range []string{"/back/a", "/back/unload", "/back/no-store"} {
+			for _, flags := range []string{"", "--disable-features=BackForwardCache"} {
+				b := start(flags)
+				d := drive(b, "visual")
+				open(d, s.URL+page, page)
+				open(d, s.URL+"/back/b", "/back/b")
+				summary = append(summary, fmt.Sprintf("| %s | %s | %s |", page, orNone(flags), describeShown(back(t, s, d.back, page))))
 				t.Logf("stop: exit %s", b.stop())
 			}
 		}
@@ -231,14 +251,14 @@ func describeShown(b shownBack) string {
 
 func orNone(flags string) string {
 	if flags == "" {
-		return "(the image's)"
+		return "(Chromium's defaults)"
 	}
 	return "`" + flags + "`"
 }
 
 // chromiumWrapper returns `docker run` options that put a wrapper over the
-// image's Chromium binary, which runs the binary with
-// $MEASURE_CHROMIUM_FLAGS after the entrypoint's switches.
+// image's Chromium binary, which runs the binary with the entrypoint's
+// switches less its --disable-features, then $MEASURE_CHROMIUM_FLAGS.
 func chromiumWrapper(t *testing.T, image string) []string {
 	t.Helper()
 	dir := os.Getenv("MEASURE_DIR")
@@ -264,7 +284,10 @@ func chromiumWrapper(t *testing.T, image string) []string {
 	docker(t, "cp", name+":/usr/lib/chromium/chromium", real)
 	wrapper := filepath.Join(dir, "chromium")
 	//nolint:gosec // an executable the container runs
-	if err := os.WriteFile(wrapper, []byte("#!/bin/sh\nexec /usr/lib/chromium/chromium-real \"$@\" $MEASURE_CHROMIUM_FLAGS\n"), 0o755); err != nil {
+	if err := os.WriteFile(wrapper, []byte(`#!/bin/sh
+for a; do shift; case "$a" in --disable-features=*) ;; *) set -- "$@" "$a";; esac; done
+exec /usr/lib/chromium/chromium-real "$@" $MEASURE_CHROMIUM_FLAGS
+`), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return []string{

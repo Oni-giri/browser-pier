@@ -237,7 +237,7 @@ func (s *Site) Shows(page string) []Shown {
 }
 
 // Served counts the requests for path, one of the pages that report
-// pageshow (/hello, /heavy, /back/a, /back/b).
+// pageshow (/hello, /heavy and those under /back/).
 func (s *Site) Served(path string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -440,11 +440,15 @@ setInterval(async () => { if ((await fetch('/later/go')).status === 200) locatio
 	})
 	// Pages that report each pageshow to /shown (PROJ-160): two light
 	// ones for Back, a plain one to leave to, and a heavy one (?mb=N).
+	// /back/unload and /back/no-store are ones the back/forward cache
+	// won't keep: an unload handler, and Cache-Control: no-store.
 	for path, body := range map[string]string{
-		"/hello":  "<title>Hello</title><h1>Hello</h1>",
-		"/back/a": "<title>A</title><h1>Page A</h1>",
-		"/back/b": "<title>B</title><h1>Page B</h1>",
-		"/heavy":  heavyPage,
+		"/hello":         "<title>Hello</title><h1>Hello</h1>",
+		"/back/a":        "<title>A</title><h1>Page A</h1>",
+		"/back/b":        "<title>B</title><h1>Page B</h1>",
+		"/back/unload":   "<title>Unload</title><h1>A page with an unload handler</h1><script>addEventListener('unload', () => {})</script>",
+		"/back/no-store": "<title>No store</title><h1>A page served with no-store</h1>",
+		"/heavy":         heavyPage,
 	} {
 		script := strings.Replace(reportShown, "PAGE", fmt.Sprintf("%q", path), 1)
 		mux.HandleFunc("GET "+path, func(w http.ResponseWriter, _ *http.Request) {
@@ -454,6 +458,9 @@ setInterval(async () => { if ((await fetch('/later/go')).status === 200) locatio
 			}
 			s.served[path]++
 			s.mu.Unlock()
+			if path == "/back/no-store" {
+				w.Header().Set("Cache-Control", "no-store")
+			}
 			_, _ = io.WriteString(w, body+script)
 		})
 	}
