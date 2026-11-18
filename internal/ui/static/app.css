@@ -530,6 +530,7 @@ dialog .dlg-head,dialog .dlg-foot{flex:none}
 .sign-form .btn{min-height:42px;margin-top:8px}
 .sign-form .input.bad{box-shadow:0 0 0 1px var(--red),0 0 0 4px var(--red-tint)}
 .sign-form .error{margin:8px 0 0;color:var(--red-text);font-size:13px}
+.sign-form .alt{margin:20px 0 0;font-size:13px}
 .sign-form code{font-size:13px;background:var(--fill);border-radius:4px;padding:1px 4px}
 .sign-art{border-radius:20px;background-color:var(--bg);background-image:radial-gradient(700px 360px at 20% -80px,rgba(47,107,255,.22),rgba(47,107,255,0) 70%),radial-gradient(600px 320px at 100% 0,rgba(56,189,248,.16),rgba(56,189,248,0) 70%),linear-gradient(rgba(47,107,255,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(47,107,255,.08) 1px,transparent 1px);background-size:auto,auto,40px 40px,40px 40px;display:flex;align-items:center;padding:48px}
 .sign-art h2{margin:0 0 20px;max-width:520px;font-size:40px;line-height:1.1;font-weight:600;letter-spacing:-1.6px}

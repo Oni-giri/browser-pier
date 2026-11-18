@@ -105,7 +105,8 @@ func matchTOTP(secret []byte, code string, now time.Time, last int64) (int64, bo
 	for d := int64(-1); d <= 1; d++ {
 		s := cur + d
 		eq := subtle.ConstantTimeCompare([]byte(hotp(secret, uint64(s))), []byte(code)) //nolint:gosec // s > 0
-		fresh := 0 // last isn't secret: a plain comparison leaks nothing
+		// last isn't secret: a plain comparison leaks nothing.
+		fresh := 0
 		if s > last {
 			fresh = 1
 		}
