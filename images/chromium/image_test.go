@@ -109,6 +109,13 @@ type browser struct {
 
 func startBrowser(t *testing.T, image, volume string) *browser {
 	t.Helper()
+	return startBrowserWith(t, image, volume)
+}
+
+// startBrowserWith starts a browser with extra environment variables,
+// as "KEY=value".
+func startBrowserWith(t *testing.T, image, volume string, env ...string) *browser {
+	t.Helper()
 	sockDir := t.TempDir()
 	if err := os.Chmod(sockDir, 0o777); err != nil { // the container's user creates the socket
 		t.Fatal(err)
@@ -121,14 +128,17 @@ func startBrowser(t *testing.T, image, volume string) *browser {
 	run := append([]string{"run", "-d", "--name", name,
 		"--security-opt", "seccomp=" + seccomp},
 		appArmor(t, image, seccomp)...)
-	docker(t, append(run,
+	args := append(run,
 		"--shm-size=1g",
 		"-e", "BROWSERPIER_SCREEN=1280x800",
 		// The test sites are on the Docker host: the local network.
 		"-e", "BROWSERPIER_LOCAL_NETWORK=true",
 		"-v", volume+":/profile",
-		"-v", sockDir+":/run/browserpier",
-		image)...)
+		"-v", sockDir+":/run/browserpier")
+	for _, e := range env {
+		args = append(args, "-e", e)
+	}
+	docker(t, append(args, image)...)
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
 
 	sock := filepath.Join(sockDir, "control.sock")
@@ -663,5 +673,69 @@ func TestBrowserEnvironment(t *testing.T) {
 	}
 	if logs := b.logs(); bytes.Contains([]byte(logs), []byte("No usable sandbox")) {
 		t.Fatalf("Chromium had no sandbox:\n%s", logs)
+	}
+}
+
+// TestA11yBusOnlyInVisualMode (PROJ-150): a Visual-mode browser runs the
+// accessibility bus and answers /tree; an API-mode one runs no bus and
+// has no /tree. The image has no screen reader, no AT-SPI launcher or
+// registry, and no terminal.
+func TestA11yBusOnlyInVisualMode(t *testing.T) {
+	image := testImage(t)
+	for _, c := range []struct {
+		mode string
+		bus  bool
+	}{{"api", false}, {"visual", true}, {"", false}} {
+		t.Run("mode "+c.mode, func(t *testing.T) {
+			var env []string
+			if c.mode != "" {
+				env = append(env, "BROWSERPIER_MODE="+c.mode)
+			}
+			b := startBrowserWith(t, image, newVolume(t), env...)
+			ps := docker(t, "exec", b.name, "ps", "-eo", "args")
+			if got := strings.Contains(ps, "dbus-daemon"); got != c.bus {
+				t.Errorf("dbus-daemon running: %t, want %t\n%s", got, c.bus, ps)
+			}
+			args := docker(t, "exec", b.name, "sh", "-c", "tr '\\0' ' ' < /proc/$(pgrep -o -f /usr/lib/chromium/chromium)/cmdline")
+			if got := strings.Contains(args, "--force-renderer-accessibility"); got != c.bus {
+				t.Errorf("--force-renderer-accessibility: %t, want %t", got, c.bus)
+			}
+			resp, err := b.http.Get("http://control/tree")
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if c.bus && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
+				t.Errorf("GET /tree: %d %s", resp.StatusCode, body)
+			}
+			if !c.bus && (resp.StatusCode != http.StatusNotFound || !strings.HasPrefix(string(body), "404 page not found")) {
+				t.Errorf("GET /tree in API mode: %d %s", resp.StatusCode, body)
+			}
+			if c.bus {
+				// The sandbox is whole with accessibility on (a test's
+				// CDP look; in a session nothing attaches in Visual mode).
+				p := b.page()
+				p.Navigate("chrome://sandbox/")
+				deadline := time.Now().Add(10 * time.Second)
+				for {
+					text, _ := p.Eval("document.body.innerText").(string)
+					if strings.Contains(text, "You are adequately sandboxed") {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatalf("chrome://sandbox in Visual mode says:\n%s", text)
+					}
+					time.Sleep(200 * time.Millisecond)
+				}
+				p.Close()
+			}
+		})
+	}
+	out := docker(t, "run", "--rm", "--entrypoint", "sh", image, "-c",
+		`for f in orca speech-dispatcher espeak espeak-ng x-terminal-emulator xterm /usr/libexec/at-spi-bus-launcher /usr/libexec/at-spi2-registryd; do
+		   command -v "$f" >/dev/null 2>&1 && echo "found $f"; [ -e "$f" ] && echo "found $f"; done; true`)
+	if out != "" {
+		t.Errorf("the image has what it shouldn't:\n%s", out)
 	}
 }

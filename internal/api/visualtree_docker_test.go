@@ -596,3 +596,53 @@ func TestVisualSnapshotDefusesAHostilePage(t *testing.T) {
 		t.Fatalf("invisible text or a comment got through:\n%s", snap)
 	}
 }
+
+// TestVisualLoginSurvivesStopAndStart is AGENTS.md's real run in Visual
+// mode, with the accessibility bus on: sign in with visual_snapshot's
+// refs and typing, stop, start, and the site still sees the login.
+func TestVisualLoginSurvivesStopAndStart(t *testing.T) {
+	a := newRealAPI(t)
+	site := browsertest.NewSite(t, browsertest.SiteHost(t))
+	s := a.startVisualBrowser(t, "vp")
+	a.openVisually(t, s.ID, site.URL+"/login")
+	snap := a.vsnap(s.ID, nil)
+	var fields []string
+	for _, l := range strings.Split(snap, "\n") {
+		if m := vrefLine.FindStringSubmatch(l); m != nil && strings.Contains(l, " textbox ") {
+			fields = append(fields, m[1])
+		}
+	}
+	if len(fields) != 2 {
+		t.Fatalf("want the user and password fields:\n%s", snap)
+	}
+	for i, text := range []string{"pier", "hunter2"} {
+		if code, msg := a.tool(s.ID, "click", map[string]any{"ref": fields[i]}); code != http.StatusOK {
+			t.Fatalf("click: %d %s", code, msg)
+		}
+		if code, msg := a.computer(s.ID, map[string]any{"action": "type", "text": text}); code != http.StatusNoContent {
+			t.Fatalf("type: %d %s", code, msg)
+		}
+	}
+	if code, msg := a.tool(s.ID, "click", map[string]any{"ref": vref(t, snap, `button "Sign in"`)}); code != http.StatusOK {
+		t.Fatalf("click Sign in: %d %s", code, msg)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for site.Issued() == "" {
+		if time.Now().After(deadline) {
+			t.Fatalf("not signed in; rejected: %s", site.Rejected())
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	token := site.Issued()
+	if code := a.do(http.MethodDelete, "/api/sessions/"+s.ID, "", nil); code != http.StatusOK {
+		t.Fatalf("stop: %d", code)
+	}
+	var again sessionJSON
+	if code := a.do(http.MethodPost, "/api/sessions", fmt.Sprintf(`{"profile": %q}`, s.Profile), &again); code != http.StatusCreated || again.Mode != "visual" {
+		t.Fatalf("start again: %d %+v", code, again)
+	}
+	a.openVisually(t, again.ID, site.URL+"/account")
+	if got := site.Seen(); got != token {
+		t.Fatalf("after stop and start the site saw session %q, want %q", got, token)
+	}
+}
