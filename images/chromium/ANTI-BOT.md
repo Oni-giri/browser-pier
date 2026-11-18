@@ -94,6 +94,31 @@ What a page's own script records (`browsertest.Detector`'s input recorder, `Inpu
 
 None of this is fingerprint spoofing: the browser reports nothing different about itself. `TestVisualModeLooksLikeAPerson` and `TestPageToolsStayQuiet` pass unchanged with it. Not done: typing mistakes and corrections, and a check against a public behaviour-scoring page (to be done by hand).
 
+## No address-bar search suggestions (PROJ-191)
+
+With suggestions on (Chromium's default), the address bar sent the default search engine what was being typed, a request per pause: a word in full, an `http://` address or one without a scheme up to its query, path and token included, and an `https://` address's host only; a query (`?token=…`) never went, and focusing the address bar sent nothing. Measured with `TestMeasureSuggest` (`go test -tags 'docker measure' -run TestMeasureSuggest -v ./images/chromium/`, 2026-11-18, Chromium 156), which makes the search engine a local one by a test policy and sends everything else to an isolated proxy:
+
+| Typed (at instant pace, open's, / human pace) | Suggest requests | The secret in them |
+|---|---|---|
+| `pierword` | 2 / 8 | (a word) |
+| `http://site.test/reset?token=SECRET` | 2 / 23 | none: they stop at the `?` |
+| `http://site.test/reset/SECRET` | 4 / 35 | all of it |
+| `https://site.test/reset?token=SECRET`, `https://site.test/reset/SECRET` | 2 / 17 | none: the host only |
+| `site.test/login/SECRET` | 3 / 28 | all of it |
+| With the image's own engine, `http://site.test/reset/SECRET` | 1–4 / 35–38 connections asked for `duckduckgo.com`, over two runs | (TLS: not readable) |
+
+The image now sets `SearchSuggestEnabled: false`, and the same runs send no suggest request at all, and ask for no `duckduckgo.com` while an address is typed (`TestTypedAddressReachesNoSuggestService` checks both, and that the address still opens). A word still goes to the engine as a search once Return is pressed.
+
+What can see it:
+- **A person**, in the live view or a handoff: the address bar's drop-down no longer offers the engine's completions. History and bookmarks still do. The setting shows on `chrome://policy`, next to the image's other policies, and Chromium already says it's managed.
+- **Not pages.** No web API reports it, and a page can't read `chrome://policy` (a `fetch` of it fails with a TypeError; the test checks that). Nothing about the browser's fingerprint changes.
+- **The search engine** sees searches that come without the suggest requests that usually precede them, as from anyone who turned suggestions off (a common privacy setting) or pasted the words. That's DuckDuckGo, not the sites an agent works on.
+
+Considered and left as they are:
+- **`NetworkPredictionOptions`** (preloading): no request reached the typed address's host before Return in any of the runs, and turning prediction off would change what pages' speculation rules get, which a page can notice. Kept at Chromium's default.
+- **`UrlKeyedAnonymizedDataCollectionEnabled`**: off by default in Chromium, and it reports to Google only for a signed-in, synced profile. Nothing to change.
+- **The start page:** a new profile's first tab still opens `start.duckduckgo.com` (PROJ-127, separate). The runs also saw Chromium ask for `accounts.google.com`, `update.googleapis.com` and `connectivitycheck.gstatic.com` on its own (refused by the test's proxy, so not measured further; PROJ-192).
+
 ## Fixed along the way
 
 - **`Intl` contradicted the browser's languages.** The image had only Chromium's `en-US` interface, so whatever `LANGUAGE` said, `Intl` reported `en-US` while `navigator.languages` and Accept-Language followed the exit location (`fr-FR`). The image now installs `chromium-l10n` (about 120 MB), and its build fails if the locales are missing. `Intl` now follows the interface language: `de` for a German exit, as Chromium on a German Linux desktop reports.
