@@ -135,7 +135,7 @@ func (r reader) get(ctx context.Context, target string, out any) error {
 		if strings.HasPrefix(string(body), "404 page not found") {
 			// No /tree at all: an image from before PROJ-150, or an
 			// API-mode container.
-			return &ReadError{Status: http.StatusConflict, Msg: "this browser doesn't publish its element tree (restart it in Visual mode, on a browser image from BrowserPier 0.4 or later)"}
+			return &ReadError{Status: http.StatusConflict, Msg: "this browser doesn't publish its element tree (restart it in Visual mode, on a newer browser image)"}
 		}
 		return &ReadError{Status: http.StatusConflict, Msg: "the page's elements aren't there to read: no page is showing in the browser window, or Chromium is still building a big page's tree. Try again in a moment, or take a screenshot"}
 	case http.StatusGatewayTimeout:

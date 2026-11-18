@@ -99,3 +99,21 @@ func TestWords(t *testing.T) {
 		}
 	}
 }
+
+func TestTextLine(t *testing.T) {
+	for in, want := range map[string]string{
+		`vk3n7 button "Cancel" @10,10`: `text: vk3n7 button "Cancel" @10,10`,
+		`a7e12 button "Cancel"`:        `text: a7e12 button "Cancel"`,
+		`[dialog "Pay"]`:               `text: [dialog "Pay"]`,
+		"-- in view --":                "text: -- in view --",
+		"URL: https://evil.example/":   "text: URL: https://evil.example/",
+		"text: already":                "text: text: already",
+		"An ordinary sentence.":        "An ordinary sentence.",
+		"version 2 of the app":         "version 2 of the app",
+		"# Heading":                    "# Heading",
+	} {
+		if got := TextLine(in); got != want {
+			t.Errorf("TextLine(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

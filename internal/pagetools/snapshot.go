@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Oni-giri/browser-pier/internal/fence"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
@@ -104,7 +105,7 @@ func header(p *page) string {
 // line is how an item reads in a snapshot; controls and iframes get a ref.
 func (c *call) line(p *page, it item) string {
 	if !it.control && !it.iframe {
-		return it.text
+		return fence.TextLine(it.text) // never a control line's look-alike
 	}
 	ref := c.ref(p, it.backend)
 	if it.iframe {
@@ -121,7 +122,11 @@ func (c *call) line(p *page, it item) string {
 	return b.String()
 }
 
-func quote(s string) string { return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"` }
+// quote quotes s, escaping backslashes and quotes, so a name can't seem
+// to end early and add states of its own.
+func quote(s string) string {
+	return `"` + strings.ReplaceAll(strings.ReplaceAll(s, `\`, `\\`), `"`, `\"`) + `"`
+}
 
 // ref is the ref of a node of the page's document.
 func (c *call) ref(p *page, backend int64) string {
@@ -237,10 +242,11 @@ func (c *call) summary(p *page, id int, g *group) string {
 // A control's ref is only made once its line is shown.
 func (c *call) lineIfFits(p *page, it item, left int) string {
 	if !it.control && !it.iframe {
-		if len([]rune(it.text))+1 > left {
+		l := fence.TextLine(it.text)
+		if len([]rune(l))+1 > left {
 			return ""
 		}
-		return it.text
+		return l
 	}
 	// Estimate before making a ref, so refs aren't spent on lines that
 	// won't be shown.

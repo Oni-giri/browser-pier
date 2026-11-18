@@ -384,6 +384,34 @@ func TestReadLeasesDontKeepAPersonOut(t *testing.T) {
 	}
 	f.m.ReleaseControl(s.ID)
 
+	// A read under way doesn't cut the quiet time short either: right
+	// after an input, Take control is refused, and the read goes on.
+	_, done, err = f.m.AgentInput(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done()
+	advance(time.Second)
+	read, err = f.m.ReadLease(context.Background(), s.ID, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	took = make(chan error, 1)
+	go func() { took <- f.m.TakeControl(s.ID) }()
+	select {
+	case err := <-took:
+		if !errors.Is(err, ErrAgentDriving) {
+			t.Fatalf("take control 1 s after an input, with a read under way = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		read.Release()
+		t.Fatal("take control 1 s after an input broke the read off and waited for it, instead of being refused")
+	}
+	if read.Ctx.Err() != nil {
+		t.Fatal("the refused Take control broke the read off")
+	}
+	read.Release()
+
 	// A handoff and the token's revocation end a read as a page call.
 	read, err = f.m.ReadLease(context.Background(), s.ID, "tok")
 	if err != nil {

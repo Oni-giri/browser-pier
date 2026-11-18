@@ -72,8 +72,11 @@ func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, f
 // Breakable (act), under way for less than takeOverAfter. One that has
 // run longer (a long human-paced type, or act's steps) is broken off, as
 // a handoff breaks it off, and TakeControl waits for it to end. A page
-// call not marked Breakable (a read, bounded by its own timeouts) is
-// never broken off: Take control is refused while it runs. Meanwhile agents can only watch: their input and new CDP
+// call not marked Breakable (the page tools' reads, bounded by their own
+// timeouts) is never broken off: Take control is refused while it runs.
+// A read lease (ReadLease, Visual mode's tree) is broken off at once, but
+// only once the agent's quiet time is over: a read neither starts,
+// extends nor cuts short those seconds. Meanwhile agents can only watch: their input and new CDP
 // connections are refused. During a handoff (Needs help) the agent is
 // paused, so it always succeeds.
 func (m *Manager) TakeControl(id string) error {
@@ -84,14 +87,14 @@ func (m *Manager) TakeControl(id string) error {
 		return ErrNotRunning
 	}
 	now := m.now()
-	breakOff := false
+	breakOff, breakReads := false, false
 	if l.sess.State == Running {
 		if len(l.conns) > 0 {
 			return ErrAgentDriving
 		}
 		for ls := range l.leases {
 			if ls.yields {
-				breakOff = true // a read: the person goes first
+				breakReads = true // a read: the person goes first, after the quiet time
 				continue
 			}
 			if !ls.breakable || now.Sub(ls.started) < takeOverAfter {
@@ -120,10 +123,11 @@ func (m *Manager) TakeControl(id string) error {
 	m.personTookLocked(l)
 	l.generation++
 	l.lastActivity = now
-	if breakOff {
+	if breakOff || breakReads {
 		// New agent input and page calls are refused from now on
 		// (l.human); what is under way breaks off. Every lease left here
-		// is Breakable and old enough, or TakeControl was refused above.
+		// is a read, or Breakable and old enough, or TakeControl was
+		// refused above.
 		for in := range l.inputs {
 			in.cancel(ErrTookControl)
 		}

@@ -183,3 +183,18 @@ func words(s string) string {
 var secretName = regexp.MustCompile(`password|passwd|passphrase|passcode|` +
 	` (pass|pwd|pw|pin|otp|totp|mfa|2 fa|cvv|cvc|csc|secret|token) |` + // as words() splits them
 	`one ?time|verification ?code|security ?code|sms ?code|auth(entication)? ?code|confirmation ?code`)
+
+// lineLike matches the start of a line BrowserPier writes in a snapshot
+// (a ref and a role, a container, a tier heading, the URL and title, the
+// marker of what was left out), so page text can't pass for one.
+var lineLike = regexp.MustCompile(`^(v[a-z][a-z0-9]n[0-9]|[a-z][a-z0-9]e[0-9]|\[|-- |URL:|Title:|…\(|text: )`)
+
+// TextLine is a line of page text in a snapshot, prefixed with "text: "
+// when it starts like a line BrowserPier writes itself: a page whose text
+// reads `vk3n7 button "Cancel" @10,10` can't make it look like a control.
+func TextLine(s string) string {
+	if lineLike.MatchString(s) {
+		return "text: " + s
+	}
+	return s
+}

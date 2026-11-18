@@ -106,7 +106,11 @@ func capText(s string, n int) string {
 	return string(r[:n-1]) + "…"
 }
 
-func quote(s string) string { return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"` }
+// quote quotes s, escaping backslashes and quotes, so a name can't seem
+// to end early and add states or a point of its own.
+func quote(s string) string {
+	return `"` + strings.ReplaceAll(strings.ReplaceAll(s, `\`, `\\`), `"`, `\"`) + `"`
+}
 
 // field is a name or value as a line shows it.
 func field(s string) string { return quote(capText(clean(s), maxField)) }
@@ -259,6 +263,8 @@ func build(t *Tree) *page {
 			}
 			if it.heading {
 				it.text = "# " + it.text
+			} else {
+				it.text = fence.TextLine(it.text) // never a control line's look-alike
 			}
 		}
 		kept = append(kept, it)
@@ -271,17 +277,22 @@ func build(t *Tree) *page {
 // value is a control's value as a line shows it.
 func value(nd Node, nodes []Node, i int) string {
 	switch nd.Role {
-	case rolePasswordText, roleEntry, roleText:
-		filled := clean(nd.Text) != ""
-		if nd.Filled != nil {
-			filled = filled || *nd.Filled
-		}
+	case rolePasswordText, roleEntry, roleText, roleComboBox, roleSpinButton, roleSlider:
+		// Any field that holds a value is judged first: a one-time code
+		// or a card's code is often a type=number field, a spin button.
 		if secretField(nd) {
+			filled := clean(nd.Text) != "" || nd.Value != nil
+			if nd.Filled != nil {
+				filled = filled || *nd.Filled
+			}
 			if filled {
 				return "[filled]"
 			}
 			return "[empty]"
 		}
+	}
+	switch nd.Role {
+	case rolePasswordText, roleEntry, roleText:
 		return field(nd.Text)
 	case roleComboBox:
 		// A <select>'s value is its selected option's name.
@@ -291,9 +302,6 @@ func value(nd Node, nodes []Node, i int) string {
 			}
 		}
 		if t := clean(nd.Text); t != "" {
-			if secretField(nd) {
-				return "[filled]"
-			}
 			return field(t)
 		}
 	case roleSlider, roleSpinButton, roleProgressBar:

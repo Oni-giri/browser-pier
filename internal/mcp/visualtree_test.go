@@ -34,6 +34,11 @@ func TestVisualSnapshotAndClickByRef(t *testing.T) {
 	if res.IsError || !strings.Contains(out, "<untrusted-content-") || !strings.Contains(out, "untrusted_content-1") || strings.Count(out, "</untrusted-content-") != 2 {
 		t.Fatalf("visual_snapshot: %s", out)
 	}
+	// The button's centre is (120, 210) on the 1440×900 screen: (96, 168)
+	// in the 1152×720 screenshot every MCP tool's coordinates are in.
+	if !strings.Contains(out, `button "Go`) || !strings.Contains(out, "@96,168") || strings.Contains(out, "@120,210") {
+		t.Fatalf("visual_snapshot's point isn't in screenshot pixels: %s", out)
+	}
 	ref := regexp.MustCompile(`(?m)^(v[a-z][a-z0-9]n[0-9]+) button`).FindStringSubmatch(out)
 	if ref == nil {
 		t.Fatalf("no ref in %s", out)
