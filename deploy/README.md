@@ -61,6 +61,26 @@ The code keeps a stranger who reaches a fresh server first from claiming it.
 Next:
 - **Settings:** set a **handoff PIN**. Handoff links ask for it by default, and agents can't open one while it's unset.
 - **Agents:** create a token per agent. Tokens can also be managed from the command line: `docker compose exec browserpier browserpier token create NAME`.
+- **On a public server:** turn on [two-step sign-in](#two-step-sign-in).
+
+## Two-step sign-in
+
+Optional, off until you turn it on: after the password, BrowserPier asks for a 6-digit code from an authenticator app on your phone (Google Authenticator, Aegis, 1Password, Bitwarden or any other app for time-based codes).
+
+- **Turning it on:** Settings → Admin account → Two-step sign-in → Turn on. Enter your password, scan the QR code (or type the key shown under it), and enter the app's code. Every other signed-in browser is signed out. You then see **ten recovery codes, once**: save them apart from your password. Each signs in once in place of a code.
+- **What it protects:** signing in to BrowserPier, and handoff links whose policy is **Full sign-in**, which ask for the admin sign-in. A browser already signed in isn't asked again.
+- **What it doesn't:** agent tokens (the API, CDP and MCP), and handoff links with the **Link + PIN** or **Link only** policy. Those never ask for a code.
+- **Limits:** five wrong codes end a sign-in attempt; five from one address in five minutes lock code entry there for five minutes; and at most ten wrong app codes a day from browsers that have never signed in, from everywhere together, after which only recovery codes and your usual browsers get in until the next day. A wrong code after a right password is logged as a warning: somebody knows your password, so change it.
+- **Turning it off, a new phone, new recovery codes:** Settings → Two-step sign-in → Manage, with your password and a code (or a recovery code).
+- **Lost the phone and the recovery codes:** reset it from the server, which needs no password, since whoever can run commands there already controls BrowserPier:
+
+  ```sh
+  docker compose exec browserpier browserpier 2fa reset
+  ```
+
+  The password alone signs in again at once; signed-in browsers stay signed in. `browserpier 2fa status` says whether it's on and how many recovery codes are left.
+
+Changing `BROWSERPIER_ADMIN_PASSWORD` resets the password but **not** two-step sign-in: use the command above for that. The app's secret is stored in the database as it is (the server needs it to compute codes), so keep `./data` as private as the rest of it.
 
 ## Firewall
 
@@ -247,4 +267,5 @@ To move one profile, use **Export** on its ⋯ menu instead. That gives an encry
 - **The turn service exits at once:** `BROWSERPIER_TURN_SECRET` is unset or shorter than 16 characters (`docker compose logs turn`).
 - **"Pool overlaps with other one on this address space":** `10.247.74.0/24` is taken on this host. In `.env`, set `BROWSERPIER_NET` to other first three numbers (say `10.247.75`) and `BROWSERPIER_TRUSTED_PROXIES` to match (`10.247.75.3`).
 - **"the browser container stopped, but Docker reported an error stopping it"** in the log, under rootless Podman on Ubuntu: AppArmor keeps Podman from stopping `pasta` when the last container stops. Browsers still stop and keep their logins; [CONTRIBUTING.md](../CONTRIBUTING.md#on-rootless-podman) has the one-line fix for the host.
+- **"the two-step sign-in state can't be read"** in the log, and sign-ins fail after the password: reset it with `docker compose exec browserpier browserpier 2fa reset`, then turn it on again.
 - **Handoff link says it needs HTTPS:** the phone opened it over plain HTTP from outside your network. Use Caddy, or open it on Tailscale.

@@ -27,6 +27,7 @@
 ## Testing an install
 
 - **Sign-in:** the app opens on Umbrel's login, then BrowserPier's: sign in with the password under BrowserPier → Info.
+- **Two-step sign-in:** BrowserPier's own (Settings → Admin account) works here too, off by default. Umbrel's login already fronts the UI, and umbrelOS has optional two-factor authentication of its own (umbrelOS Settings), which is the first one to turn on. If you turn BrowserPier's on and lose the phone and the recovery codes, reset it over SSH with `docker exec yakitori-browserpier_web_1 browserpier 2fa reset`. The app password under Info doesn't reset it: it only resets the password.
 - **Live views:** a browser's live view plays over the LAN (`http://umbrel.local:7436`) and over Tailscale (the Umbrel's 100.x address).
 - **Agents:** a token from the Agents page works on `/api`, `/cdp` and `/mcp` without an Umbrel login. A handoff link opens on a phone.
 - **AppArmor:** umbreld's log (Umbrel's system logs) shows `BrowserPier AppArmor: loaded the browserpier profile` after `Executing hook: …/pre-start`, and BrowserPier's log says `browser containers run under BrowserPier's AppArmor profile`; `sudo aa-status | grep browserpier` lists it, and `docker inspect -f '{{.AppArmorProfile}}' browserpier-<profile>` says `browserpier` for a running browser. After a reboot, the same.
