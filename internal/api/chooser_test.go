@@ -137,6 +137,27 @@ func TestChooserAnswerRefusesALinkInTheUploads(t *testing.T) {
 	if got := f.chosen(); len(got) != 0 {
 		t.Fatalf("a link reached the browser: %q", got)
 	}
+	// The uploads folder itself a link, even one that stays in the
+	// profile's files (to downloads): refused.
+	filesDir := f.m.Layout().FilesDir("google")
+	if err := os.MkdirAll(filepath.Join(filesDir, "downloads"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filesDir, "downloads", "dl.pdf"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("downloads", dir); err != nil {
+		t.Fatal(err)
+	}
+	if code := f.call(f.all, http.MethodPost, "/api/sessions/"+s.ID+"/chooser", `{"id": "c1", "files": ["dl.pdf"]}`, nil); code != http.StatusUnprocessableEntity {
+		t.Errorf("a linked uploads folder: %d", code)
+	}
+	if got := f.chosen(); len(got) != 0 {
+		t.Fatalf("a link reached the browser: %q", got)
+	}
 }
 
 func TestChooserAnswerIsInput(t *testing.T) {

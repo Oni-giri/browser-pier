@@ -337,6 +337,11 @@ func (c *chooser) uploadURIs(names []string, multiple bool) ([]string, error) {
 	case len(names) > 1 && !multiple:
 		return nil, &answerError{422, "this file chooser takes one file"}
 	}
+	// The folder itself must be a real one: a link there (to /profile,
+	// say) would make its files choosable.
+	if fi, err := os.Lstat(c.uploads); err != nil || !fi.IsDir() {
+		return nil, &answerError{422, "no uploaded files"}
+	}
 	root, err := os.OpenRoot(c.uploads)
 	if err != nil {
 		return nil, &answerError{422, "no uploaded files"}
@@ -449,6 +454,9 @@ func saveName(suggested string) string {
 // following a link: name, or name (2), (3)… before its extension when
 // taken. A link planted under the name counts as taken.
 func createSaveFile(dir, suggested string) (string, error) {
+	if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
+		return "", errors.New("the downloads folder isn't a folder")
+	}
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return "", err

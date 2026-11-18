@@ -336,6 +336,27 @@ func TestChooserAnswerChecks(t *testing.T) {
 	if err := c.answer("c9", []string{"report.pdf"}); !errors.Is(err, errNoChooser) {
 		t.Fatalf("an unknown id: %v", err)
 	}
+	// The uploads folder itself a link (to the profile, say): refused.
+	real := c.uploads
+	elsewhere := t.TempDir()
+	if err := os.WriteFile(filepath.Join(elsewhere, "Cookies"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c.uploads = filepath.Join(t.TempDir(), "uploads")
+	if err := os.Symlink(elsewhere, c.uploads); err != nil {
+		t.Fatal(err)
+	}
+	var ae *answerError
+	if err := c.answer("c1", []string{"Cookies"}); !errors.As(err, &ae) || ae.status != 422 {
+		t.Fatalf("a linked uploads folder: %v", err)
+	}
+	if _, err := createSaveFile(c.uploads, "x.txt"); err == nil {
+		t.Fatal("a save went into a linked folder")
+	}
+	c.uploads = real
+	if got := bus.got(); len(got) != 0 {
+		t.Fatalf("a linked folder's file reached the browser: %+v", got)
+	}
 	if err := c.answer("c1", []string{"report.pdf"}); err != nil {
 		t.Fatal(err)
 	}

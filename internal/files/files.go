@@ -83,6 +83,11 @@ func (s *Store) open(profile, sub string) (*os.Root, error) {
 		return nil, err
 	}
 	defer func() { _ = files.Close() }()
+	// Not even a link that stays inside (uploads -> downloads): the
+	// folder itself must be a real one, as the browser checks too.
+	if fi, err := files.Lstat(sub); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
+		return nil, ErrNotFound
+	}
 	root, err := files.OpenRoot(sub)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, ErrNotFound
