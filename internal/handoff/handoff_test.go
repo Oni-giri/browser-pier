@@ -929,7 +929,7 @@ func TestHandoffEndEmptiesTheClipboard(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t, profiles.PolicyLink, auth.WebOptions{})
 			h, _ := f.open("")
-			if err := f.m.TakeControl(h.SessionID); err != nil {
+			if err := f.m.TakeControl(h.SessionID, sessions.HandoffHolder(h.ID)); err != nil {
 				t.Fatal(err)
 			}
 			end(f, h)

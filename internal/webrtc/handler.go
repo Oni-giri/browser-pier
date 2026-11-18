@@ -104,11 +104,16 @@ func (h *Handler) ICE(w http.ResponseWriter, _ *http.Request, until time.Time, v
 }
 
 func (h *Handler) offer(w http.ResponseWriter, r *http.Request) {
-	h.Offer(w, r, r.PathValue("profile"), OfferOptions{})
+	s, _ := auth.SessionFromContext(r.Context())
+	h.Offer(w, r, r.PathValue("profile"), OfferOptions{Holder: sessions.AdminHolder(s.ID)})
 }
 
 // OfferOptions shape a live view.
 type OfferOptions struct {
+	// Holder names who this viewer is when it takes control (see
+	// sessions.Manager.TakeControl): the signed-in admin's browser or the
+	// handoff link. The file chooser routes answer only them (PROJ-184).
+	Holder string
 	// Control gives the viewer the mouse and keyboard from the start (a
 	// handoff link, once unlocked).
 	Control bool
@@ -139,11 +144,11 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 		http.Error(w, "the browser isn't running", http.StatusConflict)
 		return
 	}
-	vw := &viewer{h: h, session: s.ID, sock: h.m.Layout().ControlSocket(profile), allowed: o.Allowed}
+	vw := &viewer{h: h, session: s.ID, holder: o.Holder, sock: h.m.Layout().ControlSocket(profile), allowed: o.Allowed}
 	// A viewer promised control gets it or isn't connected: a page that
 	// thinks it drives while it only watches would send input into nothing.
 	if o.Control {
-		if err := h.m.TakeControl(s.ID); err != nil {
+		if err := h.m.TakeControl(s.ID, vw.holder); err != nil {
 			unwatch()
 			msg := "The browser isn't running."
 			switch {
@@ -188,6 +193,7 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 type viewer struct {
 	h       *Handler
 	session string
+	holder  string // who takes control through this viewer
 	sock    string
 
 	allowed func() bool // nil: always
@@ -258,7 +264,7 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 			say(map[string]any{"type": "control", "on": true})
 			return
 		}
-		err := v.h.m.TakeControl(v.session)
+		err := v.h.m.TakeControl(v.session, v.holder)
 		switch {
 		case errors.Is(err, sessions.ErrHumanDriving):
 			say(map[string]any{"type": "error", "msg": "Someone else has control."})
@@ -283,7 +289,7 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 		if v.control {
 			// Held until the input has reached the browser: a hand-back
 			// empties the clipboard only after it.
-			done, err = v.h.m.HumanInput(v.session)
+			done, err = v.h.m.HumanInput(v.session, v.holder)
 		}
 		if !v.control || err != nil {
 			v.control = false

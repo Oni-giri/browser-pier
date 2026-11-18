@@ -40,8 +40,11 @@ func TestSizesAndTimes(t *testing.T) {
 	}
 }
 
+// holder is who holds control in the rig.
+var holder = sessions.HandoffHolder("h1")
+
 // rig is a running session whose stand-in browser serves ctl, with a
-// person in control.
+// person (holder) in control.
 func rig(t *testing.T, ctl *http.ServeMux) (*sessions.Manager, sessions.Session) {
 	t.Helper()
 	ctx := context.Background()
@@ -70,7 +73,7 @@ func rig(t *testing.T, ctl *http.ServeMux) (*sessions.Manager, sessions.Session)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := m.TakeControl(s.ID); err != nil {
+	if err := m.TakeControl(s.ID, holder); err != nil {
 		t.Fatal(err)
 	}
 	return m, s
@@ -103,7 +106,7 @@ func TestUploadOver100MiB(t *testing.T) {
 		r := httptest.NewRequest(http.MethodPost, "/chooser/upload", &body)
 		r.Header.Set("Content-Type", mw.FormDataContentType())
 		w := httptest.NewRecorder()
-		p.Upload(w, r, s)
+		p.Upload(w, r, s, holder)
 		return w.Code
 	}
 	if code := send(4097); code != http.StatusRequestEntityTooLarge {
@@ -129,12 +132,102 @@ func TestShowOnABrowserWithoutThePortal(t *testing.T) {
 	p := New(m, files.New(m.Layout().FilesDir, 0, os.Getuid(), os.Getgid()), slog.New(slog.NewTextHandler(&logs, nil)))
 	for range 3 {
 		w := httptest.NewRecorder()
-		p.Show(w, httptest.NewRequest(http.MethodGet, "/chooser", nil), s)
+		p.Show(w, httptest.NewRequest(http.MethodGet, "/chooser", nil), s, holder)
 		if w.Code != http.StatusNoContent {
 			t.Fatalf("Show: %d %s", w.Code, w.Body)
 		}
 	}
 	if logs.Len() != 0 {
 		t.Fatalf("logged: %s", logs.String())
+	}
+}
+
+// TestOnlyTheHolderAnswers (PROJ-184): while one viewer holds control
+// (the handoff link's phone here), another (the admin's live view) can't
+// see, answer, cancel or upload to the chooser, and nothing it sends is
+// stored or reaches the browser. Once control changes hands, it is the
+// reverse.
+func TestOnlyTheHolderAnswers(t *testing.T) {
+	ctl := http.NewServeMux()
+	var answered atomic.Int32
+	ctl.HandleFunc("POST /chooser/restart", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	ctl.HandleFunc("POST /chooser/{id}", func(w http.ResponseWriter, _ *http.Request) { answered.Add(1); w.WriteHeader(http.StatusNoContent) })
+	ctl.HandleFunc("GET /chooser", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"choosers":[{"id":"c1","multiple":false,"left_ms":60000}]}`)
+	})
+	m, s := rig(t, ctl)
+	fs := files.New(m.Layout().FilesDir, 0, os.Getuid(), os.Getgid())
+	if _, _, err := fs.Upload(s.Profile, "cv.pdf", bytes.NewReader([]byte("%PDF")), 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	p := New(m, fs, slog.New(slog.DiscardHandler))
+	phone, admin := holder, sessions.AdminHolder("abc")
+
+	show := func(who string) int {
+		w := httptest.NewRecorder()
+		p.Show(w, httptest.NewRequest(http.MethodGet, "/chooser", nil), s, who)
+		return w.Code
+	}
+	answer := func(who, form string) int {
+		r := httptest.NewRequest(http.MethodPost, "/chooser", bytes.NewReader([]byte(form)))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		p.Answer(w, r, s, who)
+		return w.Code
+	}
+	upload := func(who, name string) int {
+		var body bytes.Buffer
+		mw := multipart.NewWriter(&body)
+		_ = mw.WriteField("id", "c1")
+		part, _ := mw.CreateFormFile("file", name)
+		_, _ = part.Write([]byte("hello"))
+		_ = mw.Close()
+		r := httptest.NewRequest(http.MethodPost, "/chooser/upload", &body)
+		r.Header.Set("Content-Type", mw.FormDataContentType())
+		w := httptest.NewRecorder()
+		p.Upload(w, r, s, who)
+		return w.Code
+	}
+	refused := func(who, from string) {
+		t.Helper()
+		for what, code := range map[string]int{
+			"show":   show(who),
+			"answer": answer(who, "id=c1&file=cv.pdf"),
+			"cancel": answer(who, "id=c1&cancel=1"),
+			"upload": upload(who, from+".txt"),
+		} {
+			if code != http.StatusConflict {
+				t.Errorf("%s from %q, not in control: %d, want 409", what, who, code)
+			}
+		}
+		if answered.Load() != 0 {
+			t.Fatalf("%q, not in control, answered the chooser", who)
+		}
+		if _, _, err := fs.Uploaded(s.Profile, from+".txt"); err == nil {
+			t.Fatalf("%q, not in control, stored an upload", who)
+		}
+	}
+
+	// The phone holds control: the admin's live view is refused.
+	refused(admin, "admin")
+	refused("", "nobody")
+	if code := show(phone); code != http.StatusOK {
+		t.Fatalf("the holder's show: %d", code)
+	}
+
+	// Control changes hands: now the phone is refused, the admin answers.
+	m.ReleaseControl(s.ID)
+	if err := m.TakeControl(s.ID, admin); err != nil {
+		t.Fatal(err)
+	}
+	refused(phone, "phone")
+	if code := show(admin); code != http.StatusOK {
+		t.Fatalf("the admin's show: %d", code)
+	}
+	if code := answer(admin, "id=c1&file=cv.pdf"); code != http.StatusNoContent || answered.Load() != 1 {
+		t.Fatalf("the admin's answer: %d, %d answers", code, answered.Load())
+	}
+	if code := upload(admin, "admin.txt"); code != http.StatusNoContent || answered.Load() != 2 {
+		t.Fatalf("the admin's upload: %d, %d answers", code, answered.Load())
 	}
 }

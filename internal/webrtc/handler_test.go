@@ -73,7 +73,7 @@ func offer(h *Handler, o OfferOptions, body string) *httptest.ResponseRecorder {
 
 func TestOfferWithControlThatFailsToConnectGivesControlBack(t *testing.T) {
 	h, m, _ := offerFixture(t)
-	if rec := offer(h, OfferOptions{Control: true}, `{"sdp": "not an offer"}`); rec.Code != http.StatusBadRequest {
+	if rec := offer(h, OfferOptions{Control: true, Holder: "viewer"}, `{"sdp": "not an offer"}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad SDP: %d %s", rec.Code, rec.Body)
 	}
 	if s, _ := m.Live("google"); s.HumanControl {
@@ -83,13 +83,34 @@ func TestOfferWithControlThatFailsToConnectGivesControlBack(t *testing.T) {
 
 func TestOfferWithControlIsRefusedWhileSomeoneElseHasIt(t *testing.T) {
 	h, m, s := offerFixture(t)
-	if err := m.TakeControl(s.ID); err != nil {
+	if err := m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatal(err)
 	}
-	if rec := offer(h, OfferOptions{Control: true}, `{"sdp": "not an offer"}`); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "Someone else") {
+	if rec := offer(h, OfferOptions{Control: true, Holder: "viewer"}, `{"sdp": "not an offer"}`); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "Someone else") {
 		t.Fatalf("control while someone else has it: %d %s", rec.Code, rec.Body)
 	}
 	if s, _ := m.Live("google"); !s.HumanControl || s.Viewers != 0 {
 		t.Fatalf("the refused viewer changed control or still watches: %+v", s)
+	}
+}
+
+// TestViewerTakesControlAsItsHolder (PROJ-184): Take control from a live
+// view records that view's holder (the signed-in admin's, or the
+// handoff link's), so the file chooser routes answer it and no other.
+func TestViewerTakesControlAsItsHolder(t *testing.T) {
+	h, m, s := offerFixture(t)
+	admin := sessions.AdminHolder("abc")
+	v := &viewer{h: h, session: s.ID, holder: admin, sock: m.Layout().ControlSocket("google")}
+	var said []string
+	v.message([]byte(`{"type":"take"}`), func(m string) { said = append(said, m) })
+	if len(said) != 1 || !strings.Contains(said[0], `"on":true`) {
+		t.Fatalf("take: %q", said)
+	}
+	if !m.ControlledBy(s.ID, admin) || m.ControlledBy(s.ID, sessions.HandoffHolder("h1")) {
+		t.Fatal("control isn't the viewer's holder's alone")
+	}
+	v.message([]byte(`{"type":"release"}`), func(string) {})
+	if m.ControlledBy(s.ID, admin) {
+		t.Fatal("still in control after release")
 	}
 }

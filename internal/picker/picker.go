@@ -7,9 +7,10 @@
 // answers it only with files from the profile's uploads. No CDP is used:
 // the page learns nothing it wouldn't from a desktop dialog. The routes
 // that mount these handlers (internal/ui for the signed-in admin,
-// internal/handoff for a handoff link's holder) find the session and say
-// who may reach it; the handlers here check that a person holds control
-// of it, as the live view's input does.
+// internal/handoff for a handoff link's holder) find the session, say
+// who may reach it and who is asking (a sessions holder id); the handlers
+// here check that the one asking holds control of it (PROJ-184), as the
+// live view's input does.
 package picker
 
 import (
@@ -78,14 +79,15 @@ type modal struct {
 type upload struct{ Name, Size, Ago string }
 
 // Show answers the modal for the oldest chooser open in s's browser, or
-// 204 when none is (or the browser has no portal). It doesn't count as
-// the person using the browser: the page asks every second.
-func (p *Picker) Show(w http.ResponseWriter, r *http.Request, s sessions.Session) {
+// 204 when none is (or the browser has no portal), to holder if they hold
+// control. It doesn't count as the person using the browser: the page
+// asks every second.
+func (p *Picker) Show(w http.ResponseWriter, r *http.Request, s sessions.Session, holder string) {
 	if p == nil {
 		http.Error(w, "file choosers can't be answered here", http.StatusServiceUnavailable)
 		return
 	}
-	if !p.m.HumanControl(s.ID) {
+	if !p.m.ControlledBy(s.ID, holder) {
 		http.Error(w, errNoControl, http.StatusConflict)
 		return
 	}
@@ -123,8 +125,8 @@ func (p *Picker) Show(w http.ResponseWriter, r *http.Request, s sessions.Session
 
 // Answer answers a chooser in s's browser with uploads the person picked
 // (form: id, file…) or cancels it (form: id, cancel). It is the person's
-// input: refused unless they hold control.
-func (p *Picker) Answer(w http.ResponseWriter, r *http.Request, s sessions.Session) {
+// input: refused unless holder holds control.
+func (p *Picker) Answer(w http.ResponseWriter, r *http.Request, s sessions.Session, holder string) {
 	if p == nil {
 		http.Error(w, "file choosers can't be answered here", http.StatusServiceUnavailable)
 		return
@@ -148,7 +150,7 @@ func (p *Picker) Answer(w http.ResponseWriter, r *http.Request, s sessions.Sessi
 	}
 	// done once the answer has reached the browser: a hand-back waits
 	// for it before emptying the clipboard (PROJ-194).
-	done, err := p.m.HumanInput(s.ID)
+	done, err := p.m.HumanInput(s.ID, holder)
 	if err != nil {
 		http.Error(w, errNoControl, http.StatusConflict)
 		return
@@ -171,14 +173,15 @@ func (p *Picker) Answer(w http.ResponseWriter, r *http.Request, s sessions.Sessi
 
 // Upload stores a file from the person's device in the profile's uploads
 // (multipart: id, then file), through files.Upload with its name rules
-// and caps, then answers chooser id with it.
-func (p *Picker) Upload(w http.ResponseWriter, r *http.Request, s sessions.Session) {
+// and caps, then answers chooser id with it. Refused unless holder holds
+// control.
+func (p *Picker) Upload(w http.ResponseWriter, r *http.Request, s sessions.Session, holder string) {
 	if p == nil {
 		http.Error(w, "file choosers can't be answered here", http.StatusServiceUnavailable)
 		return
 	}
 	// Before reading what may be 100 MiB: is this person in control?
-	if !p.m.HumanControl(s.ID) {
+	if !p.m.ControlledBy(s.ID, holder) {
 		http.Error(w, errNoControl, http.StatusConflict)
 		return
 	}
@@ -239,7 +242,7 @@ func (p *Picker) Upload(w http.ResponseWriter, r *http.Request, s sessions.Sessi
 			return
 		}
 		// Still theirs after the upload, which can take a while?
-		done, err := p.m.HumanInput(s.ID)
+		done, err := p.m.HumanInput(s.ID, holder)
 		if err != nil {
 			http.Error(w, "You no longer have control. The file is in the uploads.", http.StatusConflict)
 			return

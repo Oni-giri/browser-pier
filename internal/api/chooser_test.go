@@ -170,7 +170,7 @@ func TestChooserAnswerIsInput(t *testing.T) {
 	s := f.start(f.all, "google", "visual")
 	f.putUpload("google", "report.pdf", "%PDF")
 	f.openChooser(`[{"id":"c1","multiple":false,"accept":[]}]`)
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatal(err)
 	}
 	var out map[string]string
@@ -189,7 +189,7 @@ func TestChooserAnswerIsInput(t *testing.T) {
 		t.Fatalf("after hand-back: %d", code)
 	}
 	// It is input: a person can't take control just after it.
-	if err := f.m.TakeControl(s.ID); err == nil {
+	if err := f.m.TakeControl(s.ID, "person"); err == nil {
 		t.Fatal("a person took control right after the agent answered a chooser")
 	}
 	if got := f.chosen(); len(got) != 1 {
@@ -208,7 +208,7 @@ func TestChooserListDoesntCountAsDriving(t *testing.T) {
 		}
 	}
 	// No AgentInput: a person may take control at once.
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatalf("listing choosers kept a person out: %v", err)
 	}
 }

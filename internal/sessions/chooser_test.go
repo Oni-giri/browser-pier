@@ -95,14 +95,14 @@ func TestChooserTimerRestartsWhenControlChangesHands(t *testing.T) {
 	fc := &fakeChoosers{}
 	f.rt.Control = fc.mux()
 	s := f.start(f.m)
-	if f.m.HumanControl(s.ID) {
+	if f.m.ControlledBy(s.ID, "person") {
 		t.Fatal("a person has control from the start")
 	}
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatal(err)
 	}
 	fc.waitRestarts(t, 1)
-	if !f.m.HumanControl(s.ID) {
+	if !f.m.ControlledBy(s.ID, "person") {
 		t.Fatal("no person has control after Take control")
 	}
 	f.m.ReleaseControl(s.ID)
@@ -116,7 +116,7 @@ func TestChooserTimerRestartsWhenControlChangesHands(t *testing.T) {
 		t.Fatal(err)
 	}
 	fc.waitRestarts(t, 4)
-	if f.m.HumanControl(s.ID) {
+	if f.m.ControlledBy(s.ID, "person") {
 		t.Fatal("a person has control after hand-back")
 	}
 }

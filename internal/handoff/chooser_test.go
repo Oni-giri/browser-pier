@@ -17,6 +17,7 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
+	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
 // fakeChoosers is every browser's file chooser portal: one single-file
@@ -116,7 +117,7 @@ func TestHandoffChooserIsTheLinksOwn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, otherToken, err := f.svc.Create(ctx, gs.ID, "research-bot", FileUpload, "", "")
+	oh, otherToken, err := f.svc.Create(ctx, gs.ID, "research-bot", FileUpload, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,10 +134,10 @@ func TestHandoffChooserIsTheLinksOwn(t *testing.T) {
 	if p := f.do(phone, "POST", base, url.Values{"id": {"c1"}, "file": {"cv.pdf"}}, nil); p.code != http.StatusConflict {
 		t.Fatalf("an answer without control: %d %s", p.code, p.body)
 	}
-	if err := f.m.TakeControl(h.SessionID); err != nil {
+	if err := f.m.TakeControl(h.SessionID, sessions.HandoffHolder(h.ID)); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.m.TakeControl(gs.ID); err != nil {
+	if err := f.m.TakeControl(gs.ID, sessions.HandoffHolder(oh.ID)); err != nil {
 		t.Fatal(err)
 	}
 	p := f.do(phone, "GET", base, nil, nil)
@@ -204,7 +205,7 @@ func TestHandoffChooserIsTheLinksOwn(t *testing.T) {
 	if _, err := f.svc.Finish(ctx, hh, Done, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.m.TakeControl(h.SessionID); err != nil { // someone in the live view now
+	if err := f.m.TakeControl(h.SessionID, sessions.AdminHolder("admin")); err != nil { // someone in the live view now
 		t.Fatal(err)
 	}
 	for _, p := range []reply{
@@ -234,7 +235,7 @@ func TestHandoffChooserExpired(t *testing.T) {
 	h, token := f.open("")
 	phone := browser()
 	f.openLink(phone, token)
-	if err := f.m.TakeControl(h.SessionID); err != nil {
+	if err := f.m.TakeControl(h.SessionID, sessions.HandoffHolder(h.ID)); err != nil {
 		t.Fatal(err)
 	}
 	if p := f.do(phone, "GET", "/h/"+token+"/chooser", nil, nil); p.code != http.StatusOK {
@@ -247,5 +248,51 @@ func TestHandoffChooserExpired(t *testing.T) {
 	}
 	if got := f.answered("google"); len(got) != 0 {
 		t.Fatalf("answered after expiry: %q", got)
+	}
+}
+
+// TestHandoffChooserOnlyWhileTheLinkHasControl (PROJ-184): while the
+// admin has control from the live view, the link's holder can't see,
+// answer or upload to the chooser, though the link is open and unlocked;
+// once the link has control again, it can.
+func TestHandoffChooserOnlyWhileTheLinkHasControl(t *testing.T) {
+	f := newFixture(t, profiles.PolicyLink, auth.WebOptions{})
+	h, token := f.open("")
+	f.putUpload("google", "cv.pdf", "%PDF google")
+	phone := browser()
+	f.openLink(phone, token)
+	base := "/h/" + token + "/chooser"
+	if err := f.m.TakeControl(h.SessionID, sessions.AdminHolder("admin")); err != nil {
+		t.Fatal(err)
+	}
+	for what, p := range map[string]reply{
+		"show":   f.do(phone, "GET", base, nil, nil),
+		"answer": f.do(phone, "POST", base, url.Values{"id": {"c1"}, "file": {"cv.pdf"}}, nil),
+		"cancel": f.do(phone, "POST", base, url.Values{"id": {"c1"}, "cancel": {"1"}}, nil),
+		"upload": f.upload(phone, base+"/upload", "c1", "scan.jpg", []byte("jpeg"), nil),
+	} {
+		if p.code != http.StatusConflict {
+			t.Errorf("%s while the admin has control: %d %s", what, p.code, p.body)
+		}
+	}
+	if got := f.answered("google"); len(got) != 0 {
+		t.Fatalf("the link answered while the admin had control: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(f.m.Layout().FilesDir("google"), "uploads", "scan.jpg")); !os.IsNotExist(err) {
+		t.Fatalf("the link uploaded while the admin had control: %v", err)
+	}
+
+	f.m.ReleaseControl(h.SessionID)
+	if err := f.m.TakeControl(h.SessionID, sessions.HandoffHolder(h.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if p := f.do(phone, "GET", base, nil, nil); p.code != http.StatusOK || !strings.Contains(p.body, "cv.pdf") {
+		t.Fatalf("the link's own modal: %d %s", p.code, p.body)
+	}
+	if p := f.do(phone, "POST", base, url.Values{"id": {"c1"}, "file": {"cv.pdf"}}, nil); p.code != http.StatusNoContent {
+		t.Fatalf("the link's answer: %d %s", p.code, p.body)
+	}
+	if got := f.answered("google"); len(got) != 1 || got[0] != `{"files":["cv.pdf"]}` {
+		t.Fatalf("the browser got %q", got)
 	}
 }

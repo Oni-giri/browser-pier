@@ -2,6 +2,7 @@ package sessions
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sync"
 	"time"
@@ -76,9 +77,17 @@ func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, f
 // never broken off: Take control is refused while it runs. Meanwhile agents can only watch: their input and new CDP
 // connections are refused. During a handoff (Needs help) the agent is
 // paused, so it always succeeds.
-func (m *Manager) TakeControl(id string) error {
+//
+// holder names who takes it, opaque here: the live view's viewer passes
+// the signed-in admin's or the handoff link's (PROJ-184), and what only
+// the person in control may do (HumanInput, ControlledBy) checks it. An
+// empty holder can't take control.
+func (m *Manager) TakeControl(id, holder string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if holder == "" {
+		return errors.New("sessions: TakeControl needs a holder")
+	}
 	l := m.findLocked(id)
 	if l == nil || (l.sess.State != Running && l.sess.State != NeedsHelp) {
 		return ErrNotRunning
@@ -108,7 +117,7 @@ func (m *Manager) TakeControl(id string) error {
 	if l.human {
 		return ErrHumanDriving // one person at a time
 	}
-	l.human = true
+	l.human, l.holder = true, holder
 	// Recording stops here, under m.mu and before anything else: no
 	// fragment the browser sends from now on is kept, and HumanInput,
 	// which the live view needs before it forwards any input, can't see
@@ -139,14 +148,15 @@ func (m *Manager) TakeControl(id string) error {
 }
 
 // HumanInput records that the person in control used the browser. It
-// fails unless they hold control. Call done once the input has reached
-// the browser: ReleaseControl waits for input under way, so none lands
-// (text put on the clipboard, say) after it has emptied the clipboard.
-func (m *Manager) HumanInput(id string) (done func(), err error) {
+// fails unless holder is the one holding control. Call done once the
+// input has reached the browser: ReleaseControl waits for input under
+// way, so none lands (text put on the clipboard, say) after it has
+// emptied the clipboard.
+func (m *Manager) HumanInput(id, holder string) (done func(), err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.findLocked(id)
-	if l == nil || !l.human || l.releasing || (l.sess.State != Running && l.sess.State != NeedsHelp) {
+	if l == nil || l.releasing || !l.controlledByLocked(holder) {
 		return nil, ErrNotRunning
 	}
 	l.lastActivity = m.now()
@@ -205,7 +215,7 @@ func (m *Manager) ReleaseControl(id string) {
 		// instead, runStop empties it before agents are let back in.
 		l.clipboardLeft = true
 	}
-	l.human, l.releasing = false, false
+	l.human, l.holder, l.releasing = false, "", false
 	l.lastActivity = m.now()
 	m.restartChoosers(l.sess.Profile)
 	// Only now, the clipboard emptied and agents let back in, may the
@@ -250,4 +260,35 @@ func (m *Manager) Watch(id string) (release func(), err error) {
 			l.lastActivity = m.now()
 		}
 	}, nil
+}
+
+// ControlledBy reports whether holder holds control of the session (the
+// live view's Take control, or a handoff link's), without counting as
+// their use of it.
+func (m *Manager) ControlledBy(id, holder string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l := m.findLocked(id)
+	return l != nil && l.controlledByLocked(holder)
+}
+
+func (l *live) controlledByLocked(holder string) bool {
+	return l.human && holder != "" && l.holder == holder && (l.sess.State == Running || l.sess.State == NeedsHelp)
+}
+
+// AdminHolder is the holder of control for the admin's live view in one
+// signed-in browser (auth.AdminSession.ID, a hash, never the cookie).
+func AdminHolder(adminSession string) string {
+	if adminSession == "" {
+		return ""
+	}
+	return "admin " + adminSession
+}
+
+// HandoffHolder is the holder of control for a handoff link's holder.
+func HandoffHolder(handoff string) string {
+	if handoff == "" {
+		return ""
+	}
+	return "handoff " + handoff
 }

@@ -99,13 +99,3 @@ func (m *Manager) restartChoosers(profile string) {
 		}
 	}()
 }
-
-// HumanControl reports whether a person holds control of the session (the
-// live view's Take control, or a handoff link's), without counting as
-// their use of it.
-func (m *Manager) HumanControl(id string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	l := m.findLocked(id)
-	return l != nil && l.human && (l.sess.State == Running || l.sess.State == NeedsHelp)
-}

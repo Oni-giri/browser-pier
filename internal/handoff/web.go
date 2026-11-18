@@ -364,6 +364,7 @@ func (w *Web) offer(rw http.ResponseWriter, r *http.Request) {
 	w.svc.replaceViewers(r.Context(), h)
 	id := h.ID
 	w.live.Offer(rw, r, h.Profile, webrtc.OfferOptions{
+		Holder:  sessions.HandoffHolder(id),
 		Control: true,
 		// Only while the handoff is open: hand-back ends this viewer's control.
 		Allowed: func() bool {
@@ -374,12 +375,13 @@ func (w *Web) offer(rw http.ResponseWriter, r *http.Request) {
 	})
 }
 
-type chooserRoute = func(http.ResponseWriter, *http.Request, sessions.Session)
+type chooserRoute = func(http.ResponseWriter, *http.Request, sessions.Session, string)
 
 // chooser serves the handoff page's file chooser routes (PROJ-181): only
 // to the browser holding the link, only while it is open, and only for
 // the link's own session, so its profile's uploads and nothing else. The
-// picker checks that a person has control of it.
+// picker checks that the link holds control of it, not the admin's live
+// view (PROJ-184).
 func (w *Web) chooser(route func(*picker.Picker) chooserRoute) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		h, err := w.svc.ByToken(r.Context(), r.PathValue("token"))
@@ -392,7 +394,7 @@ func (w *Web) chooser(route func(*picker.Picker) chooserRoute) http.HandlerFunc 
 			http.Error(rw, "The browser isn't running.", http.StatusConflict)
 			return
 		}
-		route(w.picker)(rw, r, s)
+		route(w.picker)(rw, r, s, sessions.HandoffHolder(h.ID))
 	}
 }
 

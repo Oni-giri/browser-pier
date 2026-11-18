@@ -24,7 +24,7 @@ func TestTakeAndReleaseControl(t *testing.T) {
 		t.Fatal(err)
 	}
 	done()
-	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrAgentDriving) {
+	if err := f.m.TakeControl(s.ID, "person"); !errors.Is(err, ErrAgentDriving) {
 		t.Fatalf("take while the agent clicks = %v", err)
 	}
 	advance(agentQuiet + time.Second)
@@ -33,21 +33,21 @@ func TestTakeAndReleaseControl(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrAgentDriving) {
+	if err := f.m.TakeControl(s.ID, "person"); !errors.Is(err, ErrAgentDriving) {
 		t.Fatalf("take while an agent is connected = %v", err)
 	}
 	release()
 
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := f.m.Live("google"); !got.HumanControl {
 		t.Fatal("HumanControl not shown")
 	}
-	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrHumanDriving) {
+	if err := f.m.TakeControl(s.ID, "person"); !errors.Is(err, ErrHumanDriving) {
 		t.Fatalf("a second person taking control = %v, want ErrHumanDriving", err)
 	}
-	if done, err := f.m.HumanInput(s.ID); err != nil {
+	if done, err := f.m.HumanInput(s.ID, "person"); err != nil {
 		t.Fatal(err)
 	} else {
 		done()
@@ -60,13 +60,58 @@ func TestTakeAndReleaseControl(t *testing.T) {
 		t.Fatalf("CDP while a person drives = %v", err)
 	}
 	f.m.ReleaseControl(s.ID)
-	if _, err := f.m.HumanInput(s.ID); !errors.Is(err, ErrNotRunning) {
+	if _, err := f.m.HumanInput(s.ID, "person"); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("human input after release = %v", err)
 	}
 	if _, done, err := f.m.AgentInput(context.Background(), s.ID); err != nil {
 		t.Fatalf("agent input after hand-back = %v", err)
 	} else {
 		done()
+	}
+}
+
+// TestControlHasOneHolder (PROJ-184): control belongs to the holder that
+// took it. Another holder (the admin's live view while a handoff link
+// drives, or the reverse) neither counts as in control nor can use it,
+// and once it is handed back nobody holds it.
+func TestControlHasOneHolder(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	phone, admin := HandoffHolder("h1"), AdminHolder("abc")
+	if err := f.m.TakeControl(s.ID, ""); err == nil {
+		t.Fatal("control taken with no holder")
+	}
+	if err := f.m.TakeControl(s.ID, phone); err != nil {
+		t.Fatal(err)
+	}
+	if !f.m.ControlledBy(s.ID, phone) {
+		t.Fatal("the holder isn't in control")
+	}
+	if done, err := f.m.HumanInput(s.ID, phone); err != nil {
+		t.Fatal("the holder isn't in control")
+	} else {
+		done()
+	}
+	for _, other := range []string{admin, "", AdminHolder(""), HandoffHolder("h2")} {
+		if f.m.ControlledBy(s.ID, other) {
+			t.Fatalf("%q counts as in control while %q holds it", other, phone)
+		}
+		if _, err := f.m.HumanInput(s.ID, other); !errors.Is(err, ErrNotRunning) {
+			t.Fatalf("input from %q = %v, want ErrNotRunning", other, err)
+		}
+	}
+	if err := f.m.TakeControl(s.ID, admin); !errors.Is(err, ErrHumanDriving) {
+		t.Fatalf("the admin taking control from the phone = %v", err)
+	}
+	f.m.ReleaseControl(s.ID)
+	if f.m.ControlledBy(s.ID, phone) {
+		t.Fatal("still in control after hand-back")
+	}
+	if err := f.m.TakeControl(s.ID, admin); err != nil {
+		t.Fatal(err)
+	}
+	if !f.m.ControlledBy(s.ID, admin) || f.m.ControlledBy(s.ID, phone) {
+		t.Fatal("control didn't move to the admin alone")
 	}
 }
 
@@ -122,16 +167,16 @@ func TestLongInputKeepsTheAgentDriving(t *testing.T) {
 		t.Fatal(err)
 	}
 	advance(takeOverAfter - time.Second)
-	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrAgentDriving) {
+	if err := f.m.TakeControl(s.ID, "person"); !errors.Is(err, ErrAgentDriving) {
 		t.Fatalf("take while the agent types = %v", err)
 	}
 	done()
 	advance(agentQuiet - time.Second)
-	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrAgentDriving) {
+	if err := f.m.TakeControl(s.ID, "person"); !errors.Is(err, ErrAgentDriving) {
 		t.Fatalf("take %v after the typing ended = %v", agentQuiet-time.Second, err)
 	}
 	advance(2 * time.Second)
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatalf("take after the quiet = %v", err)
 	}
 }
@@ -169,7 +214,7 @@ func TestTakeControlBreaksOffALongInput(t *testing.T) {
 	}
 	advance(takeOverAfter)
 	took := make(chan error, 1)
-	go func() { took <- f.m.TakeControl(s.ID) }()
+	go func() { took <- f.m.TakeControl(s.ID, "person") }()
 	select {
 	case <-ctx.Done():
 		if !errors.Is(context.Cause(ctx), ErrTookControl) {
@@ -216,7 +261,7 @@ func TestTakeControlInAHandoffWaitsForInput(t *testing.T) {
 	go func() { _, _ = f.m.SetNeedsHelp(s.ID, true) }()
 	<-ctx.Done()
 	took := make(chan error, 1)
-	go func() { took <- f.m.TakeControl(s.ID) }()
+	go func() { took <- f.m.TakeControl(s.ID, "person") }()
 	select {
 	case err := <-took:
 		t.Fatalf("Take control returned (%v) while the input was still under way", err)
@@ -359,7 +404,7 @@ func TestReleaseControlEmptiesTheClipboardFirst(t *testing.T) {
 		} else {
 			e.pageLease = err
 		}
-		if done, err := f.m.HumanInput(id); err == nil {
+		if done, err := f.m.HumanInput(id, "person"); err == nil {
 			done()
 		} else {
 			e.humanInput = err
@@ -380,7 +425,7 @@ func TestReleaseControlEmptiesTheClipboardFirst(t *testing.T) {
 	id = s.ID
 	take := func() {
 		t.Helper()
-		if err := f.m.TakeControl(s.ID); err != nil {
+		if err := f.m.TakeControl(s.ID, "person"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -409,7 +454,7 @@ func TestReleaseControlEmptiesTheClipboardFirst(t *testing.T) {
 
 	// The person's input under way is waited for.
 	take()
-	done, err := f.m.HumanInput(s.ID)
+	done, err := f.m.HumanInput(s.ID, "person")
 	if err != nil {
 		t.Fatal(err)
 	}

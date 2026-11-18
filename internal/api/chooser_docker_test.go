@@ -26,6 +26,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/browsertest"
 	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
+	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
 // chooserRig is a Visual-mode browser on the chooser page (PROJ-152).
@@ -477,7 +478,7 @@ func TestChooserDuringHandoff(t *testing.T) {
 	if code, _ := person(http.MethodGet, "", "", nil); code != http.StatusSeeOther {
 		t.Fatalf("opening the link: %d", code)
 	}
-	if err := c.a.m.TakeControl(c.id); err != nil {
+	if err := c.a.m.TakeControl(c.id, sessions.HandoffHolder(h.ID)); err != nil {
 		t.Fatal(err)
 	}
 	if code, body := person(http.MethodGet, "/chooser", "", nil); code != http.StatusOK || !strings.Contains(body, `value="cv.pdf"`) || !strings.Contains(body, fmt.Sprintf(`data-id="%s"`, ch.ID)) {

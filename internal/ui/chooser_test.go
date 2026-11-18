@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
 // fakeChooser is the browser's file chooser portal: open is what GET
@@ -133,7 +135,7 @@ func TestLiveViewChooser(t *testing.T) {
 		t.Fatalf("uploaded without control: %v", err)
 	}
 
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, f.holder); err != nil {
 		t.Fatal(err)
 	}
 	r := f.get(base)
@@ -209,6 +211,58 @@ func TestLiveViewChooser(t *testing.T) {
 	}
 }
 
+// TestLiveViewChooserOnlyForTheHolder (PROJ-184): while a handoff link's
+// holder has control, the admin's live view can't see, answer or upload
+// to the chooser, and nothing it sends is stored or reaches the browser;
+// nor can another of the admin's signed-in browsers while this one has
+// it.
+func TestLiveViewChooserOnlyForTheHolder(t *testing.T) {
+	f := newFixture(t)
+	f.profile("google")
+	s, _, err := f.m.Start(context.Background(), "google", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.choosers.set(`[{"id":"c1","multiple":false,"accept":[],"left_ms":300000}]`)
+	f.putUpload("google", "cv.pdf", "%PDF cv")
+	base := "/profiles/google/chooser"
+	refused := func(why string) {
+		t.Helper()
+		want(t, f.get(base), http.StatusConflict, "Take control")
+		want(t, f.post(base, url.Values{"id": {"c1"}, "file": {"cv.pdf"}}), http.StatusConflict)
+		want(t, f.post(base, url.Values{"id": {"c1"}, "cancel": {"1"}}), http.StatusConflict)
+		want(t, f.uploadFrom(base+"/upload", "c1", "x.pdf", []byte("x")), http.StatusConflict)
+		if got := f.choosers.got(); len(got) != 0 {
+			t.Fatalf("answered %s: %q", why, got)
+		}
+		if _, err := os.Stat(filepath.Join(f.m.Layout().FilesDir("google"), "uploads", "x.pdf")); !os.IsNotExist(err) {
+			t.Fatalf("uploaded %s: %v", why, err)
+		}
+	}
+
+	// Another of the admin's browsers drives, then the link's phone.
+	if err := f.m.TakeControl(s.ID, sessions.AdminHolder("another signed-in browser")); err != nil {
+		t.Fatal(err)
+	}
+	refused("while another signed-in browser has control")
+	f.m.ReleaseControl(s.ID)
+	if err := f.m.TakeControl(s.ID, sessions.HandoffHolder("h1")); err != nil {
+		t.Fatal(err)
+	}
+	refused("while the handoff link has control")
+
+	// This browser takes control: it answers.
+	f.m.ReleaseControl(s.ID)
+	if err := f.m.TakeControl(s.ID, f.holder); err != nil {
+		t.Fatal(err)
+	}
+	want(t, f.get(base), http.StatusOK, `data-id="c1"`)
+	want(t, f.post(base, url.Values{"id": {"c1"}, "file": {"cv.pdf"}}), http.StatusNoContent)
+	if got := f.choosers.got(); len(got) != 1 || got[0] != filesJSON("cv.pdf") {
+		t.Fatalf("the browser got %q", got)
+	}
+}
+
 // An upload names a chooser that is open, or nothing is stored.
 func TestChooserUploadNeedsAnOpenChooser(t *testing.T) {
 	f := newFixture(t)
@@ -217,7 +271,7 @@ func TestChooserUploadNeedsAnOpenChooser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, f.holder); err != nil {
 		t.Fatal(err)
 	}
 	f.choosers.set(`[{"id":"c1","multiple":false,"accept":[],"left_ms":300000}]`)

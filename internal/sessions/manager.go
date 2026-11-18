@@ -181,8 +181,10 @@ type live struct {
 	holds int
 	// generation changes each time a person takes the browser.
 	generation uint64
-	// human is set while a person has control from the live view.
-	human bool
+	// human is set while a person has control from the live view, and
+	// holder names who: the opaque id TakeControl was given (PROJ-184).
+	human  bool
+	holder string
 	// releasing is set while ReleaseControl empties the clipboard, before
 	// human is cleared; humanInputs counts the person's inputs under way
 	// (HumanInput), which it waits for first.

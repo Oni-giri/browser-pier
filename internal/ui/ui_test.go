@@ -45,8 +45,10 @@ type fixture struct {
 	picker     *picker.Picker
 	// choosers is the browser's file chooser portal (chooser_test.go).
 	choosers *fakeChooser
-	ram      int
-	free     int64 // what the host has available, for HostFree
+	// holder is the signed-in client's holder of control (PROJ-184).
+	holder string
+	ram    int
+	free   int64 // what the host has available, for HostFree
 	// emptied counts the browser's clipboard emptyings (PROJ-194).
 	emptied atomic.Int32
 }
@@ -113,10 +115,11 @@ func newFixture(t *testing.T) *fixture {
 	f.srv = httptest.NewServer(new(http.CrossOriginProtection).Handler(mux))
 	t.Cleanup(f.srv.Close)
 
-	cookie, _, err := admin.NewSession(ctx, false, "test")
+	cookie, as, err := admin.NewSession(ctx, false, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
+	f.holder = sessions.AdminHolder(as.ID)
 	jar, _ := cookiejar.New(nil)
 	u, _ := url.Parse(f.srv.URL)
 	jar.SetCookies(u, []*http.Cookie{{Name: auth.CookieName, Value: cookie, Path: "/"}})
@@ -502,7 +505,7 @@ func TestHandBackFormEmptiesTheClipboard(t *testing.T) {
 	ctx := context.Background()
 	f.profile("google")
 	s, _, _ := f.m.Start(ctx, "google", "")
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, f.holder); err != nil {
 		t.Fatal(err)
 	}
 	if r := f.post("/profiles/google/handback", url.Values{}); r.code != http.StatusSeeOther {
@@ -514,7 +517,7 @@ func TestHandBackFormEmptiesTheClipboard(t *testing.T) {
 	if _, _, err := f.handoffs.Create(ctx, s.ID, "research-bot", handoff.SensitiveInput, "Enter the 2FA code", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, f.holder); err != nil {
 		t.Fatal(err)
 	}
 	if r := f.post("/profiles/google/handback", url.Values{"status": {"done"}}); r.code != http.StatusSeeOther {
