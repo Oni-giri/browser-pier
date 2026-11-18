@@ -26,6 +26,7 @@ input:focus{outline:none;box-shadow:0 0 0 1px #2F6BFF,0 0 0 4px rgba(47,107,255,
     </span>
 
     <div style="flex: 1; display: flex; align-items: center; justify-content: center; padding: 48px 0">
+      <sc-if value="{{passwordStep}}" hint-placeholder-val="{{true}}">
       <form action="overview.html" style="width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 22px">
         <div style="display: flex; flex-direction: column; gap: 8px">
           <h1 style="margin: 0; font-size: 28px; line-height: 1.2; font-weight: 600; letter-spacing: -0.8px">Sign in to BrowserPier</h1>
@@ -45,6 +46,26 @@ input:focus{outline:none;box-shadow:0 0 0 1px #2F6BFF,0 0 0 4px rgba(47,107,255,
         <a href="overview.html" role="button" style="height: 42px; display: flex; align-items: center; justify-content: center; gap: 10px; background: #E8EDF5; color: #111A2E; border-radius: 8px; font-size: 14px; font-weight: 500; text-decoration: none; box-shadow: 0 1px 2px rgba(0,0,0,0.52), inset 0 1px 0 rgba(15,23,42,0.12)">Continue<span aria-hidden="true" style="font-family: 'Geist Mono', monospace; font-size: 11px; padding: 1px 5px; border-radius: 4px; background: rgba(15,23,42,0.14)">↵</span></a>
         <p style="margin: 0; display: flex; align-items: center; gap: 8px; font-size: 13px; color: #8A99B0"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #16A34A"></span>Encrypted over Tailscale · pier.local</p>
       </form>
+      </sc-if>
+      <!-- With two-step sign-in on, a right password leads here (login.html?props={"codeStep":true}). -->
+      <sc-if value="{{codeStep}}" hint-placeholder-val="{{false}}">
+      <form action="overview.html" style="width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 22px">
+        <div style="display: flex; flex-direction: column; gap: 8px">
+          <h1 style="margin: 0; font-size: 28px; line-height: 1.2; font-weight: 600; letter-spacing: -0.8px">Enter your code</h1>
+          <p style="margin: 0; font-size: 15px; line-height: 1.5; color: #A7B3C6">Open your authenticator app and enter the 6‑digit code for BrowserPier.</p>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 8px">
+          <label for="code" style="font-size: 14px; font-weight: 500">Code</label>
+          <input id="code" type="text" inputmode="numeric" autocomplete="one-time-code" value="492018" style="height: 42px; box-sizing: border-box; padding: 0 12px; background: #111A2E; border: 0; border-radius: 8px; color: #E8EDF5; font-family: 'Geist Mono', monospace; font-size: 15px; letter-spacing: 2px; box-shadow: {{pwRing}}">
+          <sc-if value="{{showError}}" hint-placeholder-val="{{false}}">
+            <p role="alert" style="margin: 0; font-size: 13px; color: #FFA195">That code isn't right. 4 tries left.</p>
+          </sc-if>
+          <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #8A99B0">Lost your phone? Use a recovery code, or reset from the server: see <a href="#">the docs</a>.</p>
+        </div>
+        <a href="overview.html" role="button" style="height: 42px; display: flex; align-items: center; justify-content: center; gap: 10px; background: #E8EDF5; color: #111A2E; border-radius: 8px; font-size: 14px; font-weight: 500; text-decoration: none; box-shadow: 0 1px 2px rgba(0,0,0,0.52), inset 0 1px 0 rgba(15,23,42,0.12)">Sign in<span aria-hidden="true" style="font-family: 'Geist Mono', monospace; font-size: 11px; padding: 1px 5px; border-radius: 4px; background: rgba(15,23,42,0.14)">↵</span></a>
+        <p style="margin: 0; font-size: 13px"><a href="login.html">Back to the password</a></p>
+      </form>
+      </sc-if>
     </div>
 
     <p style="margin: 0; font-size: 13px; color: #8A99B0">v0.1 · self-hosted</p>
@@ -84,12 +105,15 @@ input:focus{outline:none;box-shadow:0 0 0 1px #2F6BFF,0 0 0 4px rgba(47,107,255,
   </section>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"showError":{"editor":"boolean","default":false},"$preview":{"width":1440,"height":900}}'>
+<script type="text/x-dc" data-dc-script data-props='{"showError":{"editor":"boolean","default":false},"codeStep":{"editor":"boolean","default":false},"$preview":{"width":1440,"height":900}}'>
 class Component extends DCLogic {
   renderVals() {
     const err = this.props.showError ?? false;
+    const code = this.props.codeStep ?? false;
     return {
       showError: err,
+      codeStep: code,
+      passwordStep: !code,
       pwRing: err ? '0 0 0 1px #DC2626, 0 0 0 4px rgba(220,38,38,0.12)' : '0 0 0 1px #283449, 0 1px 2px rgba(0,0,0,0.13)'
     };
   }

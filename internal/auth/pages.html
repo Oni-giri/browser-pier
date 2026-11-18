@@ -45,7 +45,7 @@
 
 {{define "code-body"}}
 <h1>Enter your code</h1>
-<p>Open your authenticator app and enter the 6-digit code for BrowserPier.</p>
+<p>Open your authenticator app and enter the 6‑digit code for BrowserPier.</p>
 <form method="post" action="/login/code">
 <label for="code">Code</label>
 <input class="input mono{{if .Error}} bad{{end}}" id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" maxlength="40" required autofocus{{if .Error}} aria-invalid="true" aria-describedby="error"{{end}}>

@@ -17,7 +17,7 @@ import (
 
 var (
 	recoveryCodeRE = regexp.MustCompile(`\b[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}\b`)
-	shownSecretRE  = regexp.MustCompile(`<code>((?:[A-Z2-7]{4} ){7}[A-Z2-7]{4})</code>`)
+	shownSecretRE  = regexp.MustCompile(`<code class="key">((?:[A-Z2-7]{4} ){7}[A-Z2-7]{4})</code>`)
 	linkAttrRE     = regexp.MustCompile(`(?i)(?:href|src|action|hx-post|hx-get)="([^"]*)"|url\(([^)]*)\)`)
 )
 
