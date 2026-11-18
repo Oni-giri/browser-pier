@@ -1082,3 +1082,42 @@ func TestCodeFormOverPlainHTTP(t *testing.T) {
 		t.Fatalf("own origin over plain HTTP: %d", code)
 	}
 }
+
+func TestSettingsCodesCountOnTheAccountCap(t *testing.T) {
+	f := newTwoStepFixture(t, WebOptions{})
+	for range 10 {
+		done, ok := f.web.SettingsCode("123456")
+		if !ok {
+			t.Fatal("refused before the cap")
+		}
+		done(true)
+	}
+	if _, ok := f.web.SettingsCode("123456"); ok {
+		t.Fatal("an app code in Settings past the account cap")
+	}
+	if done, ok := f.web.SettingsCode(f.codes[0]); !ok {
+		t.Fatal("a recovery code in Settings refused by the cap")
+	} else {
+		done(false)
+	}
+	// And sign-in from an unknown browser sees the same cap.
+	b := f.browser()
+	f.password(b, "", nil)
+	if resp, body := f.enter(b, "", f.code()); resp.StatusCode != http.StatusTooManyRequests || !strings.Contains(body, "for this account today") {
+		t.Fatalf("sign-in after 10 wrong codes in Settings: %d", resp.StatusCode)
+	}
+}
+
+func TestCodeTriesInFlightSayAMoment(t *testing.T) {
+	f := newTwoStepFixture(t, WebOptions{})
+	for range 5 {
+		if a, _ := f.web.codeIP.Begin("127.0.0.1"); a == nil {
+			t.Fatal("Begin refused")
+		}
+	}
+	b := f.browser()
+	f.password(b, "", nil)
+	if resp, body := f.enter(b, "", f.code()); resp.StatusCode != http.StatusTooManyRequests || !strings.Contains(body, "Try again in a moment") || strings.Contains(body, "minute") {
+		t.Fatalf("tries in flight: %d %s", resp.StatusCode, body)
+	}
+}

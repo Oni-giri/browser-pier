@@ -412,7 +412,7 @@ func (a *Admin) checkPasswordAndState(ctx context.Context, password string) (two
 
 // withPasswordAndCode checks the password and uses a code (from the app
 // or a recovery code), then runs then in the same transaction.
-func (a *Admin) withPasswordAndCode(ctx context.Context, password, code string, then func(*sql.Tx) error) error {
+func (a *Admin) withPasswordAndCode(ctx context.Context, password, code string, then func(*sql.Tx, twoStepState) error) error {
 	st, err := a.checkPasswordAndState(ctx, password)
 	if err != nil {
 		return err
@@ -427,7 +427,7 @@ func (a *Admin) withPasswordAndCode(ctx context.Context, password, code string, 
 		return err
 	}
 	if then != nil {
-		if err := then(tx); err != nil {
+		if err := then(tx, st); err != nil {
 			return err
 		}
 	}
@@ -435,21 +435,28 @@ func (a *Admin) withPasswordAndCode(ctx context.Context, password, code string, 
 }
 
 // ConfirmIdentity checks the password and uses a code, before the
-// authenticator app is replaced.
-func (a *Admin) ConfirmIdentity(ctx context.Context, password, code string) error {
-	return a.withPasswordAndCode(ctx, password, code, nil)
+// authenticator app is replaced. It returns a mark of the secret in
+// place, for ReplaceTwoStepApp: a reset and a new secret in between
+// void it.
+func (a *Admin) ConfirmIdentity(ctx context.Context, password, code string) (string, error) {
+	var mark string
+	err := a.withPasswordAndCode(ctx, password, code, func(_ *sql.Tx, st twoStepState) error {
+		mark = hashToken(st.stored)
+		return nil
+	})
+	return mark, err
 }
 
 // DisableTwoStep turns two-step sign-in off, given the password and a code.
 func (a *Admin) DisableTwoStep(ctx context.Context, password, code string) error {
-	return a.withPasswordAndCode(ctx, password, code, func(tx *sql.Tx) error { return clearTwoStep(ctx, tx) })
+	return a.withPasswordAndCode(ctx, password, code, func(tx *sql.Tx, _ twoStepState) error { return clearTwoStep(ctx, tx) })
 }
 
 // NewRecoveryCodes replaces every recovery code with ten new ones, given
 // the password and a code, and returns them: they are never shown again.
 func (a *Admin) NewRecoveryCodes(ctx context.Context, password, code string) ([]string, error) {
 	var codes []string
-	err := a.withPasswordAndCode(ctx, password, code, func(tx *sql.Tx) error {
+	err := a.withPasswordAndCode(ctx, password, code, func(tx *sql.Tx, _ twoStepState) error {
 		var err error
 		codes, err = a.storeRecoveryCodes(ctx, tx)
 		return err
@@ -486,7 +493,7 @@ func (a *Admin) storeRecoveryCodes(ctx context.Context, tx *sql.Tx) ([]string, e
 // returns the ten recovery codes, shown once.
 func (a *Admin) EnableTwoStep(ctx context.Context, secret []byte, code, keepCookie string) ([]string, error) {
 	var codes []string
-	err := a.storeSecret(ctx, secret, code, keepCookie, false, func(tx *sql.Tx) error {
+	err := a.storeSecret(ctx, secret, code, keepCookie, "", func(tx *sql.Tx) error {
 		var err error
 		codes, err = a.storeRecoveryCodes(ctx, tx)
 		return err
@@ -497,12 +504,19 @@ func (a *Admin) EnableTwoStep(ctx context.Context, secret []byte, code, keepCook
 // ReplaceTwoStepApp moves two-step sign-in to a new secret (a new phone),
 // once code shows the app has it. The recovery codes stay. As turning
 // on, it signs out every other browser and rotates the device key. The
-// caller has checked the password and a code first (ConfirmIdentity).
-func (a *Admin) ReplaceTwoStepApp(ctx context.Context, secret []byte, code, keepCookie string) error {
-	return a.storeSecret(ctx, secret, code, keepCookie, true, nil)
+// caller has checked the password and a code first: mark is what
+// ConfirmIdentity returned, and the secret must still be the one it saw.
+func (a *Admin) ReplaceTwoStepApp(ctx context.Context, mark string, secret []byte, code, keepCookie string) error {
+	if mark == "" {
+		return ErrSignInAgain
+	}
+	return a.storeSecret(ctx, secret, code, keepCookie, mark, nil)
 }
 
-func (a *Admin) storeSecret(ctx context.Context, secret []byte, code, keepCookie string, replace bool, then func(*sql.Tx) error) error {
+// storeSecret turns two-step on with secret, or, with replaceMark, moves
+// it from the secret that mark names to this one.
+func (a *Admin) storeSecret(ctx context.Context, secret []byte, code, keepCookie, replaceMark string, then func(*sql.Tx) error) error {
+	replace := replaceMark != ""
 	if len(secret) != totpSecretLen {
 		return errors.New("bad secret")
 	}
@@ -531,6 +545,8 @@ func (a *Admin) storeSecret(ctx context.Context, secret []byte, code, keepCookie
 		return ErrTwoStepOn
 	case replace && !st.on:
 		return ErrTwoStepOff
+	case replace && !hmac.Equal([]byte(hashToken(st.stored)), []byte(replaceMark)):
+		return ErrSignInAgain // reset and turned on again since the password and code were checked
 	}
 	rows := [][2]string{
 		{keyTOTPSecret, EncodeTOTPSecret(secret)},

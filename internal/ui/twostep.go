@@ -25,7 +25,8 @@ const draftTTL = 10 * time.Minute
 type twoStepDraft struct {
 	secret  []byte
 	made    time.Time
-	replace bool // replacing the app: the password and a code were checked
+	replace bool   // replacing the app: the password and a code were checked
+	mark    string // of the secret they were checked against, when replacing
 }
 
 // twoStepForm is the two-step dialog's content.
@@ -162,7 +163,7 @@ func (u *UI) twoStepConfirm(w http.ResponseWriter, r *http.Request) {
 	var codes []string
 	var err error
 	if d.replace {
-		err = admin.ReplaceTwoStepApp(r.Context(), d.secret, code, keep)
+		err = admin.ReplaceTwoStepApp(r.Context(), d.mark, d.secret, code, keep)
 	} else {
 		codes, err = admin.EnableTwoStep(r.Context(), d.secret, code, keep)
 	}
@@ -170,7 +171,7 @@ func (u *UI) twoStepConfirm(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, auth.ErrWrongCode):
 		u.showScan(w, r, http.StatusUnprocessableEntity, d, "That code isn't right. Check the app shows BrowserPier, and try the next code.")
 		return
-	case errors.Is(err, auth.ErrTwoStepOn), errors.Is(err, auth.ErrTwoStepOff):
+	case errors.Is(err, auth.ErrTwoStepOn), errors.Is(err, auth.ErrTwoStepOff), errors.Is(err, auth.ErrSignInAgain):
 		u.dropDraft(r)
 		done(w, r, "/settings", "Two-step sign-in changed in the meantime. Look again", true)
 		return
@@ -207,7 +208,15 @@ func (u *UI) twoStepManage(w http.ResponseWriter, r *http.Request) {
 	}
 	admin := u.web.Admin()
 	password, code := r.PostFormValue("current"), r.PostFormValue("code")
+	// App codes typed here count on the account-wide cap too.
+	counted, ok := u.web.SettingsCode(code)
+	if !ok {
+		try.Cancel()
+		u.twoStepDialog(w, http.StatusUnprocessableEntity, twoStepForm{Stage: "manage", Error: "Too many wrong codes for this account today. Use a recovery code."})
+		return
+	}
 	var codes []string
+	var mark string
 	var err error
 	switch action {
 	case "off":
@@ -215,8 +224,9 @@ func (u *UI) twoStepManage(w http.ResponseWriter, r *http.Request) {
 	case "codes":
 		codes, err = admin.NewRecoveryCodes(r.Context(), password, code)
 	case "replace":
-		err = admin.ConfirmIdentity(r.Context(), password, code)
+		mark, err = admin.ConfirmIdentity(r.Context(), password, code)
 	}
+	counted(errors.Is(err, auth.ErrWrongCode))
 	switch {
 	case errors.Is(err, auth.ErrWrongPassword):
 		try.Fail()
@@ -245,7 +255,7 @@ func (u *UI) twoStepManage(w http.ResponseWriter, r *http.Request) {
 		u.log.Info("new recovery codes made from the UI")
 		u.twoStepDialog(w, http.StatusOK, twoStepForm{Stage: "codes", Codes: codes})
 	case "replace":
-		d := twoStepDraft{secret: auth.NewTOTPSecret(), replace: true}
+		d := twoStepDraft{secret: auth.NewTOTPSecret(), replace: true, mark: mark}
 		u.keepDraft(r, d)
 		u.showScan(w, r, http.StatusOK, d, "")
 	}

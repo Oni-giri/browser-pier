@@ -296,7 +296,10 @@ func TestChangingTwoStepNeedsPasswordAndCode(t *testing.T) {
 	code := func() string { *now = now.Add(30 * time.Second); return TOTPCode(secret, *now) }
 	actions := map[string]func(password, code string) error{
 		"turn off": func(p, c string) error { return a.DisableTwoStep(ctx, p, c) },
-		"replace":  func(p, c string) error { return a.ConfirmIdentity(ctx, p, c) },
+		"replace": func(p, c string) error {
+			_, err := a.ConfirmIdentity(ctx, p, c)
+			return err
+		},
 		"new codes": func(p, c string) error {
 			_, err := a.NewRecoveryCodes(ctx, p, c)
 			return err
@@ -319,19 +322,23 @@ func TestChangingTwoStepNeedsPasswordAndCode(t *testing.T) {
 	if err != nil || len(fresh) != RecoveryCodes {
 		t.Fatalf("new codes: %d, %v", len(fresh), err)
 	}
-	if err := a.ConfirmIdentity(ctx, "the-password", codes[0]); !errors.Is(err, ErrWrongCode) {
+	if _, err := a.ConfirmIdentity(ctx, "the-password", codes[0]); !errors.Is(err, ErrWrongCode) {
 		t.Fatalf("an old recovery code after new ones: %v", err)
 	}
 	// Replacing: the password and a recovery code, then the new app.
-	if err := a.ConfirmIdentity(ctx, "the-password", fresh[0]); err != nil {
+	mark, err := a.ConfirmIdentity(ctx, "the-password", fresh[0])
+	if err != nil {
 		t.Fatal(err)
 	}
 	next := NewTOTPSecret()
 	*now = now.Add(30 * time.Second)
-	if err := a.ReplaceTwoStepApp(ctx, next, TOTPCode(secret, *now), ""); !errors.Is(err, ErrWrongCode) {
+	if err := a.ReplaceTwoStepApp(ctx, "", next, TOTPCode(next, *now), ""); err == nil {
+		t.Fatal("replacing without ConfirmIdentity's mark")
+	}
+	if err := a.ReplaceTwoStepApp(ctx, mark, next, TOTPCode(secret, *now), ""); !errors.Is(err, ErrWrongCode) {
 		t.Fatalf("replacing with the old app's code: %v", err)
 	}
-	if err := a.ReplaceTwoStepApp(ctx, next, TOTPCode(next, *now), ""); err != nil {
+	if err := a.ReplaceTwoStepApp(ctx, mark, next, TOTPCode(next, *now), ""); err != nil {
 		t.Fatal(err)
 	}
 	if st, _ := a.TwoStep(ctx); !st.On || st.CodesLeft != RecoveryCodes-1 {
@@ -418,5 +425,32 @@ func TestPasswordChangeVoidsAPendingStep(t *testing.T) {
 	}
 	if _, _, err := a.finishSignIn(ctx, proof, TOTPCode(secret, *now), codeTOTP, false, "", ""); !errors.Is(err, ErrSignInAgain) {
 		t.Fatalf("a step from before a password change: %v", err)
+	}
+}
+
+// A replace begun before a reset and a new secret can't replace the new one.
+func TestReplaceMarkVoidedByAReset(t *testing.T) {
+	ctx := context.Background()
+	a, d, now, _, codes := twoStepAdmin(t)
+	mark, err := a.ConfirmIdentity(ctx, "the-password", codes[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ResetTwoStep(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	again := NewTOTPSecret()
+	if _, err := a.EnableTwoStep(ctx, again, TOTPCode(again, *now), ""); err != nil {
+		t.Fatal(err)
+	}
+	next := NewTOTPSecret()
+	*now = now.Add(30 * time.Second)
+	if err := a.ReplaceTwoStepApp(ctx, mark, next, TOTPCode(next, *now), ""); !errors.Is(err, ErrSignInAgain) {
+		t.Fatalf("an old replace after a reset and a new secret: %v", err)
+	}
+	var stored string
+	_ = d.QueryRow(`SELECT value FROM settings WHERE key = ?`, keyTOTPSecret).Scan(&stored)
+	if stored != EncodeTOTPSecret(again) {
+		t.Fatal("the new secret was replaced")
 	}
 }

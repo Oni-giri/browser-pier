@@ -264,7 +264,34 @@ func (w *Web) loginCode(rw http.ResponseWriter, r *http.Request) {
 
 func (w *Web) codeLocked(rw http.ResponseWriter, r *http.Request, d pageData, wait time.Duration) {
 	retryAfter(rw, wait)
-	mins := int(math.Ceil(wait.Minutes()))
-	d.Error = fmt.Sprintf("Too many wrong codes. Try again in %d %s.", mins, plural(mins, "minute", "minutes"))
+	if wait <= time.Second { // only tries in flight fill it, no lockout
+		d.Error = "Too many sign-in attempts right now. Try again in a moment."
+	} else {
+		mins := int(math.Ceil(wait.Minutes()))
+		d.Error = fmt.Sprintf("Too many wrong codes. Try again in %d %s.", mins, plural(mins, "minute", "minutes"))
+	}
 	w.render(rw, r, http.StatusTooManyRequests, "code", d)
+}
+
+// SettingsCode counts a code typed in Settings (to turn two-step off,
+// replace the app or make new recovery codes) toward the account-wide
+// cap on wrong app codes, as at sign-in: a stolen session plus the
+// password then gets no more guesses at the code than a sign-in does.
+// Recovery codes and other shapes aren't counted. ok false means the cap
+// is reached; otherwise call done with whether the code was wrong.
+func (w *Web) SettingsCode(code string) (done func(wrong bool), ok bool) {
+	if _, kind := classifyCode(code); kind != codeTOTP {
+		return func(bool) {}, true
+	}
+	a, _ := w.codeAccount.Begin("account")
+	if a == nil {
+		return nil, false
+	}
+	return func(wrong bool) {
+		if wrong {
+			a.Fail()
+		} else {
+			a.Cancel() // never cleared by a success
+		}
+	}, true
 }

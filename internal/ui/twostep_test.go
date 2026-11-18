@@ -104,7 +104,7 @@ func TestTwoStepInSettings(t *testing.T) {
 
 	// Two left: a warning.
 	for _, c := range codes[:8] {
-		if err := admin.ConfirmIdentity(ctx, "the-admin-password", c); err != nil {
+		if _, err := admin.ConfirmIdentity(ctx, "the-admin-password", c); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -150,7 +150,7 @@ func TestReplacingTheAppInSettings(t *testing.T) {
 		t.Fatalf("after replacing: %+v", st)
 	}
 	// The old app's codes are refused now.
-	if err := f.web.Admin().ConfirmIdentity(ctx, "the-admin-password", nextCode(secret)); err == nil {
+	if _, err := f.web.Admin().ConfirmIdentity(ctx, "the-admin-password", nextCode(secret)); err == nil {
 		t.Fatal("the old app still works")
 	}
 }
