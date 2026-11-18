@@ -519,6 +519,9 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 			"BROWSERPIER_LOCAL_NETWORK=" + strconv.FormatBool(p.LocalNetwork),
 			"BROWSERPIER_HOST_IPS=" + m.hostIPs,
 			"BROWSERPIER_BLOCK_ADS=" + strconv.FormatBool(blocking),
+			// Visual mode runs the accessibility bus for its element
+			// tree (PROJ-150); fixed for the session, as its mode is.
+			"BROWSERPIER_MODE=" + string(m.snapshot(l).Mode),
 		},
 	}
 	var cid string

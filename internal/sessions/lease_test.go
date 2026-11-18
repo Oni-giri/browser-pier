@@ -332,3 +332,66 @@ func TestTakeControlBreaksOffABreakablePageCall(t *testing.T) {
 		t.Fatalf("a page call after Take control = %v", err)
 	}
 }
+
+// TestReadLeasesDontKeepAPersonOut: Visual mode's tree reads (PROJ-150)
+// take turns with page calls, but neither start nor extend the seconds
+// after an agent's input in which Take control is refused (PROJ-134),
+// and Take control breaks one off at once.
+func TestReadLeasesDontKeepAPersonOut(t *testing.T) {
+	f := newFixture(t)
+	advance := f.clock()
+	s := f.start(f.m)
+	read, err := f.m.ReadLease(context.Background(), s.ID, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// It takes turns with a page call.
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	if _, err := f.m.PageLease(ctx, s.ID, "tok"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a page call during a read = %v, want it to wait", err)
+	}
+	cancel()
+	took := make(chan error, 1)
+	go func() { took <- f.m.TakeControl(s.ID) }()
+	if err := leaseEnds(t, read); !errors.Is(err, ErrTookControl) {
+		t.Fatalf("the read ended for %v", err)
+	}
+	read.Release()
+	if err := <-took; err != nil {
+		t.Fatalf("Take control during a read = %v", err)
+	}
+	if _, err := f.m.ReadLease(context.Background(), s.ID, "tok"); !errors.Is(err, ErrHumanDriving) {
+		t.Fatalf("a read while a person drives = %v", err)
+	}
+	f.m.ReleaseControl(s.ID)
+
+	// Reads after an agent's last input don't extend its quiet time.
+	_, done, err := f.m.AgentInput(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done()
+	for range 3 {
+		advance(2 * time.Second)
+		r, err := f.m.ReadLease(context.Background(), s.ID, "tok")
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Release()
+	}
+	if err := f.m.TakeControl(s.ID); err != nil {
+		t.Fatalf("take control %s after the last input, with reads since = %v", 6*time.Second, err)
+	}
+	f.m.ReleaseControl(s.ID)
+
+	// A handoff and the token's revocation end a read as a page call.
+	read, err = f.m.ReadLease(context.Background(), s.ID, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _, _ = f.m.SetNeedsHelp(s.ID, true) }()
+	if err := leaseEnds(t, read); !errors.Is(err, ErrHandedOver) {
+		t.Fatalf("a handoff ended the read for %v", err)
+	}
+	read.Release()
+}

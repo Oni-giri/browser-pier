@@ -35,6 +35,9 @@ type lease struct {
 	// breakable: a page call the person in the live view may break off
 	// once it has run for takeOverAfter (Lease.Breakable).
 	breakable bool
+	// yields: a read (ReadLease) that the person in the live view breaks
+	// off at once, and that doesn't count as the agent driving.
+	yields bool
 }
 
 // Lease is a call into a session's page, held from PageLease until
@@ -74,6 +77,20 @@ func (l *Lease) Breakable() { l.breakable() }
 // Calls on one session take turns: PageLease waits (until ctx ends) while
 // another lease is held, so two calls never interleave.
 func (m *Manager) PageLease(ctx context.Context, id, tokenID string) (*Lease, error) {
+	return m.pageLease(ctx, id, tokenID, false)
+}
+
+// ReadLease is PageLease for a read that is not the agent driving:
+// Visual mode's element tree (PROJ-150). It takes turns with page calls
+// and is cancelled by a handoff, a hold, a stop or the token's
+// revocation as they are, but it doesn't keep a person out: it doesn't
+// start or extend the few seconds after an agent's input in which Take
+// control is refused (PROJ-134), and Take control breaks it off at once.
+func (m *Manager) ReadLease(ctx context.Context, id, tokenID string) (*Lease, error) {
+	return m.pageLease(ctx, id, tokenID, true)
+}
+
+func (m *Manager) pageLease(ctx context.Context, id, tokenID string, read bool) (*Lease, error) {
 	m.mu.Lock()
 	l := m.findLocked(id)
 	if err := leaseRefusal(l); err != nil {
@@ -103,12 +120,15 @@ func (m *Manager) PageLease(ctx context.Context, id, tokenID string) (*Lease, er
 	}
 	cctx, cancel := context.WithCancelCause(ctx)
 	now := m.now()
-	ls := &lease{tokenID: tokenID, cancel: cancel, started: now}
+	ls := &lease{tokenID: tokenID, cancel: cancel, started: now, yields: read}
 	if l.leases == nil {
 		l.leases = map[*lease]struct{}{}
 	}
 	l.leases[ls] = struct{}{}
-	l.lastActivity, l.lastAgentInput = now, now
+	l.lastActivity = now
+	if !read {
+		l.lastAgentInput = now
+	}
 	m.agentActedLocked(l)
 	var once sync.Once
 	return &Lease{Ctx: cctx, Generation: l.generation, breakable: func() {
@@ -121,7 +141,10 @@ func (m *Manager) PageLease(ctx context.Context, id, tokenID string) (*Lease, er
 			m.mu.Lock()
 			delete(l.leases, ls)
 			now := m.now()
-			l.lastActivity, l.lastAgentInput = now, now
+			l.lastActivity = now
+			if !read {
+				l.lastAgentInput = now
+			}
 			m.agentActedLocked(l)
 			m.inputsDone.Broadcast()
 			m.mu.Unlock()

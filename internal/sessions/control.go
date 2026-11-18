@@ -90,6 +90,10 @@ func (m *Manager) TakeControl(id string) error {
 			return ErrAgentDriving
 		}
 		for ls := range l.leases {
+			if ls.yields {
+				breakOff = true // a read: the person goes first
+				continue
+			}
 			if !ls.breakable || now.Sub(ls.started) < takeOverAfter {
 				return ErrAgentDriving
 			}
