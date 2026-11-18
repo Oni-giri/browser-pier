@@ -99,10 +99,12 @@ func recordArgs(width, height int) []string {
 		"video/x-raw,framerate=" + strconv.Itoa(recordFPS) + "/1", "!",
 		"videoconvert", "!", "video/x-raw,format=I420", "!",
 		"videoscale", "!", "video/x-raw,width=" + strconv.Itoa(w) + ",height=" + strconv.Itoa(h), "!",
-		// zerolatency: no look-ahead, so a frame leaves the encoder as it
-		// comes and a cut loses nothing already on screen.
+		// zerolatency and one thread: no look-ahead and no frame threads,
+		// so a frame leaves the encoder as it comes. With frame threads
+		// x264 holds about nine frames, almost two seconds at 5 fps, which
+		// a recording would miss at each start.
 		"x264enc", "pass=qual", "quantizer=" + strconv.Itoa(recordQuality), "speed-preset=veryfast", "tune=zerolatency",
-		"sliced-threads=false", "key-int-max=1000", "bframes=0", "!",
+		"sliced-threads=false", "threads=1", "key-int-max=1000", "bframes=0", "!",
 		"video/x-h264,stream-format=avc,alignment=au,profile=high", "!",
 		"mp4mux", "fragment-duration=200", "streamable=true", "!",
 		"fdsink", "fd=3",

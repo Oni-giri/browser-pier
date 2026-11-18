@@ -68,10 +68,10 @@ func (g Gate) Decide() (bool, Reason) {
 	switch {
 	case !g.Enabled:
 		return false, Off
+	case g.NeedsHelp: // the person driving during a handoff is the handoff's
+		return false, Handoff
 	case g.Human:
 		return false, Person
-	case g.NeedsHelp:
-		return false, Handoff
 	case !g.Running:
 		return false, Stopped
 	case g.Paused:
