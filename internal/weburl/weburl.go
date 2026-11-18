@@ -6,8 +6,10 @@ package weburl
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
+	"unicode"
 )
 
 // MaxLen caps an address, before it is normalised.
@@ -15,7 +17,8 @@ const MaxLen = 8192
 
 // Check refuses what pages must not be sent to: any scheme but http and
 // https, and URLs carrying a user name or password. It returns the URL as
-// Go writes it back (net/url), which is what is opened.
+// Go writes it back (net/url), with spaces in its query percent-encoded
+// too, which is what is opened.
 func Check(raw string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	switch {
@@ -30,5 +33,27 @@ func Check(raw string) (string, error) {
 	case len(raw) > MaxLen:
 		return "", errors.New("url: too long")
 	}
+	// Go escapes a space in the path and the fragment but keeps the
+	// query as written; a browser sends it as %20, so do that here too:
+	// the open action types the URL, where a space would end it.
+	u.RawQuery = escapeSpaces(u.RawQuery)
 	return u.String(), nil
+}
+
+// escapeSpaces percent-encodes every space character (Unicode's) in s.
+func escapeSpaces(s string) string {
+	if !strings.ContainsFunc(s, unicode.IsSpace) {
+		return s
+	}
+	var b strings.Builder
+	for _, r := range s {
+		if !unicode.IsSpace(r) {
+			b.WriteRune(r)
+			continue
+		}
+		for _, c := range []byte(string(r)) {
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	return b.String()
 }

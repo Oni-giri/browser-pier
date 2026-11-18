@@ -7,9 +7,10 @@ import (
 
 func TestCheck(t *testing.T) {
 	for raw, want := range map[string]string{
-		"https://example.com/":             "https://example.com/",
-		" http://example.com/a b?q=1#top ": "http://example.com/a%20b?q=1#top",
-		"HTTPS://Example.com:8443/x":       "https://Example.com:8443/x",
+		"https://example.com/":                  "https://example.com/",
+		" http://example.com/a b?q=1#top ":      "http://example.com/a%20b?q=1#top",
+		"HTTPS://Example.com:8443/x":            "https://Example.com:8443/x",
+		"https://example.com/?q=a b&r=c\u00a0d": "https://example.com/?q=a%20b&r=c%C2%A0d",
 	} {
 		if got, err := Check(raw); err != nil || got != want {
 			t.Errorf("%q: %q, %v; want %q", raw, got, err, want)
