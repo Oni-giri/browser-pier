@@ -171,11 +171,17 @@ func stopBrowser(p *process, cdp string, timeout time.Duration, portal *portal, 
 // Either failing fails the browser's start (PROJ-181): Chromium's own
 // dialog, its fallback, browses the whole container (PROJ-183).
 func startChooser(ctx context.Context, log *slog.Logger, cfg config) (*sessionBus, *portal, error) {
+	return startChooserWith(ctx, log, cfg, startPortal)
+}
+
+// startChooserWith is startChooser with the portal started by start
+// (tests make it fail).
+func startChooserWith(ctx context.Context, log *slog.Logger, cfg config, start func(*slog.Logger, string, time.Duration, focuser) (*portal, error)) (*sessionBus, *portal, error) {
 	bus, err := startSessionBus(ctx, os.Getuid())
 	if err != nil {
 		return nil, nil, fmt.Errorf("the session bus for the file chooser portal: %w", err)
 	}
-	p, err := startPortal(log, bus.address(), cfg.ChooserTimeout, newXFocus(log, cfg.Width, cfg.Height))
+	p, err := start(log, bus.address(), cfg.ChooserTimeout, newXFocus(log, cfg.Width, cfg.Height))
 	if err != nil {
 		bus.stop()
 		return nil, nil, fmt.Errorf("the file chooser portal: %w", err)

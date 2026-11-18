@@ -342,3 +342,50 @@ func TestPortalOnARealBus(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// TestNoPortalStopsTheBus (PROJ-181): with the bus up but the portal's
+// name already taken, startChooser fails, so the browser doesn't start
+// with Chromium's own dialog, and the bus it started is stopped.
+func TestNoPortalStopsTheBus(t *testing.T) {
+	if _, err := exec.LookPath("dbus-daemon"); err != nil {
+		t.Skip("no dbus-daemon here")
+	}
+	tmp, err := os.MkdirTemp("/tmp", "bpbus")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(tmp) }()
+	t.Setenv("TMPDIR", tmp)
+	var addr string
+	var rival *dbus.Conn
+	takenFirst := func(log *slog.Logger, a string, timeout time.Duration, focus focuser) (*portal, error) {
+		addr = a
+		c, err := dbus.Connect(a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rival = c
+		if reply, err := c.RequestName(portalName, dbus.NameFlagDoNotQueue); err != nil || reply != dbus.RequestNameReplyPrimaryOwner {
+			t.Fatalf("the rival couldn't take the name: %v %v", reply, err)
+		}
+		return startPortal(log, a, timeout, focus)
+	}
+	bus, p, err := startChooserWith(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), config{ChooserTimeout: time.Minute, Width: 800, Height: 600}, takenFirst)
+	if rival != nil {
+		defer func() { _ = rival.Close() }()
+	}
+	if err == nil || bus != nil || p != nil || !strings.Contains(err.Error(), "the file chooser portal: own "+portalName) {
+		t.Fatalf("startChooser = %v, %v, %v; want an error naming the portal's name", bus, p, err)
+	}
+	// The bus went with it.
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		c, err := dbus.Connect(addr)
+		if err != nil {
+			break
+		}
+		_ = c.Close()
+		if time.Now().After(deadline) {
+			t.Fatal("the session bus still runs after the portal failed")
+		}
+	}
+}
