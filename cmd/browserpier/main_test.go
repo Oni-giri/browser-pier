@@ -27,6 +27,13 @@ import (
 
 func testHandler(t *testing.T) http.Handler {
 	t.Helper()
+	h, _, _ := testServer(t)
+	return h
+}
+
+// testServer is the whole handler, with its admin account and tokens.
+func testServer(t *testing.T) (http.Handler, *auth.Admin, *auth.Tokens) {
+	t.Helper()
 	d, err := db.Open(context.Background(), filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -37,7 +44,8 @@ func testHandler(t *testing.T) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	web := auth.NewWeb(admin, auth.NewTokens(d), log, auth.WebOptions{CookieSecure: "auto"})
+	tokens := auth.NewTokens(d)
+	web := auth.NewWeb(admin, tokens, log, auth.WebOptions{CookieSecure: "auto"})
 	dir, err := os.MkdirTemp("", "bp")
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +57,7 @@ func testHandler(t *testing.T) http.Handler {
 	}
 	t.Cleanup(mgr.Close)
 	app := ui.New(mgr, web, handoff.New(d, mgr, log), settings.New(d), log, ui.Options{})
-	return newHandler(web, api.New(mgr, web, files.New(mgr.Layout().FilesDir, 0, os.Getuid(), os.Getgid()), log, ""), nil, nil, app, log)
+	return newHandler(web, api.New(mgr, web, files.New(mgr.Layout().FilesDir, 0, os.Getuid(), os.Getgid()), log, ""), nil, nil, app, log), admin, tokens
 }
 
 func TestHealthz(t *testing.T) {
@@ -210,5 +218,52 @@ func TestLocalFree(t *testing.T) {
 	t.Setenv("DOCKER_HOST", "tcp://elsewhere:2375")
 	if localFree() != nil {
 		t.Fatal("this host's free memory used for a remote daemon")
+	}
+}
+
+// Two-step sign-in changes nothing for agents: a token still works on the
+// API, CDP and MCP, and the admin cookie still doesn't (PROJ-162).
+func TestAgentsUnaffectedByTwoStep(t *testing.T) {
+	h, admin, tokens := testServer(t)
+	ctx := context.Background()
+	secret := auth.NewTOTPSecret()
+	if _, err := admin.EnableTwoStep(ctx, secret, auth.TOTPCode(secret, time.Now()), ""); err != nil {
+		t.Fatal(err)
+	}
+	_, token, err := tokens.Create(ctx, "agent", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie, _, err := admin.NewSession(ctx, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(method, path, body string, header ...string) int {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		for i := 0; i+1 < len(header); i += 2 {
+			req.Header.Set(header[i], header[i+1])
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	mcpInit := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}`
+	mcpHeaders := []string{"Content-Type", "application/json", "Accept", "application/json, text/event-stream"}
+	if code := call(http.MethodGet, "/api/profiles", "", "Authorization", "Bearer "+token); code != http.StatusOK {
+		t.Fatalf("API with a token: %d", code)
+	}
+	if code := call(http.MethodPost, "/mcp", mcpInit, append(mcpHeaders, "Authorization", "Bearer "+token)...); code != http.StatusOK {
+		t.Fatalf("MCP with a token: %d", code)
+	}
+	// CDP for a profile that doesn't exist: the token is accepted (404), not refused (401).
+	if code := call(http.MethodGet, "/cdp/nope/json/version", "", "Authorization", "Bearer "+token); code == http.StatusUnauthorized {
+		t.Fatalf("CDP with a token: %d", code)
+	}
+	for _, c := range []struct{ method, path, body string }{
+		{http.MethodGet, "/api/profiles", ""}, {http.MethodGet, "/cdp/nope/json/version", ""}, {http.MethodPost, "/mcp", mcpInit},
+	} {
+		if code := call(c.method, c.path, c.body, append(mcpHeaders, "Cookie", auth.CookieName+"="+cookie)...); code != http.StatusUnauthorized {
+			t.Errorf("%s with the admin cookie: %d, want 401", c.path, code)
+		}
 	}
 }
