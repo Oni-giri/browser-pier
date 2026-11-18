@@ -629,7 +629,7 @@ func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, pa
 				what = "Typing interrupted"
 			}
 			a.m.Note(s.ID, tok.Name, what)
-			writeError(w, http.StatusConflict, "input broke off: "+context.Cause(ctx).Error())
+			writeError(w, cutStatus(ctx), "input broke off: "+context.Cause(ctx).Error())
 			return false
 		}
 		writeError(w, http.StatusBadGateway, "input failed: "+err.Error())
@@ -643,6 +643,16 @@ func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, pa
 	}
 	a.m.Note(s.ID, tok.Name, describeInput(path, body))
 	return true
+}
+
+// cutStatus is the status of an input action cut short: 401 when its
+// token was revoked, as the page tools answer, since trying again can't
+// help; else 409 (a person took the browser, or it is stopping).
+func cutStatus(ctx context.Context) int {
+	if errors.Is(context.Cause(ctx), sessions.ErrRevoked) {
+		return http.StatusUnauthorized
+	}
+	return http.StatusConflict
 }
 
 // describeInput puts an input action in words for the activity log.

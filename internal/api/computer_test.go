@@ -405,7 +405,7 @@ func TestRevokingATokenInterruptsItsType(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the type went on after its token was revoked")
 	}
-	if a.code != http.StatusConflict || !strings.Contains(string(a.raw), "input broke off: the agent token was revoked") {
+	if a.code != http.StatusUnauthorized || !strings.Contains(string(a.raw), "input broke off: the agent token was revoked") {
 		t.Fatalf("the type cut short answered %d %s", a.code, a.raw)
 	}
 	waitFor(t, func() bool { return f.lastInput() == "cut short" })
