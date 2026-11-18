@@ -266,14 +266,17 @@ func (s *session) closed(end time.Time, why Reason) {
 }
 
 // lost marks a stretch from at with no segment open as Lost.
-func (s *session) lost(at time.Time) {
+func (s *session) lost(at time.Time) { s.gapFrom(at, Lost) }
+
+// gapFrom gives the stretch from at, with no segment open, the reason why.
+func (s *session) gapFrom(at time.Time, why Reason) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.open && s.gapWhy != Lost {
+	if !s.open && s.gapWhy != why {
 		if !s.gapStart.IsZero() && s.gapWhy != "" && at.After(s.gapStart) {
 			s.gaps = append(s.gaps, Gap{Start: s.gapStart, End: at, Reason: s.gapWhy})
 		}
-		s.gapStart, s.gapWhy = at, Lost
+		s.gapStart, s.gapWhy = at, why
 	}
 }
 
@@ -471,7 +474,10 @@ func (r *Recorder) stream(ctx context.Context, s *session, epoch uint64) time.Du
 				if still {
 					continue // nothing to keep
 				}
-				return 0 // the screen changed: a new segment, from a new keyframe
+				// The screen changed: a new segment, from a new keyframe.
+				// Until it starts (about a second) the gap is a restart's.
+				s.gapFrom(at, Restart)
+				return 0
 			}
 			// The stream's first fragment, which holds its keyframe.
 			if s.segments >= r.maxSegments {

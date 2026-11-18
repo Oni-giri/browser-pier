@@ -423,7 +423,7 @@ func TestTheIndexSaysWhyEachGapIsThere(t *testing.T) {
 			t.Errorf("gap %+v doesn't move forward", g)
 		}
 	}
-	want := []Reason{Person, Handoff, Idle, Still, Idle, Lost, Stopped}
+	want := []Reason{Person, Handoff, Idle, Still, Restart, Idle, Lost, Stopped}
 	if strings.Join(reasons(got), ",") != strings.Join(reasons(want), ",") {
 		t.Fatalf("gaps %v, want %v", got, want)
 	}
