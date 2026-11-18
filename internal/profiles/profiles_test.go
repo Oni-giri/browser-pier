@@ -198,3 +198,25 @@ func TestNewProfilesBlockAds(t *testing.T) {
 		t.Fatalf("list: %+v", list)
 	}
 }
+
+func TestRecordSessionsIsOffUntilTheAdminSetsIt(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	if New("mail").Record {
+		t.Fatal("a new profile records sessions")
+	}
+	if _, err := s.Create(ctx, New("mail")); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := s.Get(ctx, "mail")
+	if p.Record {
+		t.Fatal("a stored new profile records sessions")
+	}
+	p.Record = true
+	if got, err := s.Update(ctx, p); err != nil || !got.Record {
+		t.Fatalf("update: %+v, %v", got, err)
+	}
+	if list, _ := s.List(ctx); len(list) != 1 || !list[0].Record {
+		t.Fatalf("list: %+v", list)
+	}
+}

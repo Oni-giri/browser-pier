@@ -138,6 +138,9 @@ var migrations = []string{
 	// orchestrator with one is stopped when it is picked up, not answered
 	// for unscrubbed. Only the flag is stored, never a value.
 	`ALTER TABLE sessions ADD COLUMN had_fills INTEGER NOT NULL DEFAULT 0;`,
+	// PROJ-23: the profile's Record sessions setting, off until the admin
+	// turns it on.
+	`ALTER TABLE profiles ADD COLUMN record_sessions INTEGER NOT NULL DEFAULT 0;`,
 }
 
 // Open opens (creating if needed) the database at path and migrates it.
