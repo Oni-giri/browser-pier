@@ -687,9 +687,13 @@ func TestNoPortalNoBrowser(t *testing.T) {
 		t.Fatal(err)
 	}
 	uid := docker(t, "run", "--rm", "--entrypoint", "id", image, "-u")
+	sockDir := t.TempDir()
+	if err := os.Chmod(sockDir, 0o777); err != nil { // the container's user creates the socket
+		t.Fatal(err)
+	}
 	name := fmt.Sprintf("bp-test-%d", time.Now().UnixNano())
 	run := append([]string{"run", "-d", "--name", name, "--security-opt", "seccomp=" + seccomp}, appArmor(t, image, seccomp)...)
-	docker(t, append(run, "--shm-size=1g", "-v", newVolume(t)+":/profile", "-v", t.TempDir()+":/run/browserpier",
+	docker(t, append(run, "--shm-size=1g", "-v", newVolume(t)+":/profile", "-v", sockDir+":/run/browserpier",
 		"--mount", "type=tmpfs,destination=/tmp/browserpier-bus-"+uid+",tmpfs-mode=0755", image)...)
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
 	for deadline := time.Now().Add(60 * time.Second); docker(t, "inspect", "-f", "{{.State.Running}}", name) == "true"; time.Sleep(250 * time.Millisecond) {
@@ -699,7 +703,7 @@ func TestNoPortalNoBrowser(t *testing.T) {
 	}
 	out, _ := exec.Command("docker", "logs", name).CombinedOutput()
 	logs := string(out)
-	if code := docker(t, "inspect", "-f", "{{.State.ExitCode}}", name); code == "0" || !strings.Contains(logs, "session bus") || strings.Contains(logs, `msg=ready`) {
+	if code := docker(t, "inspect", "-f", "{{.State.ExitCode}}", name); code == "0" || !strings.Contains(logs, "the session bus for the file chooser portal: session bus folder") || strings.Contains(logs, `msg=ready`) {
 		t.Fatalf("exit %s, want a failure naming the session bus, before ready:\n%s", code, logs)
 	}
 }
