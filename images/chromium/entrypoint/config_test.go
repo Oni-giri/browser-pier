@@ -154,7 +154,7 @@ func TestChromiumArgsByMode(t *testing.T) {
 
 	vis := api
 	vis.Visual = true
-	if got := chromiumArgs(vis, false); !slices.Equal(got, append(slices.Clone(before), "--force-renderer-accessibility")) {
+	if got := chromiumArgs(vis, false); !slices.Equal(got, append(slices.Clone(before), "--force-renderer-accessibility=basic")) {
 		t.Fatalf("Visual mode: %q", got)
 	}
 	got := chromiumEnv(vis, where, "unix:path=/tmp/browserpier-a11y-1000/bus")

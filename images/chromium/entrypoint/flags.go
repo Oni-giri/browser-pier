@@ -49,8 +49,12 @@ func chromiumArgs(c config, smallShm bool) []string {
 		// Visual mode's element tree (PROJ-150): Chromium publishes its
 		// accessibility tree, the page's included, on the accessibility
 		// bus. Without this switch it publishes the window frames only,
-		// with no children, even to a reader on the bus.
-		args = append(args, "--force-renderer-accessibility")
+		// with no children, even to a reader on the bus. "basic" is
+		// what the reader needs (roles, names, states, boxes, fields'
+		// values and attributes) without what screen readers add, which
+		// made a page's own work up to five times slower on its main
+		// thread (images/chromium/ANTI-BOT.md).
+		args = append(args, "--force-renderer-accessibility=basic")
 	}
 	return args
 }

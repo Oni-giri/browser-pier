@@ -214,7 +214,7 @@ func TestVisualSnapshotRevokedMidRead(t *testing.T) {
 	}
 }
 
-func TestClickByRef(t *testing.T) {
+func TestClickByRefThroughTheAPI(t *testing.T) {
 	f := newFixture(t)
 	s := f.start(f.all, "google", "visual")
 	// The button moved since the snapshot: the click goes where it is now.
