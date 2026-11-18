@@ -138,9 +138,18 @@ var migrations = []string{
 	// orchestrator with one is stopped when it is picked up, not answered
 	// for unscrubbed. Only the flag is stored, never a value.
 	`ALTER TABLE sessions ADD COLUMN had_fills INTEGER NOT NULL DEFAULT 0;`,
+
 	// PROJ-23: the profile's Record sessions setting, off until the admin
 	// turns it on.
 	`ALTER TABLE profiles ADD COLUMN record_sessions INTEGER NOT NULL DEFAULT 0;`,
+
+	// The admin's two-step recovery codes (PROJ-162), by their SHA-256:
+	// 80 random bits each, so a slow hash would add nothing. Each row goes
+	// when its code is used.
+	`CREATE TABLE admin_recovery_codes (
+		hash       TEXT PRIMARY KEY,
+		created_at INTEGER NOT NULL
+	);`,
 }
 
 // Open opens (creating if needed) the database at path and migrates it.

@@ -232,3 +232,191 @@ func TestSignInReplacesTheOldSession(t *testing.T) {
 		t.Fatal("the old session survived a new sign-in")
 	}
 }
+
+func TestTurningTwoStepOn(t *testing.T) {
+	ctx := context.Background()
+	d := openDB(t)
+	a, logs := newAdmin(t, d, "the-password")
+	now := time.Unix(1_800_000_000, 0)
+	a.now = func() time.Time { return now }
+	mine, _, _ := a.NewSession(ctx, false, "")
+	other, _, _ := a.NewSession(ctx, true, "")
+	dev, _ := a.NewDeviceToken(ctx)
+	secret := NewTOTPSecret()
+
+	// A wrong confirming code stores nothing.
+	if _, err := a.EnableTwoStep(ctx, secret, "123456", mine); !errors.Is(err, ErrWrongCode) {
+		t.Fatalf("wrong confirming code: %v", err)
+	}
+	if st, _ := a.TwoStep(ctx); st.On {
+		t.Fatal("on after a wrong confirming code")
+	}
+	if _, _, err := a.SignIn(ctx, "the-password", false, "", ""); err != nil {
+		t.Fatalf("the password alone after a wrong confirming code: %v", err)
+	}
+
+	code := TOTPCode(secret, now)
+	codes, err := a.EnableTwoStep(ctx, secret, code, mine)
+	if err != nil || len(codes) != RecoveryCodes {
+		t.Fatalf("EnableTwoStep = %d codes, %v", len(codes), err)
+	}
+	st, err := a.TwoStep(ctx)
+	if err != nil || !st.On || !st.Since.Equal(now) || st.CodesLeft != RecoveryCodes {
+		t.Fatalf("TwoStep = %+v, %v", st, err)
+	}
+	if _, err := a.Session(ctx, mine); err != nil {
+		t.Fatal("this browser was signed out")
+	}
+	if _, err := a.Session(ctx, other); !errors.Is(err, ErrNoSession) {
+		t.Fatal("another browser stayed signed in")
+	}
+	if a.KnownDevice(ctx, dev) {
+		t.Fatal("a device cookie from before is still known")
+	}
+	// The password alone makes no session now, and the confirming code
+	// can't sign in.
+	if _, _, err := a.SignIn(ctx, "the-password", false, "", ""); !errors.Is(err, ErrNeedsCode) {
+		t.Fatalf("the password alone: %v", err)
+	}
+	_, _, proof, _ := a.signIn(ctx, "the-password", false, "", "")
+	if _, _, err := a.finishSignIn(ctx, proof, code, codeTOTP, false, "", ""); !errors.Is(err, ErrWrongCode) {
+		t.Fatalf("the confirming code signed in: %v", err)
+	}
+	if _, err := a.EnableTwoStep(ctx, NewTOTPSecret(), code, mine); !errors.Is(err, ErrTwoStepOn) && !errors.Is(err, ErrWrongCode) {
+		t.Fatalf("turning on twice: %v", err)
+	}
+	if strings.Contains(logs.String(), EncodeTOTPSecret(secret)) || strings.Contains(logs.String(), code) {
+		t.Fatal("the secret or a code was logged")
+	}
+}
+
+func TestChangingTwoStepNeedsPasswordAndCode(t *testing.T) {
+	ctx := context.Background()
+	a, d, now, secret, codes := twoStepAdmin(t)
+	code := func() string { *now = now.Add(30 * time.Second); return TOTPCode(secret, *now) }
+	actions := map[string]func(password, code string) error{
+		"turn off": func(p, c string) error { return a.DisableTwoStep(ctx, p, c) },
+		"replace":  func(p, c string) error { return a.ConfirmIdentity(ctx, p, c) },
+		"new codes": func(p, c string) error {
+			_, err := a.NewRecoveryCodes(ctx, p, c)
+			return err
+		},
+	}
+	for name, do := range actions {
+		if err := do("the-password", ""); !errors.Is(err, ErrWrongCode) {
+			t.Errorf("%s with the password alone: %v", name, err)
+		}
+		if err := do("", code()); !errors.Is(err, ErrWrongPassword) {
+			t.Errorf("%s with a code alone: %v", name, err)
+		}
+		if err := do("wrong-password", code()); !errors.Is(err, ErrWrongPassword) {
+			t.Errorf("%s with a wrong password: %v", name, err)
+		}
+	}
+
+	// New recovery codes make the old ones useless.
+	fresh, err := a.NewRecoveryCodes(ctx, "the-password", code())
+	if err != nil || len(fresh) != RecoveryCodes {
+		t.Fatalf("new codes: %d, %v", len(fresh), err)
+	}
+	if err := a.ConfirmIdentity(ctx, "the-password", codes[0]); !errors.Is(err, ErrWrongCode) {
+		t.Fatalf("an old recovery code after new ones: %v", err)
+	}
+	// Replacing: the password and a recovery code, then the new app.
+	if err := a.ConfirmIdentity(ctx, "the-password", fresh[0]); err != nil {
+		t.Fatal(err)
+	}
+	next := NewTOTPSecret()
+	*now = now.Add(30 * time.Second)
+	if err := a.ReplaceTwoStepApp(ctx, next, TOTPCode(secret, *now), ""); !errors.Is(err, ErrWrongCode) {
+		t.Fatalf("replacing with the old app's code: %v", err)
+	}
+	if err := a.ReplaceTwoStepApp(ctx, next, TOTPCode(next, *now), ""); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := a.TwoStep(ctx); !st.On || st.CodesLeft != RecoveryCodes-1 {
+		t.Fatalf("after replacing: %+v", st)
+	}
+	secret = next
+	// Turning off with both.
+	if err := a.DisableTwoStep(ctx, "the-password", code()); err != nil {
+		t.Fatal(err)
+	}
+	var rows int
+	_ = d.QueryRow(`SELECT (SELECT count(*) FROM settings WHERE key LIKE 'totp_%') + (SELECT count(*) FROM admin_recovery_codes)`).Scan(&rows)
+	if rows != 0 {
+		t.Fatalf("%d two-step rows left after turning off", rows)
+	}
+	if _, _, err := a.SignIn(ctx, "the-password", false, "", ""); err != nil {
+		t.Fatalf("the password alone after turning off: %v", err)
+	}
+}
+
+func TestEnvPasswordDoesNotTurnTwoStepOff(t *testing.T) {
+	ctx := context.Background()
+	d := openDB(t)
+	a, _ := newAdmin(t, d, "from-env-1")
+	now := time.Unix(1_800_000_000, 0)
+	a.now = func() time.Time { return now }
+	secret := NewTOTPSecret()
+	if _, err := a.EnableTwoStep(ctx, secret, TOTPCode(secret, now), ""); err != nil {
+		t.Fatal(err)
+	}
+	cookie, _, _ := a.NewSession(ctx, true, "")
+	a, _ = newAdmin(t, d, "from-env-2")
+	if _, err := a.Session(ctx, cookie); !errors.Is(err, ErrNoSession) {
+		t.Fatal("sessions survived a changed environment password")
+	}
+	if ok, _ := a.CheckPassword(ctx, "from-env-2"); !ok {
+		t.Fatal("the new password doesn't work")
+	}
+	var stored string
+	_ = d.QueryRow(`SELECT value FROM settings WHERE key = ?`, keyTOTPSecret).Scan(&stored)
+	if st, _ := a.TwoStep(ctx); !st.On || stored != EncodeTOTPSecret(secret) {
+		t.Fatalf("two-step after a changed environment password: %+v", st)
+	}
+	if _, _, err := a.SignIn(ctx, "from-env-2", false, "", ""); !errors.Is(err, ErrNeedsCode) {
+		t.Fatalf("the new password alone: %v", err)
+	}
+}
+
+func TestChangePasswordLeavesTwoStepOn(t *testing.T) {
+	ctx := context.Background()
+	d := openDB(t)
+	a, _ := newAdmin(t, d, "")
+	if err := a.Setup(ctx, a.setupCode, "first-password"); err != nil {
+		t.Fatal(err)
+	}
+	secret := NewTOTPSecret()
+	if _, err := a.EnableTwoStep(ctx, secret, TOTPCode(secret, time.Now()), ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.ChangePassword(ctx, "first-password", "second-password", ""); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := a.TwoStep(ctx); !st.On {
+		t.Fatal("changing the password turned two-step off")
+	}
+	if _, _, err := a.SignIn(ctx, "second-password", false, "", ""); !errors.Is(err, ErrNeedsCode) {
+		t.Fatalf("the new password alone: %v", err)
+	}
+}
+
+// A password changed between the password step and the code voids the step.
+func TestPasswordChangeVoidsAPendingStep(t *testing.T) {
+	ctx := context.Background()
+	a, _, now, secret, _ := twoStepAdmin(t)
+	_, _, proof, err := a.signIn(ctx, "the-password", false, "", "")
+	if !errors.Is(err, ErrNeedsCode) {
+		t.Fatal(err)
+	}
+	a.cred.Lock()
+	err = a.storePassword(ctx, "another-password", "") // as a changed BROWSERPIER_ADMIN_PASSWORD does
+	a.cred.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.finishSignIn(ctx, proof, TOTPCode(secret, *now), codeTOTP, false, "", ""); !errors.Is(err, ErrSignInAgain) {
+		t.Fatalf("a step from before a password change: %v", err)
+	}
+}

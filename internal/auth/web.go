@@ -29,6 +29,9 @@ const maxWaiting = 64
 const (
 	CookieName   = "bp_session"
 	DeviceCookie = "bp_device"
+	// StepCookie carries a pending second step, between a right password
+	// and a code. It is no session: it opens nothing but the code page.
+	StepCookie = "bp_login_step"
 )
 
 // WebOptions say how requests reach BrowserPier.
@@ -53,6 +56,9 @@ type Web struct {
 	loginIP     *Lockout  // per client
 	backstop    *backstop // failures from everywhere; past a limit, sign-ins are slowed
 	deviceFails *Lockout  // per device cookie; a locked one is treated as unknown
+	codeIP      *Lockout  // wrong second-step codes per client, apart from wrong passwords
+	codeAccount *Lockout  // wrong app codes from unknown browsers, from everywhere together
+	steps       *pendingSteps
 	waiting     atomic.Int32
 	slow        chan struct{}
 	setup       *Lockout
@@ -69,6 +75,13 @@ func NewWeb(admin *Admin, tokens *Tokens, log *slog.Logger, opts WebOptions) *We
 		admin: admin, tokens: tokens, log: log, opts: opts,
 		loginIP:     NewLockout(5, 5*time.Minute, 5*time.Minute),
 		deviceFails: NewLockout(5, time.Hour, 24*time.Hour),
+		// Three app codes are valid at a time out of a million: past 10
+		// wrong ones a day from browsers that never signed in, app codes
+		// from those wait for the next day (recovery codes still work).
+		// Someone who knows the password then has about a 1% chance a year.
+		codeIP:      NewLockout(5, 5*time.Minute, 5*time.Minute),
+		codeAccount: NewLockout(10, 24*time.Hour, 24*time.Hour),
+		steps:       newPendingSteps(),
 		backstop:    &backstop{window: 15 * time.Minute, free: 20, base: 2 * time.Second, max: 30 * time.Second, now: time.Now},
 		setup:       NewLockout(10, 5*time.Minute, 5*time.Minute),
 		badToken:    NewLockout(20, 5*time.Minute, 5*time.Minute),
@@ -77,7 +90,7 @@ func NewWeb(admin *Admin, tokens *Tokens, log *slog.Logger, opts WebOptions) *We
 		pages:       map[string]*template.Template{},
 	}
 	base := template.Must(template.New("").Parse(pagesHTML))
-	for _, name := range []string{"login", "setup"} {
+	for _, name := range []string{"login", "code", "setup"} {
 		t := template.Must(base.Clone())
 		template.Must(t.Parse(`{{define "body"}}{{template "` + name + `-body" .}}{{end}}`))
 		w.pages[name] = t
@@ -101,10 +114,12 @@ func (w *Web) Admin() *Admin { return w.admin }
 // Tokens is the agent token store the middleware checks against.
 func (w *Web) Tokens() *Tokens { return w.tokens }
 
-// Register adds /login, /logout and /setup.
+// Register adds /login, /login/code, /logout and /setup.
 func (w *Web) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /login", w.loginPage)
 	mux.HandleFunc("POST /login", w.login)
+	mux.HandleFunc("GET /login/code", w.codePage)
+	mux.HandleFunc("POST /login/code", w.loginCode)
 	mux.HandleFunc("POST /logout", w.logout)
 	mux.HandleFunc("GET /setup", w.setupPage)
 	mux.HandleFunc("POST /setup", w.doSetup)
@@ -398,7 +413,7 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(CookieName); err == nil {
 		oldCookie = c.Value
 	}
-	value, s, err := w.admin.SignIn(r.Context(), r.PostFormValue("password"), d.Remember, r.UserAgent(), oldCookie)
+	value, s, proof, err := w.admin.signIn(r.Context(), r.PostFormValue("password"), d.Remember, r.UserAgent(), oldCookie)
 	if errors.Is(err, ErrWrongPassword) {
 		left := mine.Fail()
 		if global != nil {
@@ -414,6 +429,25 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 		}
 		d.Error = fmt.Sprintf("Wrong password. %d %s left before a 5‑minute lockout.", left, plural(left, "try", "tries"))
 		w.render(rw, r, http.StatusUnauthorized, "login", d)
+		return
+	}
+	if errors.Is(err, ErrNeedsCode) {
+		// The password is right, but nothing is signed in yet: no session
+		// and no device cookie until the code. Password failures clear;
+		// code failures never do. The device's failures stay as they are,
+		// so a stolen device cookie can't clear its own count this way.
+		mine.Succeed()
+		if device != nil {
+			device.Cancel()
+		}
+		token := w.steps.add(&pendingStep{proof: proof, next: d.Next, remember: d.Remember})
+		//nolint:gosec // Secure as the session cookie is
+		http.SetCookie(rw, &http.Cookie{
+			Name: StepCookie, Value: token, Path: "/login", MaxAge: int(stepTTL.Seconds()),
+			HttpOnly: true, Secure: w.SecureCookie(r), SameSite: http.SameSiteStrictMode,
+		})
+		w.log.Info("admin password right; asking for the second step", "ip", ip)
+		http.Redirect(rw, r, "/login/code", http.StatusSeeOther)
 		return
 	}
 	if err != nil {
@@ -549,7 +583,8 @@ func (w *Web) locked(rw http.ResponseWriter, r *http.Request, d pageData, wait t
 }
 
 // setCookies hands the browser its new session cookie, and a device
-// cookie that marks it as known for future sign-ins.
+// cookie that marks it as known for future sign-ins. It is called only
+// once every step of the sign-in passed.
 func (w *Web) setCookies(rw http.ResponseWriter, r *http.Request, value string, s AdminSession) {
 	//nolint:gosec // Secure is set whenever served over HTTPS; plain-HTTP private setups can't store a Secure cookie
 	c := &http.Cookie{
@@ -564,11 +599,18 @@ func (w *Web) setCookies(rw http.ResponseWriter, r *http.Request, value string, 
 		c.Expires = s.ExpiresAt
 	}
 	http.SetCookie(rw, c)
+	w.SetDeviceCookie(rw, r)
+}
+
+// SetDeviceCookie marks the signed-in browser as known, with a device
+// cookie made under the current device key: after a sign-in, and after
+// turning on two-step sign-in, which rotates the key.
+func (w *Web) SetDeviceCookie(rw http.ResponseWriter, r *http.Request) {
 	if device, err := w.admin.NewDeviceToken(r.Context()); err == nil {
-		//nolint:gosec // as above
+		//nolint:gosec // as in setCookies
 		http.SetCookie(rw, &http.Cookie{
 			Name: DeviceCookie, Value: device, Path: "/login", HttpOnly: true,
-			Secure: c.Secure, SameSite: http.SameSiteLaxMode, Expires: time.Now().Add(DeviceTTL),
+			Secure: w.SecureCookie(r), SameSite: http.SameSiteLaxMode, Expires: time.Now().Add(DeviceTTL),
 		})
 	}
 }

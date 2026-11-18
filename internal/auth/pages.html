@@ -43,6 +43,19 @@
 </form>
 {{end}}
 
+{{define "code-body"}}
+<h1>Enter your code</h1>
+<p>Open your authenticator app and enter the 6-digit code for BrowserPier.</p>
+<form method="post" action="/login/code">
+<label for="code">Code</label>
+<input class="input mono{{if .Error}} bad{{end}}" id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" maxlength="40" required autofocus{{if .Error}} aria-invalid="true" aria-describedby="error"{{end}}>
+{{if .Error}}<div id="error" class="error" role="alert">{{.Error}}</div>{{end}}
+<p class="hint">Lost your phone? Use a recovery code, or reset from the server: see <a href="https://github.com/Oni-giri/browser-pier/blob/main/deploy/README.md#two-step-sign-in">the docs</a>.</p>
+<button class="btn primary wide" type="submit">Sign in <kbd>↵</kbd></button>
+</form>
+<p class="alt"><a href="/login{{with .Next}}?next={{.}}{{end}}">Back to the password</a></p>
+{{end}}
+
 {{define "setup-body"}}
 <h1>Set up BrowserPier</h1>
 <p>Choose the admin password. The setup code is in BrowserPier's log, on the line that says <code>setup_code=</code>.</p>

@@ -249,18 +249,44 @@ func (a *Admin) verify(ctx context.Context, hash, secret string) (bool, error) {
 
 // SignIn checks the password and, if it is right, replaces the browser's
 // old session (oldCookie, if any) with a new one, in one transaction. It
-// returns ErrWrongPassword for a wrong password.
+// returns ErrWrongPassword for a wrong password, and ErrNeedsCode, with
+// no session, when two-step sign-in is on.
 func (a *Admin) SignIn(ctx context.Context, password string, remember bool, userAgent, oldCookie string) (string, AdminSession, error) {
+	cookie, s, _, err := a.signIn(ctx, password, remember, userAgent, oldCookie)
+	return cookie, s, err
+}
+
+// signIn is SignIn, also returning, with ErrNeedsCode, a proof of the
+// password step for finishSignIn: the SHA-256 of the stored password
+// hash, so a password changed in between voids it. The two-step state is
+// read only after a right password, so a wrong one never tells whether
+// it is on, and a state that can't be read refuses the sign-in.
+func (a *Admin) signIn(ctx context.Context, password string, remember bool, userAgent, oldCookie string) (string, AdminSession, string, error) {
 	a.cred.RLock()
 	defer a.cred.RUnlock()
-	ok, err := a.CheckPassword(ctx, password)
+	stored, err := a.setting(ctx, "admin_password_hash")
 	if err != nil {
-		return "", AdminSession{}, err
+		return "", AdminSession{}, "", err
+	}
+	if stored == "" {
+		return "", AdminSession{}, "", ErrWrongPassword
+	}
+	ok, err := a.verify(ctx, stored, password)
+	if err != nil {
+		return "", AdminSession{}, "", err
 	}
 	if !ok {
-		return "", AdminSession{}, ErrWrongPassword
+		return "", AdminSession{}, "", ErrWrongPassword
 	}
-	return a.replaceSession(ctx, remember, userAgent, oldCookie)
+	st, err := readTwoStep(ctx, a.db)
+	if err != nil {
+		return "", AdminSession{}, "", err
+	}
+	if st.on {
+		return "", AdminSession{}, hashToken(stored), ErrNeedsCode
+	}
+	cookie, s, err := a.replaceSession(ctx, remember, userAgent, oldCookie)
+	return cookie, s, "", err
 }
 
 // replaceSession ends oldCookie's session, if any, and starts a new one,
