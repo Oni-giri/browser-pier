@@ -109,9 +109,26 @@ type browser struct {
 
 func startBrowser(t *testing.T, image, volume string) *browser {
 	t.Helper()
+	return startBrowserWith(t, image, volume, browserOptions{})
+}
+
+// browserOptions are what some tests add to the usual container.
+type browserOptions struct {
+	proxy string   // an upstream proxy URL, left in the control folder as the orchestrator does
+	args  []string // more `docker run` options, before the image
+}
+
+func startBrowserWith(t *testing.T, image, volume string, opt browserOptions) *browser {
+	t.Helper()
 	sockDir := t.TempDir()
 	if err := os.Chmod(sockDir, 0o777); err != nil { // the container's user creates the socket
 		t.Fatal(err)
+	}
+	if opt.proxy != "" {
+		b, _ := json.Marshal(map[string]string{"url": opt.proxy})
+		if err := os.WriteFile(filepath.Join(sockDir, "proxy.json"), b, 0o644); err != nil { //nolint:gosec // the container's user reads it
+			t.Fatal(err)
+		}
 	}
 	seccomp, err := filepath.Abs("seccomp.json")
 	if err != nil {
@@ -121,14 +138,14 @@ func startBrowser(t *testing.T, image, volume string) *browser {
 	run := append([]string{"run", "-d", "--name", name,
 		"--security-opt", "seccomp=" + seccomp},
 		appArmor(t, image, seccomp)...)
-	docker(t, append(run,
+	docker(t, slices.Concat(run, []string{
 		"--shm-size=1g",
 		"-e", "BROWSERPIER_SCREEN=1280x800",
 		// The test sites are on the Docker host: the local network.
 		"-e", "BROWSERPIER_LOCAL_NETWORK=true",
-		"-v", volume+":/profile",
-		"-v", sockDir+":/run/browserpier",
-		image)...)
+		"-v", volume + ":/profile",
+		"-v", sockDir + ":/run/browserpier"},
+		opt.args, []string{image})...)
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
 
 	sock := filepath.Join(sockDir, "control.sock")
@@ -164,6 +181,13 @@ func (b *browser) stop() string {
 // input posts a Visual-mode action to the control socket.
 func (b *browser) input(t *testing.T, path, body string) {
 	t.Helper()
+	b.inputWithin(t, path, body, 5*time.Second)
+}
+
+// inputWithin is input for an action that may take up to most, such as
+// typing a long text at human pace.
+func (b *browser) inputWithin(t *testing.T, path, body string, most time.Duration) {
+	t.Helper()
 	start := time.Now()
 	resp, err := b.http.Post("http://control"+path, "application/json", strings.NewReader(body))
 	if err != nil {
@@ -175,7 +199,7 @@ func (b *browser) input(t *testing.T, path, body string) {
 		t.Fatalf("%s %s: %d %s", path, body, resp.StatusCode, msg)
 	}
 	// xdotool's mousemove --sync to where the pointer already was took 15 s.
-	if d := time.Since(start); d > 5*time.Second {
+	if d := time.Since(start); d > most {
 		t.Fatalf("%s %s took %v", path, body, d)
 	}
 }
