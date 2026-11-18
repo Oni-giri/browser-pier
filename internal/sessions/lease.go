@@ -25,8 +25,10 @@ var (
 	ErrSessionHeld = errors.New("BrowserPier is busy with this browser; try again shortly")
 )
 
-// lease is one call of BrowserPier's page tools into a session's browser.
+// lease is one call of BrowserPier's page tools into a session's browser,
+// or an agent's input action (AgentInput).
 type lease struct {
+	// tokenID is the agent token the call came with.
 	tokenID string
 	cancel  context.CancelCauseFunc
 	// started is when an agent input action (AgentInput) or a page call

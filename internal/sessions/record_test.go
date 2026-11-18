@@ -168,7 +168,7 @@ func TestRecordingWaitsForTheAgentAfterHandBack(t *testing.T) {
 	f, rec := recordingFixture(t, true)
 	advance := f.clock()
 	s := f.start(f.m)
-	_, done, err := f.m.AgentInput(context.Background(), s.ID)
+	_, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestRecordingWaitsForTheAgentAfterHandBack(t *testing.T) {
 	f.m.ReleaseControl(s.ID)
 	// The tail from before doesn't carry over the person's control.
 	wantRecording(t, rec, s.ID, false, recording.Idle)
-	_, done, err = f.m.AgentInput(context.Background(), s.ID)
+	_, done, err = f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestAgentActionsStartRecordingAndTheTailEnds(t *testing.T) {
 			return l.Release
 		},
 		"input action": func() func() {
-			_, done, err := f.m.AgentInput(context.Background(), s.ID)
+			_, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -265,7 +265,7 @@ func TestAgentActionsStartRecordingAndTheTailEnds(t *testing.T) {
 	}
 	// The timer itself, on the real clock.
 	f.m.now = func() time.Time { return time.Now() }
-	_, done, err := f.m.AgentInput(context.Background(), s.ID)
+	_, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +281,7 @@ func TestAgentActionsStartRecordingAndTheTailEnds(t *testing.T) {
 func TestRecordingNeedsTheSettingAndARunningBrowser(t *testing.T) {
 	f, rec := recordingFixture(t, false)
 	s := f.start(f.m)
-	_, done, err := f.m.AgentInput(context.Background(), s.ID)
+	_, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +353,7 @@ func TestRecordingDoesntHoldOffIdleStop(t *testing.T) {
 	}
 	rs, ps := f.startProfile("recorded"), f.startProfile("plain")
 	for _, s := range []Session{rs, ps} {
-		_, done, err := f.m.AgentInput(ctx, s.ID)
+		_, done, err := f.m.AgentInput(ctx, s.ID, "tok")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -475,14 +475,14 @@ func TestReconcileAndRecordings(t *testing.T) {
 	}
 	// Picked up: the running one records from the agent's next action...
 	wantRecording(t, rec, running.ID, false, "")
-	_, done, err := m.AgentInput(ctx, running.ID)
+	_, done, err := m.AgentInput(ctx, running.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
 	done()
 	wantRecording(t, rec, running.ID, true, "")
 	// ...the one with a person for a handoff doesn't.
-	if _, _, err := m.AgentInput(ctx, helped.ID); err == nil {
+	if _, _, err := m.AgentInput(ctx, helped.ID, "tok"); err == nil {
 		t.Fatal("agent input during a handoff")
 	}
 	if ok, _ := rec.state(helped.ID); ok {
@@ -535,7 +535,7 @@ func TestRecordingStaysOffWhileTheClipboardIsEmptied(t *testing.T) {
 	// enough for a person to take control, within the tail.
 	agentActs := func() {
 		t.Helper()
-		_, done, err := f.m.AgentInput(context.Background(), s.ID)
+		_, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -651,7 +651,7 @@ func TestReconcileEmptiesTheClipboardBeforeAnyRecording(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantRecording(t, rec, s.ID, false, "")
-	_, done, err := m.AgentInput(context.Background(), s.ID)
+	_, done, err := m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -676,7 +676,7 @@ func TestAFailedStopEmptiesTheClipboardOfAHandBackDuringIt(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
 	mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) {
-		if _, done, err := f.m.AgentInput(context.Background(), id); err == nil {
+		if _, done, err := f.m.AgentInput(context.Background(), id, "tok"); err == nil {
 			done()
 			t.Error("agent input let in before the clipboard was emptied")
 		}
@@ -690,7 +690,7 @@ func TestAFailedStopEmptiesTheClipboardOfAHandBackDuringIt(t *testing.T) {
 	advance := f.clock()
 	s := f.start(f.m)
 	id = s.ID
-	_, done, err := f.m.AgentInput(context.Background(), s.ID)
+	_, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -722,7 +722,7 @@ func TestAFailedStopEmptiesTheClipboardOfAHandBackDuringIt(t *testing.T) {
 	if snap, _ := f.m.Live("google"); snap.State != Running || snap.HumanControl {
 		t.Fatalf("after the failed stop: %s, person in control %v", snap.State, snap.HumanControl)
 	}
-	_, done, err = f.m.AgentInput(context.Background(), s.ID)
+	_, done, err = f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -782,7 +782,7 @@ func TestRefreshRecordingAppliesTheSettingAsItIs(t *testing.T) {
 	if record {
 		t.Fatal("the browser records with Record sessions off")
 	}
-	_, done, err := f.m.AgentInput(ctx, s.ID)
+	_, done, err := f.m.AgentInput(ctx, s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}

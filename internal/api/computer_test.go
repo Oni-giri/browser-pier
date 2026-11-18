@@ -363,3 +363,53 @@ func TestComputerScreenshotOverTheCap(t *testing.T) {
 		t.Fatalf("at the cap: %d %q", code, raw)
 	}
 }
+
+// Revoking a token breaks off its long human-paced type at once, as it
+// does its page calls, whether from the UI or the token CLI (the
+// revocation watcher) (PROJ-166).
+func TestRevokingATokenInterruptsItsType(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	s := f.start(f.all, "google", "visual")
+	tok, secret, err := f.tokens.Create(ctx, "doomed", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type answer struct {
+		code int
+		raw  []byte
+	}
+	got := make(chan answer, 1)
+	go func() {
+		req, _ := http.NewRequest(http.MethodPost, f.srv.URL+"/api/sessions/"+s.ID+"/type", strings.NewReader(`{"text": "typed slowly"}`))
+		req.Header.Set("Authorization", "Bearer "+secret)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			got <- answer{0, []byte(err.Error())}
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		raw, _ := io.ReadAll(resp.Body)
+		got <- answer{resp.StatusCode, raw}
+	}()
+	waitFor(t, func() bool { return f.lastInput() != "" })
+	// A check before the revocation leaves it be.
+	f.api.checkRevocations(ctx)
+	if err := f.tokens.Revoke(ctx, tok.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.api.checkRevocations(ctx)
+	var a answer
+	select {
+	case a = <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the type went on after its token was revoked")
+	}
+	if a.code != http.StatusConflict || !strings.Contains(string(a.raw), "input broke off: the agent token was revoked") {
+		t.Fatalf("the type cut short answered %d %s", a.code, a.raw)
+	}
+	waitFor(t, func() bool { return f.lastInput() == "cut short" })
+	if got := strings.Join(f.whats(s.ID), "\n"); !strings.HasSuffix(got, "doomed: Typing interrupted") {
+		t.Fatalf("activity:\n%s", got)
+	}
+}

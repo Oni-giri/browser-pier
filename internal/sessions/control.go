@@ -20,8 +20,10 @@ const takeOverAfter = 3 * time.Second
 // person has control, and with ErrInputBusy while another is under way:
 // one at a time per session, so an agent can't queue up minutes of input.
 //
-// It is a lease: call done once the browser has answered. A handoff
-// (Needs help) or a stop cancels the context it returns, so an action
+// It is a lease, held by the token tokenID: call done once the browser
+// has answered. A handoff (Needs help), a stop or the token's revocation
+// (DisconnectToken, with ErrRevoked) cancels the context it returns, so
+// an action
 // that takes a while (typing at human pace, PROJ-113) breaks off at once,
 // and waits for leases to end before the person gets the browser; it
 // refuses new ones. The browser lets go of what the action held as it
@@ -29,7 +31,7 @@ const takeOverAfter = 3 * time.Second
 // break. A person can take control from the live view once one has run
 // for takeOverAfter, which breaks it off the same way; not before, nor
 // for agentQuiet after it ends.
-func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, func(), error) {
+func (m *Manager) AgentInput(ctx context.Context, id, tokenID string) (context.Context, func(), error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.findLocked(id)
@@ -50,6 +52,7 @@ func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, f
 		l.inputs = map[*lease]struct{}{}
 	}
 	l.inputs[in] = struct{}{}
+	in.tokenID = tokenID // DisconnectToken cancels it with ErrRevoked
 	m.agentActedLocked(l)
 	return cctx, sync.OnceFunc(func() {
 		cancel(context.Canceled)

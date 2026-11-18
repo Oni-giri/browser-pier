@@ -19,7 +19,7 @@ func TestTakeAndReleaseControl(t *testing.T) {
 	s := f.start(f.m)
 
 	// An agent clicking just now is driving.
-	_, done, err := f.m.AgentInput(context.Background(), s.ID)
+	_, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestTakeAndReleaseControl(t *testing.T) {
 		done()
 	}
 	// While a person drives, agents can only watch.
-	if _, _, err := f.m.AgentInput(context.Background(), s.ID); !errors.Is(err, ErrHumanDriving) {
+	if _, _, err := f.m.AgentInput(context.Background(), s.ID, "tok"); !errors.Is(err, ErrHumanDriving) {
 		t.Fatalf("agent input while a person drives = %v", err)
 	}
 	if _, _, err := f.m.Attach(ctx, s.ID, "t", "claude"); !errors.Is(err, ErrHumanDriving) {
@@ -63,7 +63,7 @@ func TestTakeAndReleaseControl(t *testing.T) {
 	if _, err := f.m.HumanInput(s.ID); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("human input after release = %v", err)
 	}
-	if _, done, err := f.m.AgentInput(context.Background(), s.ID); err != nil {
+	if _, done, err := f.m.AgentInput(context.Background(), s.ID, "tok"); err != nil {
 		t.Fatalf("agent input after hand-back = %v", err)
 	} else {
 		done()
@@ -75,7 +75,7 @@ func TestTakeAndReleaseControl(t *testing.T) {
 func TestHandoffWaitsForInputInFlight(t *testing.T) {
 	f := newFixture(t)
 	s := f.start(f.m)
-	ctx, done, err := f.m.AgentInput(context.Background(), s.ID)
+	ctx, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestHandoffWaitsForInputInFlight(t *testing.T) {
 		t.Fatal("the handoff began while an agent's click was in flight")
 	case <-time.After(200 * time.Millisecond):
 	}
-	if _, _, err := f.m.AgentInput(context.Background(), s.ID); !errors.Is(err, ErrHumanDriving) {
+	if _, _, err := f.m.AgentInput(context.Background(), s.ID, "tok"); !errors.Is(err, ErrHumanDriving) {
 		t.Fatalf("new input while a handoff waits = %v", err)
 	}
 	done()
@@ -117,7 +117,7 @@ func TestLongInputKeepsTheAgentDriving(t *testing.T) {
 	f := newFixture(t)
 	advance := f.clock()
 	s := f.start(f.m)
-	_, done, err := f.m.AgentInput(context.Background(), s.ID)
+	_, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,15 +141,15 @@ func TestLongInputKeepsTheAgentDriving(t *testing.T) {
 func TestOneAgentInputAtATime(t *testing.T) {
 	f := newFixture(t)
 	s := f.start(f.m)
-	_, done, err := f.m.AgentInput(context.Background(), s.ID)
+	_, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := f.m.AgentInput(context.Background(), s.ID); !errors.Is(err, ErrInputBusy) {
+	if _, _, err := f.m.AgentInput(context.Background(), s.ID, "tok"); !errors.Is(err, ErrInputBusy) {
 		t.Fatalf("a second input while one runs = %v, want ErrInputBusy", err)
 	}
 	done()
-	_, done, err = f.m.AgentInput(context.Background(), s.ID)
+	_, done, err = f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatalf("an input after the first ended = %v", err)
 	}
@@ -163,7 +163,7 @@ func TestTakeControlBreaksOffALongInput(t *testing.T) {
 	f := newFixture(t)
 	advance := f.clock()
 	s := f.start(f.m)
-	ctx, done, err := f.m.AgentInput(context.Background(), s.ID)
+	ctx, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestTakeControlBreaksOffALongInput(t *testing.T) {
 		t.Fatalf("Take control returned (%v) while the input was still under way", err)
 	case <-time.After(200 * time.Millisecond):
 	}
-	if _, _, err := f.m.AgentInput(context.Background(), s.ID); !errors.Is(err, ErrHumanDriving) && !errors.Is(err, ErrInputBusy) {
+	if _, _, err := f.m.AgentInput(context.Background(), s.ID, "tok"); !errors.Is(err, ErrHumanDriving) && !errors.Is(err, ErrInputBusy) {
 		t.Fatalf("new input while Take control waits = %v", err)
 	}
 	done()
@@ -199,7 +199,7 @@ func TestTakeControlBreaksOffALongInput(t *testing.T) {
 	if got, _ := f.m.Live("google"); !got.HumanControl {
 		t.Fatal("HumanControl not shown")
 	}
-	if _, _, err := f.m.AgentInput(context.Background(), s.ID); !errors.Is(err, ErrHumanDriving) {
+	if _, _, err := f.m.AgentInput(context.Background(), s.ID, "tok"); !errors.Is(err, ErrHumanDriving) {
 		t.Fatalf("agent input after Take control = %v", err)
 	}
 }
@@ -209,7 +209,7 @@ func TestTakeControlBreaksOffALongInput(t *testing.T) {
 func TestTakeControlInAHandoffWaitsForInput(t *testing.T) {
 	f := newFixture(t)
 	s := f.start(f.m)
-	ctx, done, err := f.m.AgentInput(context.Background(), s.ID)
+	ctx, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +237,7 @@ func TestTakeControlInAHandoffWaitsForInput(t *testing.T) {
 func TestStopCancelsInput(t *testing.T) {
 	f := newFixture(t)
 	s := f.start(f.m)
-	ctx, done, err := f.m.AgentInput(context.Background(), s.ID)
+	ctx, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ func TestBrowserWithInputUnderWayIsNeverIdle(t *testing.T) {
 	advance := f.clock()
 	f.profile("w", 5*time.Minute)
 	s := f.startProfile("w")
-	in, done, err := f.m.AgentInput(context.Background(), s.ID)
+	in, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +344,7 @@ func TestReleaseControlEmptiesTheClipboardFirst(t *testing.T) {
 		// While it empties, agents are still kept out, and so is more of
 		// the person's input.
 		var e emptying
-		if _, done, err := f.m.AgentInput(context.Background(), id); err == nil {
+		if _, done, err := f.m.AgentInput(context.Background(), id, "tok"); err == nil {
 			done()
 		} else {
 			e.agentInput = err
@@ -394,7 +394,7 @@ func TestReleaseControlEmptiesTheClipboardFirst(t *testing.T) {
 		default:
 			t.Fatalf("%s: the clipboard wasn't emptied", what)
 		}
-		if _, done, err := f.m.AgentInput(context.Background(), s.ID); err != nil {
+		if _, done, err := f.m.AgentInput(context.Background(), s.ID, "tok"); err != nil {
 			t.Fatalf("%s: agent input after = %v", what, err)
 		} else {
 			done()
@@ -484,4 +484,35 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.b.String()
+}
+
+// Revoking a token breaks off its input action under way (a long
+// human-paced type), as it does its page calls; another token's
+// revocation leaves it be (PROJ-166).
+func TestRevokingATokenCancelsItsInput(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	ctx, done, err := f.m.AgentInput(context.Background(), s.ID, "A")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer done()
+	if got := f.m.ConnectedTokens(); len(got) != 1 || got[0] != "A" {
+		t.Fatalf("ConnectedTokens = %v; the revocation watcher wouldn't look at it", got)
+	}
+	f.m.DisconnectToken("B")
+	select {
+	case <-ctx.Done():
+		t.Fatal("another token's revocation cancelled the input")
+	default:
+	}
+	f.m.DisconnectToken("A")
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the revocation didn't cancel the input")
+	}
+	if err := context.Cause(ctx); !errors.Is(err, ErrRevoked) {
+		t.Fatalf("cause = %v", err)
+	}
 }

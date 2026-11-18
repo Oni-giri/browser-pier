@@ -602,7 +602,8 @@ func takeDownloadWait(body []byte) ([]byte, *int, error) {
 // act runs one input action through the control socket and logs it, or
 // writes why it didn't run.
 func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, path string, body []byte) bool {
-	ctx, done, err := a.m.AgentInput(r.Context(), s.ID)
+	tok, _ := auth.TokenFromContext(r.Context())
+	ctx, done, err := a.m.AgentInput(r.Context(), s.ID, tok.ID)
 	if errors.Is(err, sessions.ErrInputBusy) {
 		writeError(w, http.StatusConflict, "another input is still running in this browser; wait for it to finish, then send this one")
 		return false
@@ -611,13 +612,13 @@ func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, pa
 		writeError(w, http.StatusConflict, "a person has this browser (live view or a handoff); wait until they hand it back")
 		return false
 	}
-	// Until this returns: a handoff, the live view's Take control or a
-	// stop cancels ctx, which aborts the request to the browser and waits
-	// for done. The browser then breaks the action off and lets go of any
-	// key or button it held, which can still take it some tens of
-	// milliseconds after the person has the browser.
+	// Until this returns: a handoff, the live view's Take control, a stop
+	// or the token's revocation cancels ctx, which aborts the request to
+	// the browser; all but the revocation then wait for done. The browser
+	// then breaks the action off and lets go of any key or button it held,
+	// which can still take it some tens of milliseconds after the person
+	// has the browser.
 	defer done()
-	tok, _ := auth.TokenFromContext(r.Context())
 	resp, err := a.control(ctx, s.Profile, http.MethodPost, path, body)
 	if err != nil {
 		if ctx.Err() != nil && r.Context().Err() == nil {
