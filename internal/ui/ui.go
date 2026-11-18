@@ -78,6 +78,12 @@ type UI struct {
 	// admin is signed in, but a borrowed laptop shouldn't be able to guess.
 	pinTries *auth.Lockout
 
+	// twoStep holds, per admin session, a new authenticator secret until
+	// a code from it is right (twostep.go). In memory only.
+	twoStepMu     sync.Mutex
+	twoStepDrafts map[string]twoStepDraft
+	now           func() time.Time
+
 	// prevMu also serialises screenshots: one at a time is plenty.
 	prevMu   sync.Mutex
 	previews map[string]cachedPreview
@@ -90,7 +96,7 @@ type UI struct {
 
 func New(m *sessions.Manager, web *auth.Web, handoffs *handoff.Service, st *settings.Store, log *slog.Logger, o Options) *UI {
 	u := &UI{m: m, web: web, handoffs: handoffs, settings: st, log: log, o: o, pages: map[string]*template.Template{}, previews: map[string]cachedPreview{},
-		pinTries: auth.NewLockout(5, 15*time.Minute, 15*time.Minute)}
+		pinTries: auth.NewLockout(5, 15*time.Minute, 15*time.Minute), twoStepDrafts: map[string]twoStepDraft{}, now: time.Now}
 	base := template.Must(template.New("").Funcs(funcs).ParseFS(embedded, "templates/layout.html", "templates/parts.html"))
 	for _, page := range []string{"overview", "profiles", "profile", "profile-form", "agents", "settings", "recording"} {
 		t := template.Must(base.Clone())
@@ -149,6 +155,9 @@ func (u *UI) Register(mux *http.ServeMux) {
 	mux.Handle("POST /settings/pin", admin(u.savePIN))
 	mux.Handle("POST /settings/password", admin(u.changePassword))
 	mux.Handle("POST /settings/sign-out-others", admin(u.signOutOthers))
+	mux.Handle("POST /settings/two-step/on", admin(u.twoStepOn))
+	mux.Handle("POST /settings/two-step/confirm", admin(u.twoStepConfirm))
+	mux.Handle("POST /settings/two-step/manage", admin(u.twoStepManage))
 	mux.Handle("POST /settings/appearance", admin(u.saveAppearance))
 }
 

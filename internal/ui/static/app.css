@@ -20,6 +20,7 @@
   --red:#DC2626;--red-strong:#B91C1C;--red-text:light-dark(#B91C1C,#FFA195);--red-tint:light-dark(#FEF2F2,#442728);
   --violet:#7C3AED;--violet-text:light-dark(#6D28D9,#BFB1FC);--violet-tint:light-dark(#F3EEFF,#312C45);
   --on-accent:#FFFFFF; /* text on blue, orange, red and dark blocks, in both themes */
+  --qr-bg:#FFFFFF; /* behind a QR code, in both themes: scanners want dark on light */
   --ring:0 0 0 1px light-dark(rgba(37,64,140,.07),rgba(148,163,184,.14)),0 1px 2px light-dark(rgba(37,64,140,.06),rgba(0,0,0,.16)),0 10px 28px -12px light-dark(rgba(37,64,140,.20),rgba(0,0,0,.52));
   --shadow-card:var(--ring);
   --shadow-pop:light-dark(rgba(15,23,42,.12),rgba(0,0,0,.5));
@@ -478,6 +479,14 @@ body.full-open{overflow:hidden}
 .secret code{flex:1;-webkit-user-select:all;user-select:all}
 
 /* Settings */
+/* Two-step sign-in: the QR code stays dark on white in both themes, as scanners expect. */
+.qr-box{display:flex;justify-content:center;padding:10px;border-radius:12px;background:var(--qr-bg);box-shadow:0 0 0 1px var(--line);width:max-content;max-width:100%;margin:0 auto}
+.qr-box svg{display:block;width:196px;height:196px;max-width:100%}
+.recovery-codes{margin:0 0 14px;padding:12px 16px 12px 38px;border-radius:10px;background:var(--fill);font-family:var(--mono);font-size:14px;columns:2;column-gap:32px}
+.recovery-codes li{padding:3px 0;-webkit-user-select:all;user-select:all;font-variant-numeric:tabular-nums}
+@media (max-width:480px){.recovery-codes{columns:1}}
+.dlg-foot.wrap{flex-wrap:wrap}
+.warn-text{color:var(--orange-text);font-weight:500}
 .kv{list-style:none;margin:0;padding:0}
 .kv li{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--line-soft)}
 .kv li>.muted{min-width:0;overflow-wrap:anywhere;text-align:right}

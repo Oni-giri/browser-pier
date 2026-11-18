@@ -43,6 +43,8 @@ type fixture struct {
 	free       int64 // what the host has available, for HostFree
 	// emptied counts the browser's clipboard emptyings (PROJ-194).
 	emptied atomic.Int32
+	app     *UI
+	cookie  string // the signed-in admin session's
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -97,6 +99,7 @@ func newFixture(t *testing.T) *fixture {
 	f.recordings = recording.NewStore(filepath.Join(dir, "recordings"), log)
 	app := New(m, web, f.handoffs, f.settings, log, Options{HostMemory: 16 << 30, HostFree: func() int64 { return f.free }, SetRAMLimit: func(p int) { f.ram = p },
 		Recordings: f.recordings})
+	f.app = app
 	mux := http.NewServeMux()
 	web.Register(mux)
 	app.Register(mux)
@@ -110,6 +113,7 @@ func newFixture(t *testing.T) *fixture {
 	jar, _ := cookiejar.New(nil)
 	u, _ := url.Parse(f.srv.URL)
 	jar.SetCookies(u, []*http.Cookie{{Name: auth.CookieName, Value: cookie, Path: "/"}})
+	f.cookie = cookie
 	f.client = &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	return f
 }

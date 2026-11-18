@@ -22,11 +22,21 @@ type settingsData struct {
 	PINChangedAt time.Time
 	Devices      int
 	PasswordEnv  bool
+	TwoStep      auth.TwoStepStatus
+	TwoStepErr   bool // the state can't be read
 	Error        string
 	// RecordingsUsed is what session recordings hold now, in bytes.
 	RecordingsUsed int64
 	// Which form the error is for: pin, password or defaults.
 	ErrorFor string
+}
+
+// TwoStepForm is the two-step dialog as the page first shows it.
+func (d settingsData) TwoStepForm() twoStepForm {
+	if d.TwoStep.On {
+		return twoStepForm{Stage: "manage"}
+	}
+	return twoStepForm{Stage: "password"}
 }
 
 // Policies are the handoff policies, least strict first.
@@ -43,8 +53,8 @@ var policyChoices = []policyChoice{
 		"Anyone with the link can open the browser. Only over HTTPS on a public server."},
 	{profiles.PolicyPIN, "Link + PIN", "Link plus your PIN. The agent never sees the PIN.",
 		"The link asks for your handoff PIN first. A good default: a leaked link is useless on its own."},
-	{profiles.PolicySignIn, "Full sign-in", "Your admin password. For email, banking and payments.",
-		"The link asks for your admin password. For accounts where a mistake costs money."},
+	{profiles.PolicySignIn, "Full sign-in", "Your admin sign-in. For email, banking and payments.",
+		"The link asks for your admin password, and a code from your authenticator app when two-step sign-in is on. For accounts where a mistake costs money."},
 }
 
 // AutoStopChoices are the idle timeouts offered, in minutes; 0 is never.
@@ -89,6 +99,10 @@ func (u *UI) settingsData(r *http.Request) (settingsData, error) {
 	d.PINChangedAt, _ = u.web.Admin().PINChangedAt(r.Context())
 	if all, err := u.web.Admin().Sessions(r.Context()); err == nil {
 		d.Devices = len(all)
+	}
+	if d.TwoStep, err = u.web.Admin().TwoStep(r.Context()); err != nil {
+		u.log.Error("reading two-step sign-in", "err", err)
+		d.TwoStepErr = true
 	}
 	return d, nil
 }
