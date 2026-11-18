@@ -38,6 +38,7 @@ func newTestVisual(fail bool) (*visual, *[]call) {
 		return []byte("x:100 y:700 screen:0 window:4194311\n"), nil
 	}
 	v.mot = motion.New(1)
+	v.chromium = addressBarChromium
 	return v, &calls
 }
 

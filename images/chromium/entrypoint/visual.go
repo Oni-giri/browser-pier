@@ -51,9 +51,11 @@ type visual struct {
 	// early with ctx's error if ctx ends first.
 	now   func() time.Time
 	sleep func(ctx context.Context, d time.Duration) error
-	// windows lists the windows showing at a point (windowsAtPoint),
-	// replaced in tests.
-	windows func(ctx context.Context, x, y int) ([]shownWindow, error)
+	// look reads the screen at a point (lookAt), replaced in tests.
+	look func(ctx context.Context, x, y int) (screenLook, error)
+	// chromium is the installed Chromium's major version (0 if unknown),
+	// which the address bar's place depends on (open.go).
+	chromium int
 }
 
 // shortcutGap is the least time between an agent's key call that ends on
@@ -138,7 +140,7 @@ const (
 
 func newVisual(width, height int) *visual {
 	return &visual{width: width, height: height, run: runCommand, output: runStdout, mot: motion.NewRandom(), live: newLiveInput(width, height),
-		clip: clipState{hold: holdClipboard, read: readSelection}, now: time.Now, sleep: sleepCtx, windows: windowsAtPoint}
+		clip: clipState{hold: holdClipboard, read: readSelection}, now: time.Now, sleep: sleepCtx, look: lookAt, chromium: installedChromium(chromiumVersionFile)}
 }
 
 func (v *visual) register(mux *http.ServeMux) {

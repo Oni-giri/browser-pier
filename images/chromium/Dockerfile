@@ -59,6 +59,13 @@ RUN for el in ximagesrc videoconvert videoscale x264enc mp4mux fdsink; do gst-in
       LC_ALL=C grep -qaxF -- "$sw" /tmp/strings || { echo "chromium binary lacks --$sw"; exit 1; }; done \
  && rm /tmp/strings
 
+# The installed Chromium's version, for the open action: the address bar's
+# place is measured for one major version (entrypoint/open.go), and open
+# refuses on any other.
+RUN mkdir -p /etc/browserpier \
+ && dpkg-query -W -f '${Version}\n' chromium > /etc/browserpier/chromium-version \
+ && grep -Eq '^([0-9]+:)?[0-9]+\.' /etc/browserpier/chromium-version
+
 # Chromium runs as pier (uid 1000) by default. The orchestrator runs it as its
 # own uid instead, so it owns the profile files; HOME is set to a path any uid
 # can create, since that uid has no home here. /profile is the profile folder

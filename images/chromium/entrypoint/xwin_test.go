@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/binary"
 	"io"
 	"net"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeX is an X server with a window tree, answering the few requests
@@ -172,7 +175,7 @@ func TestWindowsAtFindsTheBrowserInItsFrame(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(got, []shownWindow{{Class: "Chromium-browser", Role: "browser", Box: rect{0, 0, 1280, 768}}}) {
+	if !slices.Equal(got, []shownWindow{{Class: "Chromium-browser", Role: "browser", Box: rect{0, 0, 1280, 768}, ID: 0x400002}}) {
 		t.Fatalf("%+v", got)
 	}
 	// Only reads: the tree, attributes, geometry, atoms and properties.
@@ -234,5 +237,106 @@ func TestXSetupRefused(t *testing.T) {
 	}()
 	if _, err := xSetup(cli); err == nil || !strings.Contains(err.Error(), "No protocol specified") {
 		t.Fatalf("%v", err)
+	}
+}
+
+// scripted serves one setup, then answers the first request with reply
+// (and closes, or with stall, never answers).
+func scripted(t *testing.T, reply []byte, stall bool) *xconn {
+	t.Helper()
+	cli, srv := net.Pipe()
+	t.Cleanup(func() { _ = cli.Close(); _ = srv.Close() })
+	go func() {
+		le := binary.LittleEndian
+		_, _ = io.ReadFull(srv, make([]byte, 12))
+		data := make([]byte, 40)
+		le.PutUint32(data[32:36], 0x100) // no vendor, no formats: the root
+		head := []byte{1, 0, 11, 0, 0, 0, byte(len(data) / 4), 0}
+		_, _ = srv.Write(append(head, data...))
+		h := make([]byte, 4)
+		if _, err := io.ReadFull(srv, h); err != nil {
+			return
+		}
+		_, _ = io.CopyN(io.Discard, srv, int64(le.Uint16(h[2:4]))*4-4)
+		if stall {
+			select {}
+		}
+		_, _ = srv.Write(reply)
+		_ = srv.Close()
+	}()
+	x, err := xSetup(cli)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return x
+}
+
+// TestMalformedXRepliesAreErrors: a reply that claims more than it
+// carries, more than the cap, or never comes is an error, never a panic
+// or a hang.
+func TestMalformedXRepliesAreErrors(t *testing.T) {
+	le := binary.LittleEndian
+	reply := func(words uint32, body []byte, set func(r []byte)) []byte {
+		r := make([]byte, 32)
+		r[0] = 1
+		le.PutUint32(r[4:8], words)
+		if set != nil {
+			set(r)
+		}
+		return append(r, body...)
+	}
+	for _, c := range []struct {
+		name string
+		resp []byte
+		do   func(x *xconn) error
+	}{
+		{"over the cap", reply(1<<20, nil, nil), func(x *xconn) error { _, err := x.children(1); return err }},
+		{"cut short", reply(10, make([]byte, 8), nil), func(x *xconn) error { _, err := x.children(1); return err }},
+		{"more children than sent", reply(1, make([]byte, 4), func(r []byte) { le.PutUint16(r[16:18], 100) }),
+			func(x *xconn) error { _, err := x.children(1); return err }},
+		{"a longer property than sent", reply(1, make([]byte, 4), func(r []byte) {
+			r[1] = 8
+			le.PutUint32(r[8:12], 31)
+			le.PutUint32(r[16:20], 1000)
+		}), func(x *xconn) error { _, _, err := x.property(1, 2); return err }},
+		{"a short attributes reply", reply(0, nil, nil), func(x *xconn) error { _, _, err := x.attributes(1); return err }},
+		{"an error", []byte{0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+			func(x *xconn) error { _, err := x.children(1); return err }},
+	} {
+		x := scripted(t, c.resp, false)
+		if err := c.do(x); err == nil {
+			t.Errorf("%s: no error", c.name)
+		}
+	}
+	// A server that stops answering: the deadline ends the read.
+	x := scripted(t, nil, true)
+	_ = x.c.SetDeadline(time.Now().Add(100 * time.Millisecond))
+	start := time.Now()
+	if _, err := x.children(1); err == nil || time.Since(start) > 2*time.Second {
+		t.Errorf("stalled: %v after %v", err, time.Since(start))
+	}
+}
+
+// TestACancelledLookEndsAtOnce: a handoff cancels the request, which
+// closes the connection rather than waiting out the deadline.
+func TestACancelledLookEndsAtOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "X9")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() {
+		c, err := ln.Accept()
+		if err == nil {
+			defer func() { _ = c.Close() }()
+			_, _ = io.Copy(io.Discard, c) // reads the setup, never answers
+		}
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancel)
+	start := time.Now()
+	if _, err := dialXAt(ctx, path, 10*time.Second); err == nil || time.Since(start) > 2*time.Second {
+		t.Fatalf("%v after %v", err, time.Since(start))
 	}
 }

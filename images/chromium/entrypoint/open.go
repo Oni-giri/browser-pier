@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"unicode"
@@ -32,11 +33,58 @@ import (
 // menu buttons). Its ends hold buttons of their own (the site's security
 // chip, "Not secure" on plain HTTP, about 110 px; the bookmark star and
 // others), so the click aims at its middle.
+//
+// These hold for addressBarChromium only. Another Chromium may draw its
+// toolbar elsewhere, and a click there would go to a tab or the page with
+// the address after it, so open refuses on any other version until the
+// layout is measured again and this constant moved.
 const (
-	addressBarY     = 63
-	addressBarLeft  = 121
-	addressBarRight = 85 // from the screen's right edge
+	addressBarY        = 63
+	addressBarLeft     = 121
+	addressBarRight    = 85 // from the screen's right edge
+	addressBarChromium = 156
 )
+
+// chromiumVersionFile holds the installed Chromium package's version,
+// written when the image is built (Dockerfile).
+const chromiumVersionFile = "/etc/browserpier/chromium-version"
+
+// installedChromium reads the Chromium major version from a Debian
+// package version in file ("156.0.8078.79-1~deb13u1", maybe with an
+// epoch), or 0 if it can't.
+func installedChromium(file string) int {
+	b, err := os.ReadFile(file) //nolint:gosec // a fixed path in the image, or a test's
+	if err != nil {
+		return 0
+	}
+	return chromiumMajor(string(b))
+}
+
+func chromiumMajor(version string) int {
+	v := strings.TrimSpace(version)
+	if i := strings.IndexByte(v, ':'); i >= 0 {
+		v = v[i+1:]
+	}
+	major, _, _ := strings.Cut(v, ".")
+	n, err := strconv.Atoi(major)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
+// layoutKnown refuses the action on a Chromium whose address bar hasn't
+// been measured.
+func (v *visual) layoutKnown() error {
+	if v.chromium == addressBarChromium {
+		return nil
+	}
+	have := "an unknown version"
+	if v.chromium > 0 {
+		have = "Chromium " + strconv.Itoa(v.chromium)
+	}
+	return refusal(fmt.Sprintf("the address bar's place is known for Chromium %d only, and this browser is %s: open the address with the key ctrl+l and typing it instead", addressBarChromium, have))
+}
 
 // addressBar is the point the open action clicks, and the size of the
 // target its aim scatters over: at most 64 px wide (within about 26 px of
@@ -47,7 +95,7 @@ func (v *visual) addressBar() (point, motion.Size) {
 }
 
 // refusal is an error that answers 409: the action was refused as the
-// screen stands, and nothing was pressed.
+// screen stands, and nothing more was pressed.
 type refusal string
 
 func (r refusal) Error() string { return string(r) }
@@ -83,17 +131,43 @@ func (v *visual) addressBarCovered(stack []shownWindow) string {
 	return ""
 }
 
-// checkAddressBar refuses the action if something covers the address bar
-// at at.
-func (v *visual) checkAddressBar(ctx context.Context, at point) error {
-	stack, err := v.windows(ctx, at.X, at.Y)
+// opening is one open action's state between its runs: the browser
+// window whose address bar it clicks, which must keep the keyboard
+// until Return.
+type opening struct {
+	v       *visual
+	at      point
+	browser uint32
+}
+
+// clear looks at the address bar's point just before the press: the
+// browser window must be on top there. It remembers that window.
+func (o *opening) clear(ctx context.Context) error {
+	l, err := o.v.look(ctx, o.at.X, o.at.Y)
 	if err != nil {
 		return err
 	}
-	if why := v.addressBarCovered(stack); why != "" {
+	if why := o.v.addressBarCovered(l.Stack); why != "" {
 		return refusal(why)
 	}
+	o.browser = l.Stack[len(l.Stack)-1].ID
 	return nil
+}
+
+// still checks, after the click, that the browser window clicked still
+// has the keyboard: a window that opened meanwhile (a pop-up, a file
+// chooser) would get the rest of the address and Return.
+func (o *opening) still(typed, of int) func(ctx context.Context) error {
+	return func(ctx context.Context) error {
+		l, err := o.v.look(ctx, o.at.X, o.at.Y)
+		if err != nil {
+			return err
+		}
+		if l.Focus == 0 || l.Focus != o.browser {
+			return refusal(fmt.Sprintf("another window took the keyboard while the address was being typed (%d of its %d characters typed, Return not pressed): take a screenshot", typed, of))
+		}
+		return nil
+	}
 }
 
 type openRequest struct {
@@ -103,8 +177,9 @@ type openRequest struct {
 
 // openURL checks the address (weburl.Check, as navigate does) and that it
 // types as itself: no space, line break or control character, any of
-// which xdotool would type as a key. most caps its characters, as type's.
-func openURL(raw string, most int) (string, error) {
+// which xdotool would type as a key. Its characters are capped as an
+// instant type's.
+func openURL(raw string) (string, error) {
 	u, err := weburl.Check(raw)
 	if err != nil {
 		return "", err
@@ -112,50 +187,70 @@ func openURL(raw string, most int) (string, error) {
 	if strings.ContainsFunc(u, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
 		return "", errors.New("url: has a space or a control character")
 	}
-	if err := checkText(u, most); err != nil {
+	if err := checkText(u, maxTypeLen); err != nil {
 		return "", errors.New("url" + strings.TrimPrefix(err.Error(), "text"))
 	}
 	return u, nil
 }
 
-// instantOpen is the open action at instant pace: the click, select all,
-// the address at 12 ms a key ("type --" takes the rest as text, so it
-// ends its run), a pause for the address bar's suggestions, then Delete,
-// which drops a completion the address bar added after the text, and
-// Return.
-func (v *visual) instantOpen(at point, u string) []xcmd {
-	return []xcmd{
-		{check: func(ctx context.Context) error { return v.checkAddressBar(ctx, at) }},
-		{args: []string{"mousemove", strconv.Itoa(at.X), strconv.Itoa(at.Y), "click", "1", "sleep", "0.05",
-			"key", "--clearmodifiers", "--", "ctrl+a", "sleep", secs(shortcutGap)}, release: []string{"mouseup", "1", "keyup", "ctrl+a"}},
-		{args: []string{"type", "--clearmodifiers", "--delay", "12", "--", u}},
-		{args: []string{"sleep", "0.1", "key", "--clearmodifiers", "--delay", "50", "--", "Delete", "Return"}, release: []string{"keyup", "Delete", "Return"}},
+// openChunk is how many characters of the address one xdotool run types,
+// at 12 ms a key: under a second, after which the keyboard is looked at
+// again.
+const openChunk = 64
+
+// typeAddress types the address at 12 ms a key, at either pace: no page
+// sees these keys or their rhythm, they go to the address bar, and a
+// person pastes an address as often as they type it (but a paste would
+// overwrite the profile's clipboard). Before each run, the keyboard is
+// looked at (still); once more after the last.
+func (o *opening) typeAddress(u string) []xcmd {
+	runes := []rune(u)
+	var cmds []xcmd
+	for i := 0; i < len(runes); i += openChunk {
+		cmds = append(cmds, xcmd{check: o.still(i, len(runes))},
+			xcmd{args: []string{"type", "--clearmodifiers", "--delay", "12", "--", string(runes[i:min(i+openChunk, len(runes))])}})
 	}
+	return append(cmds, xcmd{check: o.still(len(runes), len(runes))})
+}
+
+// instantOpen is the open action at instant pace: the pointer moves to
+// the address bar, which is looked at once it is there; the click and
+// select all; the address; a pause for the address bar's suggestions,
+// then Delete, which drops a completion the address bar added after the
+// text, and Return.
+func (o *opening) instantOpen(u string) []xcmd {
+	x, y := strconv.Itoa(o.at.X), strconv.Itoa(o.at.Y)
+	cmds := []xcmd{
+		{check: o.clear},
+		{args: []string{"mousemove", x, y, "sleep", "0.05"}},
+		{check: o.clear},
+		{args: []string{"click", "1", "sleep", "0.05", "key", "--clearmodifiers", "--", "ctrl+a", "sleep", secs(shortcutGap)},
+			release: []string{"mouseup", "1", "keyup", "ctrl+a"}},
+	}
+	cmds = append(cmds, o.typeAddress(u)...)
+	return append(cmds, xcmd{args: []string{"sleep", "0.1", "key", "--clearmodifiers", "--delay", "50", "--", "Delete", "Return"},
+		release: []string{"keyup", "Delete", "Return"}})
 }
 
 // humanOpen is the open action at human pace: the pointer glides to the
-// address bar, which is looked at again once it is there (a pop-up may
-// have opened meanwhile), presses and holds, then select all, the address
-// at a typist's rhythm, Delete and Return, each held, with a hand's
-// pauses between.
-func (v *visual) humanOpen(from hand, at point, size motion.Size, u string) []xcmd {
-	aim := v.mot.Aim(motion.Point{X: float64(at.X), Y: float64(at.Y)}, size)
-	there := v.screenPoint(aim)
-	check := func(p point) xcmd {
-		return xcmd{check: func(ctx context.Context) error { return v.checkAddressBar(ctx, p) }}
-	}
-	cmds := []xcmd{check(at)}
-	// No moves if the pointer is there already, and xdotool takes no
-	// empty run.
-	if g := v.glide(nil, from, aim); len(g) > 0 {
-		cmds = append(cmds, xcmd{args: g}, check(there))
-	}
-	press := []string{"sleep", secs(v.mot.Dwell()), "mousedown", "1", "sleep", secs(v.mot.KeyHold()), "mouseup", "1",
+// address bar and pauses there as a hand does; the address bar is looked
+// at again only then, just before the press; the button and ctrl+a are
+// held; the address goes in as at instant pace (typeAddress); Delete and
+// Return are held, with a hand's pauses between.
+func (o *opening) humanOpen(from hand, size motion.Size, u string) []xcmd {
+	v := o.v
+	first := &opening{v: v, at: o.at} // the middle, before the pointer moves
+	aim := v.mot.Aim(motion.Point{X: float64(o.at.X), Y: float64(o.at.Y)}, size)
+	o.at = v.screenPoint(aim)
+	// The dwell comes before the last look, so the press follows it at once.
+	glide := append(v.glide(nil, from, aim), "sleep", secs(v.mot.Dwell()))
+	cmds := []xcmd{{check: first.clear}, {args: glide}, {check: o.clear}}
+	press := []string{"mousedown", "1", "sleep", secs(v.mot.KeyHold()), "mouseup", "1",
 		"sleep", secs(v.mot.JitterDuration(0.25, 0.08)),
 		"keydown", "ctrl+a", "sleep", secs(v.mot.KeyHold()), "keyup", "ctrl+a",
 		"sleep", secs(max(v.mot.JitterDuration(0.25, 0.08), shortcutGap))}
 	cmds = append(cmds, xcmd{args: press, release: []string{"mouseup", "1", "keyup", "ctrl+a"}})
-	cmds = append(cmds, v.humanType(u)...)
+	cmds = append(cmds, o.typeAddress(u)...)
 	enter := []string{"sleep", secs(v.mot.JitterDuration(0.3, 0.1)), "keydown", "Delete", "sleep", secs(v.mot.KeyHold()), "keyup", "Delete",
 		"sleep", secs(v.mot.JitterDuration(0.2, 0.06)), "keydown", "Return", "sleep", secs(v.mot.KeyHold()), "keyup", "Return"}
 	return append(cmds, xcmd{args: enter, release: []string{"keyup", "Delete", "Return"}})
@@ -171,20 +266,21 @@ func (v *visual) open(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	most := maxHumanTypeLen
-	if now {
-		most = maxTypeLen
-	}
-	u, err := openURL(o.URL, most)
+	u, err := openURL(o.URL)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if err := v.layoutKnown(); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	at, size := v.addressBar()
 	v.perform(w, r, keysAction, func(from func() hand) []xcmd {
+		op := &opening{v: v, at: at}
 		if now {
-			return v.instantOpen(at, u)
+			return op.instantOpen(u)
 		}
-		return v.humanOpen(from(), at, size, u)
+		return op.humanOpen(from(), size, u)
 	})
 }

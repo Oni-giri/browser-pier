@@ -19,46 +19,80 @@ import (
 // attributes and properties. It sends no input and changes nothing, and
 // it never talks to the page: X knows windows, not documents.
 type xconn struct {
-	c    net.Conn
-	root uint32
+	c     net.Conn
+	root  uint32
+	atoms map[string]uint32 // interned once per connection
+	stop  func() bool       // ends the watch on the request's context
 }
 
 // xTimeout bounds one look at the window tree.
 const xTimeout = 3 * time.Second
 
-// windowsAtPoint lists the windows showing at a point of the display
-// (windowsAt), on a connection of its own.
-func windowsAtPoint(ctx context.Context, px, py int) ([]shownWindow, error) {
+// screenLook is what the open action looks at: the windows showing at
+// the address bar's point, top first (windowsAt), and the client window
+// holding the keyboard focus (0 if none, or not a managed window's).
+type screenLook struct {
+	Stack []shownWindow
+	Focus uint32
+}
+
+// lookAt reads the screen at a point of the display, on a connection of
+// its own.
+func lookAt(ctx context.Context, px, py int) (screenLook, error) {
 	x, err := dialX(ctx, display)
 	if err != nil {
-		return nil, fmt.Errorf("the X display: %w", err)
+		return screenLook{}, fmt.Errorf("the X display: %w", err)
 	}
 	defer x.close()
-	return x.windowsAt(px, py)
+	stack, err := x.windowsAt(px, py)
+	if err != nil {
+		return screenLook{}, err
+	}
+	focus, err := x.focusedClient()
+	if err != nil {
+		return screenLook{}, err
+	}
+	return screenLook{stack, focus}, nil
 }
 
 // dialX connects to the X display's Unix socket (no authorisation: Xvfb
 // runs with none, reachable only inside the container).
 func dialX(ctx context.Context, display string) (*xconn, error) {
+	return dialXAt(ctx, "/tmp/.X11-unix/X"+strings.TrimPrefix(display, ":"), xTimeout)
+}
+
+// dialXAt is dialX on a socket path, within timeout.
+func dialXAt(ctx context.Context, path string, timeout time.Duration) (*xconn, error) {
 	var d net.Dialer
-	c, err := d.DialContext(ctx, "unix", "/tmp/.X11-unix/X"+strings.TrimPrefix(display, ":"))
+	c, err := d.DialContext(ctx, "unix", path)
 	if err != nil {
 		return nil, err
 	}
-	deadline := time.Now().Add(xTimeout)
+	deadline := time.Now().Add(timeout)
 	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
 		deadline = dl
 	}
 	_ = c.SetDeadline(deadline)
+	// A cancelled request (a handoff, Take control) breaks off a read
+	// the server is slow to answer, rather than holding the input lock
+	// for the rest of the deadline.
+	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
 	x, err := xSetup(c)
 	if err != nil {
+		stop()
 		_ = c.Close()
 		return nil, err
 	}
+	x.stop = stop
 	return x, nil
 }
 
-func (x *xconn) close() { _ = x.c.Close() }
+func (x *xconn) close() {
+	if x.stop != nil {
+		x.stop()
+	}
+	_ = x.c.Close()
+}
 
 // xSetup sends the connection setup (little-endian, protocol 11.0, no
 // authorisation) and reads the root window from the reply.
@@ -172,19 +206,66 @@ func u32(v ...uint32) []byte {
 
 // children lists a window's children, bottom of the stack first.
 func (x *xconn) children(w uint32) ([]uint32, error) {
+	_, kids, err := x.tree(w)
+	return kids, err
+}
+
+// tree is a window's parent and its children, bottom of the stack first.
+func (x *xconn) tree(w uint32) (uint32, []uint32, error) {
 	r, err := x.request(15, 0, u32(w)) // QueryTree
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	n := int(binary.LittleEndian.Uint16(r[16:18]))
 	if len(r) < 32+4*n {
-		return nil, errors.New("x11 QueryTree: short reply")
+		return 0, nil, errors.New("x11 QueryTree: short reply")
 	}
 	kids := make([]uint32, n)
 	for i := range kids {
 		kids[i] = binary.LittleEndian.Uint32(r[32+4*i:])
 	}
-	return kids, nil
+	return binary.LittleEndian.Uint32(r[12:16]), kids, nil
+}
+
+// focusedClient is the client window of the top-level window that holds
+// the keyboard focus, or 0 if no window does (None, PointerRoot) or it is
+// an override-redirect one.
+func (x *xconn) focusedClient() (uint32, error) {
+	r, err := x.request(43, 0, nil) // GetInputFocus
+	if err != nil {
+		return 0, err
+	}
+	w := binary.LittleEndian.Uint32(r[8:12])
+	if w <= 1 {
+		return 0, nil
+	}
+	// Up to the root's child that holds it.
+	for range 16 {
+		if w == x.root {
+			return 0, nil
+		}
+		parent, _, err := x.tree(w)
+		if isBadWindow(err) {
+			return 0, nil
+		}
+		if err != nil {
+			return 0, err
+		}
+		if parent == x.root {
+			break
+		}
+		w = parent
+	}
+	if _, override, err := x.attributes(w); isBadWindow(err) || err == nil && override {
+		return 0, nil
+	} else if err != nil {
+		return 0, err
+	}
+	c, err := x.client(w)
+	if isBadWindow(err) {
+		return 0, nil
+	}
+	return c.ID, err
 }
 
 // attributes reports whether a window is viewable (it and its ancestors
@@ -195,7 +276,7 @@ func (x *xconn) attributes(w uint32) (viewable, override bool, err error) {
 	if err != nil {
 		return false, false, err
 	}
-	if len(r) < 28 {
+	if len(r) < 44 {
 		return false, false, errors.New("x11 GetWindowAttributes: short reply")
 	}
 	return r[26] == 2, r[27] != 0, nil
@@ -234,6 +315,9 @@ func (x *xconn) onScreen(w uint32) (int, int, error) {
 
 // atom is the atom named name, or 0 if the server has none.
 func (x *xconn) atom(name string) (uint32, error) {
+	if a, ok := x.atoms[name]; ok {
+		return a, nil
+	}
 	if len(name) > maxRequest-4 {
 		return 0, errors.New("x11 atom name too long")
 	}
@@ -244,7 +328,12 @@ func (x *xconn) atom(name string) (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
-	return binary.LittleEndian.Uint32(r[8:12]), nil
+	a := binary.LittleEndian.Uint32(r[8:12])
+	if x.atoms == nil {
+		x.atoms = map[string]uint32{}
+	}
+	x.atoms[name] = a
+	return a, nil
 }
 
 // property is a window's property, up to 1 KiB of it, and whether the
@@ -276,9 +365,11 @@ type shownWindow struct {
 	Override bool
 	// Class and Role are the client window's WM_CLASS class and
 	// WM_WINDOW_ROLE: Chromium names its tabbed window's role "browser"
-	// and a pop-up window's "pop-up". Box is its place on the screen.
+	// and a pop-up window's "pop-up". Box is its place on the screen, and
+	// ID the client window's (0 for an override-redirect window).
 	Class, Role string
 	Box         rect
+	ID          uint32
 }
 
 // windowsAt lists the top-level windows showing at (px, py), top first:
@@ -319,6 +410,9 @@ func (x *xconn) windowsAt(px, py int) ([]shownWindow, error) {
 			continue
 		}
 		c, err := x.client(k)
+		if isBadWindow(err) {
+			continue // it closed while it was read: what is under it shows
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -366,7 +460,7 @@ func (x *xconn) describe(w uint32) (shownWindow, error) {
 	if err != nil {
 		return t, err
 	}
-	t.Box = rect{gx, gy, g.W, g.H}
+	t.Box, t.ID = rect{gx, gy, g.W, g.H}, w
 	if a, err := x.atom("WM_CLASS"); err != nil {
 		return t, err
 	} else if v, ok, err := x.property(w, a); err != nil {
