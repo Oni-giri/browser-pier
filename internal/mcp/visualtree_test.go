@@ -1,0 +1,60 @@
+package mcp
+
+import (
+	"context"
+	"regexp"
+	"strings"
+	"testing"
+
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+// TestVisualSnapshotAndClickByRef (PROJ-150): visual_snapshot is listed
+// and says what it returns is untrusted; its result is fenced; click
+// takes its ref, clicks the element's centre and says what it clicked.
+func TestVisualSnapshotAndClickByRef(t *testing.T) {
+	f := newFixture(t)
+	cs := f.connect(f.all, versions[0], nil)
+	list, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var desc string
+	for _, tl := range list.Tools {
+		if tl.Name == "visual_snapshot" {
+			desc = tl.Description
+		}
+	}
+	if !strings.Contains(desc, "untrusted") || !strings.HasPrefix(desc, "Visual mode only.") {
+		t.Fatalf("visual_snapshot's description: %q", desc)
+	}
+	call(t, cs, "start_browser", map[string]any{"profile": "google"})
+	s, _ := f.m.Live("google")
+	res, out := call(t, cs, "visual_snapshot", map[string]any{"session_id": s.ID})
+	if res.IsError || !strings.Contains(out, "<untrusted-content-") || !strings.Contains(out, "untrusted_content-1") || strings.Count(out, "</untrusted-content-") != 2 {
+		t.Fatalf("visual_snapshot: %s", out)
+	}
+	ref := regexp.MustCompile(`(?m)^(v[a-z][a-z0-9]n[0-9]+) button`).FindStringSubmatch(out)
+	if ref == nil {
+		t.Fatalf("no ref in %s", out)
+	}
+	res, out = call(t, cs, "click", map[string]any{"session_id": s.ID, "ref": ref[1]})
+	if res.IsError || !strings.Contains(out, "Clicked "+ref[1]) || !strings.Contains(out, `button "Go"`) || !strings.Contains(out, "<untrusted-content-") {
+		t.Fatalf("click by ref: %s", out)
+	}
+	f.mu.Lock()
+	clicks := append([]string(nil), f.clicks...)
+	f.mu.Unlock()
+	if len(clicks) != 1 || !strings.Contains(clicks[0], `"x":120`) || !strings.Contains(clicks[0], `"y":210`) || strings.Contains(clicks[0], "ref") {
+		t.Fatalf("the browser was asked to click %v", clicks)
+	}
+	for _, args := range []map[string]any{{"session_id": s.ID, "ref": ref[1], "x": 1, "y": 1}, {"session_id": s.ID}} {
+		res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "click", Arguments: args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !res.IsError {
+			t.Errorf("click %v: want an error", args)
+		}
+	}
+}

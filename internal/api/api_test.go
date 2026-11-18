@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,6 +44,13 @@ type browser struct {
 	pageURL string
 	// methods are the CDP methods sent on the browser's WebSocket.
 	methods []string
+	// tree is GET /tree's answer (PROJ-150); node answers GET
+	// /tree/node; treeHold, if set, holds /tree until it is closed or
+	// the request ends.
+	tree     string
+	node     func(q url.Values) string
+	treeHold chan struct{}
+	treeGets int
 }
 
 func (b *browser) handler() http.Handler {
@@ -134,6 +142,34 @@ func (b *browser) handler() http.Handler {
 	for _, p := range []string{"click", "type", "scroll", "key", "drag"} {
 		mux.HandleFunc("POST /input/"+p, input)
 	}
+	mux.HandleFunc("GET /tree", func(w http.ResponseWriter, r *http.Request) {
+		b.mu.Lock()
+		tree, hold := b.tree, b.treeHold
+		b.treeGets++
+		b.mu.Unlock()
+		if hold != nil {
+			select {
+			case <-hold:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		if tree == "" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, tree)
+	})
+	mux.HandleFunc("GET /tree/node", func(w http.ResponseWriter, r *http.Request) {
+		b.mu.Lock()
+		node := b.node
+		b.mu.Unlock()
+		if node == nil {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, node(r.URL.Query()))
+	})
 	return mux
 }
 

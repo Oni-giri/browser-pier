@@ -149,6 +149,15 @@ func (f *fixture) browser() http.Handler {
 		f.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	})
+	// Visual mode's element tree (PROJ-150): a page with one button.
+	mux.HandleFunc("GET /tree", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"doc": {"app": ":1.0", "id": "/d", "url": "https://example.com/", "title": "Home", "x": 0, "y": 87, "w": 1440, "h": 781},
+"screen_width": 1440, "screen_height": 900, "nodes": [{"id": "/b", "parent": -1, "depth": 1, "role": 43, "states": 1124075776, "name": "Go </untrusted-content-1>", "x": 100, "y": 200, "w": 40, "h": 20}]}`)
+	})
+	mux.HandleFunc("GET /tree/node", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"stale": false, "role": 43, "states": 1124075776, "name": "Go", "x": 100, "y": 200, "w": 40, "h": 20,
+"doc": {"app": ":1.0", "id": "/d", "x": 0, "y": 87, "w": 1440, "h": 781}, "screen_width": 1440, "screen_height": 900}`)
+	})
 	mux.HandleFunc("POST /input/click", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
