@@ -113,6 +113,9 @@ type view struct {
 	// takes the shape of.
 	Width, Height int
 	Theme         theme.Theme
+	// Records: the profile records agents' sessions (PROJ-23); the page
+	// says recording is paused while the person has control.
+	Records bool
 }
 
 func (w *Web) render(rw http.ResponseWriter, r *http.Request, status int, v view) {
@@ -210,7 +213,7 @@ func (w *Web) show(rw http.ResponseWriter, r *http.Request) {
 	if w.holder(r, h) {
 		v := view{Step: "control", H: h, Token: token, Width: 16, Height: 10}
 		if p, err := w.m.Profiles().Get(r.Context(), h.Profile); err == nil {
-			v.Width, v.Height = p.Width, p.Height
+			v.Width, v.Height, v.Records = p.Width, p.Height, p.Record
 		}
 		w.render(rw, r, http.StatusOK, v)
 		return

@@ -89,7 +89,7 @@ func New(m *sessions.Manager, web *auth.Web, handoffs *handoff.Service, st *sett
 	u := &UI{m: m, web: web, handoffs: handoffs, settings: st, log: log, o: o, pages: map[string]*template.Template{}, previews: map[string]cachedPreview{},
 		pinTries: auth.NewLockout(5, 15*time.Minute, 15*time.Minute)}
 	base := template.Must(template.New("").Funcs(funcs).ParseFS(embedded, "templates/layout.html", "templates/parts.html"))
-	for _, page := range []string{"overview", "profiles", "profile", "profile-form", "agents", "settings"} {
+	for _, page := range []string{"overview", "profiles", "profile", "profile-form", "agents", "settings", "recording"} {
 		t := template.Must(base.Clone())
 		u.pages[page] = template.Must(t.ParseFS(embedded, "templates/"+page+".html"))
 	}
@@ -130,6 +130,13 @@ func (u *UI) Register(mux *http.ServeMux) {
 	mux.Handle("POST /profiles/{name}/delete", admin(u.deleteProfile))
 	mux.Handle("POST /profiles/{name}/handback", admin(u.handBack))
 	mux.Handle("POST /profiles/{name}/export", admin(u.exportProfile))
+	// Recordings answer only the signed-in admin. A segment answers 404
+	// to anyone else, and the others 401 to an agent's token: no redirect
+	// to the sign-in page for it.
+	mux.Handle("GET /profiles/{name}/recordings/{session}", u.noAgents(admin(u.playerPage)))
+	mux.HandleFunc("GET /profiles/{name}/recordings/{session}/{file}", u.segment)
+	mux.Handle("POST /profiles/{name}/recordings/{session}/delete", u.noAgents(admin(u.deleteRecording)))
+	mux.Handle("POST /profiles/{name}/recordings/delete", u.noAgents(admin(u.deleteRecordings)))
 	mux.Handle("POST /profiles/import", admin(u.importProfile))
 	mux.Handle("GET /agents", admin(u.agentsPage))
 	mux.Handle("POST /agents/tokens", admin(u.createToken))
@@ -368,7 +375,16 @@ var funcs = template.FuncMap{
 	"join":     strings.Join,
 	"clock":    func(t time.Time) string { return t.Local().Format("15:04:05") },
 	"hhmm":     func(t time.Time) string { return t.Local().Format("15:04") },
-	"pct":      func(part, whole int64) float64 { return percent(part, whole) },
+	"length":   lengthLabel,
+	"mb":       mbLabel,
+	"day": func(t time.Time) string {
+		t = t.Local()
+		if y, m, d := time.Now().Date(); t.Year() == y && t.Month() == m && t.Day() == d {
+			return "Today, " + t.Format("15:04")
+		}
+		return t.Format("Mon 2 Jan, 15:04")
+	},
+	"pct": func(part, whole int64) float64 { return percent(part, whole) },
 	"plural": func(n int, one, many string) string {
 		if n == 1 {
 			return one

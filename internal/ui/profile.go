@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/handoff"
+	"github.com/Oni-giri/browser-pier/internal/recording"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
@@ -22,6 +24,35 @@ type profilePageData struct {
 	// the ad and tracker list; BlockedRead whether it could be read.
 	Blocked     int64
 	BlockedRead bool
+	// Recordings are the profile's session recordings, newest first;
+	// RetentionDays how long they are kept.
+	Recordings    []recordingRow
+	RetentionDays int
+	// liveRec is the live session's recording so far, for LogLink.
+	liveRec *recording.Index
+}
+
+// LogLink is the player at the moment of an agent log entry, while the
+// live session's recording covers it; "" otherwise. The log goes with the
+// session, so after a stop the player stands alone.
+func (d profilePageData) LogLink(at time.Time) string {
+	ix := d.liveRec
+	if ix == nil || at.Before(ix.Start().Add(-time.Second)) || at.After(ix.End()) {
+		return ""
+	}
+	return "/profiles/" + url.PathEscape(d.Name) + "/recordings/" + ix.Session + "?t=" + strconv.FormatInt(at.UnixMilli(), 10)
+}
+
+// RecordingLabel says whether the live session is being recorded, for a
+// profile that records: "" when it doesn't.
+func (d profilePageData) RecordingLabel() string {
+	switch {
+	case !d.Live() || !d.Session.Record:
+		return ""
+	case d.Session.Recording:
+		return "Recording"
+	}
+	return "Recording paused"
 }
 
 // AdsLabel says what the ad and tracker blocking is doing: the live
@@ -74,7 +105,15 @@ func (u *UI) profileData(ctx context.Context, r *http.Request, name string) (pro
 			mem[b.Profile] = b.Bytes
 		}
 	}
-	d := profilePageData{profileView: u.view(r, p, last, asks, mem)}
+	d := profilePageData{profileView: u.view(r, p, last, asks, mem), Recordings: u.recordings(name)}
+	if u.o.Recordings != nil {
+		d.RetentionDays = int(u.o.Recordings.Limits().Retention / (24 * time.Hour))
+		if d.Live() {
+			if ix, err := u.o.Recordings.Get(name, d.Session.ID); err == nil {
+				d.liveRec = &ix
+			}
+		}
+	}
 	if d.Live() {
 		d.Log = u.m.Activity(d.Session.ID)
 		if d.Session.BlockAds {

@@ -4,6 +4,7 @@
     <div class="crumbs">
       <a href="/profiles">Profiles</a><span class="sep">/</span>{{template "icon" .}}<h1>{{.Name}}</h1>
       <span class="pill {{.Status.Key}}">{{.Status.Label}}{{with .Ask}} · {{.Reason.Label}}{{end}}</span>
+      {{with .RecordingLabel}}<span class="pill rec{{if ne . "Recording"}} paused{{end}}" title="What agents do on screen is kept for you to replay, never while a person has control.">{{.}}</span>{{end}}
     </div>
     <div class="actions">
       {{if .Live}}
@@ -37,7 +38,7 @@
           </div>
         {{end}}
       </div>
-      {{if .Preview}}<div id="hint">View only. Take control to use the mouse and keyboard.</div>{{end}}
+      {{if .Preview}}<div id="hint">View only. Take control to use the mouse and keyboard.{{if .Session.Record}} Nothing is recorded while you have control.{{end}}</div>{{end}}
     </section>
     <aside class="side" id="side" hx-get="/profiles/{{.Name}}/side" hx-trigger="every 4s" hx-swap="innerHTML" data-poll>
       {{template "side" .}}
@@ -84,9 +85,21 @@
 <section class="cell" aria-labelledby="log-title">
   <h2 class="cell-title" id="log-title" style="margin-bottom:12px">Agent log</h2>
   {{if .Log}}
-  <ol class="log">{{range .Log}}<li{{if .Attention}} class="attention"{{end}}>{{if .Agent}}<b style="font-weight:500">{{.Agent}}</b>: {{end}}{{.What}}<time datetime="{{.At.Format "2006-01-02T15:04:05Z07:00"}}">{{clock .At}}</time></li>{{end}}</ol>
+  <ol class="log">{{range .Log}}<li{{if .Attention}} class="attention"{{end}}>{{if .Agent}}<b style="font-weight:500">{{.Agent}}</b>: {{end}}{{.What}}{{with $.LogLink .At}}<a class="at" href="{{.}}" title="Play the recording from here">{{end}}<time datetime="{{.At.Format "2006-01-02T15:04:05Z07:00"}}">{{clock .At}}</time>{{if $.LogLink .At}}</a>{{end}}</li>{{end}}</ol>
   {{else}}
   <p class="small muted" style="margin:0">{{if .Live}}Nothing yet. What agents do in this browser shows up here.{{else}}Starts when the browser does.{{end}}</p>
   {{end}}
 </section>
+{{if or .Record .Recordings}}
+<section class="cell" aria-labelledby="rec-title">
+  <div class="cell-head"><h2 class="cell-title" id="rec-title">Recordings</h2>{{if .RetentionDays}}<span class="caption">kept {{.RetentionDays}} {{plural .RetentionDays "day" "days"}}</span>{{end}}</div>
+  {{if .Recordings}}
+  <ul class="rows recs">{{range .Recordings}}<li><div class="grow"><b style="font-weight:500">{{day .Start}}</b><div class="caption num">{{length .Recorded}} recorded · {{mb .Bytes}}</div></div><a class="btn small" href="{{.URL}}">Play</a></li>{{end}}</ul>
+  <form class="recs-foot" method="post" action="/profiles/{{.Name}}/recordings/delete" data-busy="Deleting…"><span class="caption grow">Only you can play these. Agents can't read or turn off recordings.</span><button class="btn small danger-text" type="submit">Delete all</button></form>
+  {{else if .Record}}
+  <p class="small muted" style="margin:0">Nothing recorded yet. Agents are recorded while they act, never while a person has control.</p>
+  {{end}}
+  {{if not .Record}}<p class="caption" style="margin:{{if .Recordings}}10px{{else}}0{{end}} 0 0">Off for this profile. Turn on Record sessions in Edit settings to keep what agents do.</p>{{end}}
+</section>
+{{end}}
 {{end}}
