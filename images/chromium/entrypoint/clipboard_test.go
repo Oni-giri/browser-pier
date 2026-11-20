@@ -13,7 +13,9 @@ import (
 func shortWait(t *testing.T) {
 	t.Helper()
 	clipboardWait, emptyWait, emptyRead = 50*time.Millisecond, 100*time.Millisecond, 30*time.Millisecond
-	t.Cleanup(func() { clipboardWait, emptyWait, emptyRead = 2*time.Second, 1500*time.Millisecond, 500*time.Millisecond })
+	t.Cleanup(func() {
+		clipboardWait, emptyWait, emptyRead = 2*time.Second, 1500*time.Millisecond, 500*time.Millisecond
+	})
 }
 
 // fakeX is X's two selections as xclip sees them: who owns each, what
