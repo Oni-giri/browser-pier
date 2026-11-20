@@ -58,7 +58,7 @@ input[type=range]:focus{box-shadow:none!important}
       <section class="g-cell" aria-labelledby="st-pin" style="--s: 6; padding: 20px; background: #FFFFFF; border-radius: 16px; box-shadow: 0 0 0 1px rgba(37,64,140,0.07), 0 1px 2px rgba(37,64,140,0.06), 0 10px 28px -12px rgba(37,64,140,0.20); display: flex; flex-direction: column; gap: 14px">
         <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px">
           <h2 id="st-pin" style="margin: 0; font-size: 16px; font-weight: 600">Handoff PIN</h2>
-          <sc-if value="{{pinSet}}" hint-placeholder-val="{{true}}"><span style="display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 999px; background: #ECFDF3; color: #15803D; font-size: 12px; font-weight: 500"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #16A34A"></span>Set · changed 12 days ago</span></sc-if>
+          <sc-if value="{{pinSet}}" hint-placeholder-val="{{true}}"><span style="display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 999px; background: #ECFDF3; color: #15803D; font-size: 12px; font-weight: 500"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #16A34A"></span>{{pinChanged}}</span></sc-if>
           <sc-if value="{{noPin}}" hint-placeholder-val="{{false}}"><span style="display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 999px; background: #F1F5F9; color: #475569; font-size: 12px; font-weight: 500"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #94A3B8"></span>Not set</span></sc-if>
         </div>
         <p style="margin: 0; font-size: 14px; line-height: 1.55; color: #475569">Asked on your phone before a handoff link opens a browser. Agents never see it. Five wrong tries cancel the link.</p>
@@ -72,7 +72,7 @@ input[type=range]:focus{box-shadow:none!important}
           </div>
           <div style="display: flex; gap: 8px">
             <button type="button" onClick="{{savePin}}" style="min-height: 34px; padding: 0 12px; background: #0F172A; border: 0; border-radius: 8px; color: #FFFFFF; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer; box-shadow: inset 0 1px 0 rgba(255,255,255,0.12)">Save PIN</button>
-            <button type="button" onClick="{{cancelPin}}" style="min-height: 34px; padding: 0 12px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; color: #0F172A; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Cancel</button>
+            <sc-if value="{{pinSet}}" hint-placeholder-val="{{true}}"><button type="button" onClick="{{cancelPin}}" style="min-height: 34px; padding: 0 12px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; color: #0F172A; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Cancel</button></sc-if>
           </div>
         </sc-if>
       </section>
@@ -187,7 +187,7 @@ class Component extends DCLogic {
   constructor(props) {
     super(props);
     this.saved = { ram: 70, policy: 'pin', idle: 15 };
-    this.state = { ...this.saved, pin: props.noPin ? 'editing' : 'idle', proxyTested: false, toast: null, theme: 'system' };
+    this.state = { ...this.saved, pin: props.noPin ? 'editing' : 'idle', pinSet: !props.noPin, pinChanged: '12 days ago', proxyTested: false, toast: null, theme: 'system' };
   }
   flash(msg) {
     this.setState({ toast: msg });
@@ -211,11 +211,12 @@ class Component extends DCLogic {
     const dirty = s.ram !== this.saved.ram || s.policy !== this.saved.policy || s.idle !== this.saved.idle;
     return {
       pinIdle: s.pin === 'idle', pinEditing: s.pin === 'editing',
-      pinSet: !this.props.noPin, noPin: !!this.props.noPin,
-      pinAction: this.props.noPin ? 'Set PIN' : 'Change PIN',
+      pinSet: s.pinSet, noPin: !s.pinSet,
+      pinAction: s.pinSet ? 'Change PIN' : 'Set PIN',
+      pinChanged: 'Set · changed ' + s.pinChanged,
       editPin: () => this.setState({ pin: 'editing' }),
       cancelPin: () => this.setState({ pin: 'idle' }),
-      savePin: () => { this.setState({ pin: 'idle' }); this.flash('Handoff PIN changed'); },
+      savePin: () => { this.setState({ pin: 'idle', pinSet: true, pinChanged: 'just now' }); this.flash(s.pinSet ? 'Handoff PIN changed' : 'Handoff PIN set'); },
       policies: P.map((p) => ({ ...p, ...seg(p.id === s.policy), on: p.id === s.policy ? 'true' : 'false', pick: () => this.setState({ policy: p.id }) })),
       policyHint: cur.hint,
       ram: s.ram, ramGb, fits: Math.max(0, Math.floor((16 * s.ram / 100 - 7.1) / 0.9)),
