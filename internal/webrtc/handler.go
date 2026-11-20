@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -209,8 +210,11 @@ func (v *viewer) stillAllowed() bool {
 //	{"type":"take"}                       take control
 //	{"type":"release"}                    hand back
 //	{"type":"input","events":[...]}       mouse and keys (images/chromium/entrypoint/live.go)
-//	{"type":"text","text":"..."}          type a string (the phone's Type button)
+//	{"type":"text","text":"..."}          type a string (a paste, or the phone's Type button)
+//	{"type":"copy"}                       the browser's clipboard, answered {"type":"clipboard","text":"..."}
 //	{"type":"lift"}                       let go of held keys and buttons (the page lost focus)
+//
+// What is typed or copied is never logged: it may be a password.
 func (v *viewer) message(msg []byte, reply func(string)) {
 	var m struct {
 		Type   string          `json:"type"`
@@ -258,10 +262,21 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 		if v.control {
 			_ = v.post("/input/release", nil)
 		}
-	case "input", "text":
+	case "input", "text", "copy":
 		if !v.control || v.h.m.HumanInput(v.session) != nil {
 			v.control = false
 			say(map[string]any{"type": "control", "on": false})
+			return
+		}
+		if m.Type == "copy" {
+			// Read only now, as the person copies (PROJ-194): never polled,
+			// so a page can't put text in their clipboard on its own.
+			text, err := v.do(http.MethodGet, "/input/clipboard", nil, http.StatusOK)
+			if err != nil {
+				say(map[string]any{"type": "error", "msg": "Couldn't copy: " + err.Error()})
+				return
+			}
+			say(map[string]any{"type": "clipboard", "text": string(text)})
 			return
 		}
 		path, body := "/input/events", []byte(m.Events)
@@ -294,25 +309,41 @@ func (v *viewer) releaseLocked() {
 }
 
 func (v *viewer) post(path string, body []byte) error {
+	_, err := v.do(http.MethodPost, path, body, http.StatusNoContent)
+	return err
+}
+
+// maxClipboard caps what a copy brings back; the container caps it too.
+const maxClipboard = 64 << 10
+
+// do calls the container's control socket, wanting status want, and
+// returns the answer's body.
+func (v *viewer) do(method, path string, body []byte, want int) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	c := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", v.sock)
 	}}}
 	defer c.CloseIdleConnections()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://control"+path, bytes.NewReader(body)) //nolint:gosec // a Unix socket and fixed paths
+	req, err := http.NewRequestWithContext(ctx, method, "http://control"+path, bytes.NewReader(body)) //nolint:gosec // a Unix socket and fixed paths
 	if err != nil {
-		return err
+		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := c.Do(req) //nolint:gosec // as above
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusNoContent {
+	if resp.StatusCode != want {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return errors.New(string(bytes.TrimSpace(b)))
+		return nil, errors.New(string(bytes.TrimSpace(b)))
 	}
-	return nil
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxClipboard+1))
+	if err == nil && len(b) > maxClipboard {
+		err = fmt.Errorf("over %d kB", maxClipboard>>10)
+	}
+	return b, err
 }

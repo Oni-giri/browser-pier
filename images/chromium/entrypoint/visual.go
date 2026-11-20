@@ -64,6 +64,39 @@ func (v *visual) register(mux *http.ServeMux) {
 		mux.HandleFunc("POST /input/events", v.live.events)
 		mux.HandleFunc("POST /input/release", v.live.release)
 	}
+	mux.HandleFunc("GET /input/clipboard", v.clipboard)
+}
+
+// maxClipboard caps what the live view's copy reads (PROJ-194).
+const maxClipboard = 64 << 10
+
+// clipboardWait bounds a read: a clipboard's owner that doesn't answer
+// (a hung page) doesn't hold the live view up.
+const clipboardWait = 2 * time.Second
+
+// clipboard answers the X CLIPBOARD selection's text, for the live
+// view's copy (PROJ-194): read when the person with control copies,
+// never polled, so a page can't put text in their clipboard on its own.
+// Empty when nothing holds text. No CDP: the selection is X's, as
+// xdotool's input is.
+func (v *visual) clipboard(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), clipboardWait)
+	defer cancel()
+	out, err := v.output(ctx, "xclip", "-selection", "clipboard", "-out", "-target", "UTF8_STRING")
+	if err != nil {
+		// xclip fails when nothing holds the clipboard, or not as text.
+		out = nil
+	}
+	switch {
+	case len(out) > maxClipboard:
+		http.Error(w, fmt.Sprintf("the clipboard holds more than %d kB of text", maxClipboard>>10), http.StatusRequestEntityTooLarge)
+		return
+	case !utf8.Valid(out):
+		http.Error(w, "the clipboard's text isn't UTF-8", http.StatusUnprocessableEntity)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write(out)
 }
 
 // screenshotArgs captures one frame as PNG to fd 3, scaled to width (and

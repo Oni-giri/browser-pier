@@ -19,6 +19,7 @@ import (
 //	    /cdp/...   CDP over HTTP and WebSocket, relayed to Chromium's loopback port
 //	GET /stream    the display as an H.264 Annex-B byte stream, one reader at a time
 //	GET /screenshot, POST /input/{click,type,scroll,key,drag}   Visual mode (see visual.go)
+//	GET /input/clipboard   the clipboard's text, for the live view's copy
 //	GET /geo           the location the browser runs with
 //	GET /proxy/stats   bytes through the upstream proxy, connections refused, and blocked for the ad list
 //	POST /proxy/blocking/off, POST /proxy/exempt   the ad list's controls (block.go)

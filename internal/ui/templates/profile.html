@@ -22,7 +22,7 @@
         {{if .Preview}}<span id="who" class="pill">Connecting…</span>{{end}}
         <span class="addr">{{if and .Ask .Ask.Origin}}{{.Ask.Origin}}{{else}}{{.Name}}{{end}}</span>
         <span class="num">{{.Width}} × {{.Height}}{{if .Preview}} · 30 fps{{end}}</span>
-        <button id="type" class="btn small" type="button" hidden>Type</button>
+        <button id="type" class="btn small" type="button" hidden>Type or paste</button>
         <button id="fit" class="btn small" type="button" hidden>Fit</button>
         {{if .Preview}}<button class="btn small blue full-only" type="button" data-take disabled>Take control</button>
         <button id="full" class="btn small" type="button">Full screen</button>{{end}}

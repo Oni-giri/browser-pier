@@ -31,6 +31,12 @@
   const hint = document.getElementById("hint");
   const note = document.getElementById("note");
   const touch = matchMedia("(pointer: coarse)").matches;
+  // On a Mac, ⌘ is sent as Ctrl: the browser runs on Linux, where Super
+  // does nothing and Ctrl makes the shortcuts (PROJ-194).
+  const mac = /Mac|iPhone|iPad|iPod/.test(navigator.platform || "") || (navigator.userAgentData && navigator.userAgentData.platform === "macOS");
+  const cmd = mac ? "⌘" : "Ctrl+";
+  // maxPaste is the most a paste types: the container's cap at instant pace.
+  const maxPaste = 2000;
 
   let dc = null;
   let control = false;
@@ -102,7 +108,7 @@
     fitBtn.hidden = !touch;
     stage.classList.toggle("control", control);
     hint.textContent = (control
-      ? (touch ? `Tap to click. Pinch to zoom. ${typeBtn.textContent} sends text.` : keyboard ? "Your keyboard goes to the browser. Esc releases it." : "Click the screen to send your keyboard to the browser.")
+      ? (touch ? `Tap to click. Pinch to zoom. ${typeBtn.textContent} sends text.` : keyboard ? `Your keyboard goes to the browser, ${cmd}C and ${cmd}V included. Esc releases it.` : "Click the screen to send your keyboard to the browser.")
       : "View only. Take control to use the mouse and keyboard.") + (full && !touch ? " Esc leaves full screen." : "");
     if (connectError) hint.textContent = "Reload the page to try again.";
     if (fullBtn) fullBtn.textContent = full ? "Exit full screen" : "Full screen";
@@ -142,7 +148,8 @@
         if (keyboard) video.focus();
         render(); poll();
       }
-      if (m.type === "error") { say(m.msg); poll(); }
+      if (m.type === "clipboard") { copied(m.text); }
+      if (m.type === "error") { if (copyWait) copyWait.fail(new Error(m.msg)); else say(m.msg); poll(); }
     };
     pc.ontrack = (e) => { video.srcObject = e.streams[0] || new MediaStream([e.track]); };
     pc.onconnectionstatechange = () => {
@@ -201,7 +208,61 @@
   document.addEventListener("fullscreenchange", () => {
     if (!document.fullscreenElement && full) setFull(false);
   });
-  typeBtn.onclick = () => { const text = prompt("Type into the browser"); if (text) send({ type: "text", text }); };
+  typeBtn.onclick = () => { const text = prompt("Type or paste into the browser"); if (text) pasteText(text); };
+
+  // Paste (PROJ-194): the person's clipboard text is typed into the
+  // browser, at once. It is the paste event's own text, so no permission
+  // is asked; Safari, which may not fire one on the stream, gets a
+  // readText() after a moment (it shows its own Paste button).
+  let pasteWait = 0;
+  function pasteText(text) {
+    text = String(text || "").replace(/\r\n?/g, "\n");
+    if (!text) { say("Only text can be pasted."); return; }
+    const n = [...text].length;
+    if (n > maxPaste) { say(`That's ${n.toLocaleString()} characters: at most ${maxPaste.toLocaleString()} can be pasted at once.`); return; }
+    flush(); // keys pressed before the paste go first
+    send({ type: "text", text });
+  }
+  addEventListener("paste", (e) => {
+    if (!control || !keyboard) return;
+    clearTimeout(pasteWait); pasteWait = 0;
+    e.preventDefault();
+    pasteText(e.clipboardData && e.clipboardData.getData("text/plain"));
+  });
+  function pasteSoon() {
+    clearTimeout(pasteWait);
+    pasteWait = setTimeout(() => {
+      pasteWait = 0;
+      if (!navigator.clipboard || !navigator.clipboard.readText) { say("This browser didn't give BrowserPier the text to paste."); return; }
+      navigator.clipboard.readText().then(pasteText, () => say("Pasting was refused by this browser."));
+    }, 150);
+  }
+
+  // Copy (PROJ-194): after the browser's own copy, its clipboard is read
+  // once and written to the person's. Never polled: a page can't put text
+  // in the person's clipboard without them copying. The write starts in
+  // the key's handler, with the text to come, so Safari allows it.
+  let copyWait = null;
+  function copyFromBrowser() {
+    if (copyWait) copyWait.fail(new Error("copied again"));
+    let ok, fail;
+    const text = new Promise((res, rej) => { ok = res; fail = rej; });
+    const timer = setTimeout(() => fail(new Error("the browser didn't answer")), 4000);
+    copyWait = { ok: (t) => { clearTimeout(timer); copyWait = null; ok(t); }, fail: (err) => { clearTimeout(timer); copyWait = null; fail(err); } };
+    setTimeout(() => { flush(); send({ type: "copy" }); }, 150); // the page copies on the key; give it a moment
+    const blob = text.then((t) => { if (!t) throw new Error("nothing was copied in the browser"); return t; });
+    const done = () => say("Copied to your clipboard.");
+    const failed = (err) => say("Couldn't copy: " + ((err && err.message) || "this browser refused"));
+    if (!window.isSecureContext || !navigator.clipboard) {
+      // Over plain HTTP there's no clipboard to write: show the text to copy by hand.
+      blob.then((t) => prompt("BrowserPier is on plain HTTP, so it can't write your clipboard. Copy the text from here:", t), failed);
+    } else if (window.ClipboardItem && navigator.clipboard.write) {
+      navigator.clipboard.write([new ClipboardItem({ "text/plain": blob.then((t) => new Blob([t], { type: "text/plain" })) })]).then(done, failed);
+    } else {
+      blob.then((t) => navigator.clipboard.writeText(t)).then(done, failed);
+    }
+  }
+  function copied(text) { if (copyWait) copyWait.ok(text || ""); }
   fitBtn.onclick = () => { zoom = 1; panX = panY = 0; applyZoom(); };
   // The stage takes the stream's shape: the profile's screen size may have
   // changed since this browser started.
@@ -232,7 +293,8 @@
     PageUp: "Prior", PageDown: "Next", ArrowLeft: "Left", ArrowRight: "Right", ArrowUp: "Up", ArrowDown: "Down",
     CapsLock: "Caps_Lock", " ": "space", ContextMenu: "Menu",
   };
-  const byCode = { ShiftLeft: "Shift_L", ShiftRight: "Shift_R", ControlLeft: "Control_L", ControlRight: "Control_R", AltLeft: "Alt_L", AltRight: "Alt_R", MetaLeft: "Super_L", MetaRight: "Super_R" };
+  const byCode = { ShiftLeft: "Shift_L", ShiftRight: "Shift_R", ControlLeft: "Control_L", ControlRight: "Control_R", AltLeft: "Alt_L", AltRight: "Alt_R",
+    MetaLeft: mac ? "Control_L" : "Super_L", MetaRight: mac ? "Control_R" : "Super_R" };
   function keysym(e) {
     if (byCode[e.code]) return byCode[e.code];
     if (named[e.key]) return named[e.key];
@@ -242,6 +304,17 @@
   }
   // lift sends what's queued, then lets go of every held key and button.
   function lift() { flush(); send({ type: "lift" }); }
+  // Keys held in the browser: a Mac sends no keyup for a key pressed with
+  // ⌘ down, so they are let go with ⌘.
+  const held = new Set();
+  // shortcut is "paste" or "copy" for the person's own shortcuts.
+  function shortcut(e) {
+    if (!(mac ? e.metaKey : e.ctrlKey) || e.altKey) return "";
+    const k = e.code || "";
+    if (k === "KeyV" || (!k && e.key.toLowerCase() === "v")) return "paste";
+    if (k === "KeyC" || k === "KeyX" || (!k && /^[cx]$/i.test(e.key))) return "copy";
+    return "";
+  }
   addEventListener("keydown", (e) => {
     // The fixed full screen has no browser Esc of its own: Esc leaves it,
     // and releases the keyboard if it was captured.
@@ -251,16 +324,27 @@
       return;
     }
     if (!control || !keyboard) return;
-    if (e.key === "Escape") { e.preventDefault(); lift(); keyboard = false; render(); say("Keyboard released. Click the screen to send it again."); return; }
+    if (e.key === "Escape") { e.preventDefault(); lift(); held.clear(); keyboard = false; render(); say("Keyboard released. Click the screen to send it again."); return; }
+    const sc = shortcut(e);
+    // Paste: not sent as keys and not prevented, so this browser fires its
+    // paste event with the person's text.
+    if (sc === "paste") { if (!e.repeat) pasteSoon(); return; }
     const k = keysym(e); if (!k) return;
-    e.preventDefault(); push({ t: "keydown", k });
+    e.preventDefault(); push({ t: "keydown", k }); held.add(k);
+    if (sc === "copy" && !e.repeat) copyFromBrowser();
   });
   addEventListener("keyup", (e) => {
     if (!control || !keyboard || e.key === "Escape") return;
     const k = keysym(e); if (!k) return;
-    e.preventDefault(); push({ t: "keyup", k });
+    e.preventDefault();
+    // Only what went down goes up: a paste's V was never sent.
+    if (held.has(k)) { push({ t: "keyup", k }); held.delete(k); }
+    if (mac && (e.code === "MetaLeft" || e.code === "MetaRight")) {
+      for (const h of held) push({ t: "keyup", k: h });
+      held.clear();
+    }
   });
-  addEventListener("blur", () => { if (control) lift(); });
+  addEventListener("blur", () => { if (control) lift(); held.clear(); });
 
   // Phone: tap to click, pinch to zoom, drag to pan when zoomed.
   function applyZoom() { video.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`; }
