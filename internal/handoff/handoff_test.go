@@ -253,6 +253,12 @@ func TestPINFlowHandsBack(t *testing.T) {
 		if !strings.Contains(between(p.body, `<form method="post" action="/h/`+token+`/finish" id="finish">`, "</form>"), `name="note"`) {
 			t.Error("the finish form lost its note")
 		}
+		// The clipboard box, in the tools and so in full screen too
+		// (PROJ-194).
+		if !strings.Contains(tools, `<button id="clip" class="btn small" type="button" aria-expanded="false" aria-controls="clipbox" hidden>Clipboard</button>`) ||
+			!strings.Contains(between(p.body, "data-viewer", `id="stage"`), `<textarea id="cliptext"`) {
+			t.Errorf("no clipboard box in the tools: %s", between(p.body, "data-viewer", `id="stage"`))
+		}
 	}
 	// The link works once: another browser is refused, even with the PIN.
 	other := browser()

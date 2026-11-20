@@ -35,8 +35,13 @@
   // does nothing and Ctrl makes the shortcuts (PROJ-194).
   const mac = /Mac|iPhone|iPad|iPod/.test(navigator.platform || "") || (navigator.userAgentData && navigator.userAgentData.platform === "macOS");
   const cmd = mac ? "⌘" : "Ctrl+";
-  // maxPaste is the most one paste takes, as the container caps it.
-  const maxPaste = 10000;
+  // The clipboard box (PROJ-194), for the person with control.
+  const clipBtn = document.getElementById("clip");
+  const clipBox = document.getElementById("clipbox");
+  const clipText = document.getElementById("cliptext");
+  const clipMsg = document.getElementById("clipmsg");
+  // maxClipSet is the most the box sends at once, as BrowserPier caps it.
+  const maxClipSet = 10000;
 
   let dc = null;
   let control = false;
@@ -106,9 +111,13 @@
     }
     typeBtn.hidden = !(control && touch);
     fitBtn.hidden = !touch;
+    if (clipBtn) clipBtn.hidden = !control;
+    if (!control) closeClip();
     stage.classList.toggle("control", control);
+    const box = " Clipboard moves text between your clipboard and the browser's.";
     hint.textContent = (control
-      ? (touch ? `Tap to click. Pinch to zoom. ${typeBtn.textContent} sends text.` : keyboard ? `Your keyboard goes to the browser, ${cmd}C and ${cmd}V included. Esc releases it.` : "Click the screen to send your keyboard to the browser.")
+      ? (touch ? `Tap to click. Pinch to zoom. ${typeBtn.textContent} sends text.` + box
+        : (keyboard ? `Your keyboard goes to the browser${mac ? ", ⌘ as Ctrl" : ""}. Esc releases it.` : "Click the screen to send your keyboard to the browser.") + box)
       : "View only. Take control to use the mouse and keyboard.") + (full && !touch ? " Esc leaves full screen." : "");
     if (connectError) hint.textContent = "Reload the page to try again.";
     if (fullBtn) fullBtn.textContent = full ? "Exit full screen" : "Full screen";
@@ -143,14 +152,12 @@
     dc.onmessage = (e) => {
       const m = JSON.parse(e.data);
       if (m.type === "control") {
-        if (!m.on && copyWait) copyWait.fail(new Error("you no longer have control"));
         control = m.on; keyboard = control && !touch;
         status.human_control = m.on; // until the next poll says otherwise
         if (keyboard) video.focus();
         render(); poll();
       }
-      if (m.type === "clipboard" && copyWait && m.id === copyWait.id) copyWait.ok(m.text || "");
-      if (m.type === "copy-error" && copyWait && m.id === copyWait.id) copyWait.fail(new Error(m.msg));
+      if (/^clipboard/.test(m.type)) clipAnswer(m);
       if (m.type === "error") { say(m.msg); poll(); }
     };
     pc.ontrack = (e) => { video.srcObject = e.streams[0] || new MediaStream([e.track]); };
@@ -210,69 +217,77 @@
   document.addEventListener("fullscreenchange", () => {
     if (!document.fullscreenElement && full) setFull(false);
   });
-  typeBtn.onclick = () => { const text = prompt("Type or paste into the browser"); if (text) pasteText(text); };
+  typeBtn.onclick = () => { const text = prompt("Type into the browser"); if (text) send({ type: "text", text }); };
 
-  // Paste (PROJ-194): the person's clipboard text is pasted into the
-  // browser, through its own clipboard, exactly and at once. It is the paste event's own text, so no permission
-  // is asked; Safari, which may not fire one on the stream, gets a
-  // readText() after a moment (it shows its own Paste button).
-  let pasteWait = 0;
-  function pasteText(text) {
-    // One line ending at the end is dropped: copied from a terminal or a
-    // list, it would press Return and send a form.
-    text = String(text || "").replace(/\r\n?/g, "\n").replace(/\n$/, "");
-    if (!text) { say("Only text can be pasted."); return; }
-    const n = [...text].length;
-    if (n > maxPaste) { say(`That's ${n.toLocaleString()} characters: at most ${maxPaste.toLocaleString()} can be pasted at once.`); return; }
-    flush(); // keys pressed before the paste go first
-    send({ type: "text", text });
-  }
-  addEventListener("paste", (e) => {
-    if (!control || !keyboard) return;
-    clearTimeout(pasteWait); pasteWait = 0;
-    e.preventDefault();
-    pasteText(e.clipboardData && e.clipboardData.getData("text/plain"));
-  });
-  function pasteSoon() {
-    clearTimeout(pasteWait);
-    pasteWait = setTimeout(() => {
-      pasteWait = 0;
-      if (!navigator.clipboard || !navigator.clipboard.readText) { say("This browser didn't give BrowserPier the text to paste."); return; }
-      navigator.clipboard.readText().then(pasteText, () => say("Pasting was refused by this browser."));
-    }, 150);
-  }
-
-  // Copy (PROJ-194): the browser's clipboard is read as its own copy
-  // happens, and written to the person's. Never polled: a page can't put
-  // text in the person's clipboard without them copying. The copy message
-  // goes before the copy keys: BrowserPier reads what the clipboard held,
-  // then answers once it changes. The write starts in the key's handler,
-  // with the text to come, so Safari allows it.
-  let copyWait = null, copyID = 0;
-  function copyFromBrowser() {
-    if (copyWait) copyWait.fail(new Error("copied again"));
-    let ok, fail;
-    const text = new Promise((res, rej) => { ok = res; fail = rej; });
-    const id = ++copyID;
-    const timer = setTimeout(() => copyWait && copyWait.id === id && copyWait.fail(new Error("the browser didn't answer")), 6000);
-    const end = () => { clearTimeout(timer); if (copyWait && copyWait.id === id) copyWait = null; };
-    copyWait = { id, ok: (t) => { end(); ok(t); }, fail: (err) => { end(); fail(err); } };
+  // The clipboard box (PROJ-194): the browser's clipboard, read into it
+  // only when it opens or Refresh is pressed (never polled, so a page
+  // can't put text in it on its own), and text sent from it, which stays
+  // on the browser's clipboard until the person's control ends. Keys
+  // typed in it stay on this page.
+  let clipReq = null, clipID = 0;
+  function clipSay(text) { clipMsg.textContent = text; }
+  function clipBusy(on) { for (const b of clipBox.querySelectorAll("[data-clip=refresh],[data-clip=send],[data-clip=paste]")) b.disabled = on; }
+  // clipAsk sends one request, answered by its id (clipAnswer).
+  function clipAsk(msg, busy, done) {
+    const id = ++clipID;
+    clearTimeout(clipReq && clipReq.timer);
+    clipReq = { id, done, timer: setTimeout(() => clipAnswer({ type: "clipboard-error", id, msg: "The browser didn't answer." }), 10000) };
+    clipSay(busy); clipBusy(true);
     flush(); // keys pressed before go first
-    send({ type: "copy", id });
-    const got = text.then((t) => { if (!t) throw new Error("nothing was copied in the browser"); return t; });
-    const done = () => say("Copied to your clipboard.");
-    const failed = (err) => say("Couldn't copy: " + ((err && err.message) || "this browser refused"));
-    // Where this browser won't write its clipboard (plain HTTP, or no
-    // gesture it counts), the text is shown to copy by hand.
-    const byHand = (why) => got.then((t) => { prompt(why + " Copy the text from here:", t); }, failed);
-    if (!window.isSecureContext || !navigator.clipboard) {
-      byHand("BrowserPier is on plain HTTP, so it can't write your clipboard.");
-    } else if (window.ClipboardItem && navigator.clipboard.write) {
-      navigator.clipboard.write([new ClipboardItem({ "text/plain": got.then((t) => new Blob([t], { type: "text/plain" })) })])
-        .then(done, (err) => (err && err.name === "NotAllowedError" ? byHand("This browser didn't let BrowserPier write your clipboard.") : failed(err)));
-    } else {
-      got.then((t) => navigator.clipboard.writeText(t)).then(done, (err) => (err && err.name === "NotAllowedError" ? byHand("This browser didn't let BrowserPier write your clipboard.") : failed(err)));
+    send({ ...msg, id });
+  }
+  function clipAnswer(m) {
+    if (!clipReq || m.id !== clipReq.id) return;
+    const { done, timer } = clipReq;
+    clipReq = null; clearTimeout(timer); clipBusy(false);
+    if (m.type === "clipboard-error") clipSay(m.msg || "That didn't work.");
+    else done(m);
+  }
+  function refreshClip() {
+    clipAsk({ type: "clipboard" }, "Reading the browser's clipboard…", (m) => {
+      clipText.value = m.text || "";
+      clipSay(m.text ? "The browser's clipboard. Copy puts it on yours." : "The browser's clipboard is empty. Type or paste text here to send it.");
+    });
+  }
+  function openClip() {
+    if (!clipBox || !control) return;
+    clipBox.hidden = false; clipBtn.setAttribute("aria-expanded", "true");
+    // Typing goes to the box, not the browser (a phone's keyboard opens
+    // only when the person taps it).
+    if (!touch) clipText.focus();
+    refreshClip();
+  }
+  function closeClip() {
+    if (!clipBox || clipBox.hidden) return;
+    if (clipReq) { clearTimeout(clipReq.timer); clipReq = null; clipBusy(false); }
+    clipBox.hidden = true; clipBtn.setAttribute("aria-expanded", "false");
+  }
+  function sendClip(paste) {
+    const text = clipText.value.replace(/\r\n?/g, "\n");
+    if (!text) { clipSay("There's no text to send."); return; }
+    const n = [...text].length;
+    if (n > maxClipSet) { clipSay(`That's ${n.toLocaleString()} characters: at most ${maxClipSet.toLocaleString()} can be sent at once.`); return; }
+    clipAsk({ type: "clipboard-set", text, paste }, paste ? "Pasting…" : "Sending…", () =>
+      clipSay(paste ? "Pasted into the page. It stays on the browser's clipboard until you hand back." : `On the browser's clipboard until you hand back: ${cmd}V pastes it there.`));
+  }
+  async function copyClip() {
+    const text = clipText.value;
+    if (!text) { clipSay("There's nothing to copy."); return; }
+    // Where this browser won't write its clipboard (plain HTTP, or a
+    // refusal), the text is selected to copy by hand.
+    if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+      try { await navigator.clipboard.writeText(text); clipSay("Copied"); return; } catch (_) { /* by hand */ }
     }
+    clipText.focus(); clipText.select();
+    clipSay(touch ? "Selected: copy it from the menu." : `Selected: press ${cmd}C to copy it.`);
+  }
+  if (clipBtn && clipBox) {
+    clipBtn.onclick = () => (clipBox.hidden ? openClip() : closeClip());
+    clipBox.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-clip]");
+      if (!b) return;
+      ({ refresh: refreshClip, close: closeClip, copy: copyClip, send: () => sendClip(false), paste: () => sendClip(true) })[b.dataset.clip]();
+    });
   }
   fitBtn.onclick = () => { zoom = 1; panX = panY = 0; applyZoom(); };
   // The stage takes the stream's shape: the profile's screen size may have
@@ -322,17 +337,14 @@
   // first: "A" down, "a" up), and must let go of what went down.
   const held = new Map();
   const modifier = (e) => ["Shift", "Control", "Alt", "AltGraph", "Meta", "CapsLock"].includes(e.key);
-  // shortcut is "paste" or "copy" for the person's own shortcuts.
-  function shortcut(e) {
-    if (!(mac ? e.metaKey : e.ctrlKey) || e.altKey) return "";
-    const k = e.code || "";
-    if (k === "KeyV" || (!k && e.key.toLowerCase() === "v")) return "paste";
-    if (k === "KeyC" || k === "KeyX" || (!k && /^[cx]$/i.test(e.key))) return "copy";
-    return "";
-  }
   addEventListener("keydown", (e) => {
     // The fixed full screen has no browser Esc of its own: Esc leaves it,
     // and releases the keyboard if it was captured.
+    // In the clipboard box, keys stay on this page; Esc closes it.
+    if (clipBox && clipBox.contains(e.target)) {
+      if (e.key === "Escape") { e.preventDefault(); closeClip(); clipBtn.focus(); }
+      return;
+    }
     if (e.key === "Escape" && full && !document.fullscreenElement) {
       e.preventDefault();
       leaveFull();
@@ -340,13 +352,10 @@
     }
     if (!control || !keyboard) return;
     if (e.key === "Escape") { e.preventDefault(); releaseKeys(); say("Keyboard released. Click the screen to send it again."); return; }
-    const sc = shortcut(e);
-    // Paste: not sent as keys and not prevented, so this browser fires its
-    // paste event with the person's text.
-    if (sc === "paste") { if (!e.repeat) pasteSoon(); return; }
+    // Every key goes to the browser, Ctrl+C, X and V included: copy and
+    // paste work inside it, on its own clipboard.
     const k = keysym(e); if (!k) return;
     e.preventDefault();
-    if (sc === "copy" && !e.repeat) copyFromBrowser(); // before the keys, which copy
     if (mac && e.metaKey && !modifier(e)) {
       // A Mac sends no keyup for a key pressed with ⌘ down: a tap, so it
       // isn't held (and repeated) in the browser; its repeats are taps.
@@ -358,17 +367,16 @@
     push({ t: "keydown", k }); held.set(code, k);
   });
   addEventListener("keyup", (e) => {
-    if (!control || !keyboard || e.key === "Escape") return;
+    if (!control || !keyboard || e.key === "Escape" || (clipBox && clipBox.contains(e.target))) return;
     const code = e.code || keysym(e);
     if (!code) return;
     e.preventDefault();
-    // Only what went down goes up, as the keysym it went down as: a
-    // paste's V was never sent.
+    // Only what went down goes up, as the keysym it went down as.
     if (held.has(code)) { push({ t: "keyup", k: held.get(code) }); held.delete(code); }
   });
   addEventListener("blur", () => { if (control) lift(); });
-  // A field of this page (the handoff's note) takes the keyboard back:
-  // what is typed or pasted there stays here.
+  // A field of this page (the handoff's note, the clipboard box) takes the
+  // keyboard back: what is typed or pasted there stays here.
   addEventListener("focusin", (e) => {
     const t = e.target;
     if (keyboard && t !== video && t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) releaseKeys();

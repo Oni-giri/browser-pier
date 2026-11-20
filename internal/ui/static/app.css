@@ -436,6 +436,16 @@ input[type=range]{width:100%;accent-color:var(--ink)}
 [data-viewer].full .ho-tools{flex-wrap:wrap;box-shadow:none;padding:0 0 0 4px;background:none}
 [data-viewer].full .ho-hint{margin:0 4px}
 body.full-open{overflow:hidden}
+/* The clipboard box (PROJ-194): a popover under the bar, inside the
+   viewer, so full screen keeps it. */
+.viewer-bar,.ho-tools{position:relative}
+.clipbox{position:absolute;right:0;top:calc(100% + 6px);z-index:30;box-sizing:border-box;width:min(400px,calc(100vw - 32px));padding:12px;border-radius:12px;background:var(--surface);box-shadow:0 0 0 1px var(--line),0 12px 32px var(--shadow-pop);display:flex;flex-direction:column;gap:8px;color:var(--ink);font-size:14px}
+.ho-tools .clipbox{right:8px}
+.clipbox-head{display:flex;align-items:center;gap:6px}
+.clipbox-head b{flex:1;font-weight:500}
+.clipbox textarea.input{min-height:110px;max-height:40vh;font-family:var(--mono);font-size:12.5px;line-height:1.45}
+.clipbox p{margin:0;min-height:1.4em}
+.clipbox-actions{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 #note{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);background:var(--overlay-strong);color:var(--on-accent);border-radius:10px;padding:7px 12px;font-size:13px;pointer-events:none;opacity:0;transition:opacity .2s;white-space:nowrap}
 #note.show{opacity:1}
 #hint{font-size:13px;color:var(--ink-3);padding:0 4px 2px}
@@ -546,7 +556,7 @@ body.handoff{background:radial-gradient(280px 190px at 50% -10px,rgba(47,107,255
 .ho-error{margin:8px 0;color:var(--red-text);font-size:14px}
 .ho-bottom{position:sticky;bottom:0;padding:16px 0 calc(8px + env(safe-area-inset-bottom));margin-top:24px;background:linear-gradient(transparent,var(--bg) 30%)}
 .ho-bottom .btn{min-height:50px;font-size:16px;border-radius:12px}
-.ho-tools{display:flex;align-items:center;gap:8px;padding:8px 16px;background:var(--surface);box-shadow:0 1px 0 var(--line),0 -1px 0 var(--line)}
+.ho-tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 16px;background:var(--surface);box-shadow:0 1px 0 var(--line),0 -1px 0 var(--line)}
 #stage.ho-stage{max-width:calc(72vh * var(--ratio));margin:0 auto;border-radius:0}
 .ho-hint{margin:6px 16px 0}
 textarea.input{height:auto;padding:10px 12px;resize:vertical}

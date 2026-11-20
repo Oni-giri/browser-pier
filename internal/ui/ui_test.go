@@ -204,8 +204,21 @@ func TestEveryPageRenders(t *testing.T) {
 		strings.Count(r.body, "data-take") != 2 {
 		t.Errorf("the live view's bar: %s", between(r.body, `class="viewer"`, `id="hint"`))
 	}
-	if r := f.get("/profiles/github"); strings.Contains(r.body, `id="full"`) || strings.Contains(r.body, `id="who"`) {
-		t.Error("a stopped profile has a full-screen button or a status pill")
+	if r := f.get("/profiles/github"); strings.Contains(r.body, `id="full"`) || strings.Contains(r.body, `id="who"`) || strings.Contains(r.body, `id="clip"`) {
+		t.Error("a stopped profile has a full-screen button, a status pill or a clipboard box")
+	}
+	// The clipboard box's button is in the bar, hidden until the viewer has
+	// control, and the box is inside the viewer, so full screen keeps both
+	// (PROJ-194).
+	if r := f.get("/profiles/google"); !strings.Contains(between(r.body, `class="viewer-bar"`, `id="stage"`), `<button id="clip" class="btn small" type="button" aria-expanded="false" aria-controls="clipbox" hidden>Clipboard</button>`) ||
+		!strings.Contains(between(r.body, "data-viewer", `id="stage"`), `<textarea id="cliptext"`) {
+		t.Errorf("the clipboard box: %s", between(r.body, `class="viewer"`, `id="hint"`))
+	} else {
+		for _, b := range []string{"refresh", "copy", "send", "paste"} {
+			if !strings.Contains(between(r.body, `id="clipbox"`, `id="stage"`), `data-clip="`+b+`"`) {
+				t.Errorf("the clipboard box has no %s button", b)
+			}
+		}
 	}
 	want(t, f.get("/profiles/google"), http.StatusOK, "<dt>Ads and trackers</dt><dd class=\"num\">42 blocked</dd>")
 	want(t, f.get("/profiles/github"), http.StatusOK, "<dt>Ads and trackers</dt><dd>On</dd>")
