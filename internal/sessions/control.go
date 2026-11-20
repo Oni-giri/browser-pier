@@ -2,6 +2,7 @@ package sessions
 
 import (
 	"context"
+	"net/http"
 	"sync"
 	"time"
 )
@@ -130,25 +131,68 @@ func (m *Manager) TakeControl(id string) error {
 }
 
 // HumanInput records that the person in control used the browser. It
-// fails unless they hold control.
-func (m *Manager) HumanInput(id string) error {
+// fails unless they hold control. Call done once the input has reached
+// the browser: ReleaseControl waits for input under way, so none lands
+// (text put on the clipboard, say) after it has emptied the clipboard.
+func (m *Manager) HumanInput(id string) (done func(), err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.findLocked(id)
-	if l == nil || !l.human || (l.sess.State != Running && l.sess.State != NeedsHelp) {
-		return ErrNotRunning
+	if l == nil || !l.human || l.releasing || (l.sess.State != Running && l.sess.State != NeedsHelp) {
+		return nil, ErrNotRunning
 	}
 	l.lastActivity = m.now()
-	return nil
+	l.humanInputs++
+	return sync.OnceFunc(func() {
+		m.mu.Lock()
+		l.humanInputs--
+		m.inputsDone.Broadcast()
+		m.mu.Unlock()
+	}), nil
 }
 
-// ReleaseControl hands the browser back to agents.
+// ReleaseControl hands the browser back to agents, whatever ends the
+// person's control: they hand back, a handoff ends, the live view goes.
+// First it empties the browser's clipboard (PROJ-194), so no agent can
+// paste what the person put there or copied in the page: it waits for
+// their input under way, refuses more, and only then lets agents in. If
+// the clipboard can't be emptied, that is logged and the browser handed
+// back all the same. It returns once agents have the browser.
 func (m *Manager) ReleaseControl(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if l := m.findLocked(id); l != nil && l.human {
-		l.human = false
-		l.lastActivity = m.now()
+	l := m.findLocked(id)
+	if l == nil || !l.human {
+		return
+	}
+	if l.releasing {
+		// Another hand-back is emptying the clipboard: done when it is.
+		for m.findLocked(id) == l && l.human {
+			m.inputsDone.Wait()
+		}
+		return
+	}
+	l.releasing = true
+	for l.humanInputs > 0 {
+		m.inputsDone.Wait()
+	}
+	if l.sess.State == Running || l.sess.State == NeedsHelp {
+		profile := l.sess.Profile
+		m.mu.Unlock()
+		m.emptyClipboard(id, profile)
+		m.mu.Lock()
+	}
+	l.human, l.releasing = false, false
+	l.lastActivity = m.now()
+	m.inputsDone.Broadcast()
+}
+
+// emptyClipboard empties a running browser's clipboard, a person's
+// control ending (PROJ-194). A failure is logged without what the
+// clipboard held, which BrowserPier never sees here.
+func (m *Manager) emptyClipboard(sessionID, profile string) {
+	if err := m.control(m.ctx, profile, http.MethodDelete, "/input/clipboard", nil, nil); err != nil {
+		m.log.Warn("couldn't empty the browser's clipboard as a person's control ended", "session", sessionID, "err", err)
 	}
 }
 

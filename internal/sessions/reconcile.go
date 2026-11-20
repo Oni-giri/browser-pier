@@ -48,6 +48,10 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		cid string
 	}
 	var outdatedStarting []starting
+	// Browsers picked up running: a person may have had control as the
+	// orchestrator went, with text on the clipboard.
+	type pickedUp struct{ id, profile string }
+	var running []pickedUp
 	m.mu.Lock()
 	for _, s := range rows {
 		c, ok := byID[s.ContainerID]
@@ -75,6 +79,8 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			outdated = append(outdated, stop{s.ID, "an older BrowserPier started", slog.LevelInfo})
 		case s.HadFills && (s.State == Running || s.State == NeedsHelp):
 			outdated = append(outdated, stop{s.ID, "had secrets typed into it, which went with the restart", slog.LevelWarn})
+		case s.State == Running || s.State == NeedsHelp:
+			running = append(running, pickedUp{s.ID, s.Profile})
 		}
 		l.lastActivity = m.now() // idle time restarts with the orchestrator
 		m.live[s.Profile] = l
@@ -97,6 +103,15 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		}
 	}
 	m.mu.Unlock()
+
+	// A person's control ended with the restart: their clipboard is
+	// emptied before agents use the browser again, as at any hand-back
+	// (PROJ-194).
+	var emptied sync.WaitGroup
+	for _, p := range running {
+		emptied.Go(func() { m.emptyClipboard(p.id, p.profile) })
+	}
+	emptied.Wait()
 
 	// They lack what BrowserPier has added since, such as the egress
 	// filter, so they don't run on under this one. If one won't stop,

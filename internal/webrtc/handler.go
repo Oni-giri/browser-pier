@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
@@ -210,18 +211,26 @@ func (v *viewer) stillAllowed() bool {
 //	{"type":"take"}                       take control
 //	{"type":"release"}                    hand back
 //	{"type":"input","events":[...]}       mouse and keys (images/chromium/entrypoint/live.go)
-//	{"type":"text","text":"..."}          paste a string (a paste, or the phone's Type or paste button)
-//	{"type":"copy","id":1}                the browser's clipboard once the keys after it copied, answered
-//	                                      {"type":"clipboard","id":1,"text":"..."} or {"type":"copy-error","id":1,"msg":"..."}
+//	{"type":"text","text":"..."}          type a string (the phone's Type button)
 //	{"type":"lift"}                       let go of held keys and buttons (the page lost focus)
 //
-// What is typed or copied is never logged: it may be a password.
+// and the clipboard box's (PROJ-194), each answered with its id, or with
+// {"type":"clipboard-error","id":1,"msg":"..."}:
+//
+//	{"type":"clipboard","id":1}           read the browser's clipboard: {"type":"clipboard","id":1,"text":"..."}
+//	{"type":"clipboard-set","id":1,"text":"...","paste":false}
+//	                                      put text on it, held until the takeover ends, then
+//	                                      with paste press Ctrl+V: {"type":"clipboard-set","id":1}
+//
+// What is typed, read or set is never logged: it may be a password. The
+// clipboard is emptied as the person's control ends (ReleaseControl).
 func (v *viewer) message(msg []byte, reply func(string)) {
 	var m struct {
 		Type   string          `json:"type"`
 		Events json.RawMessage `json:"events"`
 		Text   string          `json:"text"`
 		ID     int             `json:"id"`
+		Paste  bool            `json:"paste"`
 	}
 	if err := json.Unmarshal(msg, &m); err != nil {
 		return
@@ -264,36 +273,75 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 		if v.control {
 			_ = v.post("/input/release", nil)
 		}
-	case "input", "text", "copy":
-		if !v.control || v.h.m.HumanInput(v.session) != nil {
+	case "input", "text", "clipboard", "clipboard-set":
+		var done func()
+		var err error
+		if v.control {
+			// Held until the input has reached the browser: a hand-back
+			// empties the clipboard only after it.
+			done, err = v.h.m.HumanInput(v.session)
+		}
+		if !v.control || err != nil {
 			v.control = false
+			if m.Type == "clipboard" || m.Type == "clipboard-set" {
+				say(map[string]any{"type": "clipboard-error", "id": m.ID, "msg": "You don't have control."})
+			}
 			say(map[string]any{"type": "control", "on": false})
 			return
 		}
-		if m.Type == "copy" {
-			// Read only as the person copies (PROJ-194), never polled, so
-			// a page can't put text in their clipboard on its own. The
-			// copy keys come after this message: what the clipboard holds
-			// now is read, then read again until it changes.
-			before, err := v.clipboard()
+		defer done()
+		switch m.Type {
+		case "clipboard":
+			text, err := v.do(http.MethodGet, "/input/clipboard", nil, http.StatusOK, controlWait)
 			if err != nil {
-				say(map[string]any{"type": "copy-error", "id": m.ID, "msg": err.Error()})
+				say(map[string]any{"type": "clipboard-error", "id": m.ID, "msg": "Couldn't read the browser's clipboard: " + err.Error()})
 				return
 			}
-			go v.awaitCopy(m.ID, before, say)
-			return
-		}
-		path, body := "/input/events", []byte(m.Events)
-		if m.Type == "text" {
-			// Pasted through the browser's clipboard, exactly and at once
-			// (PROJ-194): typing drops characters the keyboard map lacks.
-			path = "/input/paste"
-			body, _ = json.Marshal(map[string]string{"text": m.Text})
-		}
-		if err := v.post(path, body); err != nil {
-			say(map[string]any{"type": "error", "msg": err.Error()})
+			say(map[string]any{"type": "clipboard", "id": m.ID, "text": string(text)})
+		case "clipboard-set":
+			v.setClipboard(m.ID, m.Text, m.Paste, say)
+		default:
+			path, body := "/input/events", []byte(m.Events)
+			if m.Type == "text" {
+				path = "/input/type"
+				// A person typing: at once, not at an agent's human pace.
+				body, _ = json.Marshal(map[string]string{"text": m.Text, "pace": "instant"})
+			}
+			if err := v.post(path, body); err != nil {
+				say(map[string]any{"type": "error", "msg": err.Error()})
+			}
 		}
 	}
+}
+
+// maxClipboardSet caps the text the clipboard box sends, in characters;
+// the container caps it too.
+const maxClipboardSet = 10000
+
+// setClipboard puts the clipboard box's text on the browser's clipboard
+// and, with paste, presses Ctrl+V. Only its length is logged.
+func (v *viewer) setClipboard(id int, text string, paste bool, say func(any)) {
+	fail := func(msg string) { say(map[string]any{"type": "clipboard-error", "id": id, "msg": msg}) }
+	n := utf8.RuneCountInString(text)
+	switch {
+	case n == 0:
+		fail("There's no text to send.")
+		return
+	case n > maxClipboardSet:
+		fail(fmt.Sprintf("That's %d characters: at most %d can be sent at once.", n, maxClipboardSet))
+		return
+	}
+	path, what := "/input/clipboard", "Clipboard set"
+	if paste {
+		path, what = "/input/paste", "Pasted from the clipboard box"
+	}
+	body, _ := json.Marshal(map[string]string{"text": text})
+	if err := v.post(path, body); err != nil {
+		fail("Couldn't send it to the browser: " + err.Error())
+		return
+	}
+	v.h.m.Note(v.session, "", fmt.Sprintf("%s (%d characters)", what, n))
+	say(map[string]any{"type": "clipboard-set", "id": id})
 }
 
 // handBack runs when the viewer goes: control returns to agents with no
@@ -321,35 +369,9 @@ func (v *viewer) post(path string, body []byte) error {
 // controlWait bounds a call to the container's control socket.
 const controlWait = 10 * time.Second
 
-// maxClipboard caps what a copy brings back; the container caps it too.
+// maxClipboard caps what a clipboard read brings back; the container caps
+// it too.
 const maxClipboard = 32 << 10
-
-// copySettle is how long a copy waits for the clipboard to change before
-// answering with what it holds (copying the same text again is a copy
-// too); copyPoll is how often it looks. Tests shorten them.
-var copySettle, copyPoll = 1500 * time.Millisecond, 100 * time.Millisecond
-
-func (v *viewer) clipboard() ([]byte, error) {
-	return v.do(http.MethodGet, "/input/clipboard", nil, http.StatusOK, controlWait)
-}
-
-// awaitCopy answers copy id with the clipboard once it differs from
-// before, or with what it holds after copySettle.
-func (v *viewer) awaitCopy(id int, before []byte, say func(any)) {
-	deadline := time.Now().Add(copySettle)
-	for {
-		time.Sleep(copyPoll)
-		now, err := v.clipboard()
-		if err != nil {
-			say(map[string]any{"type": "copy-error", "id": id, "msg": err.Error()})
-			return
-		}
-		if !bytes.Equal(now, before) || !time.Now().Before(deadline) {
-			say(map[string]any{"type": "clipboard", "id": id, "text": string(now)})
-			return
-		}
-	}
-}
 
 // do calls the container's control socket, wanting status want, within
 // wait, and returns the answer's body.

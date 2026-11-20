@@ -38,7 +38,8 @@ type FakeRuntime struct {
 	// Memory is what MemoryUsage reports for every container.
 	Memory int64
 	// Control, if set, serves each started container's control socket
-	// instead of the default, which answers /healthz only.
+	// instead of the default, which answers /healthz and empties the
+	// clipboard only.
 	Control http.Handler
 }
 
@@ -98,6 +99,8 @@ func (f *FakeRuntime) Start(_ context.Context, id string) error {
 		if h == nil {
 			mux := http.NewServeMux()
 			mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+			// A person's control ending empties the clipboard (PROJ-194).
+			mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 			h = mux
 		}
 		c.srv = &http.Server{Handler: h} //nolint:gosec // test server

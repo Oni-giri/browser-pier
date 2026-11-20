@@ -1,8 +1,13 @@
 package sessions
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"net/http"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -42,8 +47,10 @@ func TestTakeAndReleaseControl(t *testing.T) {
 	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrHumanDriving) {
 		t.Fatalf("a second person taking control = %v, want ErrHumanDriving", err)
 	}
-	if err := f.m.HumanInput(s.ID); err != nil {
+	if done, err := f.m.HumanInput(s.ID); err != nil {
 		t.Fatal(err)
+	} else {
+		done()
 	}
 	// While a person drives, agents can only watch.
 	if _, _, err := f.m.AgentInput(context.Background(), s.ID); !errors.Is(err, ErrHumanDriving) {
@@ -53,7 +60,7 @@ func TestTakeAndReleaseControl(t *testing.T) {
 		t.Fatalf("CDP while a person drives = %v", err)
 	}
 	f.m.ReleaseControl(s.ID)
-	if err := f.m.HumanInput(s.ID); !errors.Is(err, ErrNotRunning) {
+	if _, err := f.m.HumanInput(s.ID); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("human input after release = %v", err)
 	}
 	if _, done, err := f.m.AgentInput(context.Background(), s.ID); err != nil {
@@ -314,4 +321,149 @@ func TestOnEndHearsEachEnd(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("OnEnd wasn't called after the stop")
 	}
+}
+
+// Whatever ends a person's control, the browser's clipboard is emptied
+// before agents get the browser back: after the person's input under way
+// has reached it, with no more let in meanwhile (PROJ-194).
+func TestReleaseControlEmptiesTheClipboardFirst(t *testing.T) {
+	f := newFixture(t)
+	var logs syncBuffer
+	f.m.log = slog.New(slog.NewTextHandler(&logs, nil))
+	type emptying struct {
+		agentInput, humanInput error
+	}
+	emptied := make(chan emptying, 10)
+	var id string
+	fail := false
+	var mu sync.Mutex
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) {
+		// While it empties, agents are still kept out, and so is more of
+		// the person's input.
+		var e emptying
+		if _, done, err := f.m.AgentInput(context.Background(), id); err == nil {
+			done()
+		} else {
+			e.agentInput = err
+		}
+		if done, err := f.m.HumanInput(id); err == nil {
+			done()
+		} else {
+			e.humanInput = err
+		}
+		emptied <- e
+		mu.Lock()
+		defer mu.Unlock()
+		if fail {
+			http.Error(w, "couldn't empty the clipboard: it kept its text", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	f.rt.Control = mux
+	advance := f.clock()
+	s := f.start(f.m)
+	id = s.ID
+	take := func() {
+		t.Helper()
+		if err := f.m.TakeControl(s.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(what string) {
+		t.Helper()
+		select {
+		case e := <-emptied:
+			if !errors.Is(e.agentInput, ErrHumanDriving) || !errors.Is(e.humanInput, ErrNotRunning) {
+				t.Errorf("%s: while emptying, agent input %v, the person's %v", what, e.agentInput, e.humanInput)
+			}
+		default:
+			t.Fatalf("%s: the clipboard wasn't emptied", what)
+		}
+		if _, done, err := f.m.AgentInput(context.Background(), s.ID); err != nil {
+			t.Fatalf("%s: agent input after = %v", what, err)
+		} else {
+			done()
+		}
+		advance(agentQuiet + time.Second) // so the person can take control again
+	}
+
+	// A plain hand-back.
+	take()
+	f.m.ReleaseControl(s.ID)
+	check("hand back")
+
+	// The person's input under way is waited for.
+	take()
+	done, err := f.m.HumanInput(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan struct{})
+	go func() { f.m.ReleaseControl(s.ID); close(released) }()
+	select {
+	case <-emptied:
+		t.Fatal("emptied with the person's input still under way")
+	case <-released:
+		t.Fatal("handed back with the person's input still under way")
+	case <-time.After(100 * time.Millisecond):
+	}
+	done()
+	<-released
+	check("input under way")
+
+	// Two hand-backs at once (the live view going as a handoff ends):
+	// emptied once, and neither returns before agents have the browser.
+	take()
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Go(func() {
+			f.m.ReleaseControl(s.ID)
+			if got, _ := f.m.Live("google"); got.HumanControl {
+				t.Error("a hand-back returned before the browser was handed back")
+			}
+		})
+	}
+	wg.Wait()
+	check("two at once")
+	if len(emptied) != 0 {
+		t.Errorf("emptied %d more times", len(emptied))
+	}
+	// Without control, nothing to empty.
+	f.m.ReleaseControl(s.ID)
+	if len(emptied) != 0 {
+		t.Error("emptied without a person in control")
+	}
+
+	// A browser that can't empty it: logged, and handed back all the same.
+	mu.Lock()
+	fail = true
+	mu.Unlock()
+	take()
+	f.m.ReleaseControl(s.ID)
+	check("a failed emptying")
+	if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "clipboard") {
+		t.Errorf("not logged: %s", logs.String())
+	}
+}
+
+// syncBuffer is a bytes.Buffer for a logger written from several
+// goroutines.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
 }
