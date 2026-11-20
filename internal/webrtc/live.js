@@ -228,7 +228,10 @@
   // clipEdited: the box holds text the person typed or pasted there and
   // hasn't sent. Opening the box again keeps it; only Refresh replaces it.
   let clipEdited = false;
-  if (clipText) clipText.addEventListener("input", () => { clipEdited = true; });
+  // clipEdits counts the person's edits, so a read can tell whether they
+  // typed while it was on its way.
+  let clipEdits = 0;
+  if (clipText) clipText.addEventListener("input", () => { clipEdited = true; clipEdits++; });
   function clipSay(text) { clipMsg.textContent = text; }
   function clipBusy(on) { for (const b of clipBox.querySelectorAll("[data-clip=refresh],[data-clip=send],[data-clip=paste]")) b.disabled = on; }
   // clipAsk sends one request, answered by its id (clipAnswer): done
@@ -248,14 +251,20 @@
     if (m.type === "clipboard-error") fail(m.msg || "That didn't work.");
     else done(m);
   }
-  function refreshClip() {
+  // refreshClip reads the browser's clipboard into the box. Refresh's
+  // read replaces what is there; the read that opening the box starts
+  // (auto) doesn't, if the person typed or pasted while it was on its way.
+  function refreshClip(auto) {
+    const edits = clipEdits;
+    const typedSince = () => auto === true && clipEdits !== edits;
     clipAsk({ type: "clipboard" }, "Reading the browser's clipboard…", (m) => {
+      if (typedSince()) { clipSay("Your text isn't sent yet. Refresh replaces it with the browser's clipboard."); return; }
       clipText.value = m.text || ""; clipEdited = false;
       clipSay(m.text ? "The browser's clipboard. Copy puts it on yours." : "The browser's clipboard is empty. Type or paste text here to send it.");
     }, (msg) => {
       // What an earlier read left would pass for the browser's clipboard
       // now: it goes. Text the person typed stays, said to be theirs.
-      if (!clipEdited) clipText.value = "";
+      if (!clipEdited && !typedSince()) clipText.value = "";
       clipSay(clipEdited ? `${msg} The text here is yours, not sent yet.` : msg);
     });
   }
@@ -266,7 +275,7 @@
     // only when the person taps it).
     if (!touch) clipText.focus();
     if (clipEdited) clipSay("Your text isn't sent yet. Refresh replaces it with the browser's clipboard.");
-    else refreshClip();
+    else refreshClip(true);
   }
   function closeClip() {
     if (!clipBox || clipBox.hidden) return;
@@ -299,7 +308,7 @@
     clipBox.addEventListener("click", (e) => {
       const b = e.target.closest("[data-clip]");
       if (!b) return;
-      ({ refresh: refreshClip, close: closeClip, copy: copyClip, send: () => sendClip(false), paste: () => sendClip(true) })[b.dataset.clip]();
+      ({ refresh: () => refreshClip(false), close: closeClip, copy: copyClip, send: () => sendClip(false), paste: () => sendClip(true) })[b.dataset.clip]();
     });
   }
   fitBtn.onclick = () => { zoom = 1; panX = panY = 0; applyZoom(); };
