@@ -297,7 +297,8 @@
   function failed(why) {
     connectError = why;
     render();
-    say(why + ". Reload the page to try again.");
+    // A refusal's own words end in a full stop already.
+    say(why.replace(/[.!?]\s*$/, "") + ". Reload the page to try again.");
     clearTimeout(say.t); // the note stays
   }
   // A network error before the offer's answer (the fetch throwing) is a
