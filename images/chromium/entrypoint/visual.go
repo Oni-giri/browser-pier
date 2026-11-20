@@ -39,9 +39,9 @@ type visual struct {
 	moved bool
 	// live is the live view's continuous mouse and keyboard.
 	live *liveInput
-	// hold puts text on the X clipboard until release is called; tests
-	// replace it.
-	hold func(text string) (release func(), err error)
+	// clip is the live view's clipboard box's side of the X clipboard
+	// (clipboard.go).
+	clip clipState
 }
 
 // maxTypeLen caps one type action; at human pace, which takes about a
@@ -53,7 +53,7 @@ const (
 )
 
 func newVisual(width, height int) *visual {
-	return &visual{width: width, height: height, run: runCommand, output: runStdout, mot: motion.NewRandom(), live: newLiveInput(width, height), hold: holdClipboard}
+	return &visual{width: width, height: height, run: runCommand, output: runStdout, mot: motion.NewRandom(), live: newLiveInput(width, height), clip: clipState{hold: holdClipboard}}
 }
 
 func (v *visual) register(mux *http.ServeMux) {
@@ -67,129 +67,7 @@ func (v *visual) register(mux *http.ServeMux) {
 		mux.HandleFunc("POST /input/events", v.live.events)
 		mux.HandleFunc("POST /input/release", v.live.release)
 	}
-	mux.HandleFunc("GET /input/clipboard", v.clipboard)
-	mux.HandleFunc("POST /input/paste", v.paste)
-}
-
-// maxPaste caps one paste, in characters.
-const maxPaste = 10000
-
-// pasteHold is how long pasted text stays on the clipboard after Ctrl+V,
-// for the page to read it; then the clipboard is empty again.
-var pasteHold = 500 * time.Millisecond
-
-// paste pastes the person's text into the page (PROJ-194): it holds it on
-// the X clipboard, presses Ctrl+V, then lets go, so it doesn't stay there
-// for a later paste (an agent's, say). Typing it instead drops characters
-// the keyboard map lacks (an accent, sometimes): xdotool maps them to a
-// spare key on the fly, and Chromium misses the change now and then.
-func (v *visual) paste(w http.ResponseWriter, r *http.Request) {
-	var t struct{ Text string }
-	if !decode(w, r, &t) {
-		return
-	}
-	if err := checkText(t.Text, maxPaste); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	release, err := v.hold(t.Text)
-	if err != nil {
-		http.Error(w, "couldn't paste: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer release()
-	// Ready once the clipboard gives the text back.
-	ctx, cancel := context.WithTimeout(r.Context(), clipboardWait)
-	defer cancel()
-	for {
-		out, err := v.output(ctx, "xclip", "-selection", "clipboard", "-out", "-target", "UTF8_STRING")
-		if err == nil && string(out) == t.Text {
-			break
-		}
-		if ctx.Err() != nil {
-			http.Error(w, "couldn't paste: the clipboard didn't take the text", http.StatusInternalServerError)
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if _, err := v.run(r.Context(), "xdotool", "key", "--clearmodifiers", "ctrl+v"); err != nil {
-		http.Error(w, "couldn't paste: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	time.Sleep(pasteHold)
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// holdClipboard runs xclip in the foreground with text as the clipboard,
-// until release kills it, which empties the clipboard.
-func holdClipboard(text string) (func(), error) {
-	pr, pw, err := os.Pipe()
-	if err != nil {
-		return nil, err
-	}
-	cmd := exec.Command("xclip", "-quiet", "-selection", "clipboard", "-in")
-	cmd.Env = append(os.Environ(), "DISPLAY="+display)
-	cmd.Stdin = pr
-	exited, err := procs.start(cmd)
-	_ = pr.Close()
-	if err != nil {
-		_ = pw.Close()
-		return nil, err
-	}
-	_, werr := io.WriteString(pw, text)
-	_ = pw.Close()
-	release := func() {
-		_ = cmd.Process.Kill()
-		<-exited
-	}
-	if werr != nil {
-		release()
-		return nil, werr
-	}
-	return release, nil
-}
-
-// maxClipboard caps what the live view's copy reads (PROJ-194): JSON-
-// escaped, up to six times as long, it still fits one data channel
-// message (256 KiB in Chrome).
-const maxClipboard = 32 << 10
-
-// clipboardWait bounds a read: a clipboard's owner that doesn't answer
-// (a hung page) doesn't hold the live view up. Tests shorten it.
-var clipboardWait = 2 * time.Second
-
-// clipboard answers the X CLIPBOARD selection's text, for the live
-// view's copy (PROJ-194): read when the person with control copies,
-// never polled, so a page can't put text in their clipboard on its own.
-// Empty when nothing holds text. No CDP: the selection is X's, as
-// xdotool's input is.
-func (v *visual) clipboard(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), clipboardWait)
-	defer cancel()
-	out, err := v.output(ctx, "xclip", "-selection", "clipboard", "-out", "-target", "UTF8_STRING")
-	switch {
-	case err == nil:
-	case ctx.Err() != nil:
-		http.Error(w, "the browser's clipboard didn't answer", http.StatusGatewayTimeout)
-		return
-	case strings.HasSuffix(err.Error(), "exit status 1"):
-		out = nil // nothing holds the clipboard, or not as text
-	default:
-		http.Error(w, "couldn't read the clipboard: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	switch {
-	case len(out) > maxClipboard:
-		http.Error(w, fmt.Sprintf("the clipboard holds more than %d kB of text", maxClipboard>>10), http.StatusRequestEntityTooLarge)
-		return
-	case !utf8.Valid(out):
-		http.Error(w, "the clipboard's text isn't UTF-8", http.StatusUnprocessableEntity)
-		return
-	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	_, _ = w.Write(out)
+	v.registerClipboard(mux)
 }
 
 // screenshotArgs captures one frame as PNG to fd 3, scaled to width (and

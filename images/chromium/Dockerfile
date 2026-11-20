@@ -49,7 +49,7 @@ RUN apt-get update \
 # en-US whatever LANGUAGE says, and Intl's locale contradicts
 # navigator.languages, which matches the exit location.
 RUN for el in ximagesrc videoconvert x264enc fdsink; do gst-inspect-1.0 "$el" >/dev/null || { echo "missing GStreamer element $el"; exit 1; }; done \
- && { command -v xclip >/dev/null || { echo "missing xclip, the live view's copy"; exit 1; }; } \
+ && { command -v xclip >/dev/null || { echo "missing xclip, the live view's clipboard box"; exit 1; }; } \
  && for l in de fr es ja; do test -f /usr/lib/chromium/locales/$l.pak || { echo "missing Chromium locale $l"; exit 1; }; done \
  && tr '\0' '\n' < /usr/lib/chromium/chromium > /tmp/strings \
  && for sw in user-data-dir remote-debugging-port password-store disable-blink-features use-angle enable-unsafe-swiftshader \
