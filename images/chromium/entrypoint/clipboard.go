@@ -295,7 +295,22 @@ func (v *visual) emptySelection(ctx context.Context, selection string) error {
 		rcancel()
 		switch {
 		case err == nil && ok && hasTarget(targets, emptyTarget):
-			return nil
+			// Ours: end it, then check it left no owner. A page taking the
+			// selection back between that look and the end would own it
+			// now, and the xclip it ended can't tell us so.
+			release()
+			release = nil
+			vctx, vcancel := context.WithTimeout(ctx, emptyRead)
+			_, owned, verr := v.clip.read(vctx, selection, "TARGETS")
+			vtimedOut := vctx.Err() != nil
+			vcancel()
+			switch {
+			case verr == nil && !owned:
+				return nil
+			case verr != nil && !vtimedOut:
+				return verr
+			}
+			continue // owned again, or unseen: take it again
 		case err != nil && !timedOut:
 			return err // no display, say: looking again won't help
 		}

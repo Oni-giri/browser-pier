@@ -32,6 +32,9 @@ type fakeX struct {
 	// steal: how many times the page takes a selection back just after an
 	// emptying xclip took it (a copy landing late), which ends that xclip.
 	steal int
+	// stealAtEnd: how many times the page takes a selection back just as
+	// an emptying xclip that was seen to own it is ended.
+	stealAtEnd int
 }
 
 type fakeOwner struct {
@@ -67,6 +70,10 @@ func newFakeX(v *visual) *fakeX {
 			h.released = true
 			if cur := x.owners[selection]; cur != nil && cur.holder == h {
 				delete(x.owners, selection) // X: an owner that goes leaves none
+				if target == emptyTarget && x.stealAtEnd > 0 {
+					x.stealAtEnd--
+					x.owners[selection] = &fakeOwner{kind: "chromium", text: "copied at the end"}
+				}
 			}
 			if p := x.pending[selection]; p != nil && p.holder == h {
 				delete(x.pending, selection)
@@ -398,6 +405,29 @@ func TestClipboardEmptyRetakes(t *testing.T) {
 	}
 	if o := x.owner(selClipboard); o != nil {
 		t.Errorf("still owned by %+v", *o)
+	}
+
+	// The page taking it back just as the xclip seen to own it ends: the
+	// check after the end sees the page's owner, and it is taken again.
+	v, _ = newTestVisual(false)
+	x = newFakeX(v)
+	x.page(selClipboard, "copied")
+	x.stealAtEnd = 1
+	if rec := serveVisual(v, http.MethodDelete, "/input/clipboard", ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("empty, taken back at the end: %d %s", rec.Code, rec.Body)
+	}
+	took = nil
+	for _, h := range x.holders {
+		took = append(took, h.selection)
+		if !h.released {
+			t.Errorf("left %+v", *h)
+		}
+	}
+	if strings.Join(took, " ") != "clipboard clipboard primary" {
+		t.Errorf("taken back at the end: took %v", took)
+	}
+	if o := x.owner(selClipboard); o != nil {
+		t.Errorf("taken back at the end: still owned by %+v", *o)
 	}
 
 	// A page that keeps taking it back: refused, saying so, after

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,11 +20,12 @@ func fakeXclip(t *testing.T, mode string) {
 	script := `#!/bin/sh
 # Called as: xclip -selection SEL -out -target TARGET
 #        or: xclip -quiet -selection SEL [-target TARGET] -in
-in=; target=
+in=; target=; sel=
 while [ $# -gt 0 ]; do
 	case "$1" in
 	-in) in=1 ;;
 	-target) shift; target=$1 ;;
+	-selection) shift; sel=$1 ;;
 	esac
 	shift
 done
@@ -37,8 +39,11 @@ big) exec head -c 40000 /dev/zero ;; # one process, as xclip is
 display) echo "Error: Can't open display: :99" >&2; exit 1 ;;
 crash) exit 2 ;;
 owner)
-	# An emptying xclip that takes its selection and holds it until killed.
-	[ -n "$in" ] && { cat >/dev/null; exec sleep 30; }
+	# An emptying xclip that takes its selection and holds it until
+	# killed; the selection is owned only while it runs.
+	f="$FAKE_XCLIP_DIR/holder-$sel"
+	[ -n "$in" ] && { cat >/dev/null; echo $$ >"$f"; exec sleep 30; }
+	[ -f "$f" ] && kill -0 "$(cat "$f")" 2>/dev/null || na
 	[ "$target" = TARGETS ] && { printf 'TARGETS\nBROWSERPIER_EMPTIED\n'; exit 0; }
 	exit 0 ;;
 stolen)
@@ -53,6 +58,7 @@ esac
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("FAKE_XCLIP", mode)
+	t.Setenv("FAKE_XCLIP_DIR", dir)
 }
 
 // readSelection reads xclip's answer: text, nothing ("not available"), or
@@ -130,10 +136,19 @@ func TestClipboardEmptyThroughXclip(t *testing.T) {
 			if rec.Code != c.code || !strings.Contains(rec.Body.String(), c.says) {
 				t.Errorf("%d %s", rec.Code, rec.Body)
 			}
-			// Every xclip started was ended: the call would hang on one
-			// still holding, and a held one sleeps 30 s.
 			if took := time.Since(start); took > 2*emptyWait+time.Second {
 				t.Errorf("took %v", took)
+			}
+			// Every xclip that held a selection was ended: a holder left
+			// running would still sleep, and own its selection.
+			for _, sel := range []string{selClipboard, selPrimary} {
+				pid, err := os.ReadFile(filepath.Join(os.Getenv("FAKE_XCLIP_DIR"), "holder-"+sel))
+				if err != nil {
+					continue
+				}
+				if err := exec.Command("kill", "-0", strings.TrimSpace(string(pid))).Run(); err == nil {
+					t.Errorf("the %s holder still runs", sel)
+				}
 			}
 		})
 	}
