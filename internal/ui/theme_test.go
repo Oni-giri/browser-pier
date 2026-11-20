@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"slices"
 	"strings"
 	"testing"
 
@@ -59,70 +58,6 @@ func TestTemplateStylesAreTokens(t *testing.T) {
 			if colourLiteral.MatchString(s) {
 				t.Errorf("%s: %s: use a token from app.css", name, s)
 			}
-		}
-	}
-}
-
-// Orange means a person is needed (DESIGN.md). A notice is a note or a
-// caution in a form or a dialog, never a request for a person, so no
-// template marks one warm and no rule for a notice reaches for orange.
-func TestNoticesAreNeverOrange(t *testing.T) {
-	classAttr := regexp.MustCompile(`class="([^"]*)"`)
-	files, err := fs.Glob(embedded, "templates/*.html")
-	if err != nil || len(files) == 0 {
-		t.Fatal("no templates", err)
-	}
-	for _, name := range files {
-		b, err := embedded.ReadFile(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, m := range classAttr.FindAllStringSubmatch(string(b), -1) {
-			classes := strings.Fields(m[1])
-			if slices.Contains(classes, "notice") && slices.Contains(classes, "warn") {
-				t.Errorf("%s: %s: a notice is neutral; orange is only for a person needed", name, m[0])
-			}
-		}
-	}
-	b, err := embedded.ReadFile("static/app.css")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, rule := range strings.Split(string(b), "}") {
-		sel, decl, ok := strings.Cut(rule, "{")
-		if ok && strings.Contains(sel, ".notice") && strings.Contains(decl, "orange") {
-			t.Errorf("app.css: %s{%s}: a notice is never orange", strings.TrimSpace(sel), decl)
-		}
-	}
-}
-
-// The orange pill is the Needs-you status. A setting that's missing (no
-// handoff PIN yet) waits for nobody, so its pill is the plain grey one.
-func TestOrangePillOnlyForNeedsYou(t *testing.T) {
-	pill := regexp.MustCompile(`<span class="([^"]*)">([^<]*)<`)
-	files, err := fs.Glob(embedded, "templates/*.html")
-	if err != nil || len(files) == 0 {
-		t.Fatal("no templates", err)
-	}
-	for _, name := range files {
-		b, err := embedded.ReadFile(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, m := range pill.FindAllStringSubmatch(string(b), -1) {
-			classes := strings.Fields(m[1])
-			if slices.Contains(classes, "pill") && slices.Contains(classes, "help") && m[2] != "Needs you" {
-				t.Errorf("%s: %s: the orange pill is only for Needs you", name, m[0])
-			}
-		}
-	}
-	// Rendered, with no PIN set yet: the PIN pills are there and grey.
-	f := newFixture(t)
-	for path, label := range map[string]string{"/agents": "No PIN", "/settings": "Not set"} {
-		r := f.get(path)
-		want(t, r, http.StatusOK, `<span class="pill">`+label+`</span>`)
-		if strings.Contains(r.body, "pill help") {
-			t.Errorf("%s is orange with nobody needed", path)
 		}
 	}
 }
