@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -146,13 +147,39 @@ func TestRealBrowserClipboardBox(t *testing.T) {
 		}
 	}
 
-	// Handing back empties the clipboard, Chromium's own copy included.
+	// What is selected in the page is PRIMARY, Chromium's, which a
+	// middle-click pastes: here, the person's own middle-click.
+	if got, ok := xselection(t, name, "primary", "UTF8_STRING"); !ok || got != text {
+		t.Fatalf("with the field's text selected, PRIMARY holds %q (%t)", got, ok)
+	}
+	before := page.state().pastes
+	input(map[string]any{"t": "move", "x": 640, "y": 400}, map[string]any{"t": "down", "b": 2}, map[string]any{"t": "up", "b": 2})
+	page.await(t, "the middle-click's paste", func(f fieldState) bool { return f.pastes == before+1 && f.value != text })
+	ctrl("a") // selected again: PRIMARY holds it all
+
+	// Handing back empties both selections, Chromium's own included.
 	send(map[string]any{"type": "release"})
 	if r := next("control"); r["on"] != false {
 		t.Fatalf("release: %v", r)
 	}
 	if got, err := v.do(http.MethodGet, "/input/clipboard", nil, http.StatusOK, controlWait); err != nil || len(got) != 0 {
 		t.Errorf("after handing back the clipboard holds %q (%v)", got, err)
+	}
+	for _, sel := range []string{"clipboard", "primary"} {
+		if got, ok := xselection(t, name, sel, "TARGETS"); ok {
+			t.Errorf("after handing back %s has an owner, offering %q", sel, got)
+		}
+	}
+	// An agent's middle-click into the field pastes nothing.
+	after := page.state()
+	body, _ := json.Marshal(map[string]any{"x": 640, "y": 400, "button": "middle", "pace": "instant"})
+	if _, err := v.do(http.MethodPost, "/input/click", body, http.StatusNoContent, controlWait); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	// (Chromium still fires a paste event, with nothing to paste.)
+	if f := page.state(); f.value != after.value {
+		t.Errorf("an agent's middle-click after the hand-back pasted: %q, was %q", f.value, after.value)
 	}
 	// Without control, the box is refused.
 	send(map[string]any{"type": "clipboard", "id": 99})
@@ -249,6 +276,16 @@ func (p *fieldPage) await(t *testing.T, what string, ok func(fieldState) bool) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+// xselection reads an X selection in the profile's browser container as
+// target, with xclip, as the test's own look: ok is false when xclip
+// finds nothing (no owner, or none with that target).
+func xselection(t *testing.T, profile, selection, target string) (string, bool) {
+	t.Helper()
+	out, err := exec.Command("docker", "exec", "-e", "DISPLAY=:99", "browserpier-"+profile,
+		"xclip", "-selection", selection, "-out", "-target", target).Output()
+	return string(out), err == nil
 }
 
 type browserTarget struct {
