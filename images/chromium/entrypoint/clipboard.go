@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -17,12 +18,12 @@ import (
 // The live view's clipboard box (PROJ-194) reads and sets the browser's
 // clipboard, X's CLIPBOARD selection, with xclip: no CDP, as xdotool's
 // input. The orchestrator calls these only for the person with control,
-// and empties the clipboard before agents get the browser back:
+// and empties both selections before agents get the browser back:
 //
-//	GET    /input/clipboard   its text (text/plain), "" when nothing holds text
+//	GET    /input/clipboard   its text (text/plain), "" when nothing holds it
 //	POST   /input/clipboard   {"text"}: hold the text there until replaced or emptied
 //	POST   /input/paste       {"text"}: the same, then Ctrl+V
-//	DELETE /input/clipboard   empty it, whoever holds it (Chromium too)
+//	DELETE /input/clipboard   empty CLIPBOARD and PRIMARY, whoever holds them (Chromium too)
 //
 // Nothing here logs the text, nor puts it in an error.
 
@@ -34,19 +35,36 @@ const maxClipboard = 32 << 10
 const maxClipboardSet = 10000
 
 // clipboardWait bounds a read, and the wait for a set or an emptying to
-// read back: a clipboard owner that doesn't answer (a hung page) doesn't
+// take hold: a clipboard owner that doesn't answer (a hung page) doesn't
 // hold the live view up. Tests shorten it.
 var clipboardWait = 2 * time.Second
 
-// clipState is the xclip that holds the text the person sent.
+// The X selections: CLIPBOARD (Ctrl+C, Ctrl+V) and PRIMARY (what is
+// selected, pasted with the middle button).
+const (
+	selClipboard = "clipboard"
+	selPrimary   = "primary"
+)
+
+// emptyTarget is the only target an emptying xclip offers. It holds no
+// text, so nothing pastes from it, and seeing it among the selection's
+// targets proves that xclip, not the page, owns the selection.
+const emptyTarget = "BROWSERPIER_EMPTIED"
+
+// clipState is the xclip that holds the text the person sent, and how to
+// reach X's selections.
 type clipState struct {
 	mu sync.Mutex
 	// release lets go of the text held, nil when nothing is.
 	release func()
-	// hold runs xclip with text as the clipboard until release is called,
-	// or until another client (Chromium copying) takes the selection;
-	// tests replace it.
-	hold func(text string) (release func(), err error)
+	// hold runs xclip owning selection, offering text as target (""
+	// for xclip's own, UTF8_STRING), until release is called or another
+	// client (Chromium copying) takes the selection; tests replace it.
+	hold func(selection, target, text string) (release func(), err error)
+	// read reads selection as target. ok is false, with no error, when
+	// the selection has nothing as that target: no owner, or an owner
+	// without it. Tests replace it.
+	read func(ctx context.Context, selection, target string) (out []byte, ok bool, err error)
 }
 
 func (v *visual) registerClipboard(mux *http.ServeMux) {
@@ -57,19 +75,33 @@ func (v *visual) registerClipboard(mux *http.ServeMux) {
 }
 
 // readClipboardText reads the clipboard's text, within clipboardWait.
-// Empty when nothing holds the clipboard, or not as text.
+// Empty when nothing holds the clipboard; an error when what holds it
+// isn't text (an image copied, say).
 func (v *visual) readClipboardText(ctx context.Context) ([]byte, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, clipboardWait)
 	defer cancel()
-	out, err := v.output(ctx, "xclip", "-selection", "clipboard", "-out", "-target", "UTF8_STRING")
-	switch {
-	case err == nil:
-	case ctx.Err() != nil:
-		return nil, http.StatusGatewayTimeout, errors.New("the browser's clipboard didn't answer")
-	case strings.HasSuffix(err.Error(), "exit status 1"):
-		out = nil // nothing holds the clipboard, or not as text
-	default:
-		return nil, http.StatusInternalServerError, fmt.Errorf("couldn't read the clipboard: %w", err)
+	timedOut := func(err error) (int, error) {
+		if ctx.Err() != nil {
+			return http.StatusGatewayTimeout, errors.New("the browser's clipboard didn't answer")
+		}
+		return http.StatusInternalServerError, fmt.Errorf("couldn't read the clipboard: %w", err)
+	}
+	out, ok, err := v.clip.read(ctx, selClipboard, "UTF8_STRING")
+	if err != nil {
+		code, err := timedOut(err)
+		return nil, code, err
+	}
+	if !ok {
+		// No text: nothing holds the clipboard, or what does isn't text.
+		targets, held, err := v.clip.read(ctx, selClipboard, "TARGETS")
+		switch {
+		case err != nil:
+			code, err := timedOut(err)
+			return nil, code, err
+		case held && !hasTarget(targets, emptyTarget):
+			return nil, http.StatusUnprocessableEntity, errors.New("the clipboard holds something that isn't text")
+		}
+		return nil, http.StatusOK, nil
 	}
 	switch {
 	case len(out) > maxClipboard:
@@ -78,6 +110,17 @@ func (v *visual) readClipboardText(ctx context.Context) ([]byte, int, error) {
 		return nil, http.StatusUnprocessableEntity, errors.New("the clipboard holds something that isn't UTF-8 text")
 	}
 	return out, http.StatusOK, nil
+}
+
+// hasTarget reports whether a TARGETS answer, one name a line, names
+// target.
+func hasTarget(targets []byte, target string) bool {
+	for line := range strings.SplitSeq(string(targets), "\n") {
+		if strings.TrimSpace(line) == target {
+			return true
+		}
+	}
+	return false
 }
 
 // readClipboard answers the clipboard's text, for the box's Refresh: read
@@ -147,11 +190,16 @@ func (v *visual) paste(w http.ResponseWriter, r *http.Request) {
 // and waits until it reads back. v.clip.mu must be held.
 func (v *visual) holdText(ctx context.Context, text string) error {
 	v.letGoLocked()
-	release, err := v.clip.hold(text)
+	release, err := v.clip.hold(selClipboard, "", text)
 	if err != nil {
 		return fmt.Errorf("couldn't set the clipboard: %w", err)
 	}
-	if err := v.awaitClipboard(ctx, text); err != nil {
+	ctx, cancel := context.WithTimeout(ctx, clipboardWait)
+	defer cancel()
+	if err := v.await(ctx, func() bool {
+		out, ok, err := v.clip.read(ctx, selClipboard, "UTF8_STRING")
+		return err == nil && ok && string(out) == text
+	}); err != nil {
 		release()
 		return errors.New("couldn't set the clipboard: it didn't take the text")
 	}
@@ -168,61 +216,79 @@ func (v *visual) letGoLocked() {
 	}
 }
 
-// awaitClipboard waits, within clipboardWait, until the clipboard reads
-// text ("" also when nothing holds it).
-func (v *visual) awaitClipboard(ctx context.Context, text string) error {
-	ctx, cancel := context.WithTimeout(ctx, clipboardWait)
-	defer cancel()
-	for {
-		out, err := v.output(ctx, "xclip", "-selection", "clipboard", "-out", "-target", "UTF8_STRING")
-		if (err == nil && string(out) == text) || (text == "" && err != nil && strings.HasSuffix(err.Error(), "exit status 1")) {
-			return nil
-		}
+// await polls done until it says so, or ctx ends.
+func (*visual) await(ctx context.Context, done func() bool) error {
+	for !done() {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
+	return nil
 }
 
-// emptyClipboard empties the clipboard, when the person's control ends:
-// it lets go of the text they sent, and of what the page copied, which
-// Chromium holds itself. An empty xclip takes the selection from
-// whoever holds it and then exits, which leaves it with no owner, so a
-// later Ctrl+V pastes nothing.
+// emptyClipboard empties both selections, when the person's control ends:
+// the text they sent, what the page copied (Chromium's CLIPBOARD) and
+// what is selected in it (Chromium's PRIMARY, which a middle-click
+// pastes). Each is taken by an xclip that offers only emptyTarget, which
+// proves it owns the selection, and which then ends, leaving no owner, so
+// a later paste of either pastes nothing.
 func (v *visual) emptyClipboard(w http.ResponseWriter, r *http.Request) {
 	v.clip.mu.Lock()
 	defer v.clip.mu.Unlock()
 	v.letGoLocked()
-	release, err := v.clip.hold("")
-	if err != nil {
-		http.Error(w, "couldn't empty the clipboard: "+err.Error(), http.StatusInternalServerError)
-		return
+	var failed []string
+	for _, sel := range []string{selClipboard, selPrimary} {
+		if err := v.emptySelection(r.Context(), sel); err != nil {
+			failed = append(failed, fmt.Sprintf("%s: %v", sel, err))
+		}
 	}
-	err = v.awaitClipboard(r.Context(), "")
-	release()
-	if err == nil {
-		// With no owner left, nothing reads back.
-		err = v.awaitClipboard(r.Context(), "")
-	}
-	if err != nil {
-		http.Error(w, "couldn't empty the clipboard: it kept its text", http.StatusInternalServerError)
+	if len(failed) > 0 {
+		http.Error(w, "couldn't empty the clipboard: "+strings.Join(failed, "; "), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// holdClipboard runs xclip in the foreground with text as the clipboard.
-// It runs until release kills it, or until another client takes the
-// selection (Chromium, when the page is copied from): then it exits by
-// itself and the reaper collects it.
-func holdClipboard(text string) (func(), error) {
+// emptySelection takes selection with an empty xclip, waits until it is
+// the owner, then ends it.
+func (v *visual) emptySelection(ctx context.Context, selection string) error {
+	release, err := v.clip.hold(selection, emptyTarget, "")
+	if err != nil {
+		return err
+	}
+	defer release() // the owner goes, and the selection has none
+	ctx, cancel := context.WithTimeout(ctx, clipboardWait)
+	defer cancel()
+	var last error
+	if err := v.await(ctx, func() bool {
+		targets, ok, err := v.clip.read(ctx, selection, "TARGETS")
+		last = err
+		return err == nil && ok && hasTarget(targets, emptyTarget)
+	}); err != nil {
+		if last != nil {
+			return last
+		}
+		return errors.New("it didn't take the selection")
+	}
+	return nil
+}
+
+// holdClipboard runs xclip in the foreground owning selection, offering
+// text as target. It runs until release kills it, or until another client
+// takes the selection (Chromium, when the page is copied from): then it
+// exits by itself and the reaper collects it.
+func holdClipboard(selection, target, text string) (func(), error) {
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command("xclip", "-quiet", "-selection", "clipboard", "-in")
+	args := []string{"-quiet", "-selection", selection}
+	if target != "" {
+		args = append(args, "-target", target)
+	}
+	cmd := exec.Command("xclip", append(args, "-in")...)
 	cmd.Env = append(os.Environ(), "DISPLAY="+display)
 	cmd.Stdin = pr
 	exited, err := procs.start(cmd)
@@ -251,4 +317,59 @@ func holdClipboard(text string) (func(), error) {
 		return nil, werr
 	}
 	return release, nil
+}
+
+// readSelection runs xclip -out for selection as target. xclip says
+// "target … not available" when the selection has no owner, or one
+// without that target: ok is false then. Any other failure (no display,
+// say) is an error, with xclip's own words, which never hold the content.
+func readSelection(ctx context.Context, selection, target string) ([]byte, bool, error) {
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() { _ = outR.Close() }()
+	errR, errW, err := os.Pipe()
+	if err != nil {
+		_ = outW.Close()
+		return nil, false, err
+	}
+	defer func() { _ = errR.Close() }()
+	cmd := exec.Command("xclip", "-selection", selection, "-out", "-target", target)
+	cmd.Env = append(os.Environ(), "DISPLAY="+display)
+	cmd.Stdout, cmd.Stderr = outW, errW
+	exited, err := procs.start(cmd)
+	_ = outW.Close()
+	_ = errW.Close()
+	if err != nil {
+		return nil, false, err
+	}
+	defer context.AfterFunc(ctx, func() { _ = cmd.Process.Kill() })()
+	var stderr bytes.Buffer
+	stderrDone := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(&stderr, io.LimitReader(errR, 1024))
+		_, _ = io.Copy(io.Discard, errR)
+		close(stderrDone)
+	}()
+	out, readErr := io.ReadAll(io.LimitReader(outR, maxClipboard+1))
+	if len(out) > maxClipboard {
+		// Over the cap: the caller refuses it, by its length.
+		_ = cmd.Process.Kill()
+	}
+	ws := <-exited
+	<-stderrDone
+	switch {
+	case len(out) > maxClipboard:
+		return out, true, nil
+	case ws.Exited() && ws.ExitStatus() == 0:
+		return out, true, readErr
+	case ws.Exited() && ws.ExitStatus() == 1 && strings.Contains(stderr.String(), "not available"):
+		return nil, false, nil
+	}
+	msg := strings.TrimSpace(stderr.String())
+	if msg == "" {
+		msg = describe(ws)
+	}
+	return nil, false, fmt.Errorf("xclip: %s", msg)
 }

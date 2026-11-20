@@ -23,7 +23,7 @@ import (
 //	GET /input/clipboard           the clipboard's text, for the live view's clipboard box (clipboard.go)
 //	POST /input/clipboard          {"text"}: hold the text on the clipboard until replaced or emptied
 //	POST /input/paste              {"text"}: the same, then Ctrl+V
-//	DELETE /input/clipboard        empty the clipboard, as the person's control ends
+//	DELETE /input/clipboard        empty CLIPBOARD and PRIMARY, as the person's control ends
 //	GET /geo           the location the browser runs with
 //	GET /proxy/stats   bytes through the upstream proxy, connections refused, and blocked for the ad list
 //	POST /proxy/blocking/off, POST /proxy/exempt   the ad list's controls (block.go)

@@ -53,7 +53,7 @@ const (
 )
 
 func newVisual(width, height int) *visual {
-	return &visual{width: width, height: height, run: runCommand, output: runStdout, mot: motion.NewRandom(), live: newLiveInput(width, height), clip: clipState{hold: holdClipboard}}
+	return &visual{width: width, height: height, run: runCommand, output: runStdout, mot: motion.NewRandom(), live: newLiveInput(width, height), clip: clipState{hold: holdClipboard, read: readSelection}}
 }
 
 func (v *visual) register(mux *http.ServeMux) {
