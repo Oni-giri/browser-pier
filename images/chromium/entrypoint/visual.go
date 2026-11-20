@@ -67,12 +67,14 @@ func (v *visual) register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /input/clipboard", v.clipboard)
 }
 
-// maxClipboard caps what the live view's copy reads (PROJ-194).
-const maxClipboard = 64 << 10
+// maxClipboard caps what the live view's copy reads (PROJ-194): JSON-
+// escaped, up to six times as long, it still fits one data channel
+// message (256 KiB in Chrome).
+const maxClipboard = 32 << 10
 
 // clipboardWait bounds a read: a clipboard's owner that doesn't answer
-// (a hung page) doesn't hold the live view up.
-const clipboardWait = 2 * time.Second
+// (a hung page) doesn't hold the live view up. Tests shorten it.
+var clipboardWait = 2 * time.Second
 
 // clipboard answers the X CLIPBOARD selection's text, for the live
 // view's copy (PROJ-194): read when the person with control copies,
@@ -83,9 +85,16 @@ func (v *visual) clipboard(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), clipboardWait)
 	defer cancel()
 	out, err := v.output(ctx, "xclip", "-selection", "clipboard", "-out", "-target", "UTF8_STRING")
-	if err != nil {
-		// xclip fails when nothing holds the clipboard, or not as text.
-		out = nil
+	switch {
+	case err == nil:
+	case ctx.Err() != nil:
+		http.Error(w, "the browser's clipboard didn't answer", http.StatusGatewayTimeout)
+		return
+	case strings.HasSuffix(err.Error(), "exit status 1"):
+		out = nil // nothing holds the clipboard, or not as text
+	default:
+		http.Error(w, "couldn't read the clipboard: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 	switch {
 	case len(out) > maxClipboard:

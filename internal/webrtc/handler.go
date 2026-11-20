@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
@@ -211,7 +212,8 @@ func (v *viewer) stillAllowed() bool {
 //	{"type":"release"}                    hand back
 //	{"type":"input","events":[...]}       mouse and keys (images/chromium/entrypoint/live.go)
 //	{"type":"text","text":"..."}          type a string (a paste, or the phone's Type button)
-//	{"type":"copy"}                       the browser's clipboard, answered {"type":"clipboard","text":"..."}
+//	{"type":"copy","id":1}                the browser's clipboard once the keys after it copied, answered
+//	                                      {"type":"clipboard","id":1,"text":"..."} or {"type":"copy-error","id":1,"msg":"..."}
 //	{"type":"lift"}                       let go of held keys and buttons (the page lost focus)
 //
 // What is typed or copied is never logged: it may be a password.
@@ -220,6 +222,7 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 		Type   string          `json:"type"`
 		Events json.RawMessage `json:"events"`
 		Text   string          `json:"text"`
+		ID     int             `json:"id"`
 	}
 	if err := json.Unmarshal(msg, &m); err != nil {
 		return
@@ -269,23 +272,27 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 			return
 		}
 		if m.Type == "copy" {
-			// Read only now, as the person copies (PROJ-194): never polled,
-			// so a page can't put text in their clipboard on its own.
-			text, err := v.do(http.MethodGet, "/input/clipboard", nil, http.StatusOK)
+			// Read only as the person copies (PROJ-194), never polled, so
+			// a page can't put text in their clipboard on its own. The
+			// copy keys come after this message: what the clipboard holds
+			// now is read, then read again until it changes.
+			before, err := v.clipboard()
 			if err != nil {
-				say(map[string]any{"type": "error", "msg": "Couldn't copy: " + err.Error()})
+				say(map[string]any{"type": "copy-error", "id": m.ID, "msg": err.Error()})
 				return
 			}
-			say(map[string]any{"type": "clipboard", "text": string(text)})
+			go v.awaitCopy(m.ID, before, say)
 			return
 		}
-		path, body := "/input/events", []byte(m.Events)
+		path, body, wait := "/input/events", []byte(m.Events), controlWait
 		if m.Type == "text" {
 			path = "/input/type"
-			// A person pasting: at once, not at an agent's human pace.
+			// A person pasting: at once, not at an agent's human pace,
+			// which is still about 12 ms a character (xdotool's delay).
 			body, _ = json.Marshal(map[string]string{"text": m.Text, "pace": "instant"})
+			wait += time.Duration(utf8.RuneCountInString(m.Text)) * 20 * time.Millisecond
 		}
-		if err := v.post(path, body); err != nil {
+		if _, err := v.do(http.MethodPost, path, body, http.StatusNoContent, wait); err != nil {
 			say(map[string]any{"type": "error", "msg": err.Error()})
 		}
 	}
@@ -309,17 +316,47 @@ func (v *viewer) releaseLocked() {
 }
 
 func (v *viewer) post(path string, body []byte) error {
-	_, err := v.do(http.MethodPost, path, body, http.StatusNoContent)
+	_, err := v.do(http.MethodPost, path, body, http.StatusNoContent, controlWait)
 	return err
 }
 
-// maxClipboard caps what a copy brings back; the container caps it too.
-const maxClipboard = 64 << 10
+// controlWait bounds a call to the container's control socket.
+const controlWait = 10 * time.Second
 
-// do calls the container's control socket, wanting status want, and
-// returns the answer's body.
-func (v *viewer) do(method, path string, body []byte, want int) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+// maxClipboard caps what a copy brings back; the container caps it too.
+const maxClipboard = 32 << 10
+
+// copySettle is how long a copy waits for the clipboard to change before
+// answering with what it holds (copying the same text again is a copy
+// too); copyPoll is how often it looks. Tests shorten them.
+var copySettle, copyPoll = 1500 * time.Millisecond, 100 * time.Millisecond
+
+func (v *viewer) clipboard() ([]byte, error) {
+	return v.do(http.MethodGet, "/input/clipboard", nil, http.StatusOK, controlWait)
+}
+
+// awaitCopy answers copy id with the clipboard once it differs from
+// before, or with what it holds after copySettle.
+func (v *viewer) awaitCopy(id int, before []byte, say func(any)) {
+	deadline := time.Now().Add(copySettle)
+	for {
+		time.Sleep(copyPoll)
+		now, err := v.clipboard()
+		if err != nil {
+			say(map[string]any{"type": "copy-error", "id": id, "msg": err.Error()})
+			return
+		}
+		if !bytes.Equal(now, before) || !time.Now().Before(deadline) {
+			say(map[string]any{"type": "clipboard", "id": id, "text": string(now)})
+			return
+		}
+	}
+}
+
+// do calls the container's control socket, wanting status want, within
+// wait, and returns the answer's body.
+func (v *viewer) do(method, path string, body []byte, want int, wait time.Duration) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
 	defer cancel()
 	c := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", v.sock)

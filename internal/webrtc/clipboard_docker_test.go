@@ -11,8 +11,9 @@ import (
 
 // TestRealBrowserPasteAndCopy is PROJ-194 on a real browser, through the
 // live view's own input path and no CDP: a paste is typed into the
-// address bar, then Ctrl+A, Ctrl+C and a copy bring the same text back
-// from the browser's clipboard.
+// address bar, then a copy (Ctrl+A, then the copy message and Ctrl+C, as
+// the page sends them) brings the same text back from the browser's
+// clipboard.
 func TestRealBrowserPasteAndCopy(t *testing.T) {
 	m, name := startBrowser(t)
 	s, ok := m.Live(name)
@@ -25,49 +26,59 @@ func TestRealBrowserPasteAndCopy(t *testing.T) {
 	}
 	defer func() { _ = relay.Close() }()
 	v := &viewer{h: NewHandler(relay, m, nil, slog.New(slog.DiscardHandler)), session: s.ID, sock: m.Layout().ControlSocket(name)}
-	send := func(msg string) map[string]any {
+	replies := make(chan map[string]any, 10)
+	send := func(msg string) {
 		t.Helper()
-		var got map[string]any
-		v.message([]byte(msg), func(r string) { _ = json.Unmarshal([]byte(r), &got) })
-		if got != nil && got["type"] == "error" {
-			t.Fatalf("%s: %v", msg, got)
-		}
-		return got
+		v.message([]byte(msg), func(r string) {
+			var got map[string]any
+			_ = json.Unmarshal([]byte(r), &got)
+			replies <- got
+		})
 	}
-	// keys presses ctrl with each key in turn, as the live view sends them.
-	keys := func(ks ...string) {
+	next := func() map[string]any {
 		t.Helper()
-		var evs []map[string]string
-		for _, k := range ks {
-			evs = append(evs, map[string]string{"t": "keydown", "k": "Control_L"}, map[string]string{"t": "keydown", "k": k},
-				map[string]string{"t": "keyup", "k": k}, map[string]string{"t": "keyup", "k": "Control_L"})
+		select {
+		case r := <-replies:
+			if r["type"] == "error" || r["type"] == "copy-error" {
+				t.Fatalf("%v", r)
+			}
+			return r
+		case <-time.After(10 * time.Second):
+			t.Fatal("no reply")
+			return nil
 		}
+	}
+	input := func(evs ...map[string]any) {
+		t.Helper()
 		b, _ := json.Marshal(map[string]any{"type": "input", "events": evs})
 		send(string(b))
 		time.Sleep(300 * time.Millisecond)
 	}
-	if r := send(`{"type":"take"}`); r["on"] != true {
+	ctrl := func(k string) {
+		input(map[string]any{"t": "keydown", "k": "Control_L"}, map[string]any{"t": "keydown", "k": k},
+			map[string]any{"t": "keyup", "k": k}, map[string]any{"t": "keyup", "k": "Control_L"})
+	}
+	send(`{"type":"take"}`)
+	if r := next(); r["on"] != true {
 		t.Fatalf("take: %v", r)
 	}
+	// The window manager focuses on click: click the page first.
+	input(map[string]any{"t": "move", "x": 640, "y": 500}, map[string]any{"t": "down", "b": 1}, map[string]any{"t": "up", "b": 1})
 	const text = "héllo 123"
-	keys("l") // the address bar
+	ctrl("l") // the address bar
 	send(`{"type":"text","text":"` + text + `"}`)
 	time.Sleep(300 * time.Millisecond)
-	keys("a", "c")
-	var got string
-	for try := 0; try < 10 && got != text; try++ {
-		r := send(`{"type":"copy"}`)
-		got, _ = r["text"].(string)
-		if got != text {
-			time.Sleep(200 * time.Millisecond)
-		}
-	}
-	if got != text {
-		t.Fatalf("copied %q, want %q", got, text)
+	ctrl("a")
+	send(`{"type":"copy","id":7}`)
+	ctrl("c")
+	if r := next(); r["type"] != "clipboard" || r["id"] != float64(7) || r["text"] != text {
+		t.Fatalf("copy: %v, want %q", r, text)
 	}
 	// Without control, a copy is refused.
 	send(`{"type":"release"}`)
-	if r := send(`{"type":"copy"}`); r["type"] != "control" || r["on"] != false || r["text"] != nil {
+	<-replies
+	send(`{"type":"copy","id":8}`)
+	if r := <-replies; r["type"] != "control" || r["on"] != false {
 		t.Errorf("copy without control: %v", r)
 	}
 }

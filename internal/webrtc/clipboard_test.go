@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // A paste is typed at instant pace and a copy reads the container's
@@ -36,22 +37,39 @@ func TestViewerPasteAndCopy(t *testing.T) {
 		})
 	}, slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	v := &viewer{h: h, session: s.ID, sock: m.Layout().ControlSocket("google")}
+	copySettle, copyPoll = 300*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() { copySettle, copyPoll = 1500*time.Millisecond, 100*time.Millisecond })
+	replies := make(chan map[string]any, 10)
 	send := func(msg string) []map[string]any {
 		t.Helper()
-		var got []map[string]any
 		v.message([]byte(msg), func(r string) {
 			var m map[string]any
 			if err := json.Unmarshal([]byte(r), &m); err != nil {
-				t.Fatalf("reply %q: %v", r, err)
+				t.Errorf("reply %q: %v", r, err)
 			}
-			got = append(got, m)
+			replies <- m
 		})
+		var got []map[string]any
+		for len(replies) > 0 {
+			got = append(got, <-replies)
+		}
 		return got
 	}
+	next := func() map[string]any {
+		t.Helper()
+		select {
+		case r := <-replies:
+			return r
+		case <-time.After(3 * time.Second):
+			t.Fatal("no reply")
+			return nil
+		}
+	}
+	setClip := func(c string) { mu.Lock(); clip = c; mu.Unlock() }
 	paste := fmt.Sprintf(`{"type":"text","text":%q}`, pasted)
 
 	// Without control: refused, nothing typed or read.
-	for _, msg := range []string{paste, `{"type":"copy"}`} {
+	for _, msg := range []string{paste, `{"type":"copy","id":1}`} {
 		if r := send(msg); len(r) != 1 || r[0]["type"] != "control" || r[0]["on"] != false {
 			t.Errorf("%s without control: %v", msg, r)
 		}
@@ -71,20 +89,32 @@ func TestViewerPasteAndCopy(t *testing.T) {
 		t.Errorf("typed %v", typed)
 	}
 	mu.Unlock()
-	if r := send(`{"type":"copy"}`); len(r) != 1 || r[0]["type"] != "clipboard" || r[0]["text"] != copied {
+
+	// A copy answers once the clipboard changes: the copy keys come after
+	// the message, so what it held before isn't the answer.
+	setClip("an older copy")
+	if r := send(`{"type":"copy","id":2}`); len(r) != 0 {
+		t.Fatalf("copy answered before the keys: %v", r)
+	}
+	time.Sleep(50 * time.Millisecond)
+	setClip(copied)
+	if r := next(); r["type"] != "clipboard" || r["id"] != float64(2) || r["text"] != copied {
 		t.Errorf("copy: %v", r)
 	}
-	// An empty clipboard is an empty text; one over the cap is refused.
-	mu.Lock()
-	clip = ""
-	mu.Unlock()
-	if r := send(`{"type":"copy"}`); len(r) != 1 || r[0]["type"] != "clipboard" || r[0]["text"] != "" {
+	// Copying the same text again: answered once the wait is over.
+	start := time.Now()
+	send(`{"type":"copy","id":3}`)
+	if r := next(); r["type"] != "clipboard" || r["id"] != float64(3) || r["text"] != copied || time.Since(start) < copySettle {
+		t.Errorf("unchanged copy: %v after %v", r, time.Since(start))
+	}
+	// An empty clipboard is an empty text; one over the cap is an error.
+	setClip("")
+	send(`{"type":"copy","id":4}`)
+	if r := next(); r["type"] != "clipboard" || r["text"] != "" {
 		t.Errorf("empty copy: %v", r)
 	}
-	mu.Lock()
-	clip = strings.Repeat("a", maxClipboard+1)
-	mu.Unlock()
-	if r := send(`{"type":"copy"}`); len(r) != 1 || r[0]["type"] != "error" {
+	setClip(strings.Repeat("a", maxClipboard+1))
+	if r := send(`{"type":"copy","id":5}`); len(r) != 1 || r[0]["type"] != "copy-error" || r[0]["id"] != float64(5) {
 		t.Errorf("copy over the cap: %v", r)
 	}
 
