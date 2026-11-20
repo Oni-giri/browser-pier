@@ -64,3 +64,48 @@ func TestClipboard(t *testing.T) {
 		t.Errorf("POST: %d", rec.Code)
 	}
 }
+
+// A paste holds the text on the clipboard, waits until it reads back,
+// presses Ctrl+V, then lets the clipboard go (PROJ-194).
+func TestPaste(t *testing.T) {
+	pasteHold = 0
+	t.Cleanup(func() { pasteHold = 500 * time.Millisecond })
+	v, calls := newTestVisual(false)
+	var held []string
+	released := 0
+	v.hold = func(text string) (func(), error) {
+		held = append(held, text)
+		return func() { released++ }, nil
+	}
+	reads := 0
+	v.output = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		reads++
+		if reads == 1 {
+			return []byte("not yet"), nil // xclip hasn't taken it yet
+		}
+		return []byte(held[len(held)-1]), nil
+	}
+	const text = "Rīga ūdens 42\nnaïve café 😀"
+	rec := serveVisual(v, http.MethodPost, "/input/paste", `{"text":"Rīga ūdens 42\nnaïve café 😀"}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	if len(held) != 1 || held[0] != text || released != 1 || reads < 2 {
+		t.Errorf("held %q, released %d, read %d times", held, released, reads)
+	}
+	if len(*calls) != 1 || (*calls)[0].name != "xdotool" || strings.Join((*calls)[0].args, " ") != "key --clearmodifiers ctrl+v" {
+		t.Errorf("ran %v", *calls)
+	}
+	for _, body := range []string{`{"text":""}`, `{"text":"` + strings.Repeat("a", maxPaste+1) + `"}`} {
+		if rec := serveVisual(v, http.MethodPost, "/input/paste", body); rec.Code != http.StatusBadRequest {
+			t.Errorf("%.30s: %d", body, rec.Code)
+		}
+	}
+	// A clipboard that never takes the text: refused, and let go.
+	clipboardWait = 50 * time.Millisecond
+	t.Cleanup(func() { clipboardWait = 2 * time.Second })
+	v.output = func(context.Context, string, ...string) ([]byte, error) { return []byte("other"), nil }
+	if rec := serveVisual(v, http.MethodPost, "/input/paste", `{"text":"x"}`); rec.Code != http.StatusInternalServerError || released != 2 {
+		t.Errorf("a clipboard that didn't take it: %d, released %d", rec.Code, released)
+	}
+}

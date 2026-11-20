@@ -4,6 +4,7 @@ package webrtc
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -64,15 +65,21 @@ func TestRealBrowserPasteAndCopy(t *testing.T) {
 	}
 	// The window manager focuses on click: click the page first.
 	input(map[string]any{"t": "move", "x": 640, "y": 500}, map[string]any{"t": "down", "b": 1}, map[string]any{"t": "up", "b": 1})
-	const text = "héllo 123"
-	ctrl("l") // the address bar
-	send(`{"type":"text","text":"` + text + `"}`)
-	time.Sleep(300 * time.Millisecond)
-	ctrl("a")
-	send(`{"type":"copy","id":7}`)
-	ctrl("c")
-	if r := next(); r["type"] != "clipboard" || r["id"] != float64(7) || r["text"] != text {
-		t.Fatalf("copy: %v, want %q", r, text)
+	// Accents a US keyboard map lacks, which typing used to drop now and then.
+	for i, text := range []string{"héllo 123", "Rīga ūdens 42", "naïve café ünïcode", "ĀČĒ ģķļ šž", "plain ascii"} {
+		ctrl("l") // the address bar
+		b, _ := json.Marshal(map[string]string{"type": "text", "text": text})
+		send(string(b))
+		// The pasted text doesn't stay on the browser's clipboard.
+		if c, err := v.clipboard(); err != nil || len(c) != 0 {
+			t.Errorf("after pasting %q the clipboard holds %q (%v)", text, c, err)
+		}
+		ctrl("a")
+		send(fmt.Sprintf(`{"type":"copy","id":%d}`, i+1))
+		ctrl("c")
+		if r := next(); r["type"] != "clipboard" || r["id"] != float64(i+1) || r["text"] != text {
+			t.Fatalf("copy: %v, want %q", r, text)
+		}
 	}
 	// Without control, a copy is refused.
 	send(`{"type":"release"}`)

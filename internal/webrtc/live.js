@@ -35,9 +35,8 @@
   // does nothing and Ctrl makes the shortcuts (PROJ-194).
   const mac = /Mac|iPhone|iPad|iPod/.test(navigator.platform || "") || (navigator.userAgentData && navigator.userAgentData.platform === "macOS");
   const cmd = mac ? "⌘" : "Ctrl+";
-  // maxPaste is the most a paste types. xdotool types about 80 characters
-  // a second, so this is some 12 s.
-  const maxPaste = 1000;
+  // maxPaste is the most one paste takes, as the container caps it.
+  const maxPaste = 10000;
 
   let dc = null;
   let control = false;
@@ -213,8 +212,8 @@
   });
   typeBtn.onclick = () => { const text = prompt("Type or paste into the browser"); if (text) pasteText(text); };
 
-  // Paste (PROJ-194): the person's clipboard text is typed into the
-  // browser, at once. It is the paste event's own text, so no permission
+  // Paste (PROJ-194): the person's clipboard text is pasted into the
+  // browser, through its own clipboard, exactly and at once. It is the paste event's own text, so no permission
   // is asked; Safari, which may not fire one on the stream, gets a
   // readText() after a moment (it shows its own Paste button).
   let pasteWait = 0;

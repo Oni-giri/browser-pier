@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// A paste is typed at instant pace and a copy reads the container's
+// A paste goes to the container's paste and a copy reads its
 // clipboard, both only for the viewer with control, and neither text is
 // logged (PROJ-194).
 func TestViewerPasteAndCopy(t *testing.T) {
@@ -23,7 +23,7 @@ func TestViewerPasteAndCopy(t *testing.T) {
 	clip := copied
 	var logs bytes.Buffer
 	h, m, s := offerFixtureWith(t, func(mux *http.ServeMux) {
-		mux.HandleFunc("POST /input/type", func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc("POST /input/paste", func(w http.ResponseWriter, r *http.Request) {
 			b, _ := io.ReadAll(r.Body)
 			mu.Lock()
 			typed = append(typed, string(b))
@@ -85,7 +85,7 @@ func TestViewerPasteAndCopy(t *testing.T) {
 		t.Errorf("paste: %v", r)
 	}
 	mu.Lock()
-	if len(typed) != 1 || typed[0] != fmt.Sprintf(`{"pace":"instant","text":%q}`, pasted) {
+	if len(typed) != 1 || typed[0] != fmt.Sprintf(`{"text":%q}`, pasted) {
 		t.Errorf("typed %v", typed)
 	}
 	mu.Unlock()

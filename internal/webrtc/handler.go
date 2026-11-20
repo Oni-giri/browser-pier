@@ -14,7 +14,6 @@ import (
 	"net/url"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
@@ -211,7 +210,7 @@ func (v *viewer) stillAllowed() bool {
 //	{"type":"take"}                       take control
 //	{"type":"release"}                    hand back
 //	{"type":"input","events":[...]}       mouse and keys (images/chromium/entrypoint/live.go)
-//	{"type":"text","text":"..."}          type a string (a paste, or the phone's Type button)
+//	{"type":"text","text":"..."}          paste a string (a paste, or the phone's Type or paste button)
 //	{"type":"copy","id":1}                the browser's clipboard once the keys after it copied, answered
 //	                                      {"type":"clipboard","id":1,"text":"..."} or {"type":"copy-error","id":1,"msg":"..."}
 //	{"type":"lift"}                       let go of held keys and buttons (the page lost focus)
@@ -284,15 +283,14 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 			go v.awaitCopy(m.ID, before, say)
 			return
 		}
-		path, body, wait := "/input/events", []byte(m.Events), controlWait
+		path, body := "/input/events", []byte(m.Events)
 		if m.Type == "text" {
-			path = "/input/type"
-			// A person pasting: at once, not at an agent's human pace,
-			// which is still about 12 ms a character (xdotool's delay).
-			body, _ = json.Marshal(map[string]string{"text": m.Text, "pace": "instant"})
-			wait += time.Duration(utf8.RuneCountInString(m.Text)) * 20 * time.Millisecond
+			// Pasted through the browser's clipboard, exactly and at once
+			// (PROJ-194): typing drops characters the keyboard map lacks.
+			path = "/input/paste"
+			body, _ = json.Marshal(map[string]string{"text": m.Text})
 		}
-		if _, err := v.do(http.MethodPost, path, body, http.StatusNoContent, wait); err != nil {
+		if err := v.post(path, body); err != nil {
 			say(map[string]any{"type": "error", "msg": err.Error()})
 		}
 	}
