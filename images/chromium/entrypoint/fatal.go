@@ -20,16 +20,21 @@ import (
 // Not every FATAL line ended the browser: a child process's ends only that
 // child, and Chromium may recover (a GPU process that can't start its
 // sandbox exits, and Chromium runs another without GL, PROJ-165). So the
-// reason is the browser process's own FATAL line, or else a child's from
-// just before the browser ended (PROJ-186).
+// reason is a FATAL line from just before the browser ended: the browser
+// process's own if there is one, or else a child's (PROJ-186).
+//
+// The pid in a line's prefix isn't proof of where it came from: every
+// child writes to the same pipe, and a compromised renderer can write any
+// prefix. The window keeps such a line from standing for a later exit.
 type fatalLine struct {
-	w      *os.File // the pipe's write end, Chromium's stdout and stderr
-	copied chan struct{}
-	mu     sync.Mutex
-	buf    []byte       // the line being written
-	pid    int          // the browser process's, once started
-	fatals []fatalEntry // the last few FATAL lines, oldest first
-	error  string       // ERROR
+	w       *os.File // the pipe's write end, Chromium's stdout and stderr
+	copied  chan struct{}
+	mu      sync.Mutex
+	buf     []byte       // the line being written
+	pid     int          // the browser process's, once started
+	browser fatalEntry   // its last FATAL line, if any
+	others  []fatalEntry // the last few FATAL lines of other pids, oldest first
+	error   string       // ERROR
 	// warn, if set, is told once when a GPU process exits because it
 	// couldn't start its sandbox (gpuSandboxFailed, then gpuNotMonoThreaded).
 	warn       func(msg string)
@@ -54,23 +59,23 @@ const (
 // failing, runs it without GL, so pages get no WebGL and can't say why.
 const gpuSandboxWarning = "a GPU process exited because it couldn't start its sandbox; Chromium restarts it, and if that keeps failing, pages get no WebGL"
 
-// fatalEntry is one FATAL line: the pid in its prefix (0 if none), when we
-// read it, and its message.
+// fatalEntry is one FATAL line: the pid in its prefix, when we read it,
+// and its message. A zero at means none.
 type fatalEntry struct {
 	pid int
 	at  time.Time
 	msg string
 }
 
-// keptFatals is how many FATAL lines are kept. The browser's own is the
-// last it writes, and only children dying with it can write after it.
+// keptFatals is how many FATAL lines of other processes are kept; only
+// the latest within fatalWindow is used.
 const keptFatals = 16
 
-// childFatalWindow is how long before the browser ended a child's FATAL
-// line can still explain it: a zygote that can't set up the sandbox
-// ("Check failed: ... Permission denied") takes the browser down within
-// milliseconds.
-const childFatalWindow = 3 * time.Second
+// fatalWindow is how long before the browser ended a FATAL line can still
+// explain it. A FATAL line aborts its process at once, and a zygote that
+// can't set up the sandbox ("Check failed: ... Permission denied") takes
+// the browser down within milliseconds.
+const fatalWindow = 3 * time.Second
 
 // watchFatal points cmd's output at a pipe read by a fatalLine, which
 // tells warn (if not nil) what an admin should know. Call started once cmd
@@ -93,9 +98,21 @@ func watchFatal(cmd *exec.Cmd, warn func(msg string)) (*fatalLine, error) {
 // started closes our copy of the write end, so the reader sees EOF once
 // Chromium and its children have exited, and records the browser process's
 // pid (0 if it didn't start): Chromium writes it in each line's prefix.
+// The browser is never pid 1 (the entrypoint is), the pid a zygote logs
+// from its own PID namespace; other children log their pid in ours.
 func (f *fatalLine) started(pid int) {
 	f.mu.Lock()
 	f.pid = pid
+	// Lines read before we knew the pid.
+	kept := f.others[:0]
+	for _, e := range f.others {
+		if pid != 0 && e.pid == pid {
+			f.browser = e
+		} else {
+			kept = append(kept, e)
+		}
+	}
+	f.others = kept
 	f.mu.Unlock()
 	_ = f.w.Close()
 }
@@ -122,12 +139,18 @@ func (f *fatalLine) Write(p []byte) (int, error) {
 				f.warn(gpuSandboxWarning)
 			}
 		}
-		if m := chromiumLine(line, "FATAL"); m != "" {
-			if len(f.fatals) == keptFatals {
-				f.fatals = append(f.fatals[:0], f.fatals[1:]...)
+		switch pid, level, m := parseChromiumLine(line); level {
+		case "FATAL":
+			e := fatalEntry{pid: pid, at: time.Now(), msg: m}
+			if f.pid != 0 && pid == f.pid {
+				f.browser = e
+				break
 			}
-			f.fatals = append(f.fatals, fatalEntry{pid: linePID(line), at: time.Now(), msg: m})
-		} else if m := chromiumLine(line, "ERROR"); m != "" {
+			if len(f.others) == keptFatals {
+				f.others = append(f.others[:0], f.others[1:]...)
+			}
+			f.others = append(f.others, e)
+		case "ERROR":
 			f.error = m
 		}
 		f.buf = f.buf[i+1:]
@@ -139,27 +162,31 @@ func (f *fatalLine) Write(p []byte) (int, error) {
 }
 
 // reason is ": " and the FATAL line that can explain why the browser
-// ended (at ended): the browser process's last one, or else the last one
-// written within childFatalWindow before ended. "" if there was none.
-// During startup (startup true) the last ERROR line stands in for a missing
-// FATAL one: later on, ERROR lines are mostly ones Chromium recovered from.
-// It waits briefly for the output still in the pipe.
-func (f *fatalLine) reason(startup bool, ended time.Time) string {
+// ended, or "" if there was none. ended is when it exited (exited true),
+// or when startup was given up on, with the browser still running (a
+// timeout, or a stop): then lines read later, as we close it, don't count.
+// Only lines read within fatalWindow before ended count, the browser
+// process's own first. During startup (startup true) the last ERROR line
+// stands in for a missing FATAL one: later on, ERROR lines are mostly ones
+// Chromium recovered from. It waits briefly for the output still in the
+// pipe.
+func (f *fatalLine) reason(startup bool, ended time.Time, exited bool) string {
 	select {
 	case <-f.copied:
 	case <-time.After(time.Second):
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.pid != 0 {
-		for i := len(f.fatals) - 1; i >= 0; i-- {
-			if f.fatals[i].pid == f.pid {
-				return ": " + f.fatals[i].msg
-			}
-		}
+	explains := func(e fatalEntry) bool {
+		return !e.at.IsZero() && ended.Sub(e.at) <= fatalWindow && (exited || !e.at.After(ended))
 	}
-	if n := len(f.fatals); n > 0 && ended.Sub(f.fatals[n-1].at) <= childFatalWindow {
-		return ": " + f.fatals[n-1].msg
+	if explains(f.browser) {
+		return ": " + f.browser.msg
+	}
+	for i := len(f.others) - 1; i >= 0; i-- {
+		if explains(f.others[i]) {
+			return ": " + f.others[i].msg
+		}
 	}
 	if startup && f.error != "" {
 		return ": " + f.error
@@ -167,37 +194,44 @@ func (f *fatalLine) reason(startup bool, ended time.Time) string {
 	return ""
 }
 
-// linePID returns the pid in a Chromium log line's prefix ("[pid:tid:..."),
-// or 0 if it has none.
-func linePID(line string) int {
-	rest, ok := strings.CutPrefix(line, "[")
+// parseChromiumLine splits a Chromium log line,
+// "[pid:tid:MMDD/HHMMSS.micros:LEVEL:sandbox/linux/services/credentials.cc:137] message",
+// into its pid, its level, and its message then where it came from. level
+// is "" for any other line: the prefix is checked field by field, so a
+// level named in a message doesn't count.
+func parseChromiumLine(line string) (pid int, level, msg string) {
+	s, ok := strings.CutPrefix(line, "[")
 	if !ok {
-		return 0
+		return 0, "", ""
 	}
-	digits, _, ok := strings.Cut(rest, ":")
+	fields := strings.SplitN(s, ":", 5)
+	if len(fields) < 5 || !allOf(fields[0], "0123456789") || !allOf(fields[1], "0123456789") ||
+		!allOf(fields[2], "0123456789/.") || !allOf(fields[3], "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") {
+		return 0, "", ""
+	}
+	pid, err := strconv.Atoi(fields[0])
+	if err != nil {
+		return 0, "", ""
+	}
+	where, m, ok := strings.Cut(fields[4], "] ")
 	if !ok {
-		return 0
+		return pid, fields[3], truncate(strings.TrimSpace(fields[4]))
 	}
-	pid, err := strconv.Atoi(digits)
-	if err != nil || pid <= 0 {
-		return 0
-	}
-	return pid
+	return pid, fields[3], truncate(strings.TrimSpace(m) + " (" + where + ")")
 }
 
 // chromiumLine returns the message of a Chromium log line at level, then
-// where it came from, or "" for any other line. Chromium writes
-// "[pid:tid:MMDD/HHMMSS.micros:FATAL:sandbox/linux/services/credentials.cc:137] message".
+// where it came from, or "" for any other line.
 func chromiumLine(line, level string) string {
-	_, rest, ok := strings.Cut(line, ":"+level+":")
-	if !ok {
-		return ""
+	if _, l, m := parseChromiumLine(line); l == level {
+		return m
 	}
-	where, msg, ok := strings.Cut(rest, "] ")
-	if !ok {
-		return truncate(strings.TrimSpace(rest))
-	}
-	return truncate(strings.TrimSpace(msg) + " (" + where + ")")
+	return ""
+}
+
+// allOf reports whether s is non-empty and made only of chars.
+func allOf(s, chars string) bool {
+	return s != "" && strings.Trim(s, chars) == ""
 }
 
 // truncate keeps the reason short enough to survive slog's quoting within

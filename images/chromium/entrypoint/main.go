@@ -162,9 +162,14 @@ func run(log *slog.Logger) error {
 		_ = resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
 	}); err != nil {
-		ended := time.Now()
+		ended, exited := time.Now(), false
+		select {
+		case <-browser.done:
+			exited = true
+		default:
+		}
 		_ = closeChromium(browser, cdpAddr, cfg.StopTimeout)
-		return fmt.Errorf("chromium: %w%s", err, fatal.reason(true, ended))
+		return fmt.Errorf("chromium: %w%s", err, fatal.reason(true, ended, exited))
 	}
 
 	ln, err := listenControl(cfg.ControlSocket)
@@ -187,7 +192,7 @@ func run(log *slog.Logger) error {
 	select {
 	case <-browser.done:
 		_ = srv.Close()
-		return fmt.Errorf("chromium exited on its own: %s%s", describe(browser.status), fatal.reason(false, time.Now()))
+		return fmt.Errorf("chromium exited on its own: %s%s", describe(browser.status), fatal.reason(false, time.Now(), true))
 	case <-ctx.Done():
 	}
 
