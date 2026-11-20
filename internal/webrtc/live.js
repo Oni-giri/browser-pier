@@ -9,6 +9,10 @@
   const offerURL = root.dataset.offer || `/live/${encodeURIComponent(profile)}/offer`;
   const statusURL = root.dataset.status || `/live/${encodeURIComponent(profile)}/status`;
   const iceURL = root.dataset.ice || `/live/${encodeURIComponent(profile)}/ice`;
+  // A page whose offer brings control (a handoff) keeps its own pill until
+  // the offer has answered: until then the status says "Needs help", as
+  // nobody has control yet.
+  let offerAnswered = !root.dataset.offer;
   // ?ice=relay connects only through the TURN server: a way to check it works.
   const relayOnly = new URLSearchParams(location.search).get("ice") === "relay";
   const video = document.getElementById("screen");
@@ -77,8 +81,9 @@
     } else if (s === "starting") { label = "Starting…"; }
     if (s === undefined && control) { label = "You have control"; cls = "you"; }
     // Until the first status, the page's own words stay ("Connecting…",
-    // or the handoff page's "You're driving", in blue).
-    if (s !== undefined || control) {
+    // or the handoff page's "You're driving", in blue, until its offer
+    // has answered).
+    if ((s !== undefined || control) && offerAnswered) {
       who.textContent = label;
       who.className = "pill " + cls;
     }
@@ -152,10 +157,12 @@
     const r = await fetch(offerURL, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sdp: pc.localDescription.sdp }),
     });
-    if (!r.ok) { who.textContent = (await r.text()).trim() || "Couldn't connect"; return; }
+    if (!r.ok) { who.textContent = (await r.text()).trim() || "Couldn't connect"; who.className = "pill"; return; }
     const answer = await r.json();
     await pc.setRemoteDescription({ type: "answer", sdp: answer.sdp });
-    if (answer.control) { control = true; keyboard = !touch; status.human_control = true; render(); }
+    offerAnswered = true;
+    if (answer.control) { control = true; keyboard = !touch; status.human_control = true; }
+    render();
   }
 
   for (const b of takeBtns) b.onclick = () => send({ type: control ? "release" : "take" });
