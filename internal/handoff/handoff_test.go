@@ -233,6 +233,11 @@ func TestPINFlowHandsBack(t *testing.T) {
 	}
 	if p := f.do(phone, "GET", "/h/"+token, nil, nil); p.code != http.StatusOK || !strings.Contains(p.body, "Done, hand back") {
 		t.Fatalf("control page: %d", p.code)
+	} else if tools := between(p.body, `class="ho-tools"`, "</div>"); !strings.Contains(tools, `id="who"`) || !strings.Contains(tools, `id="full"`) ||
+		!strings.Contains(between(p.body, "data-viewer", `class="ho"`), `id="stage"`) {
+		// The pill and the full-screen button in the tools, and the stream
+		// in the viewer that goes full screen (PROJ-193).
+		t.Errorf("the control page's tools: %s", tools)
 	}
 	// The link works once: another browser is refused, even with the PIN.
 	other := browser()
@@ -830,4 +835,18 @@ func TestHandoffPageSaysWhenItHandsBackByItself(t *testing.T) {
 	if p := g.do(phone, "GET", "/h/"+token, nil, nil); !strings.Contains(p.body, `id="finish"`) || strings.Contains(p.body, "hands back by itself") {
 		t.Fatalf("without until_url: %s", p.body)
 	}
+}
+
+// between is s from the first from to the next to after it, "" if either
+// is missing.
+func between(s, from, to string) string {
+	i := strings.Index(s, from)
+	if i < 0 {
+		return ""
+	}
+	j := strings.Index(s[i:], to)
+	if j < 0 {
+		return ""
+	}
+	return s[i : i+j]
 }

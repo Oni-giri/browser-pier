@@ -61,7 +61,9 @@ a{color:#0F172A}a:hover{color:#000000}
   <div style="flex: 1; max-width: 1376px; width: 100%; box-sizing: border-box; margin: 0 auto; padding: 16px 28px 32px; display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start">
 
     <section aria-label="Browser" style="flex: 999 1 640px; min-width: 0; padding: 10px; background: #FFFFFF; border-radius: 16px; box-shadow: {{frameRing}}; display: flex; flex-direction: column; gap: 10px">
-      <fieldset disabled="{{locked}}" style="margin: 0; min-width: 0; padding: 0; border: 0; display: flex; align-items: center; gap: 4px; opacity: {{barOpacity}}">
+      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
+      <span style="flex: none; padding: 2px 9px; border-radius: 999px; background: {{driverBg}}; color: {{driverFg}}; font-size: 12px; font-weight: 500; display: flex; align-items: center; gap: 6px; white-space: nowrap"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{driverDot}}"></span>{{driverLine}}</span>
+      <fieldset disabled="{{locked}}" style="flex: 1 1 320px; margin: 0; min-width: 0; padding: 0; border: 0; display: flex; align-items: center; gap: 4px; opacity: {{barOpacity}}">
         <legend style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Browser controls</legend>
         <button type="button" aria-label="Back" style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: transparent; border: 0; border-radius: 8px; color: #475569; cursor: pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg></button>
         <button type="button" aria-label="Forward" style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: transparent; border: 0; border-radius: 8px; color: #475569; cursor: pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></button>
@@ -70,6 +72,8 @@ a{color:#0F172A}a:hover{color:#000000}
         <input id="lv-url" type="text" value="accounts.google.com/signin/challenge/totp" style="flex: 1; min-width: 0; height: 32px; box-sizing: border-box; padding: 0 12px; background: #F1F5F9; border: 0; border-radius: 8px; color: #334155; font-family: 'Geist Mono', monospace; font-size: 12px">
         <span style="padding: 0 8px; font-size: 12px; color: #64748B; font-variant-numeric: tabular-nums; white-space: nowrap">1440 × 900 · 30 fps</span>
       </fieldset>
+      <button type="button" style="flex: none; min-height: 30px; padding: 0 12px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; color: #0F172A; font-size: 13px; font-weight: 500; cursor: pointer">Full screen</button>
+      </div>
 
       <div style="position: relative; aspect-ratio: 16 / 10; border-radius: 10px; overflow: hidden; background: #F1F5F9; box-shadow: inset 0 0 0 1px #E8EDF4; cursor: {{streamCursor}}">
         <div aria-hidden="true" style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center">
@@ -81,7 +85,6 @@ a{color:#0F172A}a:hover{color:#000000}
             <span style="align-self: flex-end; width: 84px; height: 32px; border-radius: 8px; background: #CBD5E1"></span>
           </div>
         </div>
-        <span style="position: absolute; left: 12px; top: 12px; padding: 4px 10px; border-radius: 999px; background: rgba(15,23,42,0.82); color: #F8FAFC; font-size: 12px; display: flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{driverDot}}"></span>{{driverLine}}</span>
         <sc-if value="{{human}}" hint-placeholder-val="{{true}}">
           <span role="status" style="position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); padding: 8px 12px; display: flex; align-items: center; gap: 8px; border-radius: 10px; background: rgba(15,23,42,0.88); color: #F8FAFC; font-size: 13px; white-space: nowrap; box-shadow: 0 10px 24px rgba(15,23,42,0.2)">Your keyboard goes to the browser<kbd style="padding: 0 6px; border-radius: 4px; background: rgba(255,255,255,0.16); font-family: 'Geist Mono', monospace; font-size: 11px">Esc</kbd>releases it</span>
         </sc-if>
@@ -149,7 +152,9 @@ class Component extends DCLogic {
       ctlShadow: h ? '0 0 0 1px #E2E8F0, 0 1px 2px rgba(15,23,42,0.05)' : '0 1px 2px rgba(47,107,255,0.4), 0 8px 22px -6px rgba(47,107,255,0.6), inset 0 1px 0 rgba(255,255,255,0.18)',
       frameRing: h ? '0 0 0 2px #2F6BFF, 0 0 0 6px rgba(47,107,255,0.14)' : '0 0 0 1px rgba(37,64,140,0.07), 0 1px 2px rgba(37,64,140,0.06), 0 10px 28px -12px rgba(37,64,140,0.20)',
       driverLine: h ? 'You’re driving' : 'research-bot is driving · view only',
-      driverDot: h ? '#2F6BFF' : '#94A3B8',
+      driverDot: h ? '#2F6BFF' : '#16A34A',
+      driverBg: h ? '#EEF3FF' : '#ECFDF3',
+      driverFg: h ? '#1D4ED8' : '#15803D',
       locked: !h,
       barOpacity: h ? '1' : '0.5',
       streamCursor: h ? 'default' : 'not-allowed',

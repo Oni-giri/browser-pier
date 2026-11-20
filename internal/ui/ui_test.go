@@ -196,6 +196,17 @@ func TestEveryPageRenders(t *testing.T) {
 	want(t, f.get("/profiles/new"), http.StatusOK, "Create profile")
 	want(t, f.get("/profiles/new", "HX-Request", "true"), http.StatusOK, "<dialog data-open")
 	want(t, f.get("/profiles/google"), http.StatusOK, `id="stage"`, "/static/live.js", "Enter the 2FA code", "Done, hand back", "Paused, waiting for you")
+	// Who drives is said in the bar, not over the browser; full screen is
+	// in the bar too, with its own Take control (PROJ-193).
+	if r := f.get("/profiles/google"); !strings.Contains(between(r.body, `class="viewer-bar"`, `id="stage"`), `id="who"`) ||
+		strings.Contains(between(r.body, `id="stage"`, `id="hint"`), `id="who"`) ||
+		!strings.Contains(between(r.body, `class="viewer-bar"`, `id="stage"`), `id="full"`) ||
+		strings.Count(r.body, "data-take") != 2 {
+		t.Errorf("the live view's bar: %s", between(r.body, `class="viewer"`, `id="hint"`))
+	}
+	if r := f.get("/profiles/github"); strings.Contains(r.body, `id="full"`) || strings.Contains(r.body, `id="who"`) {
+		t.Error("a stopped profile has a full-screen button or a status pill")
+	}
 	want(t, f.get("/profiles/google"), http.StatusOK, "<dt>Ads and trackers</dt><dd class=\"num\">42 blocked</dd>")
 	want(t, f.get("/profiles/github"), http.StatusOK, "<dt>Ads and trackers</dt><dd>On</dd>")
 	want(t, f.get("/profiles/github"), http.StatusOK, "Start browser", "This browser is stopped",
@@ -703,4 +714,18 @@ func TestOrangeOnlyWhenSomeoneIsNeeded(t *testing.T) {
 			t.Fatalf("%s: %q", grain, r.header.Get("Cache-Control"))
 		}
 	}
+}
+
+// between is s from the first from to the next to after it, "" if either
+// is missing.
+func between(s, from, to string) string {
+	i := strings.Index(s, from)
+	if i < 0 {
+		return ""
+	}
+	j := strings.Index(s[i:], to)
+	if j < 0 {
+		return ""
+	}
+	return s[i : i+j]
 }
