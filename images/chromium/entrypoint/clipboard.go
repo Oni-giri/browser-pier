@@ -34,10 +34,22 @@ const maxClipboard = 32 << 10
 // maxClipboardSet caps the text the person sends, in characters.
 const maxClipboardSet = 10000
 
-// clipboardWait bounds a read, and the wait for a set or an emptying to
-// take hold: a clipboard owner that doesn't answer (a hung page) doesn't
-// hold the live view up. Tests shorten it.
+// clipboardWait bounds a read, and the wait for a set to take hold: a
+// clipboard owner that doesn't answer (a hung page) doesn't hold the live
+// view up. Tests shorten it.
 var clipboardWait = 2 * time.Second
+
+// emptyWait bounds the emptying of one selection, and emptyRead each look
+// at it then. Both selections' worst case, 3 s, stays well inside the 5 s
+// the orchestrator gives the whole call (sessions.Manager.control), so a
+// slow emptying answers with its own reason, not the caller's timeout.
+// emptyTakes is how many times one emptying takes its selection again
+// from a page that keeps taking it back. Tests shorten the waits.
+var (
+	emptyWait  = 1500 * time.Millisecond
+	emptyRead  = 500 * time.Millisecond
+	emptyTakes = 3
+)
 
 // The X selections: CLIPBOARD (Ctrl+C, Ctrl+V) and PRIMARY (what is
 // selected, pasted with the middle button).
@@ -59,8 +71,9 @@ type clipState struct {
 	release func()
 	// hold runs xclip owning selection, offering text as target (""
 	// for xclip's own, UTF8_STRING), until release is called or another
-	// client (Chromium copying) takes the selection; tests replace it.
-	hold func(selection, target, text string) (release func(), err error)
+	// client (Chromium copying) takes the selection, which closes gone;
+	// tests replace it.
+	hold func(selection, target, text string) (release func(), gone <-chan struct{}, err error)
 	// read reads selection as target. ok is false, with no error, when
 	// the selection has nothing as that target: no owner, or an owner
 	// without it. Tests replace it.
@@ -190,7 +203,7 @@ func (v *visual) paste(w http.ResponseWriter, r *http.Request) {
 // and waits until it reads back. v.clip.mu must be held.
 func (v *visual) holdText(ctx context.Context, text string) error {
 	v.letGoLocked()
-	release, err := v.clip.hold(selClipboard, "", text)
+	release, _, err := v.clip.hold(selClipboard, "", text)
 	if err != nil {
 		return fmt.Errorf("couldn't set the clipboard: %w", err)
 	}
@@ -252,37 +265,63 @@ func (v *visual) emptyClipboard(w http.ResponseWriter, r *http.Request) {
 }
 
 // emptySelection takes selection with an empty xclip, waits until it is
-// the owner, then ends it.
+// seen to own it, then ends it. If the page takes the selection back
+// meanwhile (a copy landing late, on a busy page), which ends that xclip,
+// it takes it again, emptyTakes times at most.
 func (v *visual) emptySelection(ctx context.Context, selection string) error {
-	release, err := v.clip.hold(selection, emptyTarget, "")
-	if err != nil {
-		return err
-	}
-	defer release() // the owner goes, and the selection has none
-	ctx, cancel := context.WithTimeout(ctx, clipboardWait)
+	ctx, cancel := context.WithTimeout(ctx, emptyWait)
 	defer cancel()
-	var last error
-	if err := v.await(ctx, func() bool {
-		targets, ok, err := v.clip.read(ctx, selection, "TARGETS")
-		last = err
-		return err == nil && ok && hasTarget(targets, emptyTarget)
-	}); err != nil {
-		if last != nil {
-			return last
+	var release func()
+	var gone <-chan struct{}
+	defer func() {
+		if release != nil {
+			release() // the owner goes, and the selection has none
 		}
-		return errors.New("it didn't take the selection")
+	}()
+	for takes := 0; ; {
+		if release == nil {
+			if takes == emptyTakes {
+				return fmt.Errorf("the page took the selection back %d times", takes)
+			}
+			var err error
+			if release, gone, err = v.clip.hold(selection, emptyTarget, ""); err != nil {
+				return err
+			}
+			takes++
+		}
+		rctx, rcancel := context.WithTimeout(ctx, emptyRead)
+		targets, ok, err := v.clip.read(rctx, selection, "TARGETS")
+		timedOut := rctx.Err() != nil
+		rcancel()
+		switch {
+		case err == nil && ok && hasTarget(targets, emptyTarget):
+			return nil
+		case err != nil && !timedOut:
+			return err // no display, say: looking again won't help
+		}
+		select {
+		case <-gone: // another client took it, and that xclip ended
+			release()
+			release = nil
+			continue
+		default:
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("couldn't take the selection within %v", emptyWait)
+		case <-time.After(20 * time.Millisecond):
+		}
 	}
-	return nil
 }
 
 // holdClipboard runs xclip in the foreground owning selection, offering
 // text as target. It runs until release kills it, or until another client
 // takes the selection (Chromium, when the page is copied from): then it
 // exits by itself and the reaper collects it.
-func holdClipboard(selection, target, text string) (func(), error) {
+func holdClipboard(selection, target, text string) (func(), <-chan struct{}, error) {
 	pr, pw, err := os.Pipe()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	args := []string{"-quiet", "-selection", selection}
 	if target != "" {
@@ -295,7 +334,7 @@ func holdClipboard(selection, target, text string) (func(), error) {
 	_ = pr.Close()
 	if err != nil {
 		_ = pw.Close()
-		return nil, err
+		return nil, nil, err
 	}
 	gone := make(chan struct{})
 	go func() {
@@ -314,9 +353,9 @@ func holdClipboard(selection, target, text string) (func(), error) {
 	_ = pw.Close()
 	if werr != nil {
 		release()
-		return nil, werr
+		return nil, nil, werr
 	}
-	return release, nil
+	return release, gone, nil
 }
 
 // readSelection runs xclip -out for selection as target. xclip says

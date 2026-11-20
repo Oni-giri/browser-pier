@@ -12,8 +12,8 @@ import (
 
 func shortWait(t *testing.T) {
 	t.Helper()
-	clipboardWait = 50 * time.Millisecond
-	t.Cleanup(func() { clipboardWait = 2 * time.Second })
+	clipboardWait, emptyWait, emptyRead = 50*time.Millisecond, 100*time.Millisecond, 30*time.Millisecond
+	t.Cleanup(func() { clipboardWait, emptyWait, emptyRead = 2*time.Second, 1500*time.Millisecond, 500*time.Millisecond })
 }
 
 // fakeX is X's two selections as xclip sees them: who owns each, what
@@ -27,6 +27,9 @@ type fakeX struct {
 	// stuck: a holder never takes its selection. readErr: every read fails.
 	stuck   bool
 	readErr error
+	// steal: how many times the page takes a selection back just after an
+	// emptying xclip took it (a copy landing late), which ends that xclip.
+	steal int
 }
 
 type fakeOwner struct {
@@ -39,14 +42,15 @@ type fakeOwner struct {
 type fakeHolder struct {
 	selection, target, text string
 	released                bool
+	gone                    chan struct{} // closed when it exits by itself
 }
 
 func newFakeX(v *visual) *fakeX {
 	x := &fakeX{owners: map[string]*fakeOwner{}, pending: map[string]*fakeOwner{}}
-	v.clip.hold = func(selection, target, text string) (func(), error) {
+	v.clip.hold = func(selection, target, text string) (func(), <-chan struct{}, error) {
 		x.mu.Lock()
 		defer x.mu.Unlock()
-		h := &fakeHolder{selection: selection, target: target, text: text}
+		h := &fakeHolder{selection: selection, target: target, text: text, gone: make(chan struct{})}
 		x.holders = append(x.holders, h)
 		o := &fakeOwner{kind: "xclip", target: target, text: text, holder: h}
 		if !x.stuck {
@@ -65,7 +69,7 @@ func newFakeX(v *visual) *fakeX {
 			if p := x.pending[selection]; p != nil && p.holder == h {
 				delete(x.pending, selection)
 			}
-		}, nil
+		}, h.gone, nil
 	}
 	v.clip.read = func(ctx context.Context, selection, target string) ([]byte, bool, error) {
 		if _, ok := ctx.Deadline(); !ok {
@@ -80,6 +84,15 @@ func newFakeX(v *visual) *fakeX {
 			x.lag-- // xclip hasn't taken it yet
 		} else {
 			for sel, o := range x.pending {
+				if o.target == emptyTarget && x.steal > 0 {
+					// The page's late copy: it owns the selection again,
+					// and the xclip that took it exits.
+					x.steal--
+					x.owners[sel] = &fakeOwner{kind: "chromium", text: "copied late"}
+					close(o.holder.gone)
+					delete(x.pending, sel)
+					continue
+				}
 				x.owners[sel] = o
 				delete(x.pending, sel)
 			}
@@ -336,7 +349,8 @@ func TestClipboardEmpty(t *testing.T) {
 	sx := newFakeX(stuck)
 	sx.page(selClipboard, "a secret")
 	sx.stuck = true
-	if rec := serveVisual(stuck, http.MethodDelete, "/input/clipboard", ""); rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "secret") {
+	if rec := serveVisual(stuck, http.MethodDelete, "/input/clipboard", ""); rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "secret") ||
+		!strings.Contains(rec.Body.String(), "clipboard: couldn't take the selection within") {
 		t.Errorf("an emptying that failed: %d %s", rec.Code, rec.Body)
 	}
 	for _, h := range sx.holders {
@@ -356,5 +370,58 @@ func TestClipboardEmpty(t *testing.T) {
 func TestHasTarget(t *testing.T) {
 	if !hasTarget([]byte("TARGETS\nBROWSERPIER_EMPTIED\n"), emptyTarget) || hasTarget([]byte("TARGETS\nBROWSERPIER_EMPTIED_NOT\n"), emptyTarget) || hasTarget(nil, emptyTarget) {
 		t.Error("hasTarget")
+	}
+}
+
+// The page taking CLIPBOARD back just after the emptying xclip took it (a
+// copy landing late on a busy page): the emptying takes it again, a few
+// times at most, and lets go of every xclip it started (PROJ-194).
+func TestClipboardEmptyRetakes(t *testing.T) {
+	v, _ := newTestVisual(false)
+	x := newFakeX(v)
+	x.page(selClipboard, "copied")
+	x.steal = 1
+	if rec := serveVisual(v, http.MethodDelete, "/input/clipboard", ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("empty: %d %s", rec.Code, rec.Body)
+	}
+	var took []string
+	for _, h := range x.holders {
+		took = append(took, h.selection)
+		if !h.released {
+			t.Errorf("left %+v", *h)
+		}
+	}
+	if strings.Join(took, " ") != "clipboard clipboard primary" {
+		t.Errorf("took %v", took)
+	}
+	if o := x.owner(selClipboard); o != nil {
+		t.Errorf("still owned by %+v", *o)
+	}
+
+	// A page that keeps taking it back: refused, saying so, after
+	// emptyTakes tries, and well within the time it has.
+	v, _ = newTestVisual(false)
+	x = newFakeX(v)
+	x.page(selClipboard, "copied")
+	x.steal = 100
+	start := time.Now()
+	rec := serveVisual(v, http.MethodDelete, "/input/clipboard", "")
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "clipboard: the page took the selection back 3 times") || strings.Contains(rec.Body.String(), "copied") {
+		t.Errorf("a page that keeps it: %d %s", rec.Code, rec.Body)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("took %v", took)
+	}
+	n := 0
+	for _, h := range x.holders {
+		if h.selection == selClipboard {
+			n++
+		}
+		if !h.released {
+			t.Errorf("left %+v", *h)
+		}
+	}
+	if n != emptyTakes {
+		t.Errorf("took CLIPBOARD %d times", n)
 	}
 }
