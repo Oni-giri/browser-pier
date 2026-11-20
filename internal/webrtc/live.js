@@ -75,8 +75,13 @@
       else if (status.human_control) { label = "Someone else has control"; }
       else { label = "Idle"; }
     } else if (s === "starting") { label = "Starting…"; }
-    who.textContent = label;
-    who.className = "pill " + cls;
+    if (s === undefined && control) { label = "You have control"; cls = "you"; }
+    // Until the first status, the page's own words stay ("Connecting…",
+    // or the handoff page's "You're driving", in blue).
+    if (s !== undefined || control) {
+      who.textContent = label;
+      who.className = "pill " + cls;
+    }
     // While it waits for help the agent is paused, so a person can always take over.
     const agentDriving = s === "running" && !!(status.in_use_by && status.in_use_by.length);
     for (const b of takeBtns) {
@@ -159,6 +164,9 @@
   // (iPhone Safari, or a refusal) the viewer fixed over the page. Only the
   // picture is scaled: the browser's own window keeps its size.
   function setFull(on) {
+    // However full screen ends (Esc, the browser's own exit, the bar's
+    // button), the keyboard comes back to this page.
+    if (!on && keyboard) { lift(); keyboard = false; }
     full = on;
     viewer.classList.toggle("full", on);
     document.body.classList.toggle("full-open", on);
@@ -179,9 +187,7 @@
   // Esc leaves the Fullscreen API's full screen before a page sees it: it
   // also releases the keyboard, as Esc does outside it.
   document.addEventListener("fullscreenchange", () => {
-    if (document.fullscreenElement || !full) return;
-    if (keyboard) { lift(); keyboard = false; }
-    setFull(false);
+    if (!document.fullscreenElement && full) setFull(false);
   });
   typeBtn.onclick = () => { const text = prompt("Type into the browser"); if (text) send({ type: "text", text }); };
   fitBtn.onclick = () => { zoom = 1; panX = panY = 0; applyZoom(); };
@@ -229,7 +235,6 @@
     // and releases the keyboard if it was captured.
     if (e.key === "Escape" && full && !document.fullscreenElement) {
       e.preventDefault();
-      if (keyboard) { lift(); keyboard = false; }
       leaveFull();
       return;
     }

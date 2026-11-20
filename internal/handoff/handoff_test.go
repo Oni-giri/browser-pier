@@ -238,6 +238,21 @@ func TestPINFlowHandsBack(t *testing.T) {
 		// The pill and the full-screen button in the tools, and the stream
 		// in the viewer that goes full screen (PROJ-193).
 		t.Errorf("the control page's tools: %s", tools)
+	} else if !strings.Contains(tools, `id="who" class="pill you"`) {
+		// Blue from the start, not grey until the script runs.
+		t.Errorf("the pill isn't blue: %s", tools)
+	} else {
+		// Done and Can't do this are in the tools too, for full screen,
+		// where the page's own form is hidden: they submit that form, note
+		// and all (PROJ-193).
+		for _, status := range []string{"done", "cant"} {
+			if !strings.Contains(tools, `type="submit" form="finish" name="status" value="`+status+`"`) {
+				t.Errorf("no %s button for full screen in the tools: %s", status, tools)
+			}
+		}
+		if !strings.Contains(between(p.body, `<form method="post" action="/h/`+token+`/finish" id="finish">`, "</form>"), `name="note"`) {
+			t.Error("the finish form lost its note")
+		}
 	}
 	// The link works once: another browser is refused, even with the PIN.
 	other := browser()

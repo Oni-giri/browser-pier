@@ -28,7 +28,7 @@
 </main>
 {{else if eq .Step "control"}}
 <div class="ho-viewer" data-viewer>
-<div class="ho-tools"><span id="who" class="pill">You're driving</span><span class="grow"></span><button id="type" class="btn small" type="button" hidden>Keyboard</button><button id="fit" class="btn small" type="button" hidden>Fit</button><button id="full" class="btn small" type="button">Full screen</button></div>
+<div class="ho-tools"><span id="who" class="pill you">You're driving</span><span class="grow"></span><button id="type" class="btn small" type="button" hidden>Keyboard</button><button id="fit" class="btn small" type="button" hidden>Fit</button><button id="full" class="btn small" type="button">Full screen</button><button class="btn small full-only" type="submit" form="finish" name="status" value="cant">Can’t do this</button><button class="btn small primary full-only" type="submit" form="finish" name="status" value="done">Done, hand back</button></div>
 <div id="stage" class="ho-stage" style="--ratio:{{.Width}}/{{.Height}}"><video id="screen" autoplay playsinline muted tabindex="0"></video><div id="note" role="status"></div></div>
 <p id="hint" class="caption ho-hint"></p>
 </div>
