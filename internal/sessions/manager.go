@@ -130,7 +130,8 @@ type Manager struct {
 	held map[string]bool  // profiles whose folder is being exported or imported (Hold)
 	// draining is set by StopAll: no browser starts any more.
 	draining bool
-	// inputsDone is signalled, with mu, when an agent input action ends.
+	// inputsDone is signalled, with mu, when an agent input action ends,
+	// and when a person's input or hand-back does.
 	inputsDone *sync.Cond
 	// onEnd is called with a session's ID once it has ended (OnEnd).
 	onEnd []func(id string)
@@ -176,6 +177,11 @@ type live struct {
 	generation uint64
 	// human is set while a person has control from the live view.
 	human bool
+	// releasing is set while ReleaseControl empties the clipboard, before
+	// human is cleared; humanInputs counts the person's inputs under way
+	// (HumanInput), which it waits for first.
+	releasing   bool
+	humanInputs int
 	// viewers counts open live views.
 	viewers int
 	// exemptFull is set once the browser refused an exemption from the ad

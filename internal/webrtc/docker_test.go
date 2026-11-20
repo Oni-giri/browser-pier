@@ -43,6 +43,13 @@ func TestRealBrowserReachesAViewer(t *testing.T) {
 // test ends.
 func startBrowser(t *testing.T) (*sessions.Manager, string) {
 	t.Helper()
+	return startBrowserIn(t, "", nil)
+}
+
+// startBrowserIn is startBrowser in mode ("" for the profile's default),
+// with the profile changed by change first, if set.
+func startBrowserIn(t *testing.T, mode profiles.Mode, change func(*profiles.Profile)) (*sessions.Manager, string) {
+	t.Helper()
 	image := os.Getenv("BROWSERPIER_TEST_IMAGE")
 	if image == "" {
 		t.Skip("BROWSERPIER_TEST_IMAGE not set; run `make test-docker`")
@@ -73,10 +80,13 @@ func startBrowser(t *testing.T) (*sessions.Manager, string) {
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", "browserpier-"+name).Run() })
 	p := profiles.New(name)
 	p.Width, p.Height = 1280, 800
+	if change != nil {
+		change(&p)
+	}
 	if _, err := m.Profiles().Create(ctx, p); err != nil {
 		t.Fatal(err)
 	}
-	s, _, err := m.Start(ctx, name, "")
+	s, _, err := m.Start(ctx, name, mode)
 	if err != nil {
 		t.Fatal(err)
 	}

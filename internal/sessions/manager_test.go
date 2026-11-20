@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -354,6 +355,16 @@ func TestReconcileAfterRestart(t *testing.T) {
 	if _, err := f.m.Profiles().Create(ctx, profiles.New("github")); err != nil {
 		t.Fatal(err)
 	}
+	// The clipboard of a browser picked up running is emptied: a person
+	// may have had control as the orchestrator went (PROJ-194).
+	var emptied atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) {
+		emptied.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	f.rt.Control = mux
 	running := f.start(f.m)
 	gone, _, err := f.m.Start(ctx, "github", "")
 	if err != nil {
@@ -377,6 +388,9 @@ func TestReconcileAfterRestart(t *testing.T) {
 	}
 	if s, ok := m.Live("google"); !ok || s.ID != running.ID || s.State != Running {
 		t.Fatalf("google after restart: %+v, %t; want the same running session", s, ok)
+	}
+	if n := emptied.Load(); n != 1 {
+		t.Errorf("emptied %d clipboards when picking up one browser", n)
 	}
 	if again, attached, err := m.Start(ctx, "google", ""); err != nil || !attached || again.ID != running.ID {
 		t.Fatalf("Start after restart = %+v, %t, %v", again, attached, err)

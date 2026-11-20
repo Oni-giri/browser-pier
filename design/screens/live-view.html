@@ -61,7 +61,7 @@ a{color:#0F172A}a:hover{color:#000000}
   <div style="flex: 1; max-width: 1376px; width: 100%; box-sizing: border-box; margin: 0 auto; padding: 16px 28px 32px; display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start">
 
     <section aria-label="Browser" style="flex: 999 1 640px; min-width: 0; padding: 10px; background: #FFFFFF; border-radius: 16px; box-shadow: {{frameRing}}; display: flex; flex-direction: column; gap: 10px">
-      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
+      <div style="position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
       <span style="flex: none; padding: 2px 9px; border-radius: 999px; background: {{driverBg}}; color: {{driverFg}}; font-size: 12px; font-weight: 500; display: flex; align-items: center; gap: 6px; white-space: nowrap"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{driverDot}}"></span>{{driverLine}}</span>
       <fieldset disabled="{{locked}}" style="flex: 1 1 320px; margin: 0; min-width: 0; padding: 0; border: 0; display: flex; align-items: center; gap: 4px; opacity: {{barOpacity}}">
         <legend style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Browser controls</legend>
@@ -72,7 +72,30 @@ a{color:#0F172A}a:hover{color:#000000}
         <input id="lv-url" type="text" value="accounts.google.com/signin/challenge/totp" style="flex: 1; min-width: 0; height: 32px; box-sizing: border-box; padding: 0 12px; background: #F1F5F9; border: 0; border-radius: 8px; color: #334155; font-family: 'Geist Mono', monospace; font-size: 12px">
         <span style="padding: 0 8px; font-size: 12px; color: #64748B; font-variant-numeric: tabular-nums; white-space: nowrap">1440 × 900 · 30 fps</span>
       </fieldset>
+      <sc-if value="{{human}}" hint-placeholder-val="{{true}}">
+        <button type="button" onClick="{{toggleClip}}" aria-expanded="{{clipExpanded}}" style="flex: none; min-height: 30px; padding: 0 12px; background: {{clipBtnBg}}; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; color: #0F172A; font-size: 13px; font-weight: 500; cursor: pointer">Clipboard</button>
+      </sc-if>
       <button type="button" style="flex: none; min-height: 30px; padding: 0 12px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; color: #0F172A; font-size: 13px; font-weight: 500; cursor: pointer">Full screen</button>
+      <!-- The clipboard box (PROJ-194): a popover under the bar, only for the
+           person with control. Opening it and Refresh read the browser's
+           clipboard; nothing is read otherwise. -->
+      <sc-if value="{{clipShown}}" hint-placeholder-val="{{true}}">
+        <div role="dialog" aria-label="Browser clipboard" style="position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; box-sizing: border-box; width: 400px; max-width: calc(100vw - 32px); padding: 12px; border-radius: 12px; background: #FFFFFF; box-shadow: 0 0 0 1px #E2E8F0, 0 12px 32px rgba(15,23,42,0.12); display: flex; flex-direction: column; gap: 8px; font-size: 14px; color: #0F172A">
+          <div style="display: flex; align-items: center; gap: 6px">
+            <b style="flex: 1; font-weight: 500">Browser clipboard</b>
+            <button type="button" style="min-height: 30px; padding: 0 10px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; color: #0F172A; font-size: 13px; font-weight: 500; cursor: pointer">Refresh</button>
+            <button type="button" aria-label="Close" onClick="{{toggleClip}}" style="min-height: 30px; padding: 0 10px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; color: #0F172A; font-size: 13px; font-weight: 500; cursor: pointer">×</button>
+          </div>
+          <textarea aria-label="Text on the browser's clipboard" rows="5" spellcheck="false" style="box-sizing: border-box; width: 100%; min-height: 110px; padding: 10px 12px; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; background: #FFFFFF; color: #334155; font-family: 'Geist Mono', monospace; font-size: 12.5px; line-height: 1.45; resize: vertical">Backup code: 4821 7730</textarea>
+          <p role="status" style="margin: 0; font-size: 12px; color: #64748B">{{clipMsg}}</p>
+          <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px">
+            <button type="button" onClick="{{copyClip}}" style="min-height: 30px; padding: 0 10px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; color: #0F172A; font-size: 13px; font-weight: 500; cursor: pointer">Copy</button>
+            <span style="flex: 1"></span>
+            <button type="button" onClick="{{sendClip}}" style="min-height: 30px; padding: 0 10px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; color: #0F172A; font-size: 13px; font-weight: 500; cursor: pointer">Send to browser</button>
+            <button type="button" onClick="{{pasteClip}}" style="min-height: 30px; padding: 0 10px; background: #0F172A; border: 0; border-radius: 8px; box-shadow: inset 0 1px 0 rgba(255,255,255,0.12); color: #FFFFFF; font-size: 13px; font-weight: 500; cursor: pointer">Paste into page</button>
+          </div>
+        </div>
+      </sc-if>
       </div>
 
       <div style="position: relative; aspect-ratio: 16 / 10; border-radius: 10px; overflow: hidden; background: #F1F5F9; box-shadow: inset 0 0 0 1px #E8EDF4; cursor: {{streamCursor}}">
@@ -137,7 +160,7 @@ a{color:#0F172A}a:hover{color:#000000}
 class Component extends DCLogic {
   constructor(props) {
     super(props);
-    this.state = { human: true, copied: false };
+    this.state = { human: true, copied: false, clip: true, clipMsg: 'The browser’s clipboard. Copy puts it on yours.' };
   }
   renderVals() {
     const h = this.state.human;
@@ -162,6 +185,14 @@ class Component extends DCLogic {
       copyFg: this.state.copied ? '#15803D' : '#0F172A',
       copy: () => { this.setState({ copied: true }); setTimeout(() => this.setState({ copied: false }), 1500); },
       toggle: () => this.setState({ human: !h }),
+      clipShown: h && this.state.clip,
+      clipExpanded: h && this.state.clip ? 'true' : 'false',
+      clipBtnBg: h && this.state.clip ? '#F1F5F9' : '#FFFFFF',
+      clipMsg: this.state.clipMsg,
+      toggleClip: () => this.setState({ clip: !this.state.clip }),
+      copyClip: () => this.setState({ clipMsg: 'Copied' }),
+      sendClip: () => this.setState({ clipMsg: 'On the browser’s clipboard until you hand back: ⌘V pastes it there.' }),
+      pasteClip: () => this.setState({ clipMsg: 'Pasted into the page. It stays on the browser’s clipboard until you hand back.' }),
       log: [
         { t: '14:02:41', a: 'Paused, waiting for you (2FA)', c: '#C2410C', dot: '#FF6A3D' },
         { t: '14:02:38', a: 'Screenshot: code prompt found', c: '#0F172A', dot: '#CBD5E1' },
