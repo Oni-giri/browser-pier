@@ -233,6 +233,26 @@ func TestPINFlowHandsBack(t *testing.T) {
 	}
 	if p := f.do(phone, "GET", "/h/"+token, nil, nil); p.code != http.StatusOK || !strings.Contains(p.body, "Done, hand back") {
 		t.Fatalf("control page: %d", p.code)
+	} else if tools := between(p.body, `class="ho-tools"`, "</div>"); !strings.Contains(tools, `id="who"`) || !strings.Contains(tools, `id="full"`) ||
+		!strings.Contains(between(p.body, "data-viewer", `class="ho"`), `id="stage"`) {
+		// The pill and the full-screen button in the tools, and the stream
+		// in the viewer that goes full screen (PROJ-193).
+		t.Errorf("the control page's tools: %s", tools)
+	} else if !strings.Contains(tools, `id="who" class="pill you"`) {
+		// Blue from the start, not grey until the script runs.
+		t.Errorf("the pill isn't blue: %s", tools)
+	} else {
+		// Done and Can't do this are in the tools too, for full screen,
+		// where the page's own form is hidden: they submit that form, note
+		// and all (PROJ-193).
+		for _, status := range []string{"done", "cant"} {
+			if !strings.Contains(tools, `type="submit" form="finish" name="status" value="`+status+`"`) {
+				t.Errorf("no %s button for full screen in the tools: %s", status, tools)
+			}
+		}
+		if !strings.Contains(between(p.body, `<form method="post" action="/h/`+token+`/finish" id="finish">`, "</form>"), `name="note"`) {
+			t.Error("the finish form lost its note")
+		}
 	}
 	// The link works once: another browser is refused, even with the PIN.
 	other := browser()
@@ -830,4 +850,18 @@ func TestHandoffPageSaysWhenItHandsBackByItself(t *testing.T) {
 	if p := g.do(phone, "GET", "/h/"+token, nil, nil); !strings.Contains(p.body, `id="finish"`) || strings.Contains(p.body, "hands back by itself") {
 		t.Fatalf("without until_url: %s", p.body)
 	}
+}
+
+// between is s from the first from to the next to after it, "" if either
+// is missing.
+func between(s, from, to string) string {
+	i := strings.Index(s, from)
+	if i < 0 {
+		return ""
+	}
+	j := strings.Index(s[i:], to)
+	if j < 0 {
+		return ""
+	}
+	return s[i : i+j]
 }

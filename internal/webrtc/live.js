@@ -9,12 +9,23 @@
   const offerURL = root.dataset.offer || `/live/${encodeURIComponent(profile)}/offer`;
   const statusURL = root.dataset.status || `/live/${encodeURIComponent(profile)}/status`;
   const iceURL = root.dataset.ice || `/live/${encodeURIComponent(profile)}/ice`;
+  // A page whose offer brings control (a handoff) keeps its own pill until
+  // the offer has answered: until then the status says "Needs help", as
+  // nobody has control yet.
+  let offerAnswered = !root.dataset.offer;
+  // connectError, once set, is why this view couldn't connect: it stays in
+  // the pill and the hint, which say to reload.
+  let connectError = "";
   // ?ice=relay connects only through the TURN server: a way to check it works.
   const relayOnly = new URLSearchParams(location.search).get("ice") === "relay";
   const video = document.getElementById("screen");
   const stage = document.getElementById("stage");
   const who = document.getElementById("who");
-  const takeBtn = document.getElementById("take");
+  // Take control / Hand back: the page's button, and the bar's for full
+  // screen.
+  const takeBtns = [...document.querySelectorAll("[data-take]")];
+  const viewer = document.querySelector("[data-viewer]");
+  const fullBtn = document.getElementById("full");
   const typeBtn = document.getElementById("type");
   const fitBtn = document.getElementById("fit");
   const hint = document.getElementById("hint");
@@ -24,6 +35,7 @@
   let dc = null;
   let control = false;
   let keyboard = false; // keys go to the browser (released with Esc)
+  let full = false; // the viewer fills the screen
   let status = {};
   let zoom = 1, panX = 0, panY = 0;
 
@@ -70,21 +82,30 @@
       else if (status.human_control) { label = "Someone else has control"; }
       else { label = "Idle"; }
     } else if (s === "starting") { label = "Starting…"; }
-    who.textContent = label;
-    who.className = "pill " + cls;
+    if (s === undefined && control) { label = "You have control"; cls = "you"; }
+    // Until the first status, the page's own words stay ("Connecting…",
+    // or the handoff page's "You're driving", in blue, until its offer
+    // has answered).
+    if (connectError) { label = connectError; cls = ""; }
+    if (((s !== undefined || control) && offerAnswered) || connectError) {
+      who.textContent = label;
+      who.className = "pill " + cls;
+    }
     // While it waits for help the agent is paused, so a person can always take over.
     const agentDriving = s === "running" && !!(status.in_use_by && status.in_use_by.length);
-    if (takeBtn) {
-      takeBtn.textContent = control ? "Hand back" : "Take control";
-      if (takeBtn.classList.contains("btn")) takeBtn.classList.toggle("blue", !control);
-      takeBtn.disabled = !dc || dc.readyState !== "open" || (!control && (agentDriving || status.human_control || (s !== "running" && s !== "needs_help")));
+    for (const b of takeBtns) {
+      b.textContent = control ? "Hand back" : "Take control";
+      b.classList.toggle("blue", !control);
+      b.disabled = !dc || dc.readyState !== "open" || (!control && (agentDriving || status.human_control || (s !== "running" && s !== "needs_help")));
     }
     typeBtn.hidden = !(control && touch);
     fitBtn.hidden = !touch;
     stage.classList.toggle("control", control);
-    hint.textContent = control
+    hint.textContent = (control
       ? (touch ? `Tap to click. Pinch to zoom. ${typeBtn.textContent} sends text.` : keyboard ? "Your keyboard goes to the browser. Esc releases it." : "Click the screen to send your keyboard to the browser.")
-      : "View only. Take control to use the mouse and keyboard.";
+      : "View only. Take control to use the mouse and keyboard.") + (full && !touch ? " Esc leaves full screen." : "");
+    if (connectError) hint.textContent = "Reload the page to try again.";
+    if (fullBtn) fullBtn.textContent = full ? "Exit full screen" : "Full screen";
   }
 
   async function poll() {
@@ -141,13 +162,45 @@
     const r = await fetch(offerURL, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sdp: pc.localDescription.sdp }),
     });
-    if (!r.ok) { who.textContent = (await r.text()).trim() || "Couldn't connect"; return; }
+    if (!r.ok) { failed((await r.text()).trim() || "Couldn't connect"); return; }
     const answer = await r.json();
     await pc.setRemoteDescription({ type: "answer", sdp: answer.sdp });
-    if (answer.control) { control = true; keyboard = !touch; status.human_control = true; render(); }
+    offerAnswered = true;
+    if (answer.control) { control = true; keyboard = !touch; status.human_control = true; }
+    render();
   }
 
-  if (takeBtn) takeBtn.onclick = () => send({ type: control ? "release" : "take" });
+  for (const b of takeBtns) b.onclick = () => send({ type: control ? "release" : "take" });
+
+  // Full screen (PROJ-193): the Fullscreen API where there is one, else
+  // (iPhone Safari, or a refusal) the viewer fixed over the page. Only the
+  // picture is scaled: the browser's own window keeps its size.
+  function setFull(on) {
+    // However full screen ends (Esc, the browser's own exit, the bar's
+    // button), the keyboard comes back to this page.
+    if (!on && keyboard) { lift(); keyboard = false; }
+    full = on;
+    viewer.classList.toggle("full", on);
+    document.body.classList.toggle("full-open", on);
+    render();
+  }
+  async function leaveFull() {
+    if (document.fullscreenElement) { try { await document.exitFullscreen(); } catch (_) { /* gone already */ } }
+    setFull(false);
+  }
+  if (fullBtn && viewer) fullBtn.onclick = async () => {
+    if (full) return leaveFull();
+    setFull(true);
+    if (viewer.requestFullscreen) {
+      try { await viewer.requestFullscreen({ navigationUI: "hide" }); } catch (_) { /* the fixed view stays */ }
+    }
+    if (control && !touch) { keyboard = true; video.focus(); render(); }
+  };
+  // Esc leaves the Fullscreen API's full screen before a page sees it: it
+  // also releases the keyboard, as Esc does outside it.
+  document.addEventListener("fullscreenchange", () => {
+    if (!document.fullscreenElement && full) setFull(false);
+  });
   typeBtn.onclick = () => { const text = prompt("Type into the browser"); if (text) send({ type: "text", text }); };
   fitBtn.onclick = () => { zoom = 1; panX = panY = 0; applyZoom(); };
   // The stage takes the stream's shape: the profile's screen size may have
@@ -190,6 +243,13 @@
   // lift sends what's queued, then lets go of every held key and button.
   function lift() { flush(); send({ type: "lift" }); }
   addEventListener("keydown", (e) => {
+    // The fixed full screen has no browser Esc of its own: Esc leaves it,
+    // and releases the keyboard if it was captured.
+    if (e.key === "Escape" && full && !document.fullscreenElement) {
+      e.preventDefault();
+      leaveFull();
+      return;
+    }
     if (!control || !keyboard) return;
     if (e.key === "Escape") { e.preventDefault(); lift(); keyboard = false; render(); say("Keyboard released. Click the screen to send it again."); return; }
     const k = keysym(e); if (!k) return;
@@ -232,7 +292,18 @@
     if (e.touches.length === 0) { touches = 0; startDist = 0; tapStart = null; }
   });
 
-  connect().catch((err) => { who.textContent = "Couldn't connect: " + err.message; });
+  // failed shows why this view couldn't connect, for good: in the pill,
+  // the hint, and a note over the stream, each saying to reload.
+  function failed(why) {
+    connectError = why;
+    render();
+    // A refusal's own words end in a full stop already.
+    say(why.replace(/[.!?]\s*$/, "") + ". Reload the page to try again.");
+    clearTimeout(say.t); // the note stays
+  }
+  // A network error before the offer's answer (the fetch throwing) is a
+  // failure like a refused answer.
+  connect().catch((err) => failed("Couldn't connect: " + ((err && err.message) || "network error")));
   poll();
   setInterval(poll, 2000);
   render();
