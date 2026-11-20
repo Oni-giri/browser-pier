@@ -18,7 +18,8 @@ import (
 //
 // With a search engine the test reads (suggest.test), it types a plain
 // word and addresses with a secret in the query or the path, over http,
-// https and without a scheme, at instant pace (open's) and human pace,
+// https and without a scheme, with `key ctrl+l` and `type` at instant
+// pace (12 ms a key) and human pace,
 // and logs which suggest requests each sent and how much of the secret
 // they carried; then whether focusing the address bar on a page with a
 // secret in its address sends anything. With the image's own engine

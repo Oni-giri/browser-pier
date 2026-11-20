@@ -21,8 +21,9 @@ import (
 )
 
 // What PROJ-191 checks: an address typed into the address bar, as Visual
-// mode's open and a person in the live view type one, mustn't reach the
-// search engine's suggest service on its way.
+// mode's `key ctrl+l` and `type` and a person in the live view type one,
+// mustn't reach the search engine's suggest service on its way. (PROJ-164's
+// open types into the same address bar, so the same holds for it.)
 //
 // The rig makes the suggest service one the test can read. A test policy
 // file, mounted next to the image's own, makes the default search engine
@@ -114,6 +115,20 @@ func newSuggestRig(t *testing.T, image string, localEngine bool) *suggestRig {
 		opt.args = append(opt.args, "-v", file+":/etc/chromium/policies/managed/zz-test-search.json:ro")
 	}
 	r.b = startBrowserWith(t, image, newVolume(t), opt)
+
+	// A new profile's first tab opens start.duckduckgo.com (PROJ-127),
+	// which the proxy refuses, and an address typed while that settles
+	// can be lost. Open one until it opens, so no check passes on typing
+	// that never reached the address bar.
+	for i := 0; ; i++ {
+		tp := r.open(t, "http://site.test/ready", "instant")
+		if len(r.since("site.test", tp.enter)) > 0 {
+			break
+		}
+		if i == 4 {
+			t.Fatalf("no address typed into the address bar opened in 5 tries\n%s", r.b.logs())
+		}
+	}
 	return r
 }
 
@@ -202,11 +217,12 @@ func otherHosts(targets []string, allowed ...string) []string {
 //
 // First with a search engine the test reads: a plain word, which Chromium
 // would send, gets no suggest request either, so the policy is what keeps
-// it quiet. The isolated proxy reached nothing but site.test and
+// it quiet; its Return lands on that engine's search page, so the engine
+// really is in use. The isolated proxy reached nothing but site.test and
 // suggest.test, and every other host it was asked for (Chromium's own
 // background requests) was refused before it got a byte. Then with the
 // image's own engine, DuckDuckGo: typing an address doesn't ask for its
-// suggest host.
+// suggest host, and the address still opens.
 func TestTypedAddressReachesNoSuggestService(t *testing.T) {
 	image := testImage(t)
 	forms := []string{
@@ -216,8 +232,16 @@ func TestTypedAddressReachesNoSuggestService(t *testing.T) {
 	}
 	r := newSuggestRig(t, image, true)
 	for _, pace := range []string{"instant", "human"} {
-		if tp := r.open(t, "pierword", pace); len(tp.suggests) != 0 {
+		tp := r.open(t, "pierword", pace)
+		if len(tp.suggests) != 0 {
 			t.Errorf("%s: a plain word sent %d suggest requests, the first %q; is SearchSuggestEnabled off?", pace, len(tp.suggests), tp.suggests[0].uri)
+		}
+		searched := false
+		for _, s := range r.since("suggest.test", tp.enter) {
+			searched = searched || strings.HasPrefix(s.uri, "/search?q=pierword")
+		}
+		if !searched {
+			t.Fatalf("%s: Return on a plain word didn't search suggest.test, so the test search engine isn't in effect; the browser asked for %v", pace, tp.refused)
 		}
 		for i, form := range forms {
 			secret := fmt.Sprintf("Zq%dx%dWv", i, time.Now().UnixNano()%1e6)
@@ -255,9 +279,14 @@ func TestTypedAddressReachesNoSuggestService(t *testing.T) {
 				break
 			}
 		}
+		if len(d.since("site.test", tp.enter)) == 0 {
+			t.Errorf("%s %s: the address never opened, so the typing may not have reached the address bar", pace, text)
+		}
 	}
 
-	// The policy shows on chrome://policy, to a person; a page can't read it.
+	// The policy shows on chrome://policy, to a person; a page can't read
+	// it. That's Chromium's, with or without this policy: the check
+	// documents ANTI-BOT.md's claim rather than guarding the change.
 	pg := d.b.page()
 	defer pg.Close()
 	got := pg.Eval(`fetch('chrome://policy/').then(() => 'read', e => 'refused: ' + e.name)`)
