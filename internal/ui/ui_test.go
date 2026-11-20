@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,6 +38,8 @@ type fixture struct {
 	client   *http.Client
 	ram      int
 	free     int64 // what the host has available, for HostFree
+	// emptied counts the browser's clipboard emptyings (PROJ-194).
+	emptied atomic.Int32
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -66,6 +69,11 @@ func newFixture(t *testing.T) *fixture {
 	ctl.HandleFunc("GET /cdp/json/list", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `[{"type":"page","url":"https://accounts.example.com/signin"}]`)
 	})
+	var emptied *atomic.Int32
+	ctl.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) {
+		emptied.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	})
 	rt.Control = ctl
 	m, err := sessions.NewManager(d, rt, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)
 	if err != nil {
@@ -82,6 +90,7 @@ func newFixture(t *testing.T) *fixture {
 	tokens := auth.NewTokens(d)
 	web := auth.NewWeb(admin, tokens, log, auth.WebOptions{CookieSecure: "auto"})
 	f := &fixture{t: t, m: m, handoffs: handoff.New(d, m, log), web: web, tokens: tokens, settings: settings.New(d)}
+	emptied = &f.emptied
 	app := New(m, web, f.handoffs, f.settings, log, Options{HostMemory: 16 << 30, HostFree: func() int64 { return f.free }, SetRAMLimit: func(p int) { f.ram = p }})
 	mux := http.NewServeMux()
 	web.Register(mux)
@@ -467,6 +476,40 @@ func TestHandBackFinishesTheHandoff(t *testing.T) {
 	}
 	if s, _ := f.m.Live("google"); s.State != sessions.Running {
 		t.Fatalf("browser not given back: %s", s.State)
+	}
+}
+
+// The profile page's Hand back form empties the browser's clipboard as
+// it ends the person's control, with a help request open or not
+// (PROJ-194).
+func TestHandBackFormEmptiesTheClipboard(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.profile("google")
+	s, _, _ := f.m.Start(ctx, "google", "")
+	if err := f.m.TakeControl(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.post("/profiles/google/handback", url.Values{}); r.code != http.StatusSeeOther {
+		t.Fatalf("hand back: %d", r.code)
+	}
+	if n := f.emptied.Load(); n != 1 {
+		t.Fatalf("emptied %d times", n)
+	}
+	if _, _, err := f.handoffs.Create(ctx, s.ID, "research-bot", handoff.SensitiveInput, "Enter the 2FA code", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.TakeControl(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.post("/profiles/google/handback", url.Values{"status": {"done"}}); r.code != http.StatusSeeOther {
+		t.Fatalf("hand back: %d", r.code)
+	}
+	if n := f.emptied.Load(); n != 2 {
+		t.Fatalf("emptied %d times", n)
+	}
+	if s, _ := f.m.Live("google"); s.HumanControl {
+		t.Error("still under the person's control")
 	}
 }
 

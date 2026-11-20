@@ -193,9 +193,10 @@ func TestViewerClipboardBox(t *testing.T) {
 		t.Errorf("read: %v", r)
 	}
 
-	// The activity log says what happened, by length.
+	// The activity log says what happened, not how long it was: that
+	// would tell agents a password's length.
 	acts := fmt.Sprint(m.Activity(s.ID))
-	if !strings.Contains(acts, fmt.Sprintf("Clipboard set (%d characters)", len(sent))) || !strings.Contains(acts, fmt.Sprintf("Pasted from the clipboard box (%d characters)", len(pasted))) {
+	if !strings.Contains(acts, "Clipboard set") || !strings.Contains(acts, "Pasted from the clipboard box") || strings.Contains(acts, "characters") {
 		t.Errorf("activity: %s", acts)
 	}
 	k.send(`{"type":"release"}`)

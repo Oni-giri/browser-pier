@@ -331,11 +331,12 @@ func TestReleaseControlEmptiesTheClipboardFirst(t *testing.T) {
 	var logs syncBuffer
 	f.m.log = slog.New(slog.NewTextHandler(&logs, nil))
 	type emptying struct {
-		agentInput, humanInput error
+		agentInput, attach, pageLease, humanInput error
 	}
 	emptied := make(chan emptying, 10)
 	var id string
 	fail := false
+	var lastEmptied time.Time
 	var mu sync.Mutex
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
@@ -348,6 +349,16 @@ func TestReleaseControlEmptiesTheClipboardFirst(t *testing.T) {
 		} else {
 			e.agentInput = err
 		}
+		if _, release, err := f.m.Attach(context.Background(), id, "t", "claude"); err == nil {
+			release()
+		} else {
+			e.attach = err
+		}
+		if l, err := f.m.PageLease(context.Background(), id, "t"); err == nil {
+			l.Release()
+		} else {
+			e.pageLease = err
+		}
 		if done, err := f.m.HumanInput(id); err == nil {
 			done()
 		} else {
@@ -356,6 +367,7 @@ func TestReleaseControlEmptiesTheClipboardFirst(t *testing.T) {
 		emptied <- e
 		mu.Lock()
 		defer mu.Unlock()
+		lastEmptied = time.Now()
 		if fail {
 			http.Error(w, "couldn't empty the clipboard: it kept its text", http.StatusInternalServerError)
 			return
@@ -376,8 +388,8 @@ func TestReleaseControlEmptiesTheClipboardFirst(t *testing.T) {
 		t.Helper()
 		select {
 		case e := <-emptied:
-			if !errors.Is(e.agentInput, ErrHumanDriving) || !errors.Is(e.humanInput, ErrNotRunning) {
-				t.Errorf("%s: while emptying, agent input %v, the person's %v", what, e.agentInput, e.humanInput)
+			if !errors.Is(e.agentInput, ErrHumanDriving) || !errors.Is(e.attach, ErrHumanDriving) || !errors.Is(e.pageLease, ErrHumanDriving) || !errors.Is(e.humanInput, ErrNotRunning) {
+				t.Errorf("%s: while emptying, agent input %v, CDP %v, a page call %v, the person's input %v", what, e.agentInput, e.attach, e.pageLease, e.humanInput)
 			}
 		default:
 			t.Fatalf("%s: the clipboard wasn't emptied", what)
@@ -410,8 +422,14 @@ func TestReleaseControlEmptiesTheClipboardFirst(t *testing.T) {
 		t.Fatal("handed back with the person's input still under way")
 	case <-time.After(100 * time.Millisecond):
 	}
+	inputDone := time.Now()
 	done()
 	<-released
+	mu.Lock()
+	if waited := lastEmptied.Sub(inputDone); waited < clipboardSettle {
+		t.Errorf("emptied %v after the person's last input, before a copy could land", waited)
+	}
+	mu.Unlock()
 	check("input under way")
 
 	// Two hand-backs at once (the live view going as a handoff ends):

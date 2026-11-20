@@ -319,7 +319,8 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 const maxClipboardSet = 10000
 
 // setClipboard puts the clipboard box's text on the browser's clipboard
-// and, with paste, presses Ctrl+V. Only its length is logged.
+// and, with paste, presses Ctrl+V. The log says only that it happened:
+// not the text, nor its length, which would tell agents a password's.
 func (v *viewer) setClipboard(id int, text string, paste bool, say func(any)) {
 	fail := func(msg string) { say(map[string]any{"type": "clipboard-error", "id": id, "msg": msg}) }
 	n := utf8.RuneCountInString(text)
@@ -340,7 +341,7 @@ func (v *viewer) setClipboard(id int, text string, paste bool, say func(any)) {
 		fail("Couldn't send it to the browser: " + err.Error())
 		return
 	}
-	v.h.m.Note(v.session, "", fmt.Sprintf("%s (%d characters)", what, n))
+	v.h.m.Note(v.session, "", what)
 	say(map[string]any{"type": "clipboard-set", "id": id})
 }
 

@@ -153,9 +153,10 @@ func (m *Manager) HumanInput(id string) (done func(), err error) {
 
 // ReleaseControl hands the browser back to agents, whatever ends the
 // person's control: they hand back, a handoff ends, the live view goes.
-// First it empties the browser's clipboard (PROJ-194), so no agent can
-// paste what the person put there or copied in the page: it waits for
-// their input under way, refuses more, and only then lets agents in. If
+// First it empties the browser's clipboard and PRIMARY selection
+// (PROJ-194), so no agent can paste what the person put there, copied or
+// selected in the page: it waits for their input under way and a moment
+// more (clipboardSettle), refuses more, and only then lets agents in. If
 // the clipboard can't be emptied, that is logged and the browser handed
 // back all the same. It returns once agents have the browser.
 func (m *Manager) ReleaseControl(id string) {
@@ -179,6 +180,10 @@ func (m *Manager) ReleaseControl(id string) {
 	if l.sess.State == Running || l.sess.State == NeedsHelp {
 		profile := l.sess.Profile
 		m.mu.Unlock()
+		// The person's last keys have reached the browser, but Chromium
+		// takes the selection a moment after a Ctrl+C: let it land, so it
+		// is emptied too.
+		time.Sleep(clipboardSettle)
 		m.emptyClipboard(id, profile)
 		m.mu.Lock()
 	}
@@ -186,6 +191,10 @@ func (m *Manager) ReleaseControl(id string) {
 	l.lastActivity = m.now()
 	m.inputsDone.Broadcast()
 }
+
+// clipboardSettle is how long a hand-back waits, after the person's last
+// input has reached the browser, before it empties the clipboard.
+const clipboardSettle = 100 * time.Millisecond
 
 // emptyClipboard empties a running browser's clipboard, a person's
 // control ending (PROJ-194). A failure is logged without what the
