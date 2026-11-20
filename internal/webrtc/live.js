@@ -13,6 +13,9 @@
   // the offer has answered: until then the status says "Needs help", as
   // nobody has control yet.
   let offerAnswered = !root.dataset.offer;
+  // connectError, once set, is why this view couldn't connect: it stays in
+  // the pill and the hint, which say to reload.
+  let connectError = "";
   // ?ice=relay connects only through the TURN server: a way to check it works.
   const relayOnly = new URLSearchParams(location.search).get("ice") === "relay";
   const video = document.getElementById("screen");
@@ -83,7 +86,8 @@
     // Until the first status, the page's own words stay ("Connecting…",
     // or the handoff page's "You're driving", in blue, until its offer
     // has answered).
-    if ((s !== undefined || control) && offerAnswered) {
+    if (connectError) { label = connectError; cls = ""; }
+    if (((s !== undefined || control) && offerAnswered) || connectError) {
       who.textContent = label;
       who.className = "pill " + cls;
     }
@@ -100,6 +104,7 @@
     hint.textContent = (control
       ? (touch ? `Tap to click. Pinch to zoom. ${typeBtn.textContent} sends text.` : keyboard ? "Your keyboard goes to the browser. Esc releases it." : "Click the screen to send your keyboard to the browser.")
       : "View only. Take control to use the mouse and keyboard.") + (full && !touch ? " Esc leaves full screen." : "");
+    if (connectError) hint.textContent = "Reload the page to try again.";
     if (fullBtn) fullBtn.textContent = full ? "Exit full screen" : "Full screen";
   }
 
@@ -157,7 +162,7 @@
     const r = await fetch(offerURL, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sdp: pc.localDescription.sdp }),
     });
-    if (!r.ok) { who.textContent = (await r.text()).trim() || "Couldn't connect"; who.className = "pill"; return; }
+    if (!r.ok) { failed((await r.text()).trim() || "Couldn't connect"); return; }
     const answer = await r.json();
     await pc.setRemoteDescription({ type: "answer", sdp: answer.sdp });
     offerAnswered = true;
@@ -287,7 +292,17 @@
     if (e.touches.length === 0) { touches = 0; startDist = 0; tapStart = null; }
   });
 
-  connect().catch((err) => { who.textContent = "Couldn't connect: " + err.message; });
+  // failed shows why this view couldn't connect, for good: in the pill,
+  // the hint, and a note over the stream, each saying to reload.
+  function failed(why) {
+    connectError = why;
+    render();
+    say(why + ". Reload the page to try again.");
+    clearTimeout(say.t); // the note stays
+  }
+  // A network error before the offer's answer (the fetch throwing) is a
+  // failure like a refused answer.
+  connect().catch((err) => failed("Couldn't connect: " + ((err && err.message) || "network error")));
   poll();
   setInterval(poll, 2000);
   render();
