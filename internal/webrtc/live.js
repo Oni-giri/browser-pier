@@ -225,28 +225,38 @@
   // on the browser's clipboard until the person's control ends. Keys
   // typed in it stay on this page.
   let clipReq = null, clipID = 0;
+  // clipEdited: the box holds text the person typed or pasted there and
+  // hasn't sent. Opening the box again keeps it; only Refresh replaces it.
+  let clipEdited = false;
+  if (clipText) clipText.addEventListener("input", () => { clipEdited = true; });
   function clipSay(text) { clipMsg.textContent = text; }
   function clipBusy(on) { for (const b of clipBox.querySelectorAll("[data-clip=refresh],[data-clip=send],[data-clip=paste]")) b.disabled = on; }
-  // clipAsk sends one request, answered by its id (clipAnswer).
-  function clipAsk(msg, busy, done) {
+  // clipAsk sends one request, answered by its id (clipAnswer): done
+  // with the answer, or fail, if set, with the error's words.
+  function clipAsk(msg, busy, done, fail) {
     const id = ++clipID;
     clearTimeout(clipReq && clipReq.timer);
-    clipReq = { id, done, timer: setTimeout(() => clipAnswer({ type: "clipboard-error", id, msg: "The browser didn't answer." }), 10000) };
+    clipReq = { id, done, fail: fail || clipSay, timer: setTimeout(() => clipAnswer({ type: "clipboard-error", id, msg: "The browser didn't answer." }), 10000) };
     clipSay(busy); clipBusy(true);
     flush(); // keys pressed before go first
     send({ ...msg, id });
   }
   function clipAnswer(m) {
     if (!clipReq || m.id !== clipReq.id) return;
-    const { done, timer } = clipReq;
+    const { done, fail, timer } = clipReq;
     clipReq = null; clearTimeout(timer); clipBusy(false);
-    if (m.type === "clipboard-error") clipSay(m.msg || "That didn't work.");
+    if (m.type === "clipboard-error") fail(m.msg || "That didn't work.");
     else done(m);
   }
   function refreshClip() {
     clipAsk({ type: "clipboard" }, "Reading the browser's clipboard…", (m) => {
-      clipText.value = m.text || "";
+      clipText.value = m.text || ""; clipEdited = false;
       clipSay(m.text ? "The browser's clipboard. Copy puts it on yours." : "The browser's clipboard is empty. Type or paste text here to send it.");
+    }, (msg) => {
+      // What an earlier read left would pass for the browser's clipboard
+      // now: it goes. Text the person typed stays, said to be theirs.
+      if (!clipEdited) clipText.value = "";
+      clipSay(clipEdited ? `${msg} The text here is yours, not sent yet.` : msg);
     });
   }
   function openClip() {
@@ -255,7 +265,8 @@
     // Typing goes to the box, not the browser (a phone's keyboard opens
     // only when the person taps it).
     if (!touch) clipText.focus();
-    refreshClip();
+    if (clipEdited) clipSay("Your text isn't sent yet. Refresh replaces it with the browser's clipboard.");
+    else refreshClip();
   }
   function closeClip() {
     if (!clipBox || clipBox.hidden) return;
@@ -267,8 +278,10 @@
     if (!text) { clipSay("There's no text to send."); return; }
     const n = [...text].length;
     if (n > maxClipSet) { clipSay(`That's ${n.toLocaleString()} characters: at most ${maxClipSet.toLocaleString()} can be sent at once.`); return; }
-    clipAsk({ type: "clipboard-set", text, paste }, paste ? "Pasting…" : "Sending…", () =>
-      clipSay(paste ? "Pasted into the page. It stays on the browser's clipboard until you hand back." : `On the browser's clipboard until you hand back: ${cmd}V pastes it there.`));
+    clipAsk({ type: "clipboard-set", text, paste }, paste ? "Pasting…" : "Sending…", () => {
+      clipEdited = false;
+      clipSay(paste ? "Pasted into the page. It stays on the browser's clipboard until you hand back." : `On the browser's clipboard until you hand back: ${cmd}V pastes it there.`);
+    });
   }
   async function copyClip() {
     const text = clipText.value;
@@ -367,19 +380,23 @@
     push({ t: "keydown", k }); held.set(code, k);
   });
   addEventListener("keyup", (e) => {
-    if (!control || !keyboard || e.key === "Escape" || (clipBox && clipBox.contains(e.target))) return;
+    if (!control || e.key === "Escape") return;
     const code = e.code || keysym(e);
     if (!code) return;
-    e.preventDefault();
-    // Only what went down goes up, as the keysym it went down as.
+    // A key that went down in the browser always goes up there, wherever
+    // the focus has moved since (a button of the clipboard box, say), as
+    // the keysym it went down as.
     if (held.has(code)) { push({ t: "keyup", k: held.get(code) }); held.delete(code); }
+    // In the box, the key is the page's (Space presses its buttons).
+    if (keyboard && !(clipBox && clipBox.contains(e.target))) e.preventDefault();
   });
   addEventListener("blur", () => { if (control) lift(); });
-  // A field of this page (the handoff's note, the clipboard box) takes the
-  // keyboard back: what is typed or pasted there stays here.
+  // A field of this page (the handoff's note) or anything in the clipboard
+  // box takes the keyboard back, letting go of every key held: what is
+  // typed or pasted there stays here.
   addEventListener("focusin", (e) => {
     const t = e.target;
-    if (keyboard && t !== video && t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) releaseKeys();
+    if (keyboard && t !== video && t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || (clipBox && clipBox.contains(t)))) releaseKeys();
   });
 
   // Phone: tap to click, pinch to zoom, drag to pan when zoomed.
