@@ -30,6 +30,7 @@ If the Atlassian MCP is connected:
 ## Conventions
 
 - Branches are named `PROJ-<n>-<slug>`. Commits are small and start with the ticket key, e.g. `PROJ-48: every colour is a light-dark token`.
+- Don't sign commits as Claude: no `Co-Authored-By: Claude …` trailer, or any other line crediting an AI assistant.
 - Write tests alongside the code. Tests that need Docker go behind the `docker` build tag, so `make test` stays fast.
 - Docker tests are heavy, so watch the RAM. Each test browser takes about 300 MB, `-race` multiplies the test binary's memory several times, and running out can make the kernel kill the whole machine's session, agents included.
   - Check free memory (`free -m`) before a Docker run. On a small machine, run one package at a time, not the full `make test-docker`.
