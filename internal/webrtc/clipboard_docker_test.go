@@ -94,20 +94,33 @@ func TestRealBrowserClipboardBox(t *testing.T) {
 	}
 	// The window manager focuses on click: click the page first. Then a
 	// page's address is pasted into the address bar from the box.
-	input(map[string]any{"t": "move", "x": 640, "y": 500}, map[string]any{"t": "down", "b": 1}, map[string]any{"t": "up", "b": 1})
-	open := func(url string) {
-		ctrl("l")
-		set(url, true)
-		input(map[string]any{"t": "keydown", "k": "Return"}, map[string]any{"t": "keyup", "k": "Return"})
+	focus := func() {
+		input(map[string]any{"t": "move", "x": 640, "y": 500}, map[string]any{"t": "down", "b": 1}, map[string]any{"t": "up", "b": 1})
+	}
+	focus()
+	open := func(url, what string, ok func(fieldState) bool) {
+		t.Helper()
+		for try := 1; ; try++ {
+			ctrl("l")
+			set(url, true)
+			input(map[string]any{"t": "keydown", "k": "Return"}, map[string]any{"t": "keyup", "k": "Return"})
+			if page.wait(8*time.Second, ok) {
+				return
+			}
+			if try == 3 {
+				t.Fatalf("waited for %s, %d tries: %+v", what, try, page.state())
+			}
+			// A browser that has only just started can miss the first
+			// click and keys, on a slow machine: focus it and try again.
+			focus()
+		}
 	}
 	// While here: the live view's script parses in this Chromium.
-	open(page.url + "parse")
-	page.await(t, "live.js to parse", func(f fieldState) bool { return f.parsed != "" })
+	open(page.url+"parse", "live.js to parse", func(f fieldState) bool { return f.parsed != "" })
 	if f := page.state(); f.parsed != "ok" {
 		t.Errorf("live.js doesn't parse: %s", f.parsed)
 	}
-	open(page.url)
-	page.await(t, "the page to load", func(f fieldState) bool { return f.loaded })
+	open(page.url, "the page to load", func(f fieldState) bool { return f.loaded })
 	// Its field fills the page: a click focuses it.
 	input(map[string]any{"t": "move", "x": 640, "y": 400}, map[string]any{"t": "down", "b": 1}, map[string]any{"t": "up", "b": 1})
 
@@ -269,13 +282,21 @@ func (p *fieldPage) state() fieldState {
 // await waits, for 15 s at most, until the page's state is as ok says.
 func (p *fieldPage) await(t *testing.T, what string, ok func(fieldState) bool) {
 	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
+	if !p.wait(15*time.Second, ok) {
+		t.Fatalf("waited for %s: %+v", what, p.state())
+	}
+}
+
+// wait says whether the page's state meets ok within d.
+func (p *fieldPage) wait(d time.Duration, ok func(fieldState) bool) bool {
+	deadline := time.Now().Add(d)
 	for !ok(p.state()) {
 		if time.Now().After(deadline) {
-			t.Fatalf("waited for %s: %+v", what, p.state())
+			return false
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	return true
 }
 
 // xselection reads an X selection in the profile's browser container as
