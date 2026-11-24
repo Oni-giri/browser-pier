@@ -2,7 +2,7 @@
 
 # The orchestrator image: ghcr.io/oni-giri/browser-pier.
 # The binary is cross-compiled on the build platform, so multi-arch builds need no emulation.
-FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine AS build
 ARG TARGETOS TARGETARCH VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum* ./
