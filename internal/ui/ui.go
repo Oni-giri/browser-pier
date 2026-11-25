@@ -112,13 +112,15 @@ func (u *UI) Register(mux *http.ServeMux) {
 		files.ServeHTTP(w, r)
 	})))
 
-	// This version's docs, for the admin. Agents read them through MCP
-	// (read_docs): the cookie and agent tokens never mix.
+	// This version's docs, for anyone who can reach BrowserPier: they hold
+	// no secret (the same docs are at browserpier.com/docs), and the people
+	// and agents who need them can't always sign in (a phone on a handoff
+	// link, an agent with only a token). Agents also have read_docs.
 	d := u.docs
 	if d == nil {
 		d = docs.Embedded()
 	}
-	mux.Handle("GET /docs/", u.web.RequireAdmin(http.StripPrefix("/docs", d.Handler())))
+	mux.Handle("GET /docs/", http.StripPrefix("/docs", d.Handler()))
 
 	// The guide an agent reads to connect itself; under /mcp/, which Umbrel
 	// lets agents reach without signing in.

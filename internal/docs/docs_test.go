@@ -30,7 +30,7 @@ func site() fstest.MapFS {
 		"guides/handoff/index.html":      page("Hand a browser to a person", ""),
 		"guides/handoff.md":              {Data: []byte(handoffMD)},
 		"_astro/page.js":                 {Data: []byte("console.log(1)")},
-		"llms.txt":                       {Data: []byte("# BrowserPier\n")},
+		"llms.txt":                       {Data: []byte("# BrowserPier\n\n- [Sessions](https://browserpier.com/docs/reference/sessions.md)\n")},
 		".hidden":                        {Data: []byte("secret")},
 		"reference/empty/placeholder.js": {Data: []byte("")},
 	}
@@ -163,8 +163,10 @@ func TestHandler(t *testing.T) {
 	if res.StatusCode != 200 || res.Header.Get("Content-Type") != "text/markdown; charset=utf-8" || !strings.HasPrefix(body, "# Sessions API") {
 		t.Fatalf("markdown: %d %q %q", res.StatusCode, res.Header.Get("Content-Type"), body)
 	}
-	if res, _ := get(t, srv.URL+"/docs/llms.txt"); res.Header.Get("Content-Type") != "text/plain; charset=utf-8" {
-		t.Fatalf("llms.txt: %q", res.Header.Get("Content-Type"))
+	// llms.txt links to this server's copy, not the online docs.
+	if res, body := get(t, srv.URL+"/docs/llms.txt"); res.Header.Get("Content-Type") != "text/plain; charset=utf-8" ||
+		!strings.Contains(body, "(/docs/reference/sessions.md)") || strings.Contains(body, "browserpier.com") {
+		t.Fatalf("llms.txt: %q %q", res.Header.Get("Content-Type"), body)
 	}
 	if res, _ := get(t, srv.URL+"/docs/_astro/page.js"); res.Header.Get("Cache-Control") != "private, max-age=31536000, immutable" {
 		t.Fatalf("asset cache: %q", res.Header.Get("Cache-Control"))

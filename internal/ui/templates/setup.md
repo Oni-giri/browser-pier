@@ -168,6 +168,8 @@ curl -s -X POST {{.Base}}/api/sessions/ID/content -H "$H" -d '{"format": "pdf"}'
 curl -s -X DELETE {{.Base}}/api/sessions/ID -H "$H"
 ```
 
+This server's docs, for its version, are at {{.Base}}/docs/: {{.Base}}/docs/llms.txt lists the pages, and each one is Markdown at its address plus `.md`, such as {{.Base}}/docs/reference/handoffs.md.
+
 Handoff reasons: `sensitive_input`, `captcha`, `file_upload`, `review`, `manual_step`. If you know the address where the person's part ends (the account page after a sign-in), pass it as `until_url`, so you aren't left waiting when they stop there without tapping Done.
 
 ## Rules

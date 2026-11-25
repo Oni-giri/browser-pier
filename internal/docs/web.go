@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"html/template"
+	"io"
 	"io/fs"
 	"net/http"
 	"path"
@@ -89,6 +90,17 @@ func (d *Docs) Handler() http.Handler {
 			h.Set("Cache-Control", "private, max-age=31536000, immutable")
 		} else {
 			h.Set("Cache-Control", "private, no-cache")
+		}
+		// llms.txt and its kin link to the online docs, which follow the
+		// latest release: here they link to this server's own copy.
+		if path.Ext(file) == ".txt" {
+			b, err := fs.ReadFile(d.fsys, file)
+			if err != nil {
+				d.notFound(w)
+				return
+			}
+			_, _ = io.WriteString(w, strings.ReplaceAll(string(b), Online, "/docs/")) //nolint:gosec // the binary's own file, as text/plain with nosniff
+			return
 		}
 		files.ServeHTTP(w, r)
 	})
