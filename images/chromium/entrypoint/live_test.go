@@ -96,3 +96,21 @@ func TestLiveRestartsXdotool(t *testing.T) {
 		t.Fatalf("starts %d, sent %q", *starts, fresh.buf.String())
 	}
 }
+
+// A release xdotool doesn't take keeps what is held, so the next one
+// lets go of it: nothing stays down because one try failed.
+func TestLiveReleaseThatFailsIsTriedAgain(t *testing.T) {
+	x := &fakeXdotool{}
+	dead1, dead2, fresh := &fakeXdotool{broken: true}, &fakeXdotool{broken: true}, &fakeXdotool{}
+	li, _ := newTestLive(x, dead1, dead2, fresh)
+	if rec := post(li.events, `[{"t":"down","b":1},{"t":"keydown","k":"Control_L"}]`); rec.Code != http.StatusNoContent {
+		t.Fatalf("events: %d", rec.Code)
+	}
+	x.broken = true // xdotool goes away, and the next one too
+	if rec := post(li.release, ""); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("a release xdotool didn't take: %d", rec.Code)
+	}
+	if rec := post(li.release, ""); rec.Code != http.StatusNoContent || fresh.buf.String() != "mouseup 1\nkeyup Control_L\n" {
+		t.Fatalf("the release after: %d %q", rec.Code, fresh.buf.String())
+	}
+}

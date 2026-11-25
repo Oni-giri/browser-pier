@@ -165,7 +165,10 @@ func (li *liveInput) events(w http.ResponseWriter, r *http.Request) {
 }
 
 // release lets go of every key and button still down, so a viewer who
-// disconnects mid-drag or mid-shortcut leaves nothing stuck.
+// disconnects mid-drag or mid-shortcut leaves nothing stuck. They are
+// forgotten only once xdotool has taken the releases: if it fails, they
+// are still held here, so the orchestrator's next try sends them again
+// (letting go of one already up is harmless).
 func (li *liveInput) release(w http.ResponseWriter, _ *http.Request) {
 	li.mu.Lock()
 	defer li.mu.Unlock()
@@ -182,12 +185,12 @@ func (li *liveInput) release(w http.ResponseWriter, _ *http.Request) {
 			lines = append(lines, "keyup "+h[1:])
 		}
 	}
-	li.held = map[string]bool{}
 	if len(lines) > 0 {
 		if err := li.send(lines); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
+	li.held = map[string]bool{}
 	w.WriteHeader(http.StatusNoContent)
 }
