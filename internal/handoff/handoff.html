@@ -37,7 +37,7 @@
 </div>
 </div>
 <div id="stage" class="ho-stage" style="--ratio:{{.Width}}/{{.Height}}"><video id="screen" autoplay playsinline muted tabindex="0"></video><div id="note" role="status"></div></div>
-<p id="hint" class="caption ho-hint"></p>
+<p id="hint" class="caption ho-hint"{{if .Records}} data-rec="Recording is paused while you have control.">Recording is paused while you have control.{{else}}>{{end}}</p>
 </div>
 <main class="ho">
   <section class="cell">
@@ -47,7 +47,6 @@
     <form method="post" action="/h/{{.Token}}/finish" id="finish">
       <label class="ho-label" for="msg">Note for the agent · optional</label>
       <textarea class="input" id="msg" name="note" rows="2" maxlength="1000"></textarea>
-      {{if .Records}}<p class="caption" style="margin:8px 0 0">Recording is paused while you have control.</p>{{end}}
       <div class="ho-row">
         <button class="btn" type="submit" name="status" value="cant">Can’t do this</button>
         <button class="btn primary" type="submit" name="status" value="done">Done, hand back</button>

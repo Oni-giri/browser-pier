@@ -186,7 +186,9 @@ func TestTheSideSaysWhetherItRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want(t, f.get("/profiles/google"), http.StatusOK, "Recording paused", "Resumes when an agent acts", "Nothing is recorded while you have control")
+	want(t, f.get("/profiles/google"), http.StatusOK, "Recording paused", "Resumes when an agent acts",
+		// In the hint, which live.js rewrites, keeping data-rec (PROJ-23).
+		`<div id="hint" data-rec="Nothing is recorded while you have control.">`)
 	rec := &uiRecorder{}
 	f.m.SetRecorder(rec, f.recordings)
 	_, done, err := f.m.AgentInput(context.Background(), s.ID)

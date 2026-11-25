@@ -118,7 +118,11 @@
     hint.textContent = (control
       ? (touch ? `Tap to click. Pinch to zoom. ${typeBtn.textContent} sends text.` + box
         : (keyboard ? `Your keyboard goes to the browser${mac ? ", ⌘ as Ctrl" : ""}. Esc releases it.` : "Click the screen to send your keyboard to the browser.") + box)
-      : "View only. Take control to use the mouse and keyboard.") + (full && !touch ? " Esc leaves full screen." : "");
+      : "View only. Take control to use the mouse and keyboard.")
+      // A profile that records says so in the hint, which full screen
+      // keeps (PROJ-23).
+      + (hint.dataset.rec ? " " + hint.dataset.rec : "")
+      + (full && !touch ? " Esc leaves full screen." : "");
     if (connectError) hint.textContent = "Reload the page to try again.";
     if (fullBtn) fullBtn.textContent = full ? "Exit full screen" : "Full screen";
   }
