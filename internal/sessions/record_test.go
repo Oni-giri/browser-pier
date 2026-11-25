@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -485,5 +487,179 @@ func TestReconcileAndRecordings(t *testing.T) {
 	}
 	if ok, _ := rec.state(helped.ID); ok {
 		t.Fatal("recording a session in a handoff")
+	}
+}
+
+// TestRecordingStaysOffWhileTheClipboardIsEmptied: however a person's
+// control ends, recording stays off while ReleaseControl waits for their
+// input, settles and empties the browser's clipboard (PROJ-194), even if
+// something asks the gate again meanwhile, and the gate opens only once
+// agents have the browser back, from the agent's next action.
+func TestRecordingStaysOffWhileTheClipboardIsEmptied(t *testing.T) {
+	f, rec := recordingFixture(t, true)
+	var id string
+	check := func(what string) {
+		t.Helper()
+		// Anything that asks the gate again meanwhile keeps it shut.
+		if resume, err := f.m.PauseRecording(id); err == nil {
+			resume()
+		} else {
+			t.Errorf("%s: pausing: %v", what, err)
+		}
+		if err := f.m.RefreshRecording(context.Background(), "google"); err != nil {
+			t.Errorf("%s: refreshing: %v", what, err)
+		}
+		if f.m.Recording(id) {
+			t.Errorf("%s: recording", what)
+		}
+		if on, why := rec.state(id); on {
+			t.Errorf("%s: the recorder is on (%s)", what, why)
+		}
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) {
+		if snap, _ := f.m.Live("google"); !snap.HumanControl {
+			t.Error("the clipboard was emptied after the person's control had ended")
+		}
+		check("while the clipboard is emptied")
+		rec.note("emptied")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	f.rt.Control = mux
+	advance := f.clock()
+	s := f.start(f.m)
+	id = s.ID
+
+	// agentActs gets the recorder going, and leaves the agent quiet long
+	// enough for a person to take control, within the tail.
+	agentActs := func() {
+		t.Helper()
+		_, done, err := f.m.AgentInput(context.Background(), s.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		done()
+		advance(agentQuiet + time.Second)
+		wantRecording(t, rec, s.ID, true, "")
+	}
+	// ended checks, from the events since mark, that the recorder didn't
+	// start again before the clipboard was emptied, that the gate changed
+	// to idle only after it, and that the agent's next action records.
+	ended := func(what string, mark int) {
+		t.Helper()
+		rec.mu.Lock()
+		events := append([]string(nil), rec.events[mark:]...)
+		rec.mu.Unlock()
+		emptied, idle := -1, -1
+		for i, e := range events {
+			switch {
+			case e == "recording":
+				t.Fatalf("%s: recording again before the agent acted: %v", what, events)
+			case e == "emptied" && emptied < 0:
+				emptied = i
+			case e == "stopped:"+string(recording.Idle) && idle < 0:
+				idle = i
+			}
+		}
+		if emptied < 0 || idle < emptied {
+			t.Fatalf("%s: events %v: the gate must be asked again only after the clipboard is emptied", what, events)
+		}
+		wantRecording(t, rec, s.ID, false, recording.Idle)
+		agentActs()
+	}
+	mark := func() int {
+		rec.mu.Lock()
+		defer rec.mu.Unlock()
+		return len(rec.events)
+	}
+
+	// Hand back in the live view (also the viewer going, the profile
+	// page's form and a failed offer: each is ReleaseControl).
+	agentActs()
+	m := mark()
+	if err := f.m.TakeControl(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	wantRecording(t, rec, s.ID, false, recording.Person)
+	f.m.ReleaseControl(s.ID)
+	ended("hand back", m)
+
+	// With the person's input under way: off while it is waited for too.
+	m = mark()
+	if err := f.m.TakeControl(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	done, err := f.m.HumanInput(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan struct{})
+	go func() { f.m.ReleaseControl(s.ID); close(released) }()
+	time.Sleep(50 * time.Millisecond)
+	check("while the person's input is waited for")
+	done()
+	<-released
+	ended("input under way", m)
+
+	// A handoff, ended as handoff.Service ends it (Done, Can't do this,
+	// expiry, until_url): ReleaseControl, then back to Running.
+	m = mark()
+	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.TakeControl(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.m.ReleaseControl(s.ID)
+	wantRecording(t, rec, s.ID, false, recording.Handoff)
+	if _, err := f.m.SetNeedsHelp(s.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	ended("handoff", m)
+}
+
+// TestReconcileEmptiesTheClipboardBeforeAnyRecording: a browser picked
+// up running has its clipboard emptied, a person's control having ended
+// with the restart, before anything is recorded; recording starts from
+// the agent's next action, after Reconcile.
+func TestReconcileEmptiesTheClipboardBeforeAnyRecording(t *testing.T) {
+	f, _ := recordingFixture(t, true)
+	var recP atomic.Pointer[fakeRecorder]
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) {
+		if rec := recP.Load(); rec != nil {
+			rec.mu.Lock()
+			if rec.calls != 0 {
+				t.Errorf("the recorder was told %v before the clipboard was emptied", rec.events)
+			}
+			rec.mu.Unlock()
+			rec.note("emptied")
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	f.rt.Control = mux
+	s := f.start(f.m)
+	f.m.Close()
+
+	m := f.manager()
+	rec := newFakeRecorder()
+	recP.Store(rec)
+	m.SetRecorder(rec, recording.NewStore(filepath.Join(f.dir, "recordings"), slog.New(slog.DiscardHandler)))
+	if err := m.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	wantRecording(t, rec, s.ID, false, "")
+	_, done, err := m.AgentInput(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done()
+	wantRecording(t, rec, s.ID, true, "")
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if len(rec.events) != 2 || rec.events[0] != "emptied" || rec.events[1] != "recording" {
+		t.Fatalf("events %v, want the clipboard emptied, then recording", rec.events)
 	}
 }
