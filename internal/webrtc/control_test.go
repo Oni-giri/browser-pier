@@ -1,10 +1,14 @@
 package webrtc
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
 // A live view whose control ended without it (a handoff ended, the
@@ -117,5 +121,50 @@ func TestStaleViewerLeavesTheNextTakeoverAlone(t *testing.T) {
 				t.Fatal("still under a person's control")
 			}
 		})
+	}
+}
+
+// A browser that is stopping refuses the person's input, and their live
+// view is told it has no control: their control ends with it, so if the
+// stop fails the browser is the agents' again, its clipboard emptied
+// first, not left under a control no one holds (PROJ-200).
+func TestInputRefusedWhileStoppingEndsControl(t *testing.T) {
+	var c fakeClipboard
+	h, m, s, rt := offerFixtureRuntime(t, c.routes, slog.New(slog.DiscardHandler))
+	a := newTalk(t, &viewer{h: h, session: s.ID, sock: m.Layout().ControlSocket("google")})
+	if r := a.send(`{"type":"take"}`); len(r) != 1 || r[0]["on"] != true {
+		t.Fatalf("take: %v", r)
+	}
+	if r := a.send(set(1, "a secret", false)); len(r) != 1 || r[0]["type"] != "clipboard-set" {
+		t.Fatalf("set: %v", r)
+	}
+	c.took()
+	rt.Mu.Lock()
+	rt.StopErr = errors.New("the runtime refused to stop it")
+	rt.BeforeStop = func(string) {
+		if r := a.send(`{"type":"input","events":[]}`); len(r) != 1 || r[0]["type"] != "control" || r[0]["on"] != false {
+			t.Errorf("input while stopping: %v, want control off", r)
+		}
+	}
+	rt.Mu.Unlock()
+	if _, err := m.Stop(context.Background(), s.ID); err == nil {
+		t.Fatal("the stop didn't fail")
+	}
+	if snap, _ := m.Live("google"); snap.State != sessions.Running || snap.HumanControl {
+		t.Fatalf("after the failed stop: %s, person in control %v", snap.State, snap.HumanControl)
+	}
+	// What the person held was let go, and the clipboard emptied before
+	// agents had the browser back.
+	if got := strings.Join(c.took(), " "); got != "release empty" {
+		t.Errorf("the browser got %q, want release, then empty", got)
+	}
+	if _, done, err := m.AgentInput(context.Background(), s.ID); err != nil {
+		t.Fatalf("agent input after the failed stop = %v", err)
+	} else {
+		done()
+	}
+	a.v.handBack() // the live view goes: nothing more to end
+	if got := c.took(); len(got) != 0 {
+		t.Errorf("the gone viewer reached the browser: %v", got)
 	}
 }

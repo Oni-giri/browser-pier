@@ -27,6 +27,14 @@ func offerFixture(t *testing.T) (*Handler, *sessions.Manager, sessions.Session) 
 // container's control socket, and log as the logger.
 func offerFixtureWith(t *testing.T, routes func(*http.ServeMux), log *slog.Logger) (*Handler, *sessions.Manager, sessions.Session) {
 	t.Helper()
+	h, m, s, _ := offerFixtureRuntime(t, routes, log)
+	return h, m, s
+}
+
+// offerFixtureRuntime is offerFixtureWith, with the fake container
+// runtime, for its knobs.
+func offerFixtureRuntime(t *testing.T, routes func(*http.ServeMux), log *slog.Logger) (*Handler, *sessions.Manager, sessions.Session, *sessionstest.FakeRuntime) {
+	t.Helper()
 	ctx := context.Background()
 	dir, err := os.MkdirTemp("", "of")
 	if err != nil {
@@ -62,7 +70,7 @@ func offerFixtureWith(t *testing.T, routes func(*http.ServeMux), log *slog.Logge
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = relay.Close() })
-	return NewHandler(relay, m, nil, log), m, s
+	return NewHandler(relay, m, nil, log), m, s, rt
 }
 
 func offer(h *Handler, o OfferOptions, body string) *httptest.ResponseRecorder {
