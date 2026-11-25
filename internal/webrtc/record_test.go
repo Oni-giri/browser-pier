@@ -2,9 +2,11 @@ package webrtc
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync"
@@ -128,5 +130,41 @@ func TestPersonsInputNeverReachesARecordedPage(t *testing.T) {
 	defer mu.Unlock()
 	if posts != 3 {
 		t.Fatalf("%d inputs reached the browser, want the 3 sent with control", posts)
+	}
+}
+
+// TestLiveStatusSaysWhetherTheProfileRecords: the live view's status
+// carries the Record sessions setting as the running browser applies
+// it, so an open live view's hint follows a change made elsewhere.
+func TestLiveStatusSaysWhetherTheProfileRecords(t *testing.T) {
+	h, m, _ := offerFixture(t)
+	ctx := context.Background()
+	record := func() bool {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/live/google/status", nil)
+		req.SetPathValue("profile", "google")
+		w := httptest.NewRecorder()
+		h.status(w, req)
+		var out struct {
+			Record *bool `json:"record"`
+		}
+		if err := json.NewDecoder(w.Body).Decode(&out); err != nil || out.Record == nil {
+			t.Fatalf("status %s: %v", w.Body, err)
+		}
+		return *out.Record
+	}
+	if record() {
+		t.Fatal("record before the setting is on")
+	}
+	p, _ := m.Profiles().Get(ctx, "google")
+	p.Record = true
+	if _, err := m.Profiles().Update(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.RefreshRecording(ctx, "google"); err != nil {
+		t.Fatal(err)
+	}
+	if !record() {
+		t.Fatal("the status doesn't follow the setting")
 	}
 }

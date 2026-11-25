@@ -102,7 +102,7 @@ func TestTheHandoffPageSaysRecordingIsPaused(t *testing.T) {
 			t.Fatalf("control page: %d", r.code)
 		}
 		viewer := between(r.body, "data-viewer", `class="ho"`)
-		hint := `<p id="hint" class="caption ho-hint" data-rec="` + line + `">` + line + `</p>`
+		hint := `<p id="hint" class="caption ho-hint" data-rec data-rec-note="` + line + `">` + line + `</p>`
 		if record && (!strings.Contains(viewer, hint) || strings.Count(r.body, line) != 2) {
 			t.Errorf("a recording profile's handoff page doesn't say so in the viewer's hint, once: %s", viewer)
 		}

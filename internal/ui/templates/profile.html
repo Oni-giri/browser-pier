@@ -47,7 +47,7 @@
           </div>
         {{end}}
       </div>
-      {{if .Preview}}<div id="hint"{{if .Session.Record}} data-rec="Nothing is recorded while you have control."{{end}}>View only. Take control to use the mouse and keyboard.{{if .Session.Record}} Nothing is recorded while you have control.{{end}}</div>{{end}}
+      {{if .Preview}}<div id="hint" data-rec-note="Nothing is recorded while you have control."{{if .Session.Record}} data-rec{{end}}>View only. Take control to use the mouse and keyboard.{{if .Session.Record}} Nothing is recorded while you have control.{{end}}</div>{{end}}
     </section>
     <aside class="side" id="side" hx-get="/profiles/{{.Name}}/side" hx-trigger="every 4s" hx-swap="innerHTML" data-poll>
       {{template "side" .}}

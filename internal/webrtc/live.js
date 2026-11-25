@@ -29,6 +29,10 @@
   const typeBtn = document.getElementById("type");
   const fitBtn = document.getElementById("fit");
   const hint = document.getElementById("hint");
+  // Whether the profile records, as the page was rendered, then as the
+  // profile page's status says, so the hint follows the setting changed
+  // elsewhere (the handoff page's status doesn't say).
+  let records = "rec" in hint.dataset;
   const note = document.getElementById("note");
   const touch = matchMedia("(pointer: coarse)").matches;
   // On a Mac, ⌘ is sent as Ctrl: the browser runs on Linux, where Super
@@ -121,7 +125,7 @@
       : "View only. Take control to use the mouse and keyboard.")
       // A profile that records says so in the hint, which full screen
       // keeps (PROJ-23).
-      + (hint.dataset.rec ? " " + hint.dataset.rec : "")
+      + (records && hint.dataset.recNote ? " " + hint.dataset.recNote : "")
       + (full && !touch ? " Esc leaves full screen." : "");
     if (connectError) hint.textContent = "Reload the page to try again.";
     if (fullBtn) fullBtn.textContent = full ? "Exit full screen" : "Full screen";
@@ -132,6 +136,7 @@
       const r = await fetch(statusURL, { cache: "no-store" });
       if (r.redirected || r.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname); return; }
       status = await r.json();
+      if (typeof status.record === "boolean") records = status.record;
     } catch (_) { /* keep the last status */ }
     if (control && !status.human_control) { control = false; keyboard = false; }
     render();
