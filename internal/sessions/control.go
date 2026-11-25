@@ -76,7 +76,9 @@ func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, f
 // call not marked Breakable (a read, bounded by its own timeouts) is
 // never broken off: Take control is refused while it runs. Meanwhile agents can only watch: their input and new CDP
 // connections are refused. During a handoff (Needs help) the agent is
-// paused, so it always succeeds.
+// paused, so it always succeeds. If the browser begins to stop while it
+// waits, it gives up with ErrNotRunning, leaving the browser to agents
+// should the stop fail.
 func (m *Manager) TakeControl(id string) error {
 	_, err := m.TakeControlGen(id)
 	return err
@@ -143,11 +145,42 @@ func (m *Manager) TakeControlGen(id string) (gen uint64, err error) {
 	// gets the browser.
 	if len(l.inputs) > 0 || len(l.leases) > 0 {
 		m.waitLeasesLocked(l)
-		if m.findLocked(id) != l || !l.sess.State.Live() {
-			return 0, ErrNotRunning // stopped meanwhile
+		if m.findLocked(id) != l || (l.sess.State != Running && l.sess.State != NeedsHelp) {
+			// A stop began meanwhile: the take gives up (PROJ-200).
+			m.untakeLocked(l, gen)
+			return 0, ErrNotRunning
 		}
 	}
 	return gen, nil
+}
+
+// untakeLocked undoes a TakeControl that gave up, so that if the browser
+// isn't stopped after all (the stop fails and runStop puts it back), it
+// is the agents' again, with no control left set that no one holds
+// (PROJ-200). It runs under m.mu, in the same step that decides to give
+// up, and only if the control set is still that take's own (human, its
+// generation, not ending): one already ended by a ReleaseControl
+// meanwhile is that hand-back's to finish.
+//
+// The clipboard needn't be emptied: nothing the person did can be on it.
+// The live view forwards input only once Take control has returned its
+// generation, and HumanInput accepts only that generation; this take
+// returns none.
+//
+// The generation stays as it is, never goes back: it was bumped as the
+// agent's work under way was broken off, and a page call learning it
+// changed only re-reads the page. Recording is asked again, as at a
+// hand-back: it resumes at the agent's next action (the tail from before
+// was dropped by personTookLocked, as for any takeover). runStop asks too
+// as it puts the browser back.
+func (m *Manager) untakeLocked(l *live, gen uint64) {
+	if !l.human || l.humanGen != gen || l.releasing {
+		return
+	}
+	l.human = false
+	if m.live[l.sess.Profile] == l {
+		m.regateLocked(l)
+	}
 }
 
 // ErrNotInControl: the person's control ended (they handed back, or it

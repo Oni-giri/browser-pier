@@ -83,6 +83,74 @@ func wantRecording(t *testing.T, rec *fakeRecorder, id string, want bool, why re
 	}
 }
 
+// A Take control waiting for the agent's broken-off input loses to a stop
+// that begins meanwhile: it gives up, and if the stop fails, the browser
+// is the agents' again, not left under a control no one holds, and
+// recording follows the agent as before (PROJ-200).
+func TestTakeControlThatLosesToAFailedStop(t *testing.T) {
+	f, rec := recordingFixture(t, true)
+	advance := f.clock()
+	s := f.start(f.m)
+	ctx, done, err := f.m.AgentInput(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	advance(takeOverAfter)
+	took := make(chan error, 1)
+	go func() {
+		_, err := f.m.TakeControlGen(s.ID)
+		took <- err
+	}()
+	<-ctx.Done() // broken off: the take waits for it to end
+	wantRecording(t, rec, s.ID, false, recording.Person)
+
+	// A stop begins, and fails; while it is under way, the input ends and
+	// the take gives up.
+	f.rt.Mu.Lock()
+	f.rt.StopErr = errors.New("the runtime refused to stop it")
+	f.rt.BeforeStop = func(string) {
+		if snap, _ := f.m.Live("google"); snap.State != Stopping {
+			t.Errorf("stopping in state %s", snap.State)
+		}
+		done()
+		select {
+		case err := <-took:
+			if !errors.Is(err, ErrNotRunning) {
+				t.Errorf("Take control as the browser stops = %v, want ErrNotRunning", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Error("Take control never returned")
+		}
+	}
+	f.rt.Mu.Unlock()
+	if _, err := f.m.Stop(context.Background(), s.ID); err == nil {
+		t.Fatal("the stop didn't fail")
+	}
+	snap, _ := f.m.Live("google")
+	if snap.State != Running || snap.HumanControl {
+		t.Fatalf("after the failed stop: %s, person in control %v", snap.State, snap.HumanControl)
+	}
+	// Not recording until the agent acts (the tail before the take is
+	// gone, as after any takeover), and then recording again.
+	wantRecording(t, rec, s.ID, false, recording.Idle)
+	_, done, err = f.m.AgentInput(context.Background(), s.ID)
+	if err != nil {
+		t.Fatalf("agent input after the failed stop = %v", err)
+	}
+	wantRecording(t, rec, s.ID, true, "")
+	done()
+	if l, err := f.m.PageLease(context.Background(), s.ID, "t"); err != nil {
+		t.Fatalf("a page call after the failed stop = %v", err)
+	} else {
+		l.Release()
+	}
+	// And a person can take control again, once the agent is quiet.
+	advance(agentQuiet + time.Second)
+	if err := f.m.TakeControl(s.ID); err != nil {
+		t.Fatalf("Take control after = %v", err)
+	}
+}
+
 func TestTakeControlStopsTheRecorderBeforeItReturns(t *testing.T) {
 	for _, viaHandoff := range []bool{false, true} {
 		f, rec := recordingFixture(t, true)
