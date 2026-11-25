@@ -66,8 +66,11 @@ func (s *PageSite) Logins() []string {
 	return append([]string(nil), s.logins...)
 }
 
-// report is a script that tells the site about an event.
-const report = `<script>function report(e) { fetch('/event?e=' + encodeURIComponent(e)); }</script>`
+// report is a script that tells the site about an event. Each report
+// waits for the one before it, so the site records events in the order the
+// page saw them (input then change, say), not in whichever order separate
+// requests happen to arrive.
+const report = `<script>let reported = Promise.resolve(); function report(e) { reported = reported.then(() => fetch('/event?e=' + encodeURIComponent(e))).then(() => {}, () => {}); }</script>`
 
 var pageSitePages = map[string]string{ //nolint:gosec // test pages, not credentials
 	// A login form with no <form>-level tricks: email, password, a button.
