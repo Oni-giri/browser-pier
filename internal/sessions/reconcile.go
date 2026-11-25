@@ -132,17 +132,21 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	}
 	m.mu.Unlock()
 
-	// A person's control ended with the restart: their clipboard is
-	// emptied before agents use the browser again, as at any hand-back
-	// (PROJ-194). Recording (PROJ-23) waits for an agent's next action,
-	// which can't come before Reconcile has returned.
+	// A person's control ended with the restart: whatever key or button
+	// they held is let go, and their clipboard emptied, before agents use
+	// the browser again, as at any hand-back (PROJ-194). Recording
+	// (PROJ-23) waits for an agent's next action, which can't come before
+	// Reconcile has returned.
 	var emptied sync.WaitGroup
 	for _, p := range running {
 		emptied.Go(func() {
+			defer func() {
+				m.mu.Lock()
+				m.sockOpDoneLocked(p.l)
+				m.mu.Unlock()
+			}()
+			m.liftHeld(p.ctx, p.id, p.profile)
 			m.emptyClipboard(p.ctx, p.id, p.profile)
-			m.mu.Lock()
-			m.sockOpDoneLocked(p.l)
-			m.mu.Unlock()
 		})
 	}
 	emptied.Wait()

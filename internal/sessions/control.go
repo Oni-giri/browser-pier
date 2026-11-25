@@ -3,7 +3,9 @@ package sessions
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -310,8 +312,8 @@ func (m *Manager) releaseLocked(l *live, id string) {
 		return
 	}
 	l.releasing = true
-	for l.humanInputs > 0 {
-		m.inputsDone.Wait()
+	if !m.waitBoundedLocked(inputWait, func() bool { return l.humanInputs > 0 }) {
+		m.log.Warn("a person's control ended with their input still under way after "+inputWait.String()+"; handing back all the same", "session", id)
 	}
 	profile := l.sess.Profile
 	// Let go of whatever key or button the person still holds, so whoever
@@ -319,28 +321,18 @@ func (m *Manager) releaseLocked(l *live, id string) {
 	// ended. While the browser runs, waits for help or is stopping (a
 	// stop may fail); not once the session is over.
 	if l.sess.State == Running || l.sess.State == NeedsHelp || l.sess.State == Stopping {
-		if ctx, ok := m.sockOpLocked(l); ok {
-			m.mu.Unlock()
-			if err := m.control(ctx, profile, http.MethodPost, "/input/release", nil, nil); err != nil && ctx.Err() == nil {
-				m.log.Warn("couldn't let go of the keys and buttons held as a person's control ended", "session", id, "err", err)
-			}
-			m.mu.Lock()
-			m.sockOpDoneLocked(l)
-		}
+		m.unlockedOpLocked(l, func(ctx context.Context) { m.liftHeld(ctx, id, profile) })
 	}
 	switch l.sess.State {
 	case Running, NeedsHelp:
-		if ctx, ok := m.sockOpLocked(l); ok {
-			m.mu.Unlock()
+		m.unlockedOpLocked(l, func(ctx context.Context) {
 			// The person's last keys have reached the browser, but
 			// Chromium takes the selection a moment after a Ctrl+C: let
 			// it land, so it is emptied too.
 			if settle(ctx) {
 				m.emptyClipboard(ctx, id, profile)
 			}
-			m.mu.Lock()
-			m.sockOpDoneLocked(l)
-		}
+		})
 	case Stopping:
 		// The container takes the clipboard along; if the stop fails
 		// instead, runStop empties it before agents are let back in.
@@ -373,14 +365,62 @@ func settle(ctx context.Context) bool {
 	}
 }
 
+// inputWait bounds how long a hand-back waits for the person's input
+// under way: each has its own deadline well within it (controlWait).
+const inputWait = 30 * time.Second
+
 // emptyClipboard empties a running browser's clipboard, a person's
 // control ending (PROJ-194). A failure is logged without what the
 // clipboard held, which BrowserPier never sees here; not when the session
 // ended meanwhile (ctx), its container taking the clipboard along.
 func (m *Manager) emptyClipboard(ctx context.Context, sessionID, profile string) {
 	if err := m.control(ctx, profile, http.MethodDelete, "/input/clipboard", nil, nil); err != nil && ctx.Err() == nil {
-		m.log.Warn("couldn't empty the browser's clipboard as a person's control ended", "session", sessionID, "err", err)
+		m.log.Warn("couldn't empty the browser's clipboard as a person's control ended", "session", sessionID, "failure", controlFailure(err))
 	}
+}
+
+// liftHeld lets go of every key and button the person still holds, as
+// their control ends, trying once more after a moment if the browser
+// fails to: a key left down would be the next driver's (a modifier, a
+// drag). A failure is logged by its kind alone (controlFailure).
+func (m *Manager) liftHeld(ctx context.Context, sessionID, profile string) {
+	err := m.control(ctx, profile, http.MethodPost, "/input/release", nil, nil)
+	if err != nil && ctx.Err() == nil {
+		t := time.NewTimer(liftRetry)
+		select {
+		case <-t.C:
+			err = m.control(ctx, profile, http.MethodPost, "/input/release", nil, nil)
+		case <-ctx.Done():
+		}
+		t.Stop()
+	}
+	if err != nil && ctx.Err() == nil {
+		m.log.Warn("couldn't let go of the keys and buttons held as a person's control ended", "session", sessionID, "failure", controlFailure(err))
+	}
+}
+
+// liftRetry is how long liftHeld waits before trying again.
+const liftRetry = 100 * time.Millisecond
+
+// controlFailure describes a failed call on a browser's control socket
+// for the log: the answer's status code, or what kind of failure it was,
+// never the words of the answer. The container isn't trusted, and its
+// words could carry what a clipboard held.
+func controlFailure(err error) string {
+	var ce *controlError
+	switch {
+	case errors.As(err, &ce):
+		return "status " + strconv.Itoa(ce.status)
+	case errors.Is(err, context.DeadlineExceeded):
+		return "no answer in time"
+	case errors.Is(err, context.Canceled):
+		return "cancelled"
+	}
+	var ne net.Error
+	if errors.As(err, &ne) {
+		return "the browser's control socket couldn't be reached"
+	}
+	return "the browser's answer couldn't be read"
 }
 
 // sockOpLocked admits one of BrowserPier's own calls on l's control
@@ -402,6 +442,44 @@ func (m *Manager) sockOpDoneLocked(l *live) {
 	m.inputsDone.Broadcast()
 }
 
+// unlockedOpLocked runs f, a call on l's control socket, as sockOpLocked
+// admits it, with m.mu let go meanwhile and held again after, panic or
+// not. It reports false if the session is ending and f didn't run.
+func (m *Manager) unlockedOpLocked(l *live, f func(ctx context.Context)) bool {
+	ctx, ok := m.sockOpLocked(l)
+	if !ok {
+		return false
+	}
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		m.sockOpDoneLocked(l)
+	}()
+	f(ctx)
+	return true
+}
+
+// waitBoundedLocked waits, with m.mu held (let go of meanwhile), while
+// busy says so, for at most bound. It reports false if bound passed
+// first.
+func (m *Manager) waitBoundedLocked(bound time.Duration, busy func() bool) bool {
+	if !busy() {
+		return true
+	}
+	expired := false
+	t := time.AfterFunc(bound, func() {
+		m.mu.Lock()
+		expired = true
+		m.inputsDone.Broadcast()
+		m.mu.Unlock()
+	})
+	defer t.Stop()
+	for busy() && !expired {
+		m.inputsDone.Wait()
+	}
+	return !expired
+}
+
 // sockOpWait bounds how long a session's end waits for its calls on the
 // control socket. Each has a deadline well within it (controlWait, the
 // control helper's 5 s), and the session's end cancels them at once: it
@@ -413,21 +491,7 @@ const sockOpWait = 30 * time.Second
 // (HumanInput) and a hand-back's or runStop's own (sockOpLocked). l's
 // session has ended, so no more are admitted.
 func (m *Manager) waitSockOpsLocked(l *live) {
-	if l.sockOps == 0 && l.humanInputs == 0 {
-		return
-	}
-	expired := false
-	t := time.AfterFunc(sockOpWait, func() {
-		m.mu.Lock()
-		expired = true
-		m.inputsDone.Broadcast()
-		m.mu.Unlock()
-	})
-	defer t.Stop()
-	for (l.sockOps > 0 || l.humanInputs > 0) && !expired {
-		m.inputsDone.Wait()
-	}
-	if expired {
+	if !m.waitBoundedLocked(sockOpWait, func() bool { return l.sockOps > 0 || l.humanInputs > 0 }) {
 		m.log.Error("a session ended with calls to its browser still under way; its profile is let go all the same",
 			"session", l.sess.ID, "calls", l.sockOps+l.humanInputs)
 	}

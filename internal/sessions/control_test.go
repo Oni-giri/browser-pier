@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -801,5 +802,84 @@ func TestInControlWhileStopping(t *testing.T) {
 	}
 	if !f.m.InControl(s.ID, gen) {
 		t.Error("not in control once the failed stop put the browser back")
+	}
+}
+
+// A hand-back whose first lift the browser fails tries once more before
+// it empties the clipboard: a key or button left down would be the next
+// driver's (PROJ-196).
+func TestHandBackTriesTheLiftAgain(t *testing.T) {
+	f := newFixture(t)
+	var mu sync.Mutex
+	var calls []string
+	lifts := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		lifts++
+		calls = append(calls, "lift")
+		if lifts == 1 {
+			http.Error(w, "xdotool isn't taking input", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		calls = append(calls, "empty")
+		mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
+	f.rt.Control = mux
+	s := f.start(f.m)
+	if err := f.m.TakeControl(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.m.ReleaseControl(s.ID)
+	mu.Lock()
+	defer mu.Unlock()
+	if got := strings.Join(calls, " "); got != "lift lift empty" {
+		t.Errorf("the browser got %q, want the lift tried again before the clipboard is emptied", got)
+	}
+}
+
+// A hand-back's warnings say how the browser failed by status alone,
+// never in its words, which a faulty or hostile container could fill
+// with what its clipboard held (PROJ-196).
+func TestHandBackWarningsKeepTheBrowsersWordsOut(t *testing.T) {
+	f := newFixture(t)
+	var logs syncBuffer
+	f.m.log = slog.New(slog.NewTextHandler(&logs, nil))
+	const secret = "clip-Secret-91"
+	refuse := func(w http.ResponseWriter, _ *http.Request) {
+		// The reason phrase and the body both carry it.
+		conn, buf, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		body := "the clipboard held " + secret
+		_, _ = fmt.Fprintf(buf, "HTTP/1.1 500 %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", secret, len(body), body)
+		_ = buf.Flush()
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	mux.HandleFunc("POST /input/release", refuse)
+	mux.HandleFunc("DELETE /input/clipboard", refuse)
+	f.rt.Control = mux
+	s := f.start(f.m)
+	if err := f.m.TakeControl(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.m.ReleaseControl(s.ID)
+	out := logs.String()
+	if strings.Contains(out, secret) {
+		t.Errorf("the browser's words reached the log:\n%s", out)
+	}
+	if strings.Count(out, "status 500") != 2 {
+		t.Errorf("want the lift and the emptying logged by status:\n%s", out)
 	}
 }

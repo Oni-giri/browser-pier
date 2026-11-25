@@ -1231,16 +1231,13 @@ func (m *Manager) runStop(l *live, attempt *stopAttempt, cid string) {
 				// PROJ-23).
 				l.clipboardLeft = false
 				id, profile := l.sess.ID, l.sess.Profile
-				if ctx, ok := m.sockOpLocked(l); ok {
-					m.mu.Unlock()
+				m.unlockedOpLocked(l, func(ctx context.Context) {
 					// As ReleaseControl does: a copy pressed just before
 					// the stop lands first, and is emptied too.
 					if settle(ctx) {
 						m.emptyClipboard(ctx, id, profile)
 					}
-					m.mu.Lock()
-					m.sockOpDoneLocked(l)
-				}
+				})
 			}
 			if l.sess.State == Stopping {
 				l.sess.State = l.stopPrev

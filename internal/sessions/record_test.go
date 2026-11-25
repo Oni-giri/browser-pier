@@ -735,6 +735,14 @@ func TestReconcileEmptiesTheClipboardBeforeAnyRecording(t *testing.T) {
 	var recP atomic.Pointer[fakeRecorder]
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	// Whatever key or button a person held as BrowserPier went is let go
+	// first, as at any hand-back.
+	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, _ *http.Request) {
+		if rec := recP.Load(); rec != nil {
+			rec.note("lifted")
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) {
 		if rec := recP.Load(); rec != nil {
 			rec.mu.Lock()
@@ -766,8 +774,8 @@ func TestReconcileEmptiesTheClipboardBeforeAnyRecording(t *testing.T) {
 	wantRecording(t, rec, s.ID, true, "")
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
-	if len(rec.events) != 2 || rec.events[0] != "emptied" || rec.events[1] != "recording" {
-		t.Fatalf("events %v, want the clipboard emptied, then recording", rec.events)
+	if len(rec.events) != 3 || rec.events[0] != "lifted" || rec.events[1] != "emptied" || rec.events[2] != "recording" {
+		t.Fatalf("events %v, want held keys let go, the clipboard emptied, then recording", rec.events)
 	}
 }
 
