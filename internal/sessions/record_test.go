@@ -151,6 +151,45 @@ func TestTakeControlThatLosesToAFailedStop(t *testing.T) {
 	}
 }
 
+// A handoff that ends while its browser is stopping: if the stop fails,
+// the browser is put back Running, the agents', not Needs help with no
+// handoff left to end it (PROJ-196).
+func TestHandoffEndingDuringAFailedStop(t *testing.T) {
+	f, rec := recordingFixture(t, true)
+	s := f.start(f.m)
+	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.TakeControl(s.ID); err != nil { // the handoff page
+		t.Fatal(err)
+	}
+	f.rt.Mu.Lock()
+	f.rt.StopErr = errors.New("the runtime refused to stop it")
+	f.rt.BeforeStop = func(string) {
+		// What the handoff's end does (handoff.Service.end).
+		f.m.ReleaseControl(s.ID)
+		if _, err := f.m.SetNeedsHelp(s.ID, false); err != nil && !errors.Is(err, ErrNotRunning) {
+			t.Errorf("ending the handoff while stopping = %v", err)
+		}
+	}
+	f.rt.Mu.Unlock()
+	if _, err := f.m.Stop(context.Background(), s.ID); err == nil {
+		t.Fatal("the stop didn't fail")
+	}
+	if snap, _ := f.m.Live("google"); snap.State != Running || snap.HumanControl {
+		t.Fatalf("after the failed stop: %s, person in control %v", snap.State, snap.HumanControl)
+	}
+	if stored := f.stored(s.ID); stored.State != Running {
+		t.Errorf("saved as %s", stored.State)
+	}
+	_, done, err := f.m.AgentInput(context.Background(), s.ID)
+	if err != nil {
+		t.Fatalf("agent input after the failed stop = %v", err)
+	}
+	wantRecording(t, rec, s.ID, true, "")
+	done()
+}
+
 func TestTakeControlStopsTheRecorderBeforeItReturns(t *testing.T) {
 	for _, viaHandoff := range []bool{false, true} {
 		f, rec := recordingFixture(t, true)

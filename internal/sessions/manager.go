@@ -165,6 +165,10 @@ type live struct {
 	failure string
 	// stop is the stop in progress, if any; everyone stopping waits on it.
 	stop *stopAttempt
+	// stopPrev is the state a failed stop puts back: what the session was
+	// as the stop began, or what a handoff ending meanwhile left it
+	// (SetNeedsHelp).
+	stopPrev State
 	// opCtx is for this session's calls on its profile's control socket
 	// that run without m.mu: the person's input (HumanInput) and a
 	// hand-back's lift and clipboard emptying. It ends as the session
@@ -1145,7 +1149,7 @@ func (m *Manager) stopIf(ctx context.Context, id string, cond func(*live) bool) 
 			m.mu.Unlock()
 			return snap, errStillInUse
 		}
-		prev := l.sess.State
+		l.stopPrev = l.sess.State
 		l.sess.State = Stopping
 		l.sess.UpdatedAt = m.now()
 		m.regateLocked(l)
@@ -1169,7 +1173,7 @@ func (m *Manager) stopIf(ctx context.Context, id string, cond func(*live) bool) 
 			return m.waitStopped(ctx, l)
 		}
 		cid := l.sess.ContainerID
-		if !m.spawn(func() { m.runStop(l, attempt, cid, prev) }) {
+		if !m.spawn(func() { m.runStop(l, attempt, cid) }) {
 			m.mu.Unlock()
 			return Session{}, ErrClosed
 		}
@@ -1202,7 +1206,7 @@ func (m *Manager) waitStopped(ctx context.Context, l *live) (Session, error) {
 // comes back after the container has exited and the session has ended is
 // no failure: the session's final state says how the browser stopped
 // (PROJ-64).
-func (m *Manager) runStop(l *live, attempt *stopAttempt, cid string, prev State) {
+func (m *Manager) runStop(l *live, attempt *stopAttempt, cid string) {
 	ctx, cancel := context.WithTimeout(m.ctx, stopTimeout)
 	defer cancel()
 	err := m.rt.Stop(ctx, cid)
@@ -1235,7 +1239,7 @@ func (m *Manager) runStop(l *live, attempt *stopAttempt, cid string, prev State)
 				}
 			}
 			if l.sess.State == Stopping {
-				l.sess.State = prev
+				l.sess.State = l.stopPrev
 				l.sess.UpdatedAt = m.now()
 				m.regateLocked(l)
 				if err := updateSession(context.Background(), m.db, l.sess); err != nil {
@@ -1264,6 +1268,15 @@ func (m *Manager) SetNeedsHelp(id string, needsHelp bool) (Session, error) {
 	}
 	switch l.sess.State {
 	case to:
+	case Stopping:
+		if needsHelp || l.stop == nil || l.stopPrev != from {
+			return l.sess, ErrNotRunning
+		}
+		// A handoff ending while the browser stops: should the stop
+		// fail, it is put back Running, not waiting for help that is
+		// over (and with no one left to hand back).
+		l.stopPrev = to
+		l.lastActivity = m.now() // idle time starts at hand-back
 	case from:
 		before := l.sess
 		l.sess.State = to
