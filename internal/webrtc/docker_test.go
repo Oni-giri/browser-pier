@@ -185,7 +185,7 @@ func watch(t *testing.T, relay *Relay, name string, cfg pion.Configuration) int 
 	}
 	cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	v, answer, err := relay.Connect(cctx, name, viewer.LocalDescription().SDP, func([]byte, func(string)) {}, nil)
+	v, answer, err := relay.Connect(cctx, name, viewer.LocalDescription().SDP, Input{})
 	if err != nil {
 		t.Fatal(err)
 	}

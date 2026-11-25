@@ -119,6 +119,11 @@ type OfferOptions struct {
 	Opened func(*Viewer)
 }
 
+// inputOpenWait is how long a viewer given control at its offer has to
+// open its input channel: until then it can neither drive nor hand back,
+// so its control ends.
+var inputOpenWait = 30 * time.Second
+
 // Offer answers a WebRTC offer for profile's live view. The caller has
 // already checked who may watch.
 func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, o OfferOptions) {
@@ -166,7 +171,13 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 	// The page's input channel closing ends its control, as the page
 	// itself takes it (live.js): the video may stay connected, but no
 	// message can come to drive or hand back the browser.
-	v, answer, err := h.relay.Connect(ctx, profile, in.SDP, vw.message, vw.handBack)
+	opened := make(chan struct{})
+	var openOnce sync.Once
+	v, answer, err := h.relay.Connect(ctx, profile, in.SDP, Input{
+		Message: vw.message,
+		Opened:  func() { openOnce.Do(func() { close(opened) }) },
+		Closed:  vw.handBack,
+	})
 	if err != nil {
 		if control {
 			h.m.ReleaseControlGen(s.ID, gen)
@@ -184,6 +195,21 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 		vw.handBack()
 		unwatch()
 	}()
+	if control {
+		// Control from the start, but no input channel yet: if none
+		// opens (a video-only offer), the control ends, rather than stay
+		// with a page that can't use or hand it back.
+		go func() {
+			t := time.NewTimer(inputOpenWait)
+			defer t.Stop()
+			select {
+			case <-opened:
+			case <-v.Done():
+			case <-t.C:
+				vw.handBack()
+			}
+		}()
+	}
 	w.Header().Set("Content-Type", "application/json")
 	// control says whether this viewer starts with the mouse and keyboard.
 	_ = json.NewEncoder(w).Encode(map[string]any{"sdp": answer, "control": control})

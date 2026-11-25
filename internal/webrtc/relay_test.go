@@ -103,11 +103,11 @@ func TestRelayStreamsVideoAndCarriesInput(t *testing.T) {
 	var inputs []string
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	v, answer, err := relay.Connect(ctx, "google", viewer.LocalDescription().SDP, func(b []byte, _ func(string)) {
+	v, answer, err := relay.Connect(ctx, "google", viewer.LocalDescription().SDP, Input{Message: func(b []byte, _ func(string)) {
 		mu.Lock()
 		inputs = append(inputs, string(b))
 		mu.Unlock()
-	}, nil)
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}

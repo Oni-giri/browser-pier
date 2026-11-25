@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -232,26 +233,39 @@ func TestRepeatedTakeAsksWhoHasControl(t *testing.T) {
 	}
 }
 
-// Closing the live view's input channel ends its control, though the
-// video stays connected: no message can come any more to drive the
-// browser or hand it back (PROJ-196).
-func TestClosingTheInputChannelHandsBack(t *testing.T) {
-	var c fakeClipboard
-	h, m, _ := offerFixtureWith(t, c.routes, slog.New(slog.DiscardHandler))
+// pionViewer is a live view's peer connection, with a data channel for
+// each label (live.js opens one, "input"), and the offer to send.
+type pionViewer struct {
+	pc  *pion.PeerConnection
+	dcs map[string]*pion.DataChannel
+	// opened is closed once every data channel is open.
+	opened chan struct{}
+	body   string
+}
+
+func newPionViewer(t *testing.T, labels ...string) *pionViewer {
+	t.Helper()
 	pc, err := pion.NewPeerConnection(pion.Configuration{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = pc.Close() }()
+	t.Cleanup(func() { _ = pc.Close() })
 	if _, err := pc.AddTransceiverFromKind(pion.RTPCodecTypeVideo, pion.RTPTransceiverInit{Direction: pion.RTPTransceiverDirectionRecvonly}); err != nil {
 		t.Fatal(err)
 	}
-	dc, err := pc.CreateDataChannel("input", nil)
-	if err != nil {
-		t.Fatal(err)
+	pv := &pionViewer{pc: pc, dcs: map[string]*pion.DataChannel{}, opened: make(chan struct{})}
+	var wg sync.WaitGroup
+	for _, label := range labels {
+		dc, err := pc.CreateDataChannel(label, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wg.Add(1)
+		var once sync.Once
+		dc.OnOpen(func() { once.Do(wg.Done) })
+		pv.dcs[label] = dc
 	}
-	opened := make(chan struct{})
-	dc.OnOpen(func() { close(opened) })
+	go func() { wg.Wait(); close(pv.opened) }()
 	sdp, err := pc.CreateOffer(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -261,44 +275,146 @@ func TestClosingTheInputChannelHandsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-gathered
-	body, _ := json.Marshal(map[string]string{"sdp": pc.LocalDescription().SDP})
-	rec := offer(h, OfferOptions{Control: true}, string(body))
+	b, _ := json.Marshal(map[string]string{"sdp": pc.LocalDescription().SDP})
+	pv.body = string(b)
+	return pv
+}
+
+// connect sends the offer with o and completes the connection.
+func (pv *pionViewer) connect(t *testing.T, h *Handler, o OfferOptions) {
+	t.Helper()
+	rec := offer(h, o, pv.body)
 	var answer struct {
 		SDP     string `json:"sdp"`
 		Control bool   `json:"control"`
 	}
-	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &answer) != nil || !answer.Control {
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &answer) != nil || answer.Control != o.Control {
 		t.Fatalf("offer: %d %s", rec.Code, rec.Body)
 	}
-	if err := pc.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: answer.SDP}); err != nil {
+	if err := pv.pc.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: answer.SDP}); err != nil {
 		t.Fatal(err)
 	}
 	select {
-	case <-opened:
+	case <-pv.opened:
 	case <-time.After(10 * time.Second):
-		t.Fatal("the input channel never opened")
+		t.Fatal("the data channels never opened")
 	}
-	if got, _ := m.Live("google"); !got.HumanControl {
-		t.Fatal("no control to begin with")
-	}
-	if err := dc.Close(); err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(5 * time.Second)
+}
+
+// awaitHuman waits for the profile's person in control to be want.
+func awaitHuman(t *testing.T, m *sessions.Manager, want bool, within time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(within)
 	for {
 		got, _ := m.Live("google")
-		if !got.HumanControl {
-			if got.Viewers != 1 {
-				t.Errorf("viewers %d: the video should still be connected", got.Viewers)
-			}
-			break
+		if got.HumanControl == want {
+			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("still under the closed channel's control")
+			t.Fatalf("person in control %v after %s, want %v", got.HumanControl, within, want)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if pc.ConnectionState() != pion.PeerConnectionStateConnected {
-		t.Errorf("the connection is %s", pc.ConnectionState())
+}
+
+// Closing the live view's input channel ends its control, though the
+// video stays connected: no message can come any more to drive the
+// browser or hand it back (PROJ-196).
+func TestClosingTheInputChannelHandsBack(t *testing.T) {
+	var c fakeClipboard
+	h, m, _ := offerFixtureWith(t, c.routes, slog.New(slog.DiscardHandler))
+	pv := newPionViewer(t, InputLabel)
+	pv.connect(t, h, OfferOptions{Control: true})
+	awaitHuman(t, m, true, time.Second)
+	if err := pv.dcs[InputLabel].Close(); err != nil {
+		t.Fatal(err)
+	}
+	awaitHuman(t, m, false, 5*time.Second)
+	if got, _ := m.Live("google"); got.Viewers != 1 {
+		t.Errorf("viewers %d: the video should still be connected", got.Viewers)
+	}
+	if pv.pc.ConnectionState() != pion.PeerConnectionStateConnected {
+		t.Errorf("the connection is %s", pv.pc.ConnectionState())
+	}
+}
+
+// Only the input channel drives or hands back: another data channel the
+// page opens is closed unheard, and its closing leaves control with the
+// input channel (PROJ-196).
+func TestOnlyTheInputChannelCounts(t *testing.T) {
+	var c fakeClipboard
+	h, m, _ := offerFixtureWith(t, c.routes, slog.New(slog.DiscardHandler))
+	pv := newPionViewer(t, InputLabel, "aux")
+	aux := pv.dcs["aux"]
+	auxClosed := make(chan struct{})
+	aux.OnClose(func() { close(auxClosed) })
+	pv.connect(t, h, OfferOptions{Control: true})
+	awaitHuman(t, m, true, time.Second)
+	// What it sends isn't heard, and the server closes it; its closing
+	// (from either side) hands nothing back.
+	_ = aux.SendText(`{"type":"release"}`)
+	select {
+	case <-auxClosed:
+	case <-time.After(2 * time.Second):
+		t.Error("the other channel was left open")
+		_ = aux.Close()
+	}
+	time.Sleep(300 * time.Millisecond)
+	if got, _ := m.Live("google"); !got.HumanControl {
+		t.Fatal("the other channel handed back the input channel's control")
+	}
+	// The input channel still drives.
+	c.took()
+	if err := pv.dcs[InputLabel].SendText(`{"type":"input","events":[]}`); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for strings.Join(c.took(), " ") != "events" {
+		if time.Now().After(deadline) {
+			t.Fatal("the input channel's input never reached the browser")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := pv.dcs[InputLabel].Close(); err != nil {
+		t.Fatal(err)
+	}
+	awaitHuman(t, m, false, 5*time.Second)
+}
+
+// A live view given control at its offer that never opens its input
+// channel (a video-only offer) loses that control after a while: it
+// could neither use nor hand it back (PROJ-196).
+func TestControlEndsIfNoInputChannelOpens(t *testing.T) {
+	was := inputOpenWait
+	inputOpenWait = 300 * time.Millisecond
+	t.Cleanup(func() { inputOpenWait = was })
+	var c fakeClipboard
+	h, m, _ := offerFixtureWith(t, c.routes, slog.New(slog.DiscardHandler))
+	pv := newPionViewer(t) // video only
+	connected := make(chan struct{})
+	var once sync.Once
+	pv.pc.OnConnectionStateChange(func(s pion.PeerConnectionState) {
+		if s == pion.PeerConnectionStateConnected {
+			once.Do(func() { close(connected) })
+		}
+	})
+	rec := offer(h, OfferOptions{Control: true}, pv.body)
+	var answer struct {
+		SDP string `json:"sdp"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &answer) != nil {
+		t.Fatalf("offer: %d %s", rec.Code, rec.Body)
+	}
+	if err := pv.pc.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: answer.SDP}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-connected:
+	case <-time.After(10 * time.Second):
+		t.Fatal("never connected")
+	}
+	awaitHuman(t, m, false, 5*time.Second)
+	if got, _ := m.Live("google"); got.Viewers != 1 {
+		t.Errorf("viewers %d: the video should still be connected", got.Viewers)
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/ice/v4"
@@ -143,11 +144,25 @@ func (v *Viewer) Done() <-chan struct{} { return v.closed }
 // Close hangs up.
 func (v *Viewer) Close() { _ = v.pc.Close() }
 
-// Connect answers a viewer's SDP offer for profile's browser. Messages the
-// viewer sends on its data channel are passed to input, in order, with a
-// function that replies on the same channel; closed, if set, is called
-// when a data channel closes, though the video may stay connected.
-func (r *Relay) Connect(ctx context.Context, profile string, offer string, input func(msg []byte, reply func(string)), closed func()) (*Viewer, string, error) {
+// InputLabel is the label of a viewer's input data channel (live.js).
+const InputLabel = "input"
+
+// Input is what a viewer's input channel, the first data channel it
+// opens labelled InputLabel, does. Any other channel is closed unheard.
+type Input struct {
+	// Message gets each message on it, in order, with a function that
+	// replies on it.
+	Message func(msg []byte, reply func(string))
+	// Opened, if set, is called once it is open.
+	Opened func()
+	// Closed, if set, is called when it closes, though the video may
+	// stay connected.
+	Closed func()
+}
+
+// Connect answers a viewer's SDP offer for profile's browser, with in
+// for its input channel.
+func (r *Relay) Connect(ctx context.Context, profile string, offer string, in Input) (*Viewer, string, error) {
 	pc, err := r.api.NewPeerConnection(webrtc.Configuration{})
 	if err != nil {
 		return nil, "", err
@@ -179,11 +194,32 @@ func (r *Relay) Connect(ctx context.Context, profile string, offer string, input
 			}
 		}
 	}()
+	var claimed atomic.Bool
 	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
+		if dc.Label() != InputLabel || !claimed.CompareAndSwap(false, true) {
+			// Not the input channel: nothing it sends, nor its closing,
+			// may drive or hand back the browser.
+			go func() { _ = dc.Close() }()
+			return
+		}
 		reply := func(s string) { _ = dc.SendText(s) }
-		dc.OnMessage(func(msg webrtc.DataChannelMessage) { input(msg.Data, reply) })
-		if closed != nil {
-			dc.OnClose(func() { go closed() }) // it may wait: not on pion's goroutine
+		dc.OnMessage(func(msg webrtc.DataChannelMessage) {
+			if in.Message != nil {
+				in.Message(msg.Data, reply)
+			}
+		})
+		var openOnce sync.Once
+		opened := func() {
+			if in.Opened != nil {
+				openOnce.Do(func() { go in.Opened() })
+			}
+		}
+		dc.OnOpen(opened)
+		if dc.ReadyState() == webrtc.DataChannelStateOpen {
+			opened()
+		}
+		if in.Closed != nil {
+			dc.OnClose(func() { go in.Closed() }) // it may wait: not on pion's goroutine
 		}
 	})
 	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
