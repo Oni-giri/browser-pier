@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.0
+
+**Before you update:**
+- The browser definition changed (the browser image now has a recording pipeline), so browsers started by 0.4.x are closed gracefully on the first start of 0.5.0, logins kept, and start again under the new definition the next time they're used.
+- **0.5.0 is published for amd64 only.** There is no arm64 image this time; stay on 0.4.0 on an arm64 machine (a Raspberry Pi, say) until a later release brings it back.
+
+**Changed for people running BrowserPier**
+- **Session recording.** A profile with **Record sessions** on keeps what agents do on its screen, for you to replay. It is off by default, for new and existing profiles, and only the admin turns it on, in the profile's settings; it applies at once, to a running browser too.
+  - **What's recorded:** only while an agent acts, and for 30 s after, at 5 frames a second and 3/4 of the screen size; a still screen records almost nothing.
+  - **Never a person:** recording stops before Take control or a handoff lets a person's input reach the page, and starts again only once the agent has the browser back and its clipboard has been emptied. The live view's hint says so, in full screen too.
+  - **Where to watch:** the profile page shows **Recording** or **Recording paused**, and a **Recordings** cell with one row per session. The player has speeds from 1× to 8×, a timeline that shows the gaps and why (a person had control, the screen was still, the browser was idle…), Skip gaps, and links from the agent's activity log to the moment.
+  - **Room:** Settings sets how long recordings are kept (1 to 90 days, 7 by default) and how much space they take in all (2 GB by default). 1 GB of the disk is always left free, and the profile holding the most gives up its oldest recording first.
+  - **Privacy:** recordings show what a screenshot would. They live in `data/recordings/`, outside the profile folders, and aren't encrypted apart from the data dir; leave `data/recordings` out of your backups if you don't want them there. Deleting a profile deletes its recordings.
+  - **Cost:** about 3–4% of one CPU core and 33 MB of memory in each browser while it records.
+
+**Changed for agents**
+- Nothing new to call: agents can't read, list, start, stop or turn off a recording, so an agent can't hide what it did.
+
+**Fixed**
+- A hand-back that happens while a browser is stopping, where the stop then fails, no longer leaves the person's text on the browser's clipboard: it is emptied before the browser is back in service.
+
 ## 0.4.0
 
 **Before you update:** the browser definition changed (the browser image now has a clipboard tool), so browsers started by 0.3.x are closed gracefully on the first start of 0.4.0, logins kept, and start again under the new definition the next time they're used.
