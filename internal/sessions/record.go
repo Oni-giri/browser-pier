@@ -139,14 +139,16 @@ func (m *Manager) PauseRecording(id string) (resume func(), err error) {
 }
 
 // RefreshRecording applies the profile's Record sessions setting to its
-// running session at once, after the admin changed it.
+// running session at once, after the admin changed it. The setting is
+// read under m.mu, as Reconcile reads it, so two saves close together
+// apply in order: the last one applied is the one read last.
 func (m *Manager) RefreshRecording(ctx context.Context, profile string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	p, err := m.profiles.Get(ctx, profile)
 	if err != nil {
 		return err
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	if l, ok := m.live[profile]; ok {
 		l.record = p.Record
 		m.regateLocked(l)

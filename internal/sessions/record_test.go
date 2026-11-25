@@ -749,3 +749,45 @@ func TestAFailedStopEmptiesTheClipboardOfAHandBackDuringIt(t *testing.T) {
 		t.Fatalf("events %v: the clipboard must be emptied after the hand-back, before the browser goes back to Running", events)
 	}
 }
+
+// TestRefreshRecordingAppliesTheSettingAsItIs: a refresh that waits for
+// the manager's lock applies the setting as saved when it gets it, not as
+// it was when the refresh began, so overlapping saves (on, then off)
+// can't leave a running browser recorded with the setting off.
+func TestRefreshRecordingAppliesTheSettingAsItIs(t *testing.T) {
+	f, rec := recordingFixture(t, false)
+	ctx := context.Background()
+	s := f.start(f.m)
+	set := func(on bool) {
+		t.Helper()
+		p, _ := f.m.Profiles().Get(ctx, "google")
+		p.Record = on
+		if _, err := f.m.Profiles().Update(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set(true) // the first save, whose refresh is slow to get the lock
+	f.m.mu.Lock()
+	refreshed := make(chan error, 1)
+	go func() { refreshed <- f.m.RefreshRecording(ctx, "google") }()
+	time.Sleep(50 * time.Millisecond)
+	set(false) // the second save; its own refresh ran meanwhile
+	f.m.mu.Unlock()
+	if err := <-refreshed; err != nil {
+		t.Fatal(err)
+	}
+	f.m.mu.Lock()
+	record := f.m.live["google"].record
+	f.m.mu.Unlock()
+	if record {
+		t.Fatal("the browser records with Record sessions off")
+	}
+	_, done, err := f.m.AgentInput(ctx, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer done()
+	if on, _ := rec.state(s.ID); on {
+		t.Fatal("recording with Record sessions off")
+	}
+}
