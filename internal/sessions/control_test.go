@@ -150,6 +150,92 @@ func TestReleaseTurnIsOnlyItsOwn(t *testing.T) {
 	}
 }
 
+// A turn handed back while Take control waited for an agent's input to
+// let go (the profile page's Hand back, a handoff's end) isn't reported as
+// taken: the live view would think it drives a browser nobody gave it.
+func TestATurnHandedBackWhileItWaitsIsNotTaken(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	ctx, done, err := f.m.AgentInput(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _, _ = f.m.SetNeedsHelp(s.ID, true) }()
+	<-ctx.Done()
+	took := make(chan error, 1)
+	go func() {
+		_, err := f.m.TakeControlTurn(s.ID, AdminHolder)
+		took <- err
+	}()
+	for deadline := time.Now().Add(2 * time.Second); !f.m.ControlledBy(s.ID, AdminHolder); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("Take control never started waiting")
+		}
+	}
+	f.m.ReleaseControl(s.ID)
+	done()
+	select {
+	case err := <-took:
+		if !errors.Is(err, ErrControlEnded) {
+			t.Fatalf("a turn handed back while it waited = %v, want ErrControlEnded", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Take control never returned after the input ended")
+	}
+}
+
+// Input, a lift and the hand-back's own wait are bound to a turn, not to
+// the holder alone: the admin's views share one holder, so a view whose
+// turn ended can't type into the next one's, a turn being handed back
+// isn't held any more, and the hand-back lets go of held keys itself.
+func TestInputIsOnlyThisTurns(t *testing.T) {
+	f := newFixture(t)
+	var mu sync.Mutex
+	var calls []string
+	var held []bool
+	var turn uint64
+	var id string
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	record := func(name string) http.HandlerFunc {
+		return func(w http.ResponseWriter, _ *http.Request) {
+			h := f.m.HoldsTurn(id, turn)
+			mu.Lock()
+			calls = append(calls, name)
+			held = append(held, h)
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}
+	mux.HandleFunc("POST /input/release", record("release"))
+	mux.HandleFunc("DELETE /input/clipboard", record("empty"))
+	f.rt.Control = mux
+	s := f.start(f.m)
+	id = s.ID
+	old, err := f.m.TakeControlTurn(s.ID, AdminHolder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn = old
+	f.m.ReleaseControl(s.ID) // Hand back from another page
+	mu.Lock()
+	if strings.Join(calls, " ") != "release empty" || held[0] || held[1] {
+		t.Fatalf("the hand-back: %v, the turn held meanwhile %v", calls, held)
+	}
+	mu.Unlock()
+	if turn, err = f.m.TakeControlTurn(s.ID, AdminHolder); err != nil { // the same admin, from another view
+		t.Fatal(err)
+	}
+	if _, err := f.m.HumanInputTurn(s.ID, AdminHolder, old); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("input from the old turn = %v", err)
+	}
+	if done, err := f.m.HumanInputTurn(s.ID, AdminHolder, turn); err != nil {
+		t.Fatal(err)
+	} else {
+		done()
+	}
+}
+
 // A handoff waits for agent input already on its way, and refuses more:
 // no agent click lands while the person has the browser.
 func TestHandoffWaitsForInputInFlight(t *testing.T) {

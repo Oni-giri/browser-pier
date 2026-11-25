@@ -210,9 +210,10 @@ func TestStaleViewerLeavesTheNextHolderAlone(t *testing.T) {
 			t.Fatalf("the stale view was told %q", said)
 		}
 		r.m.ReleaseControl(r.s.ID)
+		in.take() // that hand-back's own lift
 	}
 
-	// Its own control it still releases, keys lifted.
+	// Its own control it still releases, keys lifted (by the hand-back).
 	a := &viewer{h: r.h, session: r.s.ID, holder: sessions.AdminHolder, sock: r.m.Layout().ControlSocket("google")}
 	a.message([]byte(`{"type":"take"}`), func(string) {})
 	a.handBack()

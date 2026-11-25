@@ -46,6 +46,9 @@ var (
 	// ErrNoHolder: TakeControl was called without saying who takes it, a
 	// wiring mistake (PROJ-184).
 	ErrNoHolder = errors.New("sessions: control taken with no holder")
+	// ErrControlEnded: control was handed back while Take control waited
+	// for an agent's action to end (PROJ-184).
+	ErrControlEnded = errors.New("control was handed back before it was taken")
 	// ErrHumanDriving: an agent can't act while a person has control.
 	ErrHumanDriving = errors.New("a person is driving this browser")
 	// ErrInputBusy: an agent's input action is still under way in this

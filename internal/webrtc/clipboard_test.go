@@ -261,7 +261,7 @@ func TestClipboardEmptiedWhenControlEnds(t *testing.T) {
 			if r := k.send(set(2, "after", false)); len(r) != 2 || r[0]["type"] != "clipboard-error" || r[1]["on"] != false {
 				t.Errorf("a set after losing control: %v", r)
 			}
-		}, "set empty"},
+		}, "set release empty"}, // the hand-back lets go of held keys itself
 		{"the viewer goes", func(k *talk) { k.v.handBack() }, "set release empty"},
 	} {
 		t.Run(end.name, func(t *testing.T) {

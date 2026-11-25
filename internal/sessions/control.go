@@ -148,8 +148,13 @@ func (m *Manager) TakeControlTurn(id, holder string) (uint64, error) {
 	// gets the browser.
 	if len(l.inputs) > 0 || len(l.leases) > 0 {
 		m.waitLeasesLocked(l)
-		if m.findLocked(id) != l || !l.sess.State.Live() {
-			return 0, ErrNotRunning // stopped meanwhile
+		if m.findLocked(id) != l || (l.sess.State != Running && l.sess.State != NeedsHelp) {
+			return 0, ErrNotRunning // stopped, or stopping, meanwhile
+		}
+		if !l.human || l.controlTurn != turn || l.releasing {
+			// Handed back meanwhile (the profile page's Hand back, a
+			// handoff's end), and perhaps taken by someone else since.
+			return 0, ErrControlEnded
 		}
 	}
 	return turn, nil
@@ -167,6 +172,24 @@ func (m *Manager) HumanInput(id, holder string) (done func(), err error) {
 	if l == nil || l.releasing || !l.controlledByLocked(holder) {
 		return nil, ErrNotRunning
 	}
+	return m.humanInputLocked(l), nil
+}
+
+// HumanInputTurn is HumanInput for the live view that took turn (from
+// TakeControlTurn): the admin's views share one holder, so a view whose
+// turn ended can't send input into the next one's, or read its clipboard,
+// even when the same admin took control again from another view.
+func (m *Manager) HumanInputTurn(id, holder string, turn uint64) (done func(), err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l := m.findLocked(id)
+	if l == nil || l.releasing || l.controlTurn != turn || !l.controlledByLocked(holder) {
+		return nil, ErrNotRunning
+	}
+	return m.humanInputLocked(l), nil
+}
+
+func (m *Manager) humanInputLocked(l *live) func() {
 	l.lastActivity = m.now()
 	l.humanInputs++
 	return sync.OnceFunc(func() {
@@ -174,7 +197,7 @@ func (m *Manager) HumanInput(id, holder string) (done func(), err error) {
 		l.humanInputs--
 		m.inputsDone.Broadcast()
 		m.mu.Unlock()
-	}), nil
+	})
 }
 
 // ReleaseControl hands the browser back to agents, whoever held it: a
@@ -208,12 +231,13 @@ func (m *Manager) HoldsTurn(id string, turn uint64) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.findLocked(id)
-	return l != nil && l.human && l.controlTurn == turn && (l.sess.State == Running || l.sess.State == NeedsHelp)
+	return l != nil && l.human && !l.releasing && l.controlTurn == turn && (l.sess.State == Running || l.sess.State == NeedsHelp)
 }
 
 // releaseLocked ends a person's control, whatever ends it: they hand
-// back, a handoff ends, the live view goes. First it empties the
-// browser's clipboard and PRIMARY selection (PROJ-194), so no agent can
+// back, a handoff ends, the live view goes. First it lets go of any key
+// or button the live view still holds, then it empties the browser's
+// clipboard and PRIMARY selection (PROJ-194), so no agent can
 // paste what the person put there, copied or selected in the page: it
 // waits for their input under way and a moment more (clipboardSettle),
 // refuses more, and only then lets agents in. If the clipboard can't be
@@ -225,8 +249,10 @@ func (m *Manager) HoldsTurn(id string, turn uint64) bool {
 // it empties the clipboard, and returns once agents have the browser.
 func (m *Manager) releaseLocked(id string, l *live) {
 	if l.releasing {
-		// Another hand-back is emptying the clipboard: done when it is.
-		for m.findLocked(id) == l && l.human {
+		// Another hand-back is emptying the clipboard: done when it is,
+		// not when a turn taken after it ends.
+		turn := l.controlTurn
+		for m.findLocked(id) == l && l.human && l.controlTurn == turn {
 			m.inputsDone.Wait()
 		}
 		return
@@ -239,6 +265,10 @@ func (m *Manager) releaseLocked(id string, l *live) {
 	case Running, NeedsHelp:
 		profile := l.sess.Profile
 		m.mu.Unlock()
+		// Their input has all reached the browser: what it still holds
+		// goes up, here rather than in the live view, so a view whose
+		// control ended behind its back leaves nothing held for agents.
+		m.liftLiveInput(id, profile)
 		// The person's last keys have reached the browser, but Chromium
 		// takes the selection a moment after a Ctrl+C: let it land, so it
 		// is emptied too.
@@ -265,6 +295,14 @@ func (m *Manager) releaseLocked(id string, l *live) {
 // clipboardSettle is how long a hand-back waits, after the person's last
 // input has reached the browser, before it empties the clipboard.
 const clipboardSettle = 100 * time.Millisecond
+
+// liftLiveInput lets go of any key or button the live view's input still
+// holds in a running browser, a person's control ending.
+func (m *Manager) liftLiveInput(sessionID, profile string) {
+	if err := m.control(m.ctx, profile, http.MethodPost, "/input/release", nil, nil); err != nil {
+		m.log.Warn("couldn't let go of the live view's keys as a person's control ended", "session", sessionID, "err", err)
+	}
+}
 
 // emptyClipboard empties a running browser's clipboard, a person's
 // control ending (PROJ-194). A failure is logged without what the

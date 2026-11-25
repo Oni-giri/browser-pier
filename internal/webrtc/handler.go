@@ -156,6 +156,8 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 				msg = "Someone else has control."
 			case errors.Is(err, sessions.ErrAgentDriving):
 				msg = "The agent is driving."
+			case errors.Is(err, sessions.ErrControlEnded):
+				msg = "Control was handed back meanwhile. Try again."
 			case errors.Is(err, sessions.ErrNoHolder):
 				h.log.Error("a live view offered control with no holder", "profile", profile)
 				msg, code = "Couldn't take control: this live view says nobody's taking it.", http.StatusInternalServerError
@@ -290,6 +292,8 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 			say(map[string]any{"type": "control", "on": true})
 		case errors.Is(err, sessions.ErrAgentDriving):
 			say(map[string]any{"type": "error", "msg": "The agent is driving. Try again in a few seconds, or when it asks for help."})
+		case errors.Is(err, sessions.ErrControlEnded):
+			say(map[string]any{"type": "error", "msg": "Control was handed back meanwhile. Try again."})
 		case errors.Is(err, sessions.ErrNoHolder):
 			v.h.log.Error("a live view took control with no holder", "session", v.session)
 			say(map[string]any{"type": "error", "msg": "Couldn't take control: this live view says nobody's taking it."})
@@ -300,16 +304,22 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 		v.releaseLocked()
 		say(map[string]any{"type": "control", "on": false})
 	case "lift":
+		// As input of this turn's: never lifts the next person's keys.
 		if v.holdsLocked() {
-			_ = v.post("/input/release", nil)
+			if done, err := v.h.m.HumanInputTurn(v.session, v.holder, v.turn); err == nil {
+				_ = v.post("/input/release", nil)
+				done()
+			}
 		}
 	case "input", "text", "clipboard", "clipboard-set":
 		var done func()
 		var err error
 		if v.holdsLocked() {
 			// Held until the input has reached the browser: a hand-back
-			// empties the clipboard only after it.
-			done, err = v.h.m.HumanInput(v.session, v.holder)
+			// empties the clipboard only after it. Only this view's turn:
+			// another admin view may hold control now under the same
+			// holder.
+			done, err = v.h.m.HumanInputTurn(v.session, v.holder, v.turn)
 		}
 		if !v.control || err != nil {
 			v.control = false
@@ -384,13 +394,13 @@ func (v *viewer) handBack() {
 }
 
 // releaseLocked lets go of this viewer's control, if it still has it:
-// one that lost it behind its back lifts nothing of the next person's.
+// one that lost it behind its back releases nothing of the next person's.
+// The hand-back itself lets go of held keys and buttons (ReleaseTurn).
 func (v *viewer) releaseLocked() {
 	if !v.holdsLocked() {
 		return
 	}
 	v.control = false
-	_ = v.post("/input/release", nil)
 	v.h.m.ReleaseTurn(v.session, v.turn)
 }
 
