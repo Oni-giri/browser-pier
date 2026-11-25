@@ -144,9 +144,12 @@ func (m *Manager) TakeControlGen(id string) (gen uint64, err error) {
 	// handoff cancelled and is itself waiting for) ends before the person
 	// gets the browser.
 	if len(l.inputs) > 0 || len(l.leases) > 0 {
+		stops := l.stops
 		m.waitLeasesLocked(l)
-		if m.findLocked(id) != l || (l.sess.State != Running && l.sess.State != NeedsHelp) {
-			// A stop began meanwhile: the take gives up (PROJ-200).
+		if m.findLocked(id) != l || (l.sess.State != Running && l.sess.State != NeedsHelp) || l.stops != stops {
+			// A stop began meanwhile, even one that failed and put the
+			// browser back before this woke: the take gives up
+			// (PROJ-200), as it would have had it woken first.
 			m.untakeLocked(l, gen)
 			return 0, ErrNotRunning
 		}
@@ -209,14 +212,8 @@ func (m *Manager) HumanInput(id string, gen uint64) (ctx context.Context, done f
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.findLocked(id)
-	if l == nil {
-		return nil, nil, ErrNotRunning
-	}
-	if !l.human || l.humanGen != gen || l.releasing {
-		return nil, nil, ErrNotInControl
-	}
-	if l.sess.State != Running && l.sess.State != NeedsHelp {
-		return nil, nil, ErrNotRunning
+	if err := humanRefusal(l, gen); err != nil {
+		return nil, nil, err
 	}
 	l.lastActivity = m.now()
 	l.humanInputs++
@@ -228,13 +225,27 @@ func (m *Manager) HumanInput(id string, gen uint64) (ctx context.Context, done f
 	}), nil
 }
 
-// InControl reports whether the takeover of generation gen still holds
-// the browser and isn't ending.
+// humanRefusal says why the person who took control as generation gen
+// can't use the browser now, if they can't. m.mu must be held.
+func humanRefusal(l *live, gen uint64) error {
+	switch {
+	case l == nil:
+		return ErrNotRunning
+	case !l.human || l.humanGen != gen || l.releasing:
+		return ErrNotInControl
+	case l.sess.State != Running && l.sess.State != NeedsHelp, l.opCtx.Err() != nil:
+		return ErrNotRunning
+	}
+	return nil
+}
+
+// InControl reports whether the takeover of generation gen holds the
+// browser now, as HumanInput would admit its input: not while it is
+// ending, nor while the browser is stopping or its session over.
 func (m *Manager) InControl(id string, gen uint64) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	l := m.findLocked(id)
-	return l != nil && l.human && l.humanGen == gen && !l.releasing
+	return humanRefusal(m.findLocked(id), gen) == nil
 }
 
 // ReleaseControl hands the browser back to agents, whatever ends the

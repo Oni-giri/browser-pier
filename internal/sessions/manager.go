@@ -178,6 +178,9 @@ type live struct {
 	opCtx    context.Context
 	opCancel context.CancelFunc
 	sockOps  int
+	// stops counts the stops begun, failed ones included: a Take control
+	// that waited across one gives up (TakeControlGen).
+	stops uint64
 	// conns are the agents' open connections to the browser.
 	conns map[*conn]struct{}
 	// lastActivity is when an agent or person last used the browser.
@@ -1151,6 +1154,7 @@ func (m *Manager) stopIf(ctx context.Context, id string, cond func(*live) bool) 
 		}
 		l.stopPrev = l.sess.State
 		l.sess.State = Stopping
+		l.stops++
 		l.sess.UpdatedAt = m.now()
 		m.regateLocked(l)
 		if err := updateSession(context.Background(), m.db, l.sess); err != nil {

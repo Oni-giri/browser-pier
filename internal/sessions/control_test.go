@@ -728,3 +728,78 @@ func TestTakeControlHandedBackWhileItWaits(t *testing.T) {
 		done()
 	}
 }
+
+// A Take control waiting for the agent's broken-off input gives up if a
+// stop began meanwhile, even one that failed and put the browser back
+// Running before the take woke: as if it had woken first (PROJ-200).
+func TestTakeControlGivesUpOnAStopThatFailedBeforeItWoke(t *testing.T) {
+	f := newFixture(t)
+	advance := f.clock()
+	s := f.start(f.m)
+	ctx, done, err := f.m.AgentInput(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	advance(takeOverAfter)
+	took := make(chan error, 1)
+	go func() {
+		_, err := f.m.TakeControlGen(s.ID)
+		took <- err
+	}()
+	<-ctx.Done() // broken off: the take waits for it to end
+	f.rt.Mu.Lock()
+	f.rt.StopErr = errors.New("the runtime refused to stop it")
+	f.rt.Mu.Unlock()
+	if _, err := f.m.Stop(context.Background(), s.ID); err == nil {
+		t.Fatal("the stop didn't fail")
+	}
+	if snap, _ := f.m.Live("google"); snap.State != Running {
+		t.Fatalf("after the failed stop: %s", snap.State)
+	}
+	done() // only now does the take wake
+	select {
+	case err := <-took:
+		if !errors.Is(err, ErrNotRunning) {
+			t.Fatalf("Take control across a failed stop = %v, want ErrNotRunning", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Take control never returned")
+	}
+	if snap, _ := f.m.Live("google"); snap.HumanControl {
+		t.Error("left under a person's control")
+	}
+	if _, done, err := f.m.AgentInput(context.Background(), s.ID); err != nil {
+		t.Fatalf("agent input after = %v", err)
+	} else {
+		done()
+	}
+}
+
+// InControl answers as HumanInput admits: not while the browser is
+// stopping, though the takeover hasn't ended (PROJ-196).
+func TestInControlWhileStopping(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	gen, err := f.m.TakeControlGen(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.m.InControl(s.ID, gen) {
+		t.Fatal("not in control after taking it")
+	}
+	f.rt.Mu.Lock()
+	f.rt.StopErr = errors.New("the runtime refused to stop it")
+	f.rt.BeforeStop = func(string) {
+		_, _, inputErr := f.m.HumanInput(s.ID, gen)
+		if f.m.InControl(s.ID, gen) || inputErr == nil {
+			t.Errorf("while stopping: InControl %v, input %v", f.m.InControl(s.ID, gen), inputErr)
+		}
+	}
+	f.rt.Mu.Unlock()
+	if _, err := f.m.Stop(context.Background(), s.ID); err == nil {
+		t.Fatal("the stop didn't fail")
+	}
+	if !f.m.InControl(s.ID, gen) {
+		t.Error("not in control once the failed stop put the browser back")
+	}
+}
