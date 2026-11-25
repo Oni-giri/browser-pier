@@ -117,6 +117,11 @@ type OfferOptions struct {
 	Allowed func() bool
 	// Opened, if set, gets the viewer once connected, to close it later.
 	Opened func(*Viewer)
+	// Session, if set, is the session the caller let this viewer watch
+	// (a handoff's): the offer is refused unless it is still the
+	// profile's live session, and control is only ever taken of it,
+	// never of a session that replaced it meanwhile.
+	Session string
 }
 
 // inputOpenWait is how long a viewer given control at its offer has to
@@ -128,10 +133,13 @@ var inputOpenWait = 30 * time.Second
 // already checked who may watch.
 func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, o OfferOptions) {
 	s, ok := h.m.Live(profile)
-	if !ok || (s.State != sessions.Running && s.State != sessions.NeedsHelp) {
+	if !ok || (s.State != sessions.Running && s.State != sessions.NeedsHelp) || (o.Session != "" && s.ID != o.Session) {
 		http.Error(w, "the browser isn't running", http.StatusConflict)
 		return
 	}
+	// From here on, everything names s.ID: Watch and TakeControlGen find
+	// that session or none, under the manager's lock, so a session that
+	// replaces it is never watched or taken through this offer.
 	var in struct {
 		SDP string `json:"sdp"`
 	}

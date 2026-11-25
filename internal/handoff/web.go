@@ -361,6 +361,10 @@ func (w *Web) offer(rw http.ResponseWriter, r *http.Request) {
 			return err == nil && cur.Status == Pending
 		},
 		Opened: func(v *webrtc.Viewer) { w.svc.track(id, v) },
+		// The session this link is for: if it ended and another started
+		// on the profile meanwhile, the offer is refused, and that one is
+		// never taken.
+		Session: h.SessionID,
 	})
 }
 

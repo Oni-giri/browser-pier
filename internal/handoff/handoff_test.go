@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -44,6 +45,9 @@ type fixture struct {
 	// emptied counts the browser's clipboard emptyings, with whether a
 	// person still had control as each happened (PROJ-194).
 	emptied *clipRecord
+	// onLift, if set, runs as the browser is asked to let go of held
+	// keys and buttons (a hand-back).
+	onLift *atomic.Pointer[func()]
 }
 
 type clipRecord struct {
@@ -88,6 +92,13 @@ func newFixture(t *testing.T, policy profiles.HandoffPolicy, opts auth.WebOption
 		emptied.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	})
+	onLift := &atomic.Pointer[func()]{}
+	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, _ *http.Request) {
+		if f := onLift.Load(); f != nil {
+			(*f)()
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	// No CDP: what the handoff reads of the browser, it reads over HTTP.
 	b := cdptest.New(func(m cdptest.Message) (any, error) {
 		return nil, cdptest.Error{Message: "not in the fake: " + m.Method}
@@ -128,7 +139,7 @@ func newFixture(t *testing.T, policy profiles.HandoffPolicy, opts auth.WebOption
 	srv := httptest.NewServer(new(http.CrossOriginProtection).Handler(hmux))
 	t.Cleanup(srv.Close)
 	t.Cleanup(svc.Close)
-	return &fixture{t: t, m: m, svc: svc, admin: admin, srv: srv, cdp: b, tabs: tabs, emptied: emptied}
+	return &fixture{t: t, m: m, svc: svc, admin: admin, srv: srv, cdp: b, tabs: tabs, emptied: emptied, onLift: onLift}
 }
 
 func (f *fixture) running() sessions.Session {
@@ -929,5 +940,64 @@ func TestHandoffEndEmptiesTheClipboard(t *testing.T) {
 				t.Errorf("after the handoff: %+v", s)
 			}
 		})
+	}
+}
+
+// A handoff's offer that a stop and restart overtake (after the link was
+// checked, before the live view connects) never takes control of the
+// profile's new session: the link is for the session it was opened in,
+// and the new one's agent keeps its browser (PROJ-196).
+func TestHandoffOfferNeverTakesTheNextSession(t *testing.T) {
+	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
+	h, token := f.open("")
+	phone := browser()
+	if p := f.do(phone, "POST", "/h/"+token+"/pin", url.Values{"pin": {"4821"}}, nil); p.code != http.StatusSeeOther {
+		t.Fatalf("right PIN: %d %s", p.code, p.body)
+	}
+	offer := func() reply {
+		req, _ := http.NewRequest(http.MethodPost, f.srv.URL+"/h/"+token+"/offer", strings.NewReader(pionOffer(t)))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := phone.Do(req)
+		if err != nil {
+			t.Error(err)
+			return reply{}
+		}
+		defer func() { _ = resp.Body.Close() }()
+		b, _ := io.ReadAll(resp.Body)
+		return reply{code: resp.StatusCode, body: string(b)}
+	}
+	if r := offer(); r.code != http.StatusOK || !strings.Contains(r.body, `"control":true`) {
+		t.Fatalf("offer: %d %s", r.code, r.body)
+	}
+	// The page reloads: its new offer passes the link's checks, then
+	// waits for the old view's hand-back, held up here.
+	entered, gate := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	hold := func() { once.Do(func() { close(entered); <-gate }) }
+	f.onLift.Store(&hold)
+	defer close(gate)
+	second := make(chan reply, 1)
+	go func() { second <- offer() }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reloaded page's offer never got to the old view's hand-back")
+	}
+	// Meanwhile the browser stops, and the profile starts again.
+	if _, err := f.m.Stop(context.Background(), h.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	next := f.running()
+	r := <-second
+	if r.code == http.StatusOK {
+		t.Errorf("the offer for the stopped session connected (%d)", r.code)
+	}
+	if s, _ := f.m.Live("google"); s.ID != next.ID || s.HumanControl {
+		t.Fatalf("the new session: %s, person in control %v", s.ID, s.HumanControl)
+	}
+	if _, done, err := f.m.AgentInput(context.Background(), next.ID); err != nil {
+		t.Fatalf("the new session's agent = %v", err)
+	} else {
+		done()
 	}
 }

@@ -418,3 +418,35 @@ func TestControlEndsIfNoInputChannelOpens(t *testing.T) {
 		t.Errorf("viewers %d: the video should still be connected", got.Viewers)
 	}
 }
+
+// An offer for a session that has since stopped, its profile started
+// again, is refused, and never takes the new session: a handoff's link
+// is for the session it was opened in (PROJ-196).
+func TestOfferForAStoppedSessionTakesNothing(t *testing.T) {
+	var c fakeClipboard
+	h, m, s := offerFixtureWith(t, c.routes, slog.New(slog.DiscardHandler))
+	if _, err := m.Stop(context.Background(), s.ID); err != nil {
+		t.Fatal(err)
+	}
+	next, _, err := m.Start(context.Background(), "google", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pv := newPionViewer(t, InputLabel)
+	if rec := offer(h, OfferOptions{Control: true, Session: s.ID}, pv.body); rec.Code != http.StatusConflict {
+		t.Fatalf("an offer for the stopped session: %d %s", rec.Code, rec.Body)
+	}
+	if got, _ := m.Live("google"); got.ID != next.ID || got.HumanControl || got.Viewers != 0 {
+		t.Fatalf("the new session: %+v", got)
+	}
+	// The profile page's own live view, connected to the stopped
+	// session, can't take the new one either: its viewer names the
+	// session it was offered.
+	old := newTalk(t, &viewer{h: h, session: s.ID, sock: m.Layout().ControlSocket("google")})
+	if r := old.send(`{"type":"take"}`); len(r) != 1 || r[0]["type"] != "error" {
+		t.Errorf("a take from the stopped session's live view: %v", r)
+	}
+	if got, _ := m.Live("google"); got.HumanControl {
+		t.Error("the new session was taken")
+	}
+}
