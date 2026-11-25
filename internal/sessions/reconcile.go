@@ -65,7 +65,11 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	var outdatedStarting []starting
 	// Browsers picked up running: a person may have had control as the
 	// orchestrator went, with text on the clipboard.
-	type pickedUp struct{ id, profile string }
+	type pickedUp struct {
+		l           *live
+		id, profile string
+		ctx         context.Context
+	}
 	var running []pickedUp
 	m.mu.Lock()
 	for _, s := range rows {
@@ -73,7 +77,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		if ok {
 			delete(byID, c.ID)
 		}
-		l := newLive(s)
+		l := newLive(m.ctx, s)
 		if p, err := m.profiles.Get(ctx, s.Profile); err == nil {
 			// Recorded again by the same rules: a Needs help session
 			// isn't, and a running one only from the agent's next action.
@@ -100,7 +104,11 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		case s.HadFills && (s.State == Running || s.State == NeedsHelp):
 			outdated = append(outdated, stop{s.ID, "had secrets typed into it, which went with the restart", slog.LevelWarn})
 		case s.State == Running || s.State == NeedsHelp:
-			running = append(running, pickedUp{s.ID, s.Profile})
+			// Admitted for this browser alone (sockOpLocked): if it
+			// ended meanwhile, the call can't reach the next one.
+			if ctx, ok := m.sockOpLocked(l); ok {
+				running = append(running, pickedUp{l, s.ID, s.Profile, ctx})
+			}
 		}
 		l.lastActivity = m.now() // idle time restarts with the orchestrator
 		m.live[s.Profile] = l
@@ -130,7 +138,12 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	// which can't come before Reconcile has returned.
 	var emptied sync.WaitGroup
 	for _, p := range running {
-		emptied.Go(func() { m.emptyClipboard(p.id, p.profile) })
+		emptied.Go(func() {
+			m.emptyClipboard(p.ctx, p.id, p.profile)
+			m.mu.Lock()
+			m.sockOpDoneLocked(p.l)
+			m.mu.Unlock()
+		})
 	}
 	emptied.Wait()
 

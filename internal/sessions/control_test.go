@@ -476,14 +476,18 @@ func TestControlBelongsToItsTakeover(t *testing.T) {
 	f := newFixture(t)
 	var mu sync.Mutex
 	var calls []string
+	note := func(what string) http.HandlerFunc {
+		return func(w http.ResponseWriter, _ *http.Request) {
+			mu.Lock()
+			calls = append(calls, what)
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
-	mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) {
-		mu.Lock()
-		calls = append(calls, "empty")
-		mu.Unlock()
-		w.WriteHeader(http.StatusNoContent)
-	})
+	mux.HandleFunc("POST /input/release", note("lift"))
+	mux.HandleFunc("DELETE /input/clipboard", note("empty"))
 	f.rt.Control = mux
 	took := func() string {
 		mu.Lock()
@@ -491,13 +495,6 @@ func TestControlBelongsToItsTakeover(t *testing.T) {
 		out := strings.Join(calls, " ")
 		calls = nil
 		return out
-	}
-	lifted := 0
-	lift := func() {
-		mu.Lock()
-		calls = append(calls, "lift")
-		mu.Unlock()
-		lifted++
 	}
 	s := f.start(f.m)
 
@@ -514,24 +511,27 @@ func TestControlBelongsToItsTakeover(t *testing.T) {
 		t.Fatalf("both takeovers are generation %d", first)
 	}
 	took()
-	if _, err := f.m.HumanInput(s.ID, first); !errors.Is(err, ErrNotInControl) {
+	if _, _, err := f.m.HumanInput(s.ID, first); !errors.Is(err, ErrNotInControl) {
 		t.Errorf("the first person's input during the second's control = %v, want ErrNotInControl", err)
 	}
-	if f.m.ReleaseControlGen(s.ID, first, lift) {
+	if f.m.InControl(s.ID, first) || !f.m.InControl(s.ID, second) {
+		t.Error("InControl names the wrong takeover")
+	}
+	if f.m.ReleaseControlGen(s.ID, first) {
 		t.Error("the first person's hand-back ended the second's control")
 	}
 	if got, _ := f.m.Live("google"); !got.HumanControl {
 		t.Fatal("the second person lost control")
 	}
-	if got := took(); got != "" || lifted != 0 {
+	if got := took(); got != "" {
 		t.Errorf("the first person's hand-back reached the browser: %q", got)
 	}
-	if done, err := f.m.HumanInput(s.ID, second); err != nil {
+	if _, done, err := f.m.HumanInput(s.ID, second); err != nil {
 		t.Fatalf("the second person's input = %v", err)
 	} else {
 		done()
 	}
-	if !f.m.ReleaseControlGen(s.ID, second, lift) {
+	if !f.m.ReleaseControlGen(s.ID, second) {
 		t.Error("the second person's hand-back did nothing")
 	}
 	if got := took(); got != "lift empty" {
@@ -540,7 +540,7 @@ func TestControlBelongsToItsTakeover(t *testing.T) {
 	if got, _ := f.m.Live("google"); got.HumanControl {
 		t.Error("still under a person's control")
 	}
-	if f.m.ReleaseControlGen(s.ID, second, lift) || lifted != 1 {
+	if f.m.ReleaseControlGen(s.ID, second) || took() != "" {
 		t.Error("handed back twice")
 	}
 }
@@ -573,5 +573,158 @@ func humanInput(m *Manager, id string) (func(), error) {
 		gen = l.humanGen
 	}
 	m.mu.Unlock()
-	return m.HumanInput(id, gen)
+	_, done, err := m.HumanInput(id, gen)
+	return done, err
+}
+
+// A hand-back admitted for one session never reaches the next session on
+// the same profile, whose browser listens on the same control socket:
+// the session's end waits for it, and breaks it off, before the profile
+// can start again (PROJ-196).
+func TestHandBackNeverReachesTheNextSession(t *testing.T) {
+	f := newFixture(t)
+	var mu sync.Mutex
+	var first *http.Server // the first session's browser
+	var reachedNext []string
+	server := func(r *http.Request) *http.Server {
+		s, _ := r.Context().Value(http.ServerContextKey).(*http.Server)
+		return s
+	}
+	record := func(what string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			if server(r) != first {
+				reachedNext = append(reachedNext, what)
+			}
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		if first == nil {
+			first = server(r)
+		}
+		mu.Unlock()
+		_, _ = w.Write([]byte("ok\n"))
+	})
+	mux.HandleFunc("POST /input/release", record("lift"))
+	mux.HandleFunc("DELETE /input/clipboard", record("empty"))
+	f.rt.Control = mux
+	s := f.start(f.m)
+	if err := f.m.TakeControl(s.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// A hand-back gets under way: past its checks, with m.mu let go.
+	released := make(chan struct{})
+	go func() { f.m.ReleaseControl(s.ID); close(released) }()
+	for {
+		f.m.mu.Lock()
+		l := f.m.findLocked(s.ID)
+		releasing := l != nil && l.releasing
+		f.m.mu.Unlock()
+		if releasing {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// Meanwhile the browser stops, and the profile starts again.
+	if _, err := f.m.Stop(context.Background(), s.ID); err != nil {
+		t.Fatal(err)
+	}
+	next := f.start(f.m)
+	if next.ID == s.ID {
+		t.Fatal("no new session")
+	}
+	select {
+	case <-released:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the hand-back never returned")
+	}
+	time.Sleep(3 * clipboardSettle) // anything late would have landed by now
+	mu.Lock()
+	defer mu.Unlock()
+	if len(reachedNext) != 0 {
+		t.Errorf("the first session's hand-back reached the next session's browser: %v", reachedNext)
+	}
+}
+
+// A hand-back waiting on another that is ending the same takeover returns
+// once that one has ended, even if someone takes control the moment it
+// does: it doesn't wait out the next person's takeover (PROJ-196).
+func TestConcurrentHandBackWaitsForItsOwnTakeover(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	first, err := f.m.TakeControlGen(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Another hand-back is ending it (let go of m.mu to empty the
+	// clipboard).
+	f.m.mu.Lock()
+	l := f.m.findLocked(s.ID)
+	l.releasing = true
+	f.m.mu.Unlock()
+	waited := make(chan bool, 1)
+	go func() { waited <- f.m.ReleaseControlGen(s.ID, first) }()
+	time.Sleep(50 * time.Millisecond) // it waits on the other
+	// That one ends, and in the same step someone else takes control,
+	// before the waiter gets m.mu back.
+	f.m.mu.Lock()
+	l.releasing = false
+	l.generation++
+	l.humanGen = l.generation
+	f.m.inputsDone.Broadcast()
+	f.m.mu.Unlock()
+	select {
+	case ended := <-waited:
+		if ended {
+			t.Error("the waiting hand-back says it ended the takeover")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the waiting hand-back is waiting out the next person's takeover")
+	}
+	if got, _ := f.m.Live("google"); !got.HumanControl {
+		t.Error("the next person lost control")
+	}
+}
+
+// A Take control waiting for the agent's broken-off input, whose takeover
+// the profile page hands back meanwhile, fails: the person never gets a
+// generation for control that has already ended (PROJ-196).
+func TestTakeControlHandedBackWhileItWaits(t *testing.T) {
+	f := newFixture(t)
+	advance := f.clock()
+	s := f.start(f.m)
+	ctx, done, err := f.m.AgentInput(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	advance(takeOverAfter)
+	took := make(chan error, 1)
+	go func() {
+		_, err := f.m.TakeControlGen(s.ID)
+		took <- err
+	}()
+	<-ctx.Done() // broken off: the take waits for it to end
+	f.m.ReleaseControl(s.ID)
+	done()
+	select {
+	case err := <-took:
+		if !errors.Is(err, ErrNotInControl) {
+			t.Fatalf("Take control handed back while it waited = %v, want ErrNotInControl", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Take control never returned")
+	}
+	if got, _ := f.m.Live("google"); got.HumanControl {
+		t.Error("still under a person's control")
+	}
+	if _, done, err := f.m.AgentInput(context.Background(), s.ID); err != nil {
+		t.Fatalf("agent input after = %v", err)
+	} else {
+		done()
+	}
 }

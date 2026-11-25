@@ -103,6 +103,8 @@ func (f *FakeRuntime) Start(_ context.Context, id string) error {
 			mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
 			// A person's control ending empties the clipboard (PROJ-194).
 			mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+			// And lets go of what the person held.
+			mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 			h = mux
 		}
 		c.srv = &http.Server{Handler: h} //nolint:gosec // test server

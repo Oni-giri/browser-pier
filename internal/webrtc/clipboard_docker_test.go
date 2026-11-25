@@ -175,7 +175,7 @@ func TestRealBrowserClipboardBox(t *testing.T) {
 	if r := next("control"); r["on"] != false {
 		t.Fatalf("release: %v", r)
 	}
-	if got, err := v.do(http.MethodGet, "/input/clipboard", nil, http.StatusOK, controlWait); err != nil || len(got) != 0 {
+	if got, err := v.do(context.Background(), http.MethodGet, "/input/clipboard", nil, http.StatusOK, controlWait); err != nil || len(got) != 0 {
 		t.Errorf("after handing back the clipboard holds %q (%v)", got, err)
 	}
 	for _, sel := range []string{"clipboard", "primary"} {
@@ -186,7 +186,7 @@ func TestRealBrowserClipboardBox(t *testing.T) {
 	// An agent's middle-click into the field pastes nothing.
 	after := page.state()
 	body, _ := json.Marshal(map[string]any{"x": 640, "y": 400, "button": "middle", "pace": "instant"})
-	if _, err := v.do(http.MethodPost, "/input/click", body, http.StatusNoContent, controlWait); err != nil {
+	if _, err := v.do(context.Background(), http.MethodPost, "/input/click", body, http.StatusNoContent, controlWait); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(1500 * time.Millisecond)

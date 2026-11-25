@@ -150,6 +150,12 @@ func (m *Manager) TakeControlGen(id string) (gen uint64, err error) {
 			m.untakeLocked(l, gen)
 			return 0, ErrNotRunning
 		}
+		if !l.human || l.humanGen != gen || l.releasing {
+			// Handed back meanwhile (the profile page's Hand back, a
+			// handoff ending): that ended this takeover before the
+			// person ever had it, and no generation of it is handed out.
+			return 0, ErrNotInControl
+		}
 	}
 	return gen, nil
 }
@@ -195,22 +201,26 @@ var ErrNotInControl = errors.New("you don't have control of this browser")
 // is stopping, say). Call done once the input has reached the browser:
 // ReleaseControl waits for input under way, so none lands (text put on
 // the clipboard, say) after it has emptied the clipboard.
-func (m *Manager) HumanInput(id string, gen uint64) (done func(), err error) {
+//
+// Send the input with ctx: it ends as the session does, and the session
+// lets go of its profile only once done is called, so the input can't
+// reach the profile's next browser, which listens on the same socket.
+func (m *Manager) HumanInput(id string, gen uint64) (ctx context.Context, done func(), err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.findLocked(id)
 	if l == nil {
-		return nil, ErrNotRunning
+		return nil, nil, ErrNotRunning
 	}
 	if !l.human || l.humanGen != gen || l.releasing {
-		return nil, ErrNotInControl
+		return nil, nil, ErrNotInControl
 	}
 	if l.sess.State != Running && l.sess.State != NeedsHelp {
-		return nil, ErrNotRunning
+		return nil, nil, ErrNotRunning
 	}
 	l.lastActivity = m.now()
 	l.humanInputs++
-	return sync.OnceFunc(func() {
+	return l.opCtx, sync.OnceFunc(func() {
 		m.mu.Lock()
 		l.humanInputs--
 		m.inputsDone.Broadcast()
@@ -218,19 +228,29 @@ func (m *Manager) HumanInput(id string, gen uint64) (done func(), err error) {
 	}), nil
 }
 
+// InControl reports whether the takeover of generation gen still holds
+// the browser and isn't ending.
+func (m *Manager) InControl(id string, gen uint64) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l := m.findLocked(id)
+	return l != nil && l.human && l.humanGen == gen && !l.releasing
+}
+
 // ReleaseControl hands the browser back to agents, whatever ends the
 // person's control: they hand back, a handoff ends, the live view goes.
-// First it empties the browser's clipboard and PRIMARY selection
-// (PROJ-194), so no agent can paste what the person put there, copied or
-// selected in the page: it waits for their input under way and a moment
-// more (clipboardSettle), refuses more, and only then lets agents in. If
-// the clipboard can't be emptied, that is logged and the browser handed
-// back all the same. A browser that is stopping keeps its clipboard: the
-// container takes it along, or, if the stop fails, runStop empties it
-// before agents get the browser back. Recording (PROJ-23) stays off
-// throughout, and the
-// gate is asked again only as agents get the browser back. It returns
-// once agents have the browser.
+// First it lets go of any key or mouse button the person still holds
+// (a drag when a handoff expires), then empties the browser's clipboard
+// and PRIMARY selection (PROJ-194), so no agent can paste what the
+// person put there, copied or selected in the page: it waits for their
+// input under way and a moment more (clipboardSettle), refuses more, and
+// only then lets agents in. If the clipboard can't be emptied, that is
+// logged and the browser handed back all the same. A browser that is
+// stopping keeps its clipboard: the container takes it along, or, if the
+// stop fails, runStop empties it before agents get the browser back.
+// Recording (PROJ-23) stays off throughout, and the gate is asked again
+// only as agents get the browser back. It returns once agents have the
+// browser.
 //
 // It ends whoever's control it is: it is for what ends a takeover from
 // outside it (a handoff, the profile page's Hand back). The person's own
@@ -242,42 +262,38 @@ func (m *Manager) ReleaseControl(id string) {
 	if l == nil || !l.human {
 		return
 	}
-	m.releaseLocked(l, id, nil)
+	m.releaseLocked(l, id)
 }
 
 // ReleaseControlGen is ReleaseControl for the takeover of generation gen
 // (TakeControlGen) alone: if that control has ended already, however, it
 // does nothing and returns false, so a live view that missed the end of
-// its control never ends, or empties the clipboard of, the takeover of
-// whoever took the browser since (PROJ-196). The check and the release
-// are one step under m.mu, and no one else can take control until the
-// release is over. lift, if set, runs once the takeover is known to be
-// this one's and to be ending, the person's input under way done, before
-// the clipboard is emptied: it lets go of keys and buttons the person
-// held, never anyone else's.
-func (m *Manager) ReleaseControlGen(id string, gen uint64, lift func()) bool {
+// its control never ends, or lifts the keys or empties the clipboard of,
+// the takeover of whoever took the browser since (PROJ-196). The check
+// and the release are one step under m.mu, and no one else can take
+// control until the release is over.
+func (m *Manager) ReleaseControlGen(id string, gen uint64) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.findLocked(id)
 	if l == nil || !l.human || l.humanGen != gen {
 		return false
 	}
-	if l.releasing {
-		// Ended for them meanwhile (a handoff, the profile page): that
-		// hand-back finishes it.
-		m.releaseLocked(l, id, nil)
-		return false
-	}
-	m.releaseLocked(l, id, lift)
-	return true
+	ended := !l.releasing // otherwise ended for them meanwhile: that hand-back finishes it
+	m.releaseLocked(l, id)
+	return ended
 }
 
 // releaseLocked ends l's person's control (see ReleaseControl); m.mu is
-// held, and let go of meanwhile.
-func (m *Manager) releaseLocked(l *live, id string, lift func()) {
+// held, and let go of meanwhile. Throughout, human stays set, so no one
+// else can take control before the end.
+func (m *Manager) releaseLocked(l *live, id string) {
 	if l.releasing {
-		// Another hand-back is emptying the clipboard: done when it is.
-		for m.findLocked(id) == l && l.human {
+		// Another hand-back is ending this takeover: done when it has,
+		// not when some later one has too (someone may take control the
+		// moment it ends).
+		gen := l.humanGen
+		for m.findLocked(id) == l && l.human && l.humanGen == gen {
 			m.inputsDone.Wait()
 		}
 		return
@@ -286,23 +302,34 @@ func (m *Manager) releaseLocked(l *live, id string, lift func()) {
 	for l.humanInputs > 0 {
 		m.inputsDone.Wait()
 	}
-	if lift != nil {
-		// Still this person's: human stays set, so no one can take
-		// control, until the end below.
-		m.mu.Unlock()
-		lift()
-		m.mu.Lock()
+	profile := l.sess.Profile
+	// Let go of whatever key or button the person still holds, so whoever
+	// drives next doesn't inherit a pressed one, however their control
+	// ended. While the browser runs, waits for help or is stopping (a
+	// stop may fail); not once the session is over.
+	if l.sess.State == Running || l.sess.State == NeedsHelp || l.sess.State == Stopping {
+		if ctx, ok := m.sockOpLocked(l); ok {
+			m.mu.Unlock()
+			if err := m.control(ctx, profile, http.MethodPost, "/input/release", nil, nil); err != nil && ctx.Err() == nil {
+				m.log.Warn("couldn't let go of the keys and buttons held as a person's control ended", "session", id, "err", err)
+			}
+			m.mu.Lock()
+			m.sockOpDoneLocked(l)
+		}
 	}
 	switch l.sess.State {
 	case Running, NeedsHelp:
-		profile := l.sess.Profile
-		m.mu.Unlock()
-		// The person's last keys have reached the browser, but Chromium
-		// takes the selection a moment after a Ctrl+C: let it land, so it
-		// is emptied too.
-		time.Sleep(clipboardSettle)
-		m.emptyClipboard(id, profile)
-		m.mu.Lock()
+		if ctx, ok := m.sockOpLocked(l); ok {
+			m.mu.Unlock()
+			// The person's last keys have reached the browser, but
+			// Chromium takes the selection a moment after a Ctrl+C: let
+			// it land, so it is emptied too.
+			if settle(ctx) {
+				m.emptyClipboard(ctx, id, profile)
+			}
+			m.mu.Lock()
+			m.sockOpDoneLocked(l)
+		}
 	case Stopping:
 		// The container takes the clipboard along; if the stop fails
 		// instead, runStop empties it before agents are let back in.
@@ -323,12 +350,75 @@ func (m *Manager) releaseLocked(l *live, id string, lift func()) {
 // input has reached the browser, before it empties the clipboard.
 const clipboardSettle = 100 * time.Millisecond
 
+// settle waits clipboardSettle, and reports false if ctx ended first.
+func settle(ctx context.Context) bool {
+	t := time.NewTimer(clipboardSettle)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // emptyClipboard empties a running browser's clipboard, a person's
 // control ending (PROJ-194). A failure is logged without what the
-// clipboard held, which BrowserPier never sees here.
-func (m *Manager) emptyClipboard(sessionID, profile string) {
-	if err := m.control(m.ctx, profile, http.MethodDelete, "/input/clipboard", nil, nil); err != nil {
+// clipboard held, which BrowserPier never sees here; not when the session
+// ended meanwhile (ctx), its container taking the clipboard along.
+func (m *Manager) emptyClipboard(ctx context.Context, sessionID, profile string) {
+	if err := m.control(ctx, profile, http.MethodDelete, "/input/clipboard", nil, nil); err != nil && ctx.Err() == nil {
 		m.log.Warn("couldn't empty the browser's clipboard as a person's control ended", "session", sessionID, "err", err)
+	}
+}
+
+// sockOpLocked admits one of BrowserPier's own calls on l's control
+// socket that runs without m.mu (a hand-back's lift or clipboard
+// emptying), for l's browser alone: it returns the context to make it
+// with, and false once the session is ending. Call sockOpDoneLocked, with
+// m.mu, once it is over: end waits for that before the profile, and its
+// socket, can have a new browser.
+func (m *Manager) sockOpLocked(l *live) (context.Context, bool) {
+	if l.opCtx.Err() != nil {
+		return nil, false
+	}
+	l.sockOps++
+	return l.opCtx, true
+}
+
+func (m *Manager) sockOpDoneLocked(l *live) {
+	l.sockOps--
+	m.inputsDone.Broadcast()
+}
+
+// sockOpWait bounds how long a session's end waits for its calls on the
+// control socket. Each has a deadline well within it (controlWait, the
+// control helper's 5 s), and the session's end cancels them at once: it
+// is only a backstop against a caller that never says done.
+const sockOpWait = 30 * time.Second
+
+// waitSockOpsLocked waits, with m.mu held, until no call admitted for
+// l's browser on the control socket is under way: the person's input
+// (HumanInput) and a hand-back's or runStop's own (sockOpLocked). l's
+// session has ended, so no more are admitted.
+func (m *Manager) waitSockOpsLocked(l *live) {
+	if l.sockOps == 0 && l.humanInputs == 0 {
+		return
+	}
+	expired := false
+	t := time.AfterFunc(sockOpWait, func() {
+		m.mu.Lock()
+		expired = true
+		m.inputsDone.Broadcast()
+		m.mu.Unlock()
+	})
+	defer t.Stop()
+	for (l.sockOps > 0 || l.humanInputs > 0) && !expired {
+		m.inputsDone.Wait()
+	}
+	if expired {
+		m.log.Error("a session ended with calls to its browser still under way; its profile is let go all the same",
+			"session", l.sess.ID, "calls", l.sockOps+l.humanInputs)
 	}
 }
 

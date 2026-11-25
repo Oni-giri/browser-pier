@@ -152,6 +152,8 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 				msg = "Someone else has control."
 			case errors.Is(err, sessions.ErrAgentDriving):
 				msg = "The agent is driving."
+			case errors.Is(err, sessions.ErrNotInControl):
+				msg = "The browser was handed back before you got control."
 			}
 			http.Error(w, msg, http.StatusConflict)
 			return
@@ -164,7 +166,7 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 	v, answer, err := h.relay.Connect(ctx, profile, in.SDP, vw.message)
 	if err != nil {
 		if control {
-			h.m.ReleaseControlGen(s.ID, gen, nil) // nothing was pressed yet: no need to lift keys
+			h.m.ReleaseControlGen(s.ID, gen)
 		}
 		unwatch()
 		http.Error(w, "couldn't connect: "+err.Error(), http.StatusBadRequest)
@@ -262,8 +264,12 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 	switch m.Type {
 	case "take":
 		if v.control {
-			say(map[string]any{"type": "control", "on": true})
-			return
+			if v.h.m.InControl(v.session, v.gen) {
+				say(map[string]any{"type": "control", "on": true})
+				return
+			}
+			// Its control ended elsewhere: this is a take afresh.
+			v.releaseLocked()
 		}
 		gen, err := v.h.m.TakeControlGen(v.session)
 		switch {
@@ -274,6 +280,8 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 			say(map[string]any{"type": "control", "on": true})
 		case errors.Is(err, sessions.ErrAgentDriving):
 			say(map[string]any{"type": "error", "msg": "The agent is driving. Try again in a few seconds, or when it asks for help."})
+		case errors.Is(err, sessions.ErrNotInControl):
+			say(map[string]any{"type": "error", "msg": "The browser was handed back before you got control. Try again."})
 		default:
 			say(map[string]any{"type": "error", "msg": "The browser isn't running."})
 		}
@@ -281,6 +289,7 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 		v.releaseLocked()
 		say(map[string]any{"type": "control", "on": false})
 	case "lift", "input", "text", "clipboard", "clipboard-set":
+		var ctx context.Context
 		var done func()
 		var err error
 		if v.control {
@@ -289,7 +298,9 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 			// own takeover: once its control has ended, whoever drives now
 			// (a person, or an agent mid-drag) gets nothing from it, not
 			// even a lift.
-			done, err = v.h.m.HumanInput(v.session, v.gen)
+			// ctx ends with the session, which waits for done before its
+			// profile can have a new browser on the same socket.
+			ctx, done, err = v.h.m.HumanInput(v.session, v.gen)
 		}
 		if !v.control || err != nil {
 			if m.Type == "lift" && !v.control {
@@ -310,16 +321,16 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 		defer done()
 		switch m.Type {
 		case "lift":
-			_ = v.post("/input/release", nil)
+			_ = v.post(ctx, "/input/release", nil)
 		case "clipboard":
-			text, err := v.do(http.MethodGet, "/input/clipboard", nil, http.StatusOK, controlWait)
+			text, err := v.do(ctx, http.MethodGet, "/input/clipboard", nil, http.StatusOK, controlWait)
 			if err != nil {
 				say(map[string]any{"type": "clipboard-error", "id": m.ID, "msg": "Couldn't read the browser's clipboard: " + err.Error()})
 				return
 			}
 			say(map[string]any{"type": "clipboard", "id": m.ID, "text": string(text)})
 		case "clipboard-set":
-			v.setClipboard(m.ID, m.Text, m.Paste, say)
+			v.setClipboard(ctx, m.ID, m.Text, m.Paste, say)
 		default:
 			path, body := "/input/events", []byte(m.Events)
 			if m.Type == "text" {
@@ -327,7 +338,7 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 				// A person typing: at once, not at an agent's human pace.
 				body, _ = json.Marshal(map[string]string{"text": m.Text, "pace": "instant"})
 			}
-			if err := v.post(path, body); err != nil {
+			if err := v.post(ctx, path, body); err != nil {
 				say(map[string]any{"type": "error", "msg": err.Error()})
 			}
 		}
@@ -341,7 +352,7 @@ const maxClipboardSet = 10000
 // setClipboard puts the clipboard box's text on the browser's clipboard
 // and, with paste, presses Ctrl+V. The log says only that it happened:
 // not the text, nor its length, which would tell agents a password's.
-func (v *viewer) setClipboard(id int, text string, paste bool, say func(any)) {
+func (v *viewer) setClipboard(ctx context.Context, id int, text string, paste bool, say func(any)) {
 	fail := func(msg string) { say(map[string]any{"type": "clipboard-error", "id": id, "msg": msg}) }
 	n := utf8.RuneCountInString(text)
 	switch {
@@ -357,7 +368,7 @@ func (v *viewer) setClipboard(id int, text string, paste bool, say func(any)) {
 		path, what = "/input/paste", "Pasted from the clipboard box"
 	}
 	body, _ := json.Marshal(map[string]string{"text": text})
-	if err := v.post(path, body); err != nil {
+	if err := v.post(ctx, path, body); err != nil {
 		fail("Couldn't send it to the browser: " + err.Error())
 		return
 	}
@@ -373,20 +384,20 @@ func (v *viewer) handBack() {
 	v.releaseLocked()
 }
 
-// releaseLocked ends this viewer's control, if it still has it: lifting
-// what the person held first. Control that has ended without it (and
-// perhaps been taken by someone else since) is left alone: the viewer
-// only forgets it had it.
+// releaseLocked ends this viewer's control, if it still has it (the
+// hand-back lets go of what the person held first). Control that has
+// ended without it (and perhaps been taken by someone else since) is
+// left alone: the viewer only forgets it had it.
 func (v *viewer) releaseLocked() {
 	if !v.control {
 		return
 	}
 	v.control = false
-	v.h.m.ReleaseControlGen(v.session, v.gen, func() { _ = v.post("/input/release", nil) })
+	v.h.m.ReleaseControlGen(v.session, v.gen)
 }
 
-func (v *viewer) post(path string, body []byte) error {
-	_, err := v.do(http.MethodPost, path, body, http.StatusNoContent, controlWait)
+func (v *viewer) post(ctx context.Context, path string, body []byte) error {
+	_, err := v.do(ctx, http.MethodPost, path, body, http.StatusNoContent, controlWait)
 	return err
 }
 
@@ -398,9 +409,10 @@ const controlWait = 10 * time.Second
 const maxClipboard = 32 << 10
 
 // do calls the container's control socket, wanting status want, within
-// wait, and returns the answer's body.
-func (v *viewer) do(method, path string, body []byte, want int, wait time.Duration) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), wait)
+// wait and while ctx lasts (HumanInput's: the session's), and returns the
+// answer's body.
+func (v *viewer) do(ctx context.Context, method, path string, body []byte, want int, wait time.Duration) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	c := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", v.sock)

@@ -165,6 +165,15 @@ type live struct {
 	failure string
 	// stop is the stop in progress, if any; everyone stopping waits on it.
 	stop *stopAttempt
+	// opCtx is for this session's calls on its profile's control socket
+	// that run without m.mu: the person's input (HumanInput) and a
+	// hand-back's lift and clipboard emptying. It ends as the session
+	// does (end), and end waits for those calls (sockOps, humanInputs)
+	// before it lets go of the profile, so none outlives the session to
+	// reach the next browser on the same socket.
+	opCtx    context.Context
+	opCancel context.CancelFunc
+	sockOps  int
 	// conns are the agents' open connections to the browser.
 	conns map[*conn]struct{}
 	// lastActivity is when an agent or person last used the browser.
@@ -233,8 +242,10 @@ type stopAttempt struct {
 	err  error // set before done closes
 }
 
-func newLive(s Session) *live {
-	return &live{sess: s, ready: make(chan struct{}), done: make(chan struct{}), lastActivity: time.Now()}
+func newLive(parent context.Context, s Session) *live {
+	l := &live{sess: s, ready: make(chan struct{}), done: make(chan struct{}), lastActivity: time.Now()}
+	l.opCtx, l.opCancel = context.WithCancel(parent)
+	return l
 }
 
 // markReady unblocks everyone waiting for the start to resolve, either way.
@@ -450,7 +461,7 @@ func (m *Manager) begin(ctx context.Context, profile string, mode profiles.Mode,
 	if err := insertSession(ctx, m.db, s); err != nil {
 		return nil, p, err
 	}
-	l := newLive(s)
+	l := newLive(m.ctx, s)
 	l.lastActivity = now
 	l.record = p.Record
 	m.live[profile] = l
@@ -915,6 +926,10 @@ func (m *Manager) end(l *live, lastLog string, final func(*Session)) {
 	l.sess.Error = sc.String(l.sess.Error)
 	l.sess.UpdatedAt = m.now()
 	m.regateLocked(l)
+	// No more calls on the control socket for this session: those under
+	// way break off (and are waited for below), and HumanInput and a
+	// hand-back admit no more, the session being final.
+	l.opCancel()
 	s := l.sess
 	m.mu.Unlock()
 	m.removeProxyFile(s.Profile)
@@ -927,6 +942,9 @@ func (m *Manager) end(l *live, lastLog string, final func(*Session)) {
 		m.log.Error("saving the final session state", "session", s.ID, "state", s.State, "try", i+1, "err", err)
 	}
 	m.mu.Lock()
+	// The profile's next browser listens on the same socket: nothing
+	// admitted for this one may still be on its way there.
+	m.waitSockOpsLocked(l)
 	if m.live[s.Profile] == l {
 		delete(m.live, s.Profile)
 	}
@@ -1205,12 +1223,16 @@ func (m *Manager) runStop(l *live, attempt *stopAttempt, cid string, prev State)
 				// PROJ-23).
 				l.clipboardLeft = false
 				id, profile := l.sess.ID, l.sess.Profile
-				m.mu.Unlock()
-				// As ReleaseControl does: a copy pressed just before the
-				// stop lands first, and is emptied too.
-				time.Sleep(clipboardSettle)
-				m.emptyClipboard(id, profile)
-				m.mu.Lock()
+				if ctx, ok := m.sockOpLocked(l); ok {
+					m.mu.Unlock()
+					// As ReleaseControl does: a copy pressed just before
+					// the stop lands first, and is emptied too.
+					if settle(ctx) {
+						m.emptyClipboard(ctx, id, profile)
+					}
+					m.mu.Lock()
+					m.sockOpDoneLocked(l)
+				}
 			}
 			if l.sess.State == Stopping {
 				l.sess.State = prev

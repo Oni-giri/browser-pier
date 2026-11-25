@@ -81,7 +81,7 @@ func TestStaleViewerLeavesTheNextTakeoverAlone(t *testing.T) {
 			// A's control ends from outside its live view.
 			m.ReleaseControl(s.ID)
 			open = false
-			if got := strings.Join(c.took(), " "); got != "empty" {
+			if got := strings.Join(c.took(), " "); got != "release empty" {
 				t.Fatalf("as A's control ended, the browser got %q", got)
 			}
 			// B takes the browser and puts something on its clipboard.
@@ -166,5 +166,64 @@ func TestInputRefusedWhileStoppingEndsControl(t *testing.T) {
 	a.v.handBack() // the live view goes: nothing more to end
 	if got := c.took(); len(got) != 0 {
 		t.Errorf("the gone viewer reached the browser: %v", got)
+	}
+}
+
+// A handoff that ends during a drag (it expires, say) lets go of the
+// mouse button before anyone else drives: whoever ends the person's
+// control lifts what they held, not only their own live view (PROJ-196).
+func TestControlEndedElsewhereLetsGoOfHeldButtons(t *testing.T) {
+	var c fakeClipboard
+	h, m, s := offerFixtureWith(t, c.routes, slog.New(slog.DiscardHandler))
+	sock := m.Layout().ControlSocket("google")
+	a := newTalk(t, &viewer{h: h, session: s.ID, sock: sock})
+	if r := a.send(`{"type":"take"}`); len(r) != 1 || r[0]["on"] != true {
+		t.Fatalf("take: %v", r)
+	}
+	if r := a.send(`{"type":"input","events":[{"t":"down","b":1}]}`); len(r) != 0 {
+		t.Fatalf("mouse down: %v", r)
+	}
+	m.ReleaseControl(s.ID) // the handoff expires
+	a.v.handBack()         // and its page goes
+	if got := strings.Join(c.took(), " "); got != "events release empty" {
+		t.Errorf("the browser got %q, want the button let go before the clipboard is emptied", got)
+	}
+}
+
+// A take from a live view whose control ended elsewhere is a take afresh,
+// answered by the manager, not by the view's own memory of having had
+// control (PROJ-196).
+func TestRepeatedTakeAsksWhoHasControl(t *testing.T) {
+	var c fakeClipboard
+	h, m, s := offerFixtureWith(t, c.routes, slog.New(slog.DiscardHandler))
+	sock := m.Layout().ControlSocket("google")
+	a := newTalk(t, &viewer{h: h, session: s.ID, sock: sock})
+	if r := a.send(`{"type":"take"}`); len(r) != 1 || r[0]["on"] != true {
+		t.Fatalf("take: %v", r)
+	}
+	if r := a.send(`{"type":"take"}`); len(r) != 1 || r[0]["on"] != true {
+		t.Fatalf("take again, still in control: %v", r)
+	}
+	m.ReleaseControl(s.ID)
+	if err := m.TakeControl(s.ID); err != nil { // someone else
+		t.Fatal(err)
+	}
+	if r := a.send(`{"type":"take"}`); len(r) != 1 || r[0]["type"] != "error" {
+		t.Errorf("take while someone else has control: %v, want an error", r)
+	}
+	m.ReleaseControl(s.ID)
+	c.took()
+	// Free again: A takes it for real, and drives.
+	if r := a.send(`{"type":"take"}`); len(r) != 1 || r[0]["on"] != true {
+		t.Fatalf("take once free: %v", r)
+	}
+	if got, _ := m.Live("google"); !got.HumanControl {
+		t.Fatal("told it has control, but no one has")
+	}
+	if r := a.send(`{"type":"input","events":[]}`); len(r) != 0 {
+		t.Errorf("input: %v", r)
+	}
+	if got := strings.Join(c.took(), " "); got != "events" {
+		t.Errorf("the browser got %q", got)
 	}
 }
