@@ -145,7 +145,9 @@ func (m *Manager) PauseRecording(id string) (resume func(), err error) {
 func (m *Manager) RefreshRecording(ctx context.Context, profile string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	p, err := m.profiles.Get(ctx, profile)
+	// The save has happened: a request cancelled while it waited for the
+	// lock must not leave the browser on the old setting.
+	p, err := m.profiles.Get(context.WithoutCancel(ctx), profile)
 	if err != nil {
 		return err
 	}

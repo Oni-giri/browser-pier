@@ -1201,6 +1201,9 @@ func (m *Manager) runStop(l *live, attempt *stopAttempt, cid string, prev State)
 				l.clipboardLeft = false
 				id, profile := l.sess.ID, l.sess.Profile
 				m.mu.Unlock()
+				// As ReleaseControl does: a copy pressed just before the
+				// stop lands first, and is emptied too.
+				time.Sleep(clipboardSettle)
 				m.emptyClipboard(id, profile)
 				m.mu.Lock()
 			}
