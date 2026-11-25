@@ -183,6 +183,11 @@ type live struct {
 	generation uint64
 	// human is set while a person has control from the live view.
 	human bool
+	// humanGen is the generation the person in control took it at
+	// (TakeControlGen): only input and a hand-back that name it count, so
+	// a live view whose control ended elsewhere can't use, or end, the
+	// next person's (PROJ-196).
+	humanGen uint64
 	// releasing is set while ReleaseControl empties the clipboard, before
 	// human is cleared; humanInputs counts the person's inputs under way
 	// (HumanInput), which it waits for first.

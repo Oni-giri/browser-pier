@@ -2,6 +2,7 @@ package sessions
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sync"
 	"time"
@@ -77,36 +78,46 @@ func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, f
 // connections are refused. During a handoff (Needs help) the agent is
 // paused, so it always succeeds.
 func (m *Manager) TakeControl(id string) error {
+	_, err := m.TakeControlGen(id)
+	return err
+}
+
+// TakeControlGen is TakeControl, returning the generation this takeover
+// has: the person's input (HumanInput) and their own hand-back
+// (ReleaseControlGen) name it, so once their control has ended some other
+// way and someone else has taken the browser, nothing they still send
+// reaches it (PROJ-196).
+func (m *Manager) TakeControlGen(id string) (gen uint64, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.findLocked(id)
 	if l == nil || (l.sess.State != Running && l.sess.State != NeedsHelp) {
-		return ErrNotRunning
+		return 0, ErrNotRunning
 	}
 	now := m.now()
 	breakOff := false
 	if l.sess.State == Running {
 		if len(l.conns) > 0 {
-			return ErrAgentDriving
+			return 0, ErrAgentDriving
 		}
 		for ls := range l.leases {
 			if !ls.breakable || now.Sub(ls.started) < takeOverAfter {
-				return ErrAgentDriving
+				return 0, ErrAgentDriving
 			}
 			breakOff = true
 		}
 		for in := range l.inputs {
 			if now.Sub(in.started) < takeOverAfter {
-				return ErrAgentDriving
+				return 0, ErrAgentDriving
 			}
 			breakOff = true
 		}
 		if !breakOff && now.Sub(l.lastAgentInput) < agentQuiet {
-			return ErrAgentDriving
+			return 0, ErrAgentDriving
 		}
 	}
 	if l.human {
-		return ErrHumanDriving // one person at a time
+		return 0, ErrHumanDriving // one person at a time
 	}
 	l.human = true
 	// Recording stops here, under m.mu and before anything else: no
@@ -115,6 +126,8 @@ func (m *Manager) TakeControl(id string) error {
 	// human until it has.
 	m.personTookLocked(l)
 	l.generation++
+	l.humanGen = l.generation
+	gen = l.generation
 	l.lastActivity = now
 	if breakOff {
 		// New agent input and page calls are refused from now on
@@ -131,21 +144,35 @@ func (m *Manager) TakeControl(id string) error {
 	if len(l.inputs) > 0 || len(l.leases) > 0 {
 		m.waitLeasesLocked(l)
 		if m.findLocked(id) != l || !l.sess.State.Live() {
-			return ErrNotRunning // stopped meanwhile
+			return 0, ErrNotRunning // stopped meanwhile
 		}
 	}
-	return nil
+	return gen, nil
 }
 
-// HumanInput records that the person in control used the browser. It
-// fails unless they hold control. Call done once the input has reached
-// the browser: ReleaseControl waits for input under way, so none lands
-// (text put on the clipboard, say) after it has emptied the clipboard.
-func (m *Manager) HumanInput(id string) (done func(), err error) {
+// ErrNotInControl: the person's control ended (they handed back, or it
+// was ended for them: a handoff ended, the profile page's Hand back), and
+// whoever drives now, if anyone, took it afresh.
+var ErrNotInControl = errors.New("you don't have control of this browser")
+
+// HumanInput records that the person who took control as generation gen
+// (TakeControlGen) used the browser. It fails with ErrNotInControl unless
+// that takeover still holds control and isn't ending, and with
+// ErrNotRunning while the browser isn't running or waiting for help (it
+// is stopping, say). Call done once the input has reached the browser:
+// ReleaseControl waits for input under way, so none lands (text put on
+// the clipboard, say) after it has emptied the clipboard.
+func (m *Manager) HumanInput(id string, gen uint64) (done func(), err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.findLocked(id)
-	if l == nil || !l.human || l.releasing || (l.sess.State != Running && l.sess.State != NeedsHelp) {
+	if l == nil {
+		return nil, ErrNotRunning
+	}
+	if !l.human || l.humanGen != gen || l.releasing {
+		return nil, ErrNotInControl
+	}
+	if l.sess.State != Running && l.sess.State != NeedsHelp {
 		return nil, ErrNotRunning
 	}
 	l.lastActivity = m.now()
@@ -171,6 +198,10 @@ func (m *Manager) HumanInput(id string) (done func(), err error) {
 // throughout, and the
 // gate is asked again only as agents get the browser back. It returns
 // once agents have the browser.
+//
+// It ends whoever's control it is: it is for what ends a takeover from
+// outside it (a handoff, the profile page's Hand back). The person's own
+// live view hands back with ReleaseControlGen.
 func (m *Manager) ReleaseControl(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -178,6 +209,39 @@ func (m *Manager) ReleaseControl(id string) {
 	if l == nil || !l.human {
 		return
 	}
+	m.releaseLocked(l, id, nil)
+}
+
+// ReleaseControlGen is ReleaseControl for the takeover of generation gen
+// (TakeControlGen) alone: if that control has ended already, however, it
+// does nothing and returns false, so a live view that missed the end of
+// its control never ends, or empties the clipboard of, the takeover of
+// whoever took the browser since (PROJ-196). The check and the release
+// are one step under m.mu, and no one else can take control until the
+// release is over. lift, if set, runs once the takeover is known to be
+// this one's and to be ending, the person's input under way done, before
+// the clipboard is emptied: it lets go of keys and buttons the person
+// held, never anyone else's.
+func (m *Manager) ReleaseControlGen(id string, gen uint64, lift func()) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l := m.findLocked(id)
+	if l == nil || !l.human || l.humanGen != gen {
+		return false
+	}
+	if l.releasing {
+		// Ended for them meanwhile (a handoff, the profile page): that
+		// hand-back finishes it.
+		m.releaseLocked(l, id, nil)
+		return false
+	}
+	m.releaseLocked(l, id, lift)
+	return true
+}
+
+// releaseLocked ends l's person's control (see ReleaseControl); m.mu is
+// held, and let go of meanwhile.
+func (m *Manager) releaseLocked(l *live, id string, lift func()) {
 	if l.releasing {
 		// Another hand-back is emptying the clipboard: done when it is.
 		for m.findLocked(id) == l && l.human {
@@ -188,6 +252,13 @@ func (m *Manager) ReleaseControl(id string) {
 	l.releasing = true
 	for l.humanInputs > 0 {
 		m.inputsDone.Wait()
+	}
+	if lift != nil {
+		// Still this person's: human stays set, so no one can take
+		// control, until the end below.
+		m.mu.Unlock()
+		lift()
+		m.mu.Lock()
 	}
 	switch l.sess.State {
 	case Running, NeedsHelp:

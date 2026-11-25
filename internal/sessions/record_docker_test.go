@@ -291,7 +291,7 @@ func TestRecordingStopsForAPerson(t *testing.T) {
 	personTypes := func(text string) {
 		t.Helper()
 		// What the live view sends for a person's paste (viewer.message).
-		done, err := r.m.HumanInput(s.ID)
+		done, err := humanInput(r.m, s.ID)
 		if err != nil {
 			t.Fatalf("the person has no control: %v", err)
 		}

@@ -143,7 +143,8 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 	// A viewer promised control gets it or isn't connected: a page that
 	// thinks it drives while it only watches would send input into nothing.
 	if o.Control {
-		if err := h.m.TakeControl(s.ID); err != nil {
+		gen, err := h.m.TakeControlGen(s.ID)
+		if err != nil {
 			unwatch()
 			msg := "The browser isn't running."
 			switch {
@@ -155,15 +156,15 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 			http.Error(w, msg, http.StatusConflict)
 			return
 		}
-		vw.control = true
+		vw.control, vw.gen = true, gen
 	}
-	control := vw.control // read before the data channel can change it
+	control, gen := vw.control, vw.gen // read before the data channel can change them
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	v, answer, err := h.relay.Connect(ctx, profile, in.SDP, vw.message)
 	if err != nil {
 		if control {
-			h.m.ReleaseControl(s.ID) // nothing was pressed yet: no need to lift keys
+			h.m.ReleaseControlGen(s.ID, gen, nil) // nothing was pressed yet: no need to lift keys
 		}
 		unwatch()
 		http.Error(w, "couldn't connect: "+err.Error(), http.StatusBadRequest)
@@ -193,8 +194,14 @@ type viewer struct {
 	allowed func() bool // nil: always
 	conn    *Viewer
 
-	mu        sync.Mutex
+	mu sync.Mutex
+	// control is set once this viewer took control, as generation gen
+	// (TakeControlGen). Its control can also end without it (a handoff
+	// ends, the profile page's Hand back), and someone else take the
+	// browser: whatever it sends then names gen, which the manager no
+	// longer honours, so it never uses or ends that takeover (PROJ-196).
 	control   bool
+	gen       uint64
 	checkedAt time.Time // when allowed last said yes
 }
 
@@ -258,12 +265,12 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 			say(map[string]any{"type": "control", "on": true})
 			return
 		}
-		err := v.h.m.TakeControl(v.session)
+		gen, err := v.h.m.TakeControlGen(v.session)
 		switch {
 		case errors.Is(err, sessions.ErrHumanDriving):
 			say(map[string]any{"type": "error", "msg": "Someone else has control."})
 		case err == nil:
-			v.control = true
+			v.control, v.gen = true, gen
 			say(map[string]any{"type": "control", "on": true})
 		case errors.Is(err, sessions.ErrAgentDriving):
 			say(map[string]any{"type": "error", "msg": "The agent is driving. Try again in a few seconds, or when it asks for help."})
@@ -273,20 +280,27 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 	case "release":
 		v.releaseLocked()
 		say(map[string]any{"type": "control", "on": false})
-	case "lift":
-		if v.control {
-			_ = v.post("/input/release", nil)
-		}
-	case "input", "text", "clipboard", "clipboard-set":
+	case "lift", "input", "text", "clipboard", "clipboard-set":
 		var done func()
 		var err error
 		if v.control {
 			// Held until the input has reached the browser: a hand-back
-			// empties the clipboard only after it.
-			done, err = v.h.m.HumanInput(v.session)
+			// empties the clipboard only after it. Only for this viewer's
+			// own takeover: once its control has ended, whoever drives now
+			// (a person, or an agent mid-drag) gets nothing from it, not
+			// even a lift.
+			done, err = v.h.m.HumanInput(v.session, v.gen)
 		}
 		if !v.control || err != nil {
-			v.control = false
+			if m.Type == "lift" && !v.control {
+				return // nothing held: the page lost focus without control
+			}
+			// A browser that is stopping refuses input while this viewer
+			// still holds control: its control ends with the refusal, as
+			// the page is told, rather than outliving it with no one
+			// holding it if the stop fails. For control that has ended,
+			// this only drops the flag.
+			v.releaseLocked()
 			if m.Type == "clipboard" || m.Type == "clipboard-set" {
 				say(map[string]any{"type": "clipboard-error", "id": m.ID, "msg": "You don't have control."})
 			}
@@ -295,6 +309,8 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 		}
 		defer done()
 		switch m.Type {
+		case "lift":
+			_ = v.post("/input/release", nil)
 		case "clipboard":
 			text, err := v.do(http.MethodGet, "/input/clipboard", nil, http.StatusOK, controlWait)
 			if err != nil {
@@ -357,13 +373,16 @@ func (v *viewer) handBack() {
 	v.releaseLocked()
 }
 
+// releaseLocked ends this viewer's control, if it still has it: lifting
+// what the person held first. Control that has ended without it (and
+// perhaps been taken by someone else since) is left alone: the viewer
+// only forgets it had it.
 func (v *viewer) releaseLocked() {
 	if !v.control {
 		return
 	}
 	v.control = false
-	_ = v.post("/input/release", nil)
-	v.h.m.ReleaseControl(v.session)
+	v.h.m.ReleaseControlGen(v.session, v.gen, func() { _ = v.post("/input/release", nil) })
 }
 
 func (v *viewer) post(path string, body []byte) error {

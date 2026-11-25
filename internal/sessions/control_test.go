@@ -47,7 +47,7 @@ func TestTakeAndReleaseControl(t *testing.T) {
 	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrHumanDriving) {
 		t.Fatalf("a second person taking control = %v, want ErrHumanDriving", err)
 	}
-	if done, err := f.m.HumanInput(s.ID); err != nil {
+	if done, err := humanInput(f.m, s.ID); err != nil {
 		t.Fatal(err)
 	} else {
 		done()
@@ -60,7 +60,7 @@ func TestTakeAndReleaseControl(t *testing.T) {
 		t.Fatalf("CDP while a person drives = %v", err)
 	}
 	f.m.ReleaseControl(s.ID)
-	if _, err := f.m.HumanInput(s.ID); !errors.Is(err, ErrNotRunning) {
+	if _, err := humanInput(f.m, s.ID); !errors.Is(err, ErrNotInControl) {
 		t.Fatalf("human input after release = %v", err)
 	}
 	if _, done, err := f.m.AgentInput(context.Background(), s.ID); err != nil {
@@ -359,7 +359,7 @@ func TestReleaseControlEmptiesTheClipboardFirst(t *testing.T) {
 		} else {
 			e.pageLease = err
 		}
-		if done, err := f.m.HumanInput(id); err == nil {
+		if done, err := humanInput(f.m, id); err == nil {
 			done()
 		} else {
 			e.humanInput = err
@@ -388,7 +388,7 @@ func TestReleaseControlEmptiesTheClipboardFirst(t *testing.T) {
 		t.Helper()
 		select {
 		case e := <-emptied:
-			if !errors.Is(e.agentInput, ErrHumanDriving) || !errors.Is(e.attach, ErrHumanDriving) || !errors.Is(e.pageLease, ErrHumanDriving) || !errors.Is(e.humanInput, ErrNotRunning) {
+			if !errors.Is(e.agentInput, ErrHumanDriving) || !errors.Is(e.attach, ErrHumanDriving) || !errors.Is(e.pageLease, ErrHumanDriving) || !errors.Is(e.humanInput, ErrNotInControl) {
 				t.Errorf("%s: while emptying, agent input %v, CDP %v, a page call %v, the person's input %v", what, e.agentInput, e.attach, e.pageLease, e.humanInput)
 			}
 		default:
@@ -409,7 +409,7 @@ func TestReleaseControlEmptiesTheClipboardFirst(t *testing.T) {
 
 	// The person's input under way is waited for.
 	take()
-	done, err := f.m.HumanInput(s.ID)
+	done, err := humanInput(f.m, s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -467,6 +467,84 @@ func TestReleaseControlEmptiesTheClipboardFirst(t *testing.T) {
 	}
 }
 
+// A person's input and their own hand-back count only for the takeover
+// they took (TakeControlGen): once it has ended without them and someone
+// else has taken the browser, they neither reach it nor end that
+// takeover; their own hand-back lifts what they held before the
+// clipboard is emptied (PROJ-196).
+func TestControlBelongsToItsTakeover(t *testing.T) {
+	f := newFixture(t)
+	var mu sync.Mutex
+	var calls []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		calls = append(calls, "empty")
+		mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
+	f.rt.Control = mux
+	took := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		out := strings.Join(calls, " ")
+		calls = nil
+		return out
+	}
+	lifted := 0
+	lift := func() {
+		mu.Lock()
+		calls = append(calls, "lift")
+		mu.Unlock()
+		lifted++
+	}
+	s := f.start(f.m)
+
+	first, err := f.m.TakeControlGen(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.m.ReleaseControl(s.ID) // ended from outside: a handoff, the profile page
+	second, err := f.m.TakeControlGen(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second == first {
+		t.Fatalf("both takeovers are generation %d", first)
+	}
+	took()
+	if _, err := f.m.HumanInput(s.ID, first); !errors.Is(err, ErrNotInControl) {
+		t.Errorf("the first person's input during the second's control = %v, want ErrNotInControl", err)
+	}
+	if f.m.ReleaseControlGen(s.ID, first, lift) {
+		t.Error("the first person's hand-back ended the second's control")
+	}
+	if got, _ := f.m.Live("google"); !got.HumanControl {
+		t.Fatal("the second person lost control")
+	}
+	if got := took(); got != "" || lifted != 0 {
+		t.Errorf("the first person's hand-back reached the browser: %q", got)
+	}
+	if done, err := f.m.HumanInput(s.ID, second); err != nil {
+		t.Fatalf("the second person's input = %v", err)
+	} else {
+		done()
+	}
+	if !f.m.ReleaseControlGen(s.ID, second, lift) {
+		t.Error("the second person's hand-back did nothing")
+	}
+	if got := took(); got != "lift empty" {
+		t.Errorf("the second person's hand-back: the browser got %q, want lift, then empty", got)
+	}
+	if got, _ := f.m.Live("google"); got.HumanControl {
+		t.Error("still under a person's control")
+	}
+	if f.m.ReleaseControlGen(s.ID, second, lift) || lifted != 1 {
+		t.Error("handed back twice")
+	}
+}
+
 // syncBuffer is a bytes.Buffer for a logger written from several
 // goroutines.
 type syncBuffer struct {
@@ -484,4 +562,16 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.b.String()
+}
+
+// humanInput is HumanInput for whoever holds control now, as the live
+// view of the person who took it would send it.
+func humanInput(m *Manager, id string) (func(), error) {
+	m.mu.Lock()
+	var gen uint64
+	if l := m.findLocked(id); l != nil {
+		gen = l.humanGen
+	}
+	m.mu.Unlock()
+	return m.HumanInput(id, gen)
 }

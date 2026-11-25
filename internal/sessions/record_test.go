@@ -116,7 +116,7 @@ func TestTakeControlStopsTheRecorderBeforeItReturns(t *testing.T) {
 						rec.note("person has it")
 						return
 					}
-				} else if done, err := f.m.HumanInput(s.ID); err == nil {
+				} else if done, err := humanInput(f.m, s.ID); err == nil {
 					done()
 					rec.note("person has it")
 					return
@@ -590,7 +590,7 @@ func TestRecordingStaysOffWhileTheClipboardIsEmptied(t *testing.T) {
 	if err := f.m.TakeControl(s.ID); err != nil {
 		t.Fatal(err)
 	}
-	done, err := f.m.HumanInput(s.ID)
+	done, err := humanInput(f.m, s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
