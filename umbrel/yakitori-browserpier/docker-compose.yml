@@ -7,7 +7,7 @@ services:
       APP_PORT: 7437
       # Agents, and phones opening handoff links, can't sign in to Umbrel.
       # BrowserPier checks their tokens, PIN and single-use links itself.
-      PROXY_AUTH_WHITELIST: "/api/*,/cdp/*,/mcp,/mcp/*,/h/*,/static/*"
+      PROXY_AUTH_WHITELIST: "/api/*,/cdp/*,/mcp,/mcp/*,/h/*,/static/*,/docs/*"
 
   web:
     # Pinned to the release, with BROWSERPIER_BROWSER_IMAGE below to match

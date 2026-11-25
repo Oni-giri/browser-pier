@@ -6,7 +6,7 @@
 
 - **`umbrel-app.yml`:** the listing. It needs umbrelOS 2.0 or later (`manifestVersion: 2.0`), whose proxy is the one BrowserPier trusts. The app password (`deterministicPassword: true`) is BrowserPier's admin password. Umbrel opens the app on port 7436.
 - **`docker-compose.yml`:** BrowserPier as service `web`, behind Umbrel's proxy.
-  - Agent and handoff paths skip Umbrel's login: `/api`, `/cdp`, `/mcp`, `/h`, `/static`.
+  - Agent and handoff paths skip Umbrel's login: `/api`, `/cdp`, `/mcp`, `/h`, `/static`, and the docs at `/docs`.
   - It mounts the Docker socket to start browsers, which is why this app can't go in Umbrel's official store.
   - Live views use port 7438, UDP and TCP, published directly.
 - **`exports.sh`:** read on the host when the app starts: the host's LAN and Tailscale addresses, for live viewers, and the Docker socket's group.
