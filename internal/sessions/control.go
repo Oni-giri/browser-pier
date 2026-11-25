@@ -189,7 +189,8 @@ func (m *Manager) ReleaseControl(id string) {
 	for l.humanInputs > 0 {
 		m.inputsDone.Wait()
 	}
-	if l.sess.State == Running || l.sess.State == NeedsHelp {
+	switch l.sess.State {
+	case Running, NeedsHelp:
 		profile := l.sess.Profile
 		m.mu.Unlock()
 		// The person's last keys have reached the browser, but Chromium
@@ -198,7 +199,7 @@ func (m *Manager) ReleaseControl(id string) {
 		time.Sleep(clipboardSettle)
 		m.emptyClipboard(id, profile)
 		m.mu.Lock()
-	} else if l.sess.State == Stopping {
+	case Stopping:
 		// The container takes the clipboard along; if the stop fails
 		// instead, runStop empties it before agents are let back in.
 		l.clipboardLeft = true
