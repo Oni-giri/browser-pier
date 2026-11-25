@@ -128,7 +128,7 @@ func TestViewerClipboardBox(t *testing.T) {
 	var c fakeClipboard
 	var logs syncBuffer
 	h, m, s := offerFixtureWith(t, c.routes, slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	k := newTalk(t, &viewer{h: h, session: s.ID, sock: m.Layout().ControlSocket("google")})
+	k := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: m.Layout().ControlSocket("google")})
 
 	// Without control: refused, with the box told, and nothing reaches
 	// the browser.
@@ -214,7 +214,7 @@ func TestViewerClipboardBox(t *testing.T) {
 func TestViewerTypesText(t *testing.T) {
 	var c fakeClipboard
 	h, m, s := offerFixtureWith(t, c.routes, slog.New(slog.DiscardHandler))
-	k := newTalk(t, &viewer{h: h, session: s.ID, sock: m.Layout().ControlSocket("google")})
+	k := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: m.Layout().ControlSocket("google")})
 	k.send(`{"type":"take"}`)
 	if r := k.send(`{"type":"text","text":"héllo"}`); len(r) != 0 {
 		t.Errorf("text: %v", r)
@@ -268,7 +268,7 @@ func TestClipboardEmptiedWhenControlEnds(t *testing.T) {
 			mu.Lock()
 			during = nil
 			mu.Unlock()
-			k := newTalk(t, &viewer{h: h, session: s.ID, sock: m.Layout().ControlSocket("google")})
+			k := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: m.Layout().ControlSocket("google")})
 			if r := k.send(`{"type":"take"}`); len(r) != 1 || r[0]["on"] != true {
 				t.Fatalf("take: %v", r)
 			}
