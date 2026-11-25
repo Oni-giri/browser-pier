@@ -1,0 +1,287 @@
+/* The docs in the landing page's look (design/DESIGN.md,
+   design/screens/landing.html): the sky page, slate neutrals, Geist, white
+   cards and dark code blocks. The tokens are the web UI's
+   (internal/ui/static/app.css), as light-dark(light, dark); Starlight sets
+   color-scheme from its theme switch, so they follow it. This file is
+   unlayered, so it wins over Starlight's layered styles. */
+
+@font-face {
+	font-family: Geist;
+	src: url('../../../internal/ui/static/fonts/Geist-Variable.woff2') format('woff2');
+	font-weight: 100 900;
+	font-display: swap;
+}
+@font-face {
+	font-family: 'Geist Mono';
+	src: url('../../../internal/ui/static/fonts/GeistMono-Variable.woff2') format('woff2');
+	font-weight: 100 900;
+	font-display: swap;
+}
+
+:root {
+	--bp-page: light-dark(#eaf1ff, #070c18);
+	--bp-surface: light-dark(#ffffff, #111a2e);
+	--bp-surface-2: light-dark(#f8fafc, #0e1628);
+	--bp-well: light-dark(#f1f5f9, #0a1222);
+	--bp-line-soft: light-dark(#eef2f7, #1c273b);
+	--bp-line: light-dark(#e2e8f0, #283449);
+	--bp-line-strong: light-dark(#cbd5e1, #3b4863);
+	--bp-ink: light-dark(#0f172a, #e8edf5);
+	--bp-ink-body: light-dark(#334155, #c5cedb);
+	--bp-ink-2: light-dark(#475569, #a7b3c6);
+	--bp-ink-3: light-dark(#64748b, #8a99b0);
+	--bp-blue: #2f6bff;
+	--bp-blue-text: light-dark(#1d4ed8, #9ebdfd);
+	--bp-blue-tint: light-dark(#eef3ff, #262f47);
+	--bp-green-text: light-dark(#15803d, #77d68e);
+	--bp-green-tint: light-dark(#ecfdf3, #1a3728);
+	--bp-red: #dc2626;
+	--bp-red-text: light-dark(#b91c1c, #ffa195);
+	--bp-red-tint: light-dark(#fef2f2, #442728);
+	--bp-violet-text: light-dark(#6d28d9, #bfb1fc);
+	--bp-violet-tint: light-dark(#f3eeff, #312c45);
+	--bp-block: light-dark(#0f172a, #0a1020);
+	--bp-block-ring: light-dark(rgba(148, 163, 184, 0), rgba(148, 163, 184, 0.14));
+	--bp-card-shadow: 0 0 0 1px light-dark(rgba(37, 64, 140, 0.07), rgba(148, 163, 184, 0.14)),
+		0 1px 2px light-dark(rgba(37, 64, 140, 0.06), rgba(0, 0, 0, 0.16)),
+		0 10px 28px -12px light-dark(rgba(37, 64, 140, 0.2), rgba(0, 0, 0, 0.52));
+	--bp-header-bg: light-dark(rgba(255, 255, 255, 0.72), rgba(17, 26, 46, 0.72));
+	--bp-header-line: light-dark(rgba(37, 64, 140, 0.08), rgba(148, 163, 184, 0.12));
+	--bp-sans: Geist, system-ui, sans-serif;
+	--bp-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+	--bp-grain: url('../../../internal/ui/static/grain.svg');
+	--bp-light: rgba(47, 107, 255, 0.22);
+	--bp-grid: rgba(47, 107, 255, 0.07);
+
+	/* Starlight's palette, from the tokens. "white" is the strongest text
+	   and "black" the page, in both themes. */
+	--sl-color-white: var(--bp-ink);
+	--sl-color-gray-1: var(--bp-ink);
+	--sl-color-gray-2: var(--bp-ink-body);
+	--sl-color-gray-3: var(--bp-ink-2);
+	--sl-color-gray-4: var(--bp-ink-3);
+	--sl-color-gray-5: var(--bp-line);
+	--sl-color-gray-6: var(--bp-line-soft);
+	--sl-color-gray-7: var(--bp-surface-2);
+	--sl-color-black: var(--bp-page);
+
+	--sl-color-accent-low: var(--bp-blue-tint);
+	--sl-color-accent: var(--bp-blue);
+	--sl-color-accent-high: var(--bp-blue-text);
+	--sl-color-text: var(--bp-ink-body);
+	--sl-color-text-accent: var(--bp-blue-text);
+	--sl-color-text-invert: #ffffff;
+	--sl-color-bg: var(--bp-page);
+	--sl-color-bg-nav: var(--bp-header-bg);
+	--sl-color-bg-sidebar: var(--bp-page);
+	--sl-color-bg-inline-code: var(--bp-surface);
+	--sl-color-bg-accent: var(--bp-blue);
+	--sl-color-hairline-light: var(--bp-line-soft);
+	--sl-color-hairline: var(--bp-line);
+	--sl-color-hairline-shade: var(--bp-header-line);
+	--sl-color-backdrop-overlay: light-dark(rgba(15, 23, 42, 0.36), rgba(2, 6, 15, 0.6));
+
+	/* Asides. Orange means "a person is needed" and nothing else, so a
+	   caution is red (destructive), like Failed and Delete in the UI. */
+	--sl-color-blue-low: var(--bp-blue-tint);
+	--sl-color-blue: var(--bp-blue);
+	--sl-color-blue-high: var(--bp-blue-text);
+	--sl-color-green-low: var(--bp-green-tint);
+	--sl-color-green: #16a34a;
+	--sl-color-green-high: var(--bp-green-text);
+	--sl-color-purple-low: var(--bp-violet-tint);
+	--sl-color-purple: #7c3aed;
+	--sl-color-purple-high: var(--bp-violet-text);
+	--sl-color-orange-low: var(--bp-red-tint);
+	--sl-color-orange: var(--bp-red);
+	--sl-color-orange-high: var(--bp-red-text);
+	--sl-color-red-low: var(--bp-red-tint);
+	--sl-color-red: var(--bp-red);
+	--sl-color-red-high: var(--bp-red-text);
+
+	--sl-font: var(--bp-sans);
+	--sl-font-mono: var(--bp-mono);
+	--sl-nav-height: 3.75rem;
+	--sl-text-h1: 2.375rem;
+	--sl-text-h2: 1.625rem;
+	--sl-text-h3: 1.1875rem;
+	--sl-text-h4: 1rem;
+	--sl-line-height-headings: 1.15;
+}
+
+:root[data-theme='dark'] {
+	--bp-grain: url('../../../internal/ui/static/grain-dark.svg');
+}
+
+/* The page: a blue light from the top left, a fine grain and a 48px
+   hairline grid that fades out so the text sits on a clean surface. */
+body {
+	background:
+		radial-gradient(1000px 480px at 15% -140px, var(--bp-light), transparent 70%),
+		var(--bp-grain) 0 0 / 180px 180px,
+		linear-gradient(to bottom, transparent 0, color-mix(in srgb, var(--bp-page) 60%, transparent) 260px, var(--bp-page) 560px),
+		linear-gradient(var(--bp-grid) 1px, transparent 1px) 0 0 / 48px 48px,
+		linear-gradient(90deg, var(--bp-grid) 1px, transparent 1px) 0 0 / 48px 48px,
+		var(--bp-page);
+	background-repeat: no-repeat, repeat, no-repeat, repeat, repeat;
+	font-feature-settings: 'ss01' off;
+}
+
+/* Frosted header, as on the landing page and in the app. */
+header.header {
+	background: var(--bp-header-bg);
+	backdrop-filter: blur(14px) saturate(160%);
+	-webkit-backdrop-filter: blur(14px) saturate(160%);
+	border-bottom: 0;
+	box-shadow: 0 1px 0 var(--bp-header-line);
+}
+
+/* The sidebar sits on the page on wide screens; on phones it's a solid
+   menu over the page. */
+@media (min-width: 50rem) {
+	.sidebar-pane {
+		background: transparent;
+		border-inline-end-color: var(--bp-header-line);
+	}
+}
+.sidebar-content a[aria-current='page'],
+.sidebar-content a[aria-current='page']:hover,
+.sidebar-content a[aria-current='page']:focus {
+	background: var(--bp-blue-tint);
+	color: var(--bp-blue-text);
+	font-weight: 600;
+}
+.sidebar-content .large {
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--bp-ink);
+}
+.sidebar-content a {
+	font-size: 14px;
+	border-radius: 6px;
+}
+
+/* Headings: Geist 600 with the landing page's tight tracking. */
+.sl-markdown-content :is(h1, h2, h3, h4),
+h1#_top {
+	font-weight: 600;
+	color: var(--bp-ink);
+}
+h1#_top {
+	letter-spacing: -1.2px;
+}
+.sl-markdown-content h2 {
+	letter-spacing: -0.6px;
+	margin-top: 2.5rem;
+}
+.sl-markdown-content h3 {
+	letter-spacing: -0.3px;
+}
+.sl-markdown-content {
+	font-size: 15.5px;
+	line-height: 1.65;
+}
+
+/* Links are blue, underlined so they don't rely on colour alone. */
+.sl-markdown-content a:not(:where(.not-content *)) {
+	color: var(--bp-blue-text);
+	text-decoration-thickness: 1px;
+	text-underline-offset: 3px;
+	text-decoration-color: color-mix(in srgb, var(--bp-blue-text) 40%, transparent);
+}
+.sl-markdown-content a:not(:where(.not-content *)):hover {
+	text-decoration-color: currentColor;
+}
+
+/* Inline code: a small white chip with the line ring. */
+.sl-markdown-content :not(pre) > code {
+	padding: 0.1em 0.35em;
+	border-radius: 5px;
+	background: var(--bp-surface);
+	box-shadow: 0 0 0 1px var(--bp-line);
+	color: var(--bp-ink);
+	font-size: 0.86em;
+}
+
+/* Code blocks: dark cards in both themes, with the dark theme's ring. */
+.expressive-code .frame {
+	box-shadow: 0 0 0 1px var(--bp-block-ring);
+	border-radius: 12px;
+}
+.expressive-code .frame pre,
+.expressive-code .frame .header {
+	background: var(--bp-block);
+}
+
+/* Tables: a white card, a quiet header, dividers inside. */
+.sl-markdown-content table {
+	display: table;
+	width: 100%;
+	border-collapse: separate;
+	border-spacing: 0;
+	background: var(--bp-surface);
+	border-radius: 12px;
+	box-shadow: var(--bp-card-shadow);
+	overflow: hidden;
+	font-size: 14px;
+}
+.sl-markdown-content :is(th, td) {
+	padding: 0.6rem 0.85rem;
+	border-bottom: 1px solid var(--bp-line-soft);
+	vertical-align: top;
+}
+.sl-markdown-content th {
+	background: var(--bp-surface-2);
+	color: var(--bp-ink-2);
+	font-weight: 500;
+	font-size: 13px;
+	text-align: start;
+}
+.sl-markdown-content tr:last-child td {
+	border-bottom: 0;
+}
+/* Wide tables scroll on their own on phones, never the page. */
+@media (max-width: 50rem) {
+	.sl-markdown-content table {
+		display: block;
+		overflow-x: auto;
+	}
+}
+
+/* Asides: white cards with a coloured edge and their label kept. */
+.starlight-aside {
+	background: var(--bp-surface);
+	border-inline-start-width: 3px;
+	border-radius: 0 12px 12px 0;
+	box-shadow: var(--bp-card-shadow);
+}
+
+/* Search and the theme menu: inputs as in the app. */
+site-search button[data-open-modal] {
+	background: var(--bp-surface);
+	border: 0;
+	border-radius: 8px;
+	box-shadow: 0 0 0 1px var(--bp-line), 0 1px 2px rgba(15, 23, 42, 0.05);
+}
+
+/* Prev / next links: cards. */
+.pagination-links a {
+	background: var(--bp-surface);
+	border: 0;
+	border-radius: 14px;
+	box-shadow: var(--bp-card-shadow);
+}
+
+:focus-visible {
+	outline: 2px solid var(--bp-blue);
+	outline-offset: 2px;
+}
+
+/* Geist Mono's ligatures turn != into ≠: code shows what you type. */
+code,
+pre,
+.expressive-code,
+.expressive-code :is(pre, code, .code) {
+	font-variant-ligatures: none;
+	font-feature-settings: 'liga' 0, 'calt' 0;
+}

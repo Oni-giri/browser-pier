@@ -1,0 +1,61 @@
+name: Docs site
+
+# Builds the docs site (site/) on every change to it. Deploying to GitHub
+# Pages is manual until browserpier.com points at Pages: run this workflow
+# from the Actions tab. Then switch the deploy to pushes on main.
+on:
+  push:
+    branches: [main]
+    paths: ["site/**", "internal/ui/static/fonts/**", "internal/ui/static/grain*.svg", ".github/workflows/site.yml"]
+  pull_request:
+    paths: ["site/**", "internal/ui/static/fonts/**", "internal/ui/static/grain*.svg", ".github/workflows/site.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Actions are pinned to commit SHAs; Dependabot keeps them current.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      # The site is served at browserpier.com/docs; until the landing page
+      # exists, the root sends visitors there.
+      - name: Lay out the Pages site
+        run: |
+          mkdir -p ../_site
+          cp -R dist ../_site/docs
+          printf '<!doctype html><meta charset="utf-8"><title>BrowserPier</title><meta http-equiv="refresh" content="0; url=/docs/"><link rel="canonical" href="https://browserpier.com/docs/"><a href="/docs/">BrowserPier docs</a>\n' > ../_site/index.html
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          path: _site
+
+  deploy:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

@@ -106,6 +106,19 @@ curl -H "Authorization: Bearer $TOKEN" -X POST localhost:7437/api/sessions -d '{
 curl -H "Authorization: Bearer $TOKEN" -X DELETE localhost:7437/api/sessions/<id>
 ```
 
+## The docs site
+
+The docs at browserpier.com/docs are an [Astro Starlight](https://starlight.astro.build) site in `site/`, built from Markdown in `site/src/content/docs/`. Read [site/STYLE.md](site/STYLE.md) before writing a page. It needs Node 22.23 or later.
+
+```sh
+cd site
+npm ci
+npm run dev     # http://localhost:4321/docs/, reloads as you edit
+npm run build   # dist/, as CI builds it
+```
+
+If a config change doesn't show up, clear the build cache: `rm -rf .astro node_modules/.astro`.
+
 ## Layout
 
 - `cmd/browserpier/`: the orchestrator's entry point
@@ -113,6 +126,7 @@ curl -H "Authorization: Bearer $TOKEN" -X DELETE localhost:7437/api/sessions/<id
 - `images/chromium/`: the browser container image, its entrypoint and stream sidecar
 - `deploy/`: the generic docker-compose, the Caddy config and the install guide
 - `umbrel/`: the Umbrel app
+- `site/`: the docs site and its style guide
 
 ## Changes
 
