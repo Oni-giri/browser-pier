@@ -11,10 +11,10 @@ import (
 	"time"
 )
 
-// fakeX answers xdotool's calls as a screen with a 1280x800 display:
+// fakeFocusX answers xdotool's calls as a screen with a 1280x800 display:
 // the browser's window 11 (stale if stale is set, found again as 12),
 // the taskbar 7.
-type fakeX struct {
+type fakeFocusX struct {
 	mu      sync.Mutex
 	focus   string
 	stale   bool
@@ -22,7 +22,7 @@ type fakeX struct {
 	actions []string
 }
 
-func (x *fakeX) output(_ context.Context, _ string, args ...string) ([]byte, error) {
+func (x *fakeFocusX) output(_ context.Context, _ string, args ...string) ([]byte, error) {
 	time.Sleep(x.delay)
 	x.mu.Lock()
 	defer x.mu.Unlock()
@@ -58,19 +58,19 @@ func (x *fakeX) output(_ context.Context, _ string, args ...string) ([]byte, err
 	return nil, errors.New("unexpected xdotool " + strings.Join(args, " "))
 }
 
-func (x *fakeX) state() (string, []string) {
+func (x *fakeFocusX) state() (string, []string) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	return x.focus, append([]string{}, x.actions...)
 }
 
-func testFocus(x *fakeX) *xFocus {
+func testFocus(x *fakeFocusX) *xFocus {
 	f := &xFocus{log: slog.New(slog.NewTextHandler(io.Discard, nil)), width: 1280, height: 800, output: x.output, wake: make(chan struct{}, 1)}
 	go f.work()
 	return f
 }
 
-func waitFocus(t *testing.T, x *fakeX, want string) []string {
+func waitFocus(t *testing.T, x *fakeFocusX, want string) []string {
 	t.Helper()
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
 		if got, actions := x.state(); got == want {
@@ -84,7 +84,7 @@ func waitFocus(t *testing.T, x *fakeX, want string) []string {
 }
 
 func TestFocusGoesAwayAndBack(t *testing.T) {
-	x := &fakeX{focus: "11"}
+	x := &fakeFocusX{focus: "11"}
 	f := testFocus(x)
 	f.away()
 	waitFocus(t, x, "7")
@@ -95,7 +95,7 @@ func TestFocusGoesAwayAndBack(t *testing.T) {
 }
 
 func TestFocusComesBackToAStaleWindow(t *testing.T) {
-	x := &fakeX{focus: "11"}
+	x := &fakeFocusX{focus: "11"}
 	f := testFocus(x)
 	f.away()
 	waitFocus(t, x, "7")
@@ -107,7 +107,7 @@ func TestFocusComesBackToAStaleWindow(t *testing.T) {
 }
 
 func TestFocusBurstEndsBack(t *testing.T) {
-	x := &fakeX{focus: "11", delay: 5 * time.Millisecond}
+	x := &fakeFocusX{focus: "11", delay: 5 * time.Millisecond}
 	f := testFocus(x)
 	for range 200 {
 		f.away()
@@ -124,7 +124,7 @@ func TestFocusBurstEndsBack(t *testing.T) {
 }
 
 func TestFocusLeavesAnotherWindowAlone(t *testing.T) {
-	x := &fakeX{focus: "99"}
+	x := &fakeFocusX{focus: "99"}
 	f := testFocus(x)
 	f.away()
 	f.back()
