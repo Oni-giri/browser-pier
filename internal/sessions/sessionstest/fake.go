@@ -30,6 +30,8 @@ type FakeRuntime struct {
 	StopStatus  int
 	StopErr     error   // Stop fails with this, leaving the container running
 	StartErrs   []error // each Start fails with the next of these, while any are left
+	// BeforeStop, if set, is called (without the lock) as Stop begins.
+	BeforeStop func(id string)
 	// AfterStop, if set, is called (without the lock) once Stop has made
 	// the container exit, and Stop returns what it returns: a runtime that
 	// reports an error after the container has stopped (PROJ-64).
@@ -128,6 +130,12 @@ func (f *FakeRuntime) exitLocked(c *FakeContainer, status int) {
 }
 
 func (f *FakeRuntime) Stop(_ context.Context, id string) error {
+	f.Mu.Lock()
+	before := f.BeforeStop
+	f.Mu.Unlock()
+	if before != nil {
+		before(id)
+	}
 	f.Mu.Lock()
 	c, ok := f.Containers[id]
 	if !ok {

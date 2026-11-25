@@ -165,7 +165,10 @@ func (m *Manager) HumanInput(id string) (done func(), err error) {
 // selected in the page: it waits for their input under way and a moment
 // more (clipboardSettle), refuses more, and only then lets agents in. If
 // the clipboard can't be emptied, that is logged and the browser handed
-// back all the same. Recording (PROJ-23) stays off throughout, and the
+// back all the same. A browser that is stopping keeps its clipboard: the
+// container takes it along, or, if the stop fails, runStop empties it
+// before agents get the browser back. Recording (PROJ-23) stays off
+// throughout, and the
 // gate is asked again only as agents get the browser back. It returns
 // once agents have the browser.
 func (m *Manager) ReleaseControl(id string) {
@@ -195,6 +198,10 @@ func (m *Manager) ReleaseControl(id string) {
 		time.Sleep(clipboardSettle)
 		m.emptyClipboard(id, profile)
 		m.mu.Lock()
+	} else if l.sess.State == Stopping {
+		// The container takes the clipboard along; if the stop fails
+		// instead, runStop empties it before agents are let back in.
+		l.clipboardLeft = true
 	}
 	l.human, l.releasing = false, false
 	l.lastActivity = m.now()

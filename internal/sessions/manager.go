@@ -188,6 +188,11 @@ type live struct {
 	// (HumanInput), which it waits for first.
 	releasing   bool
 	humanInputs int
+	// clipboardLeft is set when a hand-back came while the browser was
+	// stopping and left its clipboard as it was: the container takes it
+	// along, but if the stop fails, runStop empties it before agents get
+	// the browser back.
+	clipboardLeft bool
 	// viewers counts open live views.
 	viewers int
 	// exemptFull is set once the browser refused an exemption from the ad
@@ -1187,6 +1192,18 @@ func (m *Manager) runStop(l *live, attempt *stopAttempt, cid string, prev State)
 		default:
 			m.log.Warn("stopping the browser container", "container", cid, "err", err)
 			m.mu.Lock()
+			if l.sess.State == Stopping && l.clipboardLeft {
+				// A person's control ended during the stop, with no
+				// clipboard emptied: empty it now, while the session is
+				// still Stopping and agents are kept out, before the
+				// gate or any agent can have the browser (PROJ-194,
+				// PROJ-23).
+				l.clipboardLeft = false
+				id, profile := l.sess.ID, l.sess.Profile
+				m.mu.Unlock()
+				m.emptyClipboard(id, profile)
+				m.mu.Lock()
+			}
 			if l.sess.State == Stopping {
 				l.sess.State = prev
 				l.sess.UpdatedAt = m.now()

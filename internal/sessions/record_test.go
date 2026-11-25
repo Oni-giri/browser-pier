@@ -663,3 +663,89 @@ func TestReconcileEmptiesTheClipboardBeforeAnyRecording(t *testing.T) {
 		t.Fatalf("events %v, want the clipboard emptied, then recording", rec.events)
 	}
 }
+
+// TestAFailedStopEmptiesTheClipboardOfAHandBackDuringIt: a person's
+// control ends while the browser is stopping (the live view drops as the
+// admin or idle stops it), so the clipboard isn't emptied then; the stop
+// fails, and the browser goes back to Running. Its clipboard is emptied
+// before agents can act or the gate can record again, not left with the
+// person's text for the agent to paste (PROJ-194, PROJ-23).
+func TestAFailedStopEmptiesTheClipboardOfAHandBackDuringIt(t *testing.T) {
+	f, rec := recordingFixture(t, true)
+	var id string
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) {
+		if _, done, err := f.m.AgentInput(context.Background(), id); err == nil {
+			done()
+			t.Error("agent input let in before the clipboard was emptied")
+		}
+		if on, why := rec.state(id); on {
+			t.Errorf("recording (%s) before the clipboard was emptied", why)
+		}
+		rec.note("emptied")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	f.rt.Control = mux
+	advance := f.clock()
+	s := f.start(f.m)
+	id = s.ID
+	_, done, err := f.m.AgentInput(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done()
+	advance(agentQuiet + time.Second)
+	wantRecording(t, rec, s.ID, true, "")
+	if err := f.m.TakeControl(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	rec.mu.Lock()
+	mark := len(rec.events)
+	rec.mu.Unlock()
+
+	// The person's control ends as the container is being stopped, and
+	// the stop fails.
+	f.rt.Mu.Lock()
+	f.rt.StopErr = errors.New("the runtime refused to stop it")
+	f.rt.BeforeStop = func(string) {
+		if snap, _ := f.m.Live("google"); snap.State != Stopping {
+			t.Errorf("stopping in state %s", snap.State)
+		}
+		f.m.ReleaseControl(s.ID)
+		rec.note("handed back")
+	}
+	f.rt.Mu.Unlock()
+	if _, err := f.m.Stop(context.Background(), s.ID); err == nil {
+		t.Fatal("the stop didn't fail")
+	}
+	if snap, _ := f.m.Live("google"); snap.State != Running || snap.HumanControl {
+		t.Fatalf("after the failed stop: %s, person in control %v", snap.State, snap.HumanControl)
+	}
+	_, done, err = f.m.AgentInput(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRecording(t, rec, s.ID, true, "")
+	done()
+
+	rec.mu.Lock()
+	events := append([]string(nil), rec.events[mark:]...)
+	rec.mu.Unlock()
+	handedBack, emptied, idle := -1, -1, -1
+	for i, e := range events {
+		switch {
+		case e == "handed back" && handedBack < 0:
+			handedBack = i
+		case e == "emptied" && emptied < 0:
+			emptied = i
+		case e == "stopped:"+string(recording.Idle) && idle < 0:
+			idle = i
+		case e == "recording" && emptied < 0:
+			t.Fatalf("events %v: recording before the clipboard was emptied", events)
+		}
+	}
+	if handedBack < 0 || emptied < handedBack || idle < emptied {
+		t.Fatalf("events %v: the clipboard must be emptied after the hand-back, before the browser goes back to Running", events)
+	}
+}
