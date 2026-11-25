@@ -134,6 +134,7 @@ Once connected, the server tells you how to use its tools. Which ones depend on 
 - **Visual mode** (sites with heavy anti-bot measures): `screenshot` to see the screen, then `click`, `type_text`, `press_keys`, `scroll`, `drag`, `wait` and `zoom`, with coordinates in the screenshot's pixels.
 - **API mode**: `snapshot` to read the page as text, with refs like `a7e12` for its controls, `find` to search it, `act` to click, fill, type, press, select, check, hover or upload by ref, or by a target like `role=button[name="Save"]` or `text=Save` with no snapshot first (put the file in first with `upload_file`), `wait_for`, `navigate` and `tabs` (sign-in popups open in a new tab), and `page_content` to read a whole page as Markdown, its main text only (`readability`, the fewest tokens) or a PDF. Or connect your own CDP client to the `cdp_url`.
 - **Both:** `request_handoff`, `wait_for_handoff`, `cancel_handoff`, `list_files`, `upload_file`, `stop_browser`, and `page_content` with `screenshot`.
+- **Any time:** `read_docs`, BrowserPier's docs for this server's version: what a tool or endpoint does, what an error means.
 - **Ads and trackers** are usually blocked. If a page misses something it needs (a video player, a sign-in widget), call `start_browser` again with `allow_ads`; that turns blocking off for this session only.
 
 ## 4. No MCP? Use the REST API
@@ -166,6 +167,8 @@ curl -s -X POST {{.Base}}/api/sessions/ID/content -H "$H" -d '{"format": "pdf"}'
 # done: stop the browser; its logins are kept
 curl -s -X DELETE {{.Base}}/api/sessions/ID -H "$H"
 ```
+
+This server's docs, for its version, are at {{.Base}}/docs/: {{.Base}}/docs/llms.txt lists the pages, and each one is Markdown at its address plus `.md`, such as {{.Base}}/docs/reference/handoffs.md.
 
 Handoff reasons: `sensitive_input`, `captcha`, `file_upload`, `review`, `manual_step`. If you know the address where the person's part ends (the account page after a sign-in), pass it as `until_url`, so you aren't left waiting when they stop there without tapping Done.
 

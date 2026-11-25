@@ -8,4 +8,9 @@
 !images/chromium
 !LICENSE
 !NOTICE
+!site
+site/node_modules
+site/dist
+site/.astro
+internal/docs/site/*
 **/*_test.go

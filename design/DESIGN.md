@@ -97,7 +97,7 @@ Every profile shows an icon next to its name (Overview list 28px, Profiles cards
 
 ## Rules
 
-1. **One header on every app page:** logo (→ Overview), nav (Overview · Profiles · Agents · Settings), the orange "N needs you" chip (→ the waiting profile's live view; hidden at zero), search (⌘K), and an avatar linking to account and sign-out.
+1. **One header on every app page:** logo (→ Overview), nav (Overview · Profiles · Agents · Settings), the orange "N needs you" chip (→ the waiting profile's live view; hidden at zero), search (⌘K), and an avatar menu: Account, Docs (this version's docs, at `/docs/`) and Sign out.
 2. **One colour per action:**
    - "Take control" is always blue, including on the phone handoff page.
    - "Hand back" is neutral: white with a ring in the app, `ink` as the phone page's main button.

@@ -40,6 +40,7 @@ func (s *Server) addTools(srv *sdk.Server) {
 	s.addUploadTools(srv)
 	s.addPageTools(srv)
 	s.addHandoffTools(srv)
+	s.addDocsTool(srv)
 }
 
 // text is a result of one text block.

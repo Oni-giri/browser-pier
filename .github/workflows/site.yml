@@ -6,9 +6,9 @@ name: Docs site
 on:
   push:
     branches: [main]
-    paths: ["site/**", "internal/ui/static/fonts/**", "internal/ui/static/grain*.svg", ".github/workflows/site.yml"]
+    paths: ["site/**", "internal/docs/**", "internal/ui/static/fonts/**", "internal/ui/static/grain*.svg", ".github/workflows/site.yml"]
   pull_request:
-    paths: ["site/**", "internal/ui/static/fonts/**", "internal/ui/static/grain*.svg", ".github/workflows/site.yml"]
+    paths: ["site/**", "internal/docs/**", "internal/ui/static/fonts/**", "internal/ui/static/grain*.svg", ".github/workflows/site.yml"]
   workflow_dispatch:
 
 permissions:
@@ -34,6 +34,12 @@ jobs:
           cache-dependency-path: site/package-lock.json
       - run: npm ci
       - run: npm run build
+      # The binary embeds this build (internal/docs): check it reads every
+      # page, and that search's links point at headings that exist.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: cp -R dist/. ../internal/docs/site/ && go -C .. test ./internal/docs/...
       # The site is served at browserpier.com/docs; until the landing page
       # exists, the root sends visitors there.
       - name: Lay out the Pages site
