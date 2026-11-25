@@ -109,6 +109,7 @@ func (m *Manager) PageLease(ctx context.Context, id, tokenID string) (*Lease, er
 	}
 	l.leases[ls] = struct{}{}
 	l.lastActivity, l.lastAgentInput = now, now
+	m.agentActedLocked(l)
 	var once sync.Once
 	return &Lease{Ctx: cctx, Generation: l.generation, breakable: func() {
 		m.mu.Lock()
@@ -121,6 +122,7 @@ func (m *Manager) PageLease(ctx context.Context, id, tokenID string) (*Lease, er
 			delete(l.leases, ls)
 			now := m.now()
 			l.lastActivity, l.lastAgentInput = now, now
+			m.agentActedLocked(l)
 			m.inputsDone.Broadcast()
 			m.mu.Unlock()
 			<-turn

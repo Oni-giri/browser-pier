@@ -152,7 +152,11 @@ func (u *UI) saveProfile(w http.ResponseWriter, r *http.Request) {
 		u.formError(w, r, f, "Edit "+p.Name)
 		return
 	}
-	u.log.Info("profile settings changed from the UI", "profile", p.Name)
+	u.log.Info("profile settings changed from the UI", "profile", p.Name, "record_sessions", p.Record)
+	// Recording follows the setting at once, a running browser included.
+	if err := u.m.RefreshRecording(r.Context(), p.Name); err != nil {
+		u.log.Warn("applying the Record sessions setting", "profile", p.Name, "err", err)
+	}
 	// Asked again now that the site is saved: a browser stopping meanwhile
 	// reads its icon for the site saved.
 	if _, live := u.m.Live(p.Name); p.Site != oldSite && !live {
@@ -211,6 +215,9 @@ func readProfileForm(r *http.Request, p *profiles.Profile, keepProxy string) str
 	// A form without the checkbox leaves it as it is.
 	if r.PostFormValue("block_ads_field") == "1" {
 		p.BlockAds = r.PostFormValue("block_ads") == "1"
+	}
+	if r.PostFormValue("record_field") == "1" {
+		p.Record = r.PostFormValue("record") == "1"
 	}
 	// A form without the icon fields leaves them as they are.
 	if _, ok := r.PostForm["site"]; ok {

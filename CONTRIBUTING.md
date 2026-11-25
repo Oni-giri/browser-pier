@@ -56,7 +56,7 @@ make lint
 make image        # the orchestrator image, ghcr.io/oni-giri/browser-pier
 ```
 
-Tests that need Docker sit behind the `docker` build tag, so `go test ./...` stays fast. Before calling a change done, run it for real: start a browser, sign in to a test site, stop it, start it again and check that the login survived.
+Tests that need Docker sit behind the `docker` build tag, so `go test ./...` stays fast. `BROWSERPIER_TEST_RECORD=1` runs the API package's Docker tests with every session recorded (PROJ-23), to check recording changes nothing a page or an agent sees; `BROWSERPIER_MEASURE=1` runs `TestMeasureRecordingCost` in `internal/sessions`, which logs the recording pipeline's CPU, memory and bytes per hour (`BROWSERPIER_MEASURE_SECONDS`, default 60, per scene). Before calling a change done, run it for real: start a browser, sign in to a test site, stop it, start it again and check that the login survived.
 
 ### On rootless Podman
 

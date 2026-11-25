@@ -72,6 +72,11 @@
           <label class="check"><input type="checkbox" name="block_ads" value="1"{{if .Profile.BlockAds}} checked{{end}}> Block ads and trackers</label>
           <span class="hint">Known ad and tracker servers can't be reached, so pages load faster and agents read less. A page opened directly by its address still loads. An agent can turn it off for one session.</span>
         </div>
+        <div class="field">
+          <input type="hidden" name="record_field" value="1">
+          <label class="check"><input type="checkbox" name="record" value="1"{{if .Profile.Record}} checked{{end}}> Record sessions</label>
+          <span class="hint">Keep what agents do on screen, for you to replay from this profile's page. Only while an agent acts, never while a person has control. The recording shows the page as a screenshot would. Agents can't change this.</span>
+        </div>
         <fieldset class="field picker" style="border:0;padding:0;margin:0 0 18px">
           <legend class="label" style="font-weight:500;margin-bottom:8px">Icon when the site has none</legend>
           <div class="picker-head">

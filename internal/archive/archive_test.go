@@ -40,6 +40,9 @@ func profileDir(t *testing.T) string {
 	write("files/downloads/report.csv", "a,b")
 	write("run/proxy.json", `{"password":"s3cret"}`)
 	write("run/.browserpier-mount", "s1")
+	// Recordings live in <data dir>/recordings, never here; even one put
+	// here by hand isn't exported (PROJ-23).
+	write("recordings/0123456789abcdef01234567/000001.mp4", "mp4")
 	if err := os.Symlink("/etc/passwd", filepath.Join(dir, "chrome/Default/link")); err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +79,7 @@ func TestRoundTrip(t *testing.T) {
 			t.Errorf("%s: %q, %v", name, b, err)
 		}
 	}
-	for _, name := range []string{"run", "chrome/Default/Cache", "chrome/.browserpier-mount", "chrome/Default/link", "chrome/Default/fifo"} {
+	for _, name := range []string{"run", "chrome/Default/Cache", "chrome/.browserpier-mount", "chrome/Default/link", "chrome/Default/fifo", "recordings"} {
 		if _, err := os.Lstat(filepath.Join(dest, name)); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("%s was carried over", name)
 		}

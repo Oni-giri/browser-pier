@@ -30,6 +30,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/handoff"
 	"github.com/Oni-giri/browser-pier/internal/mcp"
+	"github.com/Oni-giri/browser-pier/internal/recording"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/settings"
 	"github.com/Oni-giri/browser-pier/internal/ui"
@@ -162,6 +163,18 @@ func run(log *slog.Logger) error {
 	if !docker.RemoteDaemon() {
 		mgr.SetHostFree(func() (int64, error) { return meminfo("MemAvailable") })
 	}
+	// Session recordings (PROJ-23): beside profiles/, never inside it,
+	// which is mounted into browser containers. The folder appears with
+	// the first segment.
+	recStore := recording.NewStore(filepath.Join(dataDir, "recordings"), log)
+	recStore.SetLimits(saved.RecordingLimits())
+	defer recStore.Close()
+	recorder := recording.NewRecorder(recStore, mgr.RecordStream, log)
+	// Deferred after mgr.Close, so it runs first: segments under way are
+	// closed whole before the manager lets go.
+	defer recorder.Close()
+	mgr.SetRecorder(recorder, recStore)
+	go recStore.Run(ctx, time.Hour)
 	go mgr.WatchIdle(ctx, 30*time.Second)
 	if err := mgr.Reconcile(ctx); err != nil {
 		return fmt.Errorf("checking browsers left running: %w", err)
@@ -225,6 +238,8 @@ func run(log *slog.Logger) error {
 		HostFree:        localFree(),
 		RAMLimitFromEnv: cfg.RAMLimitFromEnv,
 		Version:         version,
+		Recordings:      recStore,
+		Recorder:        recorder,
 		SetRAMLimit: func(percent int) {
 			if total > 0 {
 				mgr.SetMemoryLimit(total*int64(percent)/100, perBrowser)

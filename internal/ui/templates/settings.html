@@ -75,6 +75,15 @@
       </ul>
     </section>
 
+    <section class="cell span-12" aria-labelledby="rec-title">
+      <h2 class="cell-title big" id="rec-title" style="margin:0 0 6px">Recordings</h2>
+      <p class="small" style="margin:0 0 14px;color:var(--ink-2)">For profiles with Record sessions on: what agents do on screen, never what a person does.</p>
+      <div class="two">
+        <label class="field"><span class="label">Keep for</span><span class="prefix suffix"><input name="rec_days" type="number" min="1" max="90" value="{{.RecordingRetentionDays}}" form="defaults" class="num" style="width:100%"><span>days</span></span><span class="hint">1 to 90 days.</span></label>
+        <label class="field"><span class="label">Space for all recordings</span><span class="prefix suffix"><input name="rec_cap_mb" type="number" min="64" max="1048576" value="{{.RecordingCapMiB}}" form="defaults" class="num" style="width:100%"><span>MB</span></span><span class="hint">Using {{gb .RecordingsUsed}} now. 1 GB is always left free on the disk; when either limit is reached, the profile holding the most gives up its oldest recording first.</span></label>
+      </div>
+    </section>
+
     <section class="cell span-12 appearance" aria-labelledby="look-title">
       <div><h2 class="cell-title big" id="look-title" style="margin:0">Appearance</h2>
       <p class="small" style="margin:2px 0 0;color:var(--ink-2)">On this device. System follows its light or dark setting.</p></div>

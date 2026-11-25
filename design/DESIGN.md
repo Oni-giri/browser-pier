@@ -15,6 +15,7 @@ The reference for the web UI (PROJ-11), the handoff page (PROJ-10) and the landi
 | Settings | `screens/settings.html` | `/settings` | `screenshots/settings.png` |
 | Handoff link (phone) | `screens/handoff.html` | `/h/{token}` | `screenshots/handoff.png` |
 | Landing page (marketing site) | `screens/landing.html` | separate site | `screenshots/landing.png` |
+| Recordings: indicator, list, player, handoff line, settings (PROJ-23) | `screens/recordings.html` | `/profiles/{name}/recordings/{session}` and cells on other screens | none yet |
 
 Every screen also has a dark version with the same file name in `screens-dark/` and `screenshots-dark/` (plus `screenshots-dark/profiles-table.png`). See **Dark mode** below.
 
@@ -84,6 +85,10 @@ The whole UI rests on one split: **blue is the agents' side, orange is you.**
 - **The page light follows the human.** When at least one profile needs you, the page gets a warm light near where you're needed (`radial-gradient(760px 420px at 24% -150px, rgba(255,106,61,0.20), transparent 70%)` on app pages, behind the phone on the landing page) alongside the agents' blue light. With nothing waiting, both lights are blue (the cyan right-hand light from the base recipe).
 - **The emphasis surface is warm frosted glass:** `linear-gradient(180deg, rgba(255,234,223,0.94) 0, rgba(255,247,243,0.9) 120px, rgba(255,255,255,0.9) 240px)` with `backdrop-filter: blur(16px) saturate(140%)`, ring `rgba(255,106,61,0.38)` and glow `0 22px 48px -20px rgba(255,106,61,0.55)`. One per screen.
 - **The header chip** is frosted orange (`rgba(255,106,61,0.12)` + blur, inset ring `rgba(255,106,61,0.35)`, soft orange glow) with a slowly pulsing dot. No pulse under `prefers-reduced-motion`.
+
+## Recordings
+
+Session recordings (PROJ-23) are the agents' side, so they are **blue**: the "Recording" pill beside the status, and the recorded stretches on the player's timeline. A profile that records but isn't recording right now shows a neutral "Recording paused" pill (well background, hollow dot). Never orange: a recording isn't a person being needed; nor red: it isn't a failure. Stretches with nothing recorded are hatched in `line-strong` on the timeline, and the player names the reason in words ("A person had control here. Nothing was recorded."). The video frame is a real page, so it isn't themed, like the live view.
 
 ## Profile icons
 

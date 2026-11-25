@@ -1,0 +1,35 @@
+{{define "content"}}{{with .Data}}
+<div class="page">
+  <div class="page-head" style="align-items:center">
+    <div class="crumbs">
+      <a href="/profiles">Profiles</a><span class="sep">/</span><a href="/profiles/{{.Profile}}">{{.Profile}}</a><span class="sep">/</span><h1>Recording, {{day .Index.Start}}</h1>
+    </div>
+    <div class="actions">
+      <form method="post" action="/profiles/{{.Profile}}/recordings/{{.Index.Session}}/delete" data-busy="Deleting…"><button class="btn danger-text" type="submit">Delete recording</button></form>
+    </div>
+  </div>
+  <section class="cell player" aria-label="Player" data-recording="{{.JSON}}">
+    <div class="player-stage">
+      <video id="rec-video" playsinline muted preload="auto" aria-label="Recording of {{.Profile}}"></video>
+      <div id="rec-note" class="rec-note" role="status" hidden></div>
+    </div>
+    <div class="player-controls">
+      <button id="rec-play" class="btn icon" type="button" aria-label="Play">▶</button>
+      <span id="rec-time" class="num small">0:00 of {{length .Index.Recorded}}</span>
+      <span class="grow"></span>
+      <div class="seg" role="radiogroup" aria-label="Speed">{{range list "1" "2" "4" "8"}}<label><input type="radio" name="speed" value="{{.}}"{{if eq . "1"}} checked{{end}}><span>{{.}}×</span></label>{{end}}</div>
+      <label class="check"><input id="rec-skip" type="checkbox" checked> Skip gaps</label>
+    </div>
+    <div id="rec-bar" class="timeline" role="slider" tabindex="0" aria-label="Position: click to seek, arrows to step" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="rec-head" class="head"></span></div>
+    <ul class="tl-legend"><li><i class="on"></i>Recorded</li><li><i class="off"></i>Not recorded; point at a gap to see why</li></ul>
+    <dl class="facts" style="margin-top:16px">
+      <div><dt>Started</dt><dd>{{day .Index.Start}}</dd></div>
+      <div><dt>Ended</dt><dd>{{day .Index.End}}</dd></div>
+      <div><dt>Recorded</dt><dd class="num">{{length .Index.Recorded}} in {{len .Index.Segments}} {{plural (len .Index.Segments) "part" "parts"}}</dd></div>
+      <div><dt>Size</dt><dd class="num">{{mb .Index.Bytes}}</dd></div>
+    </dl>
+    <p class="caption" style="margin:12px 0 0">The screen as the display showed it while agents acted, at up to 5 frames a second. Nothing is recorded while a person has control or a handoff is open. Space plays and pauses, 1 to 4 set the speed, the arrows step 5 seconds.</p>
+  </section>
+</div>
+<script src="{{static "player.js"}}" defer></script>
+{{end}}{{end}}

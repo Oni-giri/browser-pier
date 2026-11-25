@@ -567,3 +567,29 @@ textarea.input{height:auto;padding:10px 12px;resize:vertical}
 .ho-end p{margin:0 0 16px;color:var(--ink-2)}
 .appearance{display:flex;align-items:center;justify-content:space-between;gap:12px 24px;flex-wrap:wrap}
 .appearance .seg span{min-height:36px;min-width:76px;justify-content:center}
+/* Session recordings (PROJ-23): the agents' side, so blue; see design/screens/recordings.html. */
+.pill.rec{background:var(--blue-tint);color:var(--blue-text)}
+.pill.rec::before{background:var(--blue)}
+.pill.rec.paused{background:var(--fill);color:var(--ink-2)}
+.pill.rec.paused::before{background:transparent;box-shadow:inset 0 0 0 1.5px var(--ink-3)}
+.prefix.suffix>span{border-right:0;border-left:1px solid var(--line);font-family:inherit;order:2}
+.prefix.suffix>input{font-family:inherit}
+.recs>li{display:flex;align-items:center;gap:12px}
+.recs-foot{display:flex;align-items:center;gap:10px;margin:12px 0 0}
+.player-stage{position:relative;background:var(--stage-bg);border-radius:12px;overflow:hidden;display:flex;justify-content:center}
+.player-stage video{display:block;width:100%;max-height:72vh;object-fit:contain}
+.rec-note{position:absolute;left:16px;right:16px;bottom:16px;padding:10px 14px;border-radius:10px;background:var(--overlay-strong);color:var(--block-text);font-size:13px}
+.player-controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;margin-top:12px}
+.timeline{position:relative;height:28px;margin-top:14px;border-radius:7px;background:var(--fill);overflow:hidden;cursor:pointer}
+.timeline:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.timeline i{position:absolute;top:0;bottom:0;display:block}
+.timeline i.rec{background:var(--blue);opacity:.85}
+.timeline i.gap{background:repeating-linear-gradient(135deg,var(--line-strong) 0 4px,transparent 4px 8px)}
+.timeline .head{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:var(--ink);z-index:1}
+.tl-legend{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12px;color:var(--ink-2)}
+.tl-legend li{display:flex;align-items:center;gap:6px}
+.tl-legend i{width:14px;height:10px;border-radius:3px;display:block}
+.tl-legend i.on{background:var(--blue);opacity:.85}
+.tl-legend i.off{background:repeating-linear-gradient(135deg,var(--line-strong) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px var(--line)}
+.log a.at{color:inherit;text-decoration:none}
+.log a.at:hover{text-decoration:underline}

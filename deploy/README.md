@@ -5,7 +5,7 @@ BrowserPier runs as one container. It starts a browser container per running pro
 **You need:**
 - Docker 24 or newer with Docker Compose 2.20 or newer (`docker compose version`)
 - about 1–2 GB of RAM per browser you'll run at once
-- a few GB of disk for profiles
+- a few GB of disk for profiles, plus up to 2 GB for session recordings if you turn them on (Settings sets how much; 1 GB of the disk is always left free)
 
 ## Choose how you'll reach it
 
@@ -224,7 +224,7 @@ docker compose pull && docker compose up -d   # with the same --profile options 
 
 Running browsers keep running through an update, and the new orchestrator picks them up. If the update changed how browsers are started, it stops them instead, the usual way with logins kept, and they start afresh next time.
 
-`./data` holds everything: the database and one folder per profile, with its logins. Back it up like a password manager's vault: anyone with a copy can use those logins.
+`./data` holds everything: the database, one folder per profile, with its logins, and `recordings/`, the session recordings of profiles with **Record sessions** on. Back it up like a password manager's vault: anyone with a copy can use those logins, and play the recordings, which show the pages agents worked on as a screenshot would. Recordings aren't encrypted apart from the data dir; leave `data/recordings` out of the copy (`--exclude=data/recordings`) if you don't want them in your backups.
 
 Copy it only while nothing writes to it, or the copy may not open:
 1. In BrowserPier, stop every running browser. `docker compose stop` doesn't: browsers keep running without the orchestrator.

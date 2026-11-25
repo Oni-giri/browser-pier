@@ -23,6 +23,8 @@ type settingsData struct {
 	Devices      int
 	PasswordEnv  bool
 	Error        string
+	// RecordingsUsed is what session recordings hold now, in bytes.
+	RecordingsUsed int64
 	// Which form the error is for: pin, password or defaults.
 	ErrorFor string
 }
@@ -70,6 +72,11 @@ func (u *UI) settingsData(r *http.Request) (settingsData, error) {
 	d := settingsData{Settings: st, Proxy: maskProxy(st.DefaultProxy), RAMFromEnv: u.o.RAMLimitFromEnv,
 		PasswordEnv: u.web.Admin().EnvManaged()}
 	d.Mem = u.memoryView(r, nil)
+	if u.o.Recordings != nil {
+		d.RecordingsUsed, _ = u.o.Recordings.Usage()
+	}
+	d.RecordingRetentionDays = int(st.RecordingLimits().Retention / (24 * time.Hour))
+	d.RecordingCapMiB = int(st.RecordingLimits().Cap >> 20)
 	if d.Mem.Each == 0 {
 		d.Mem.Each = 1 << 30
 	}
@@ -136,6 +143,23 @@ func (u *UI) saveSettings(w http.ResponseWriter, r *http.Request) {
 	if r.PostFormValue("block_ads_field") == "1" {
 		st.DefaultBlockAds = r.PostFormValue("block_ads") == "1"
 	}
+	for _, f := range []struct {
+		name string
+		to   *int
+		msg  string
+	}{
+		{"rec_days", &st.RecordingRetentionDays, "Keep recordings for 1 to 90 days."},
+		{"rec_cap_mb", &st.RecordingCapMiB, "Give recordings 64 MB or more."},
+	} {
+		if v := strings.TrimSpace(r.PostFormValue(f.name)); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n <= 0 {
+				u.settingsError(w, r, "defaults", f.msg)
+				return
+			}
+			*f.to = n
+		}
+	}
 	ramChanged := false
 	if v := r.PostFormValue("ram"); v != "" && !u.o.RAMLimitFromEnv {
 		n, err := strconv.Atoi(v)
@@ -149,6 +173,10 @@ func (u *UI) saveSettings(w http.ResponseWriter, r *http.Request) {
 	if err := u.settings.Save(r.Context(), st); err != nil {
 		u.settingsError(w, r, "defaults", sentence(err.Error()))
 		return
+	}
+	if u.o.Recordings != nil {
+		u.o.Recordings.SetLimits(st.RecordingLimits())
+		u.o.Recordings.Sweep() // a shorter retention, or less space, applies now
 	}
 	if ramChanged && u.o.SetRAMLimit != nil {
 		u.o.SetRAMLimit(st.RAMLimitPercent)

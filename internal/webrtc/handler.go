@@ -65,12 +65,16 @@ type statusJSON struct {
 	InUseBy      []string `json:"in_use_by,omitempty"`
 	HumanControl bool     `json:"human_control"`
 	Viewers      int      `json:"viewers"`
+	// Record is the profile's Record sessions setting as the session
+	// applies it, for the live view's hint (PROJ-23). This status is the
+	// admin's alone.
+	Record bool `json:"record"`
 }
 
 func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 	out := statusJSON{State: string(sessions.Stopped)}
 	if s, ok := h.m.Live(r.PathValue("profile")); ok {
-		out = statusJSON{State: string(s.State), InUseBy: s.InUseBy, HumanControl: s.HumanControl, Viewers: s.Viewers}
+		out = statusJSON{State: string(s.State), InUseBy: s.InUseBy, HumanControl: s.HumanControl, Viewers: s.Viewers, Record: s.Record}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")

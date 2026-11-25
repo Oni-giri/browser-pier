@@ -52,8 +52,10 @@ const (
 // in the egress forwarder, with BROWSERPIER_BLOCK_ADS and /proxy/exempt
 // (PROJ-119): the orchestrator relies on all three; 5 adds xclip and the
 // entrypoint's /input/clipboard and /input/paste, which the orchestrator
-// calls to empty the clipboard when a person's control ends (PROJ-194).
-const Spec = "5"
+// calls to empty the clipboard when a person's control ends (PROJ-194);
+// 6 adds the entrypoint's /record pipeline, which the recorder reads
+// (PROJ-23).
+const Spec = "6"
 
 const (
 	// StopTimeout is how long a browser container gets to stop before Docker

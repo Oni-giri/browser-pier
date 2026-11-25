@@ -50,6 +50,7 @@ func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, f
 		l.inputs = map[*lease]struct{}{}
 	}
 	l.inputs[in] = struct{}{}
+	m.agentActedLocked(l)
 	return cctx, sync.OnceFunc(func() {
 		cancel(context.Canceled)
 		m.mu.Lock()
@@ -58,6 +59,7 @@ func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, f
 		// event, not after the action began.
 		now := m.now()
 		l.lastActivity, l.lastAgentInput = now, now
+		m.agentActedLocked(l)
 		m.inputsDone.Broadcast()
 		m.mu.Unlock()
 	}), nil
@@ -107,6 +109,11 @@ func (m *Manager) TakeControl(id string) error {
 		return ErrHumanDriving // one person at a time
 	}
 	l.human = true
+	// Recording stops here, under m.mu and before anything else: no
+	// fragment the browser sends from now on is kept, and HumanInput,
+	// which the live view needs before it forwards any input, can't see
+	// human until it has.
+	m.personTookLocked(l)
 	l.generation++
 	l.lastActivity = now
 	if breakOff {
@@ -158,7 +165,12 @@ func (m *Manager) HumanInput(id string) (done func(), err error) {
 // selected in the page: it waits for their input under way and a moment
 // more (clipboardSettle), refuses more, and only then lets agents in. If
 // the clipboard can't be emptied, that is logged and the browser handed
-// back all the same. It returns once agents have the browser.
+// back all the same. A browser that is stopping keeps its clipboard: the
+// container takes it along, or, if the stop fails, runStop empties it
+// before agents get the browser back. Recording (PROJ-23) stays off
+// throughout, and the
+// gate is asked again only as agents get the browser back. It returns
+// once agents have the browser.
 func (m *Manager) ReleaseControl(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -177,7 +189,8 @@ func (m *Manager) ReleaseControl(id string) {
 	for l.humanInputs > 0 {
 		m.inputsDone.Wait()
 	}
-	if l.sess.State == Running || l.sess.State == NeedsHelp {
+	switch l.sess.State {
+	case Running, NeedsHelp:
 		profile := l.sess.Profile
 		m.mu.Unlock()
 		// The person's last keys have reached the browser, but Chromium
@@ -186,9 +199,19 @@ func (m *Manager) ReleaseControl(id string) {
 		time.Sleep(clipboardSettle)
 		m.emptyClipboard(id, profile)
 		m.mu.Lock()
+	case Stopping:
+		// The container takes the clipboard along; if the stop fails
+		// instead, runStop empties it before agents are let back in.
+		l.clipboardLeft = true
 	}
 	l.human, l.releasing = false, false
 	l.lastActivity = m.now()
+	// Only now, the clipboard emptied and agents let back in, may the
+	// gate record again (PROJ-23): never while the person's control is
+	// still ending. A session stopped meanwhile has nothing to record.
+	if m.findLocked(id) == l {
+		m.regateLocked(l)
+	}
 	m.inputsDone.Broadcast()
 }
 

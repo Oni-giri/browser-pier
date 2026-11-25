@@ -28,7 +28,8 @@ func TestDefaultsAndSave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (Settings{DefaultPolicy: profiles.PolicyPIN, DefaultAutoStop: 15 * time.Minute, DefaultBlockAds: true}); got != want {
+	if want := (Settings{DefaultPolicy: profiles.PolicyPIN, DefaultAutoStop: 15 * time.Minute, DefaultBlockAds: true,
+		RecordingRetentionDays: 7, RecordingCapMiB: 2048}); got != want {
 		t.Fatalf("defaults %+v, want %+v", got, want)
 	}
 	if p := got.NewProfile("fresh"); p != profiles.New("fresh") {
@@ -64,6 +65,10 @@ func TestSaveRefusesBadSettings(t *testing.T) {
 		"auto-stop": {DefaultPolicy: profiles.PolicyPIN, DefaultAutoStop: 7 * time.Minute},
 		"ram":       {DefaultPolicy: profiles.PolicyPIN, DefaultAutoStop: 15 * time.Minute, RAMLimitPercent: 101},
 		"negative":  {DefaultPolicy: profiles.PolicyPIN, DefaultAutoStop: 15 * time.Minute, RAMLimitPercent: -1},
+		"retention": {DefaultPolicy: profiles.PolicyPIN, DefaultAutoStop: 15 * time.Minute, RecordingRetentionDays: 91},
+		"no days":   {DefaultPolicy: profiles.PolicyPIN, DefaultAutoStop: 15 * time.Minute, RecordingRetentionDays: -1},
+		"rec cap":   {DefaultPolicy: profiles.PolicyPIN, DefaultAutoStop: 15 * time.Minute, RecordingCapMiB: 63},
+		"huge cap":  {DefaultPolicy: profiles.PolicyPIN, DefaultAutoStop: 15 * time.Minute, RecordingCapMiB: 1<<20 + 1},
 		"scheme":    {DefaultPolicy: profiles.PolicyPIN, DefaultAutoStop: 15 * time.Minute, DefaultProxy: "ftp://u:" + secret + "@corp-proxy.test:21"},
 		"no port":   {DefaultPolicy: profiles.PolicyPIN, DefaultAutoStop: 15 * time.Minute, DefaultProxy: "http://u:" + secret + "@corp-proxy.test"},
 		"path":      {DefaultPolicy: profiles.PolicyPIN, DefaultAutoStop: 15 * time.Minute, DefaultProxy: "http://u:" + secret + "@corp-proxy.test:80/x"},
@@ -80,5 +85,24 @@ func TestSaveRefusesBadSettings(t *testing.T) {
 	}
 	if got, err := s.Get(ctx); err != nil || got != good {
 		t.Fatalf("a refused save changed the settings to %+v, %v", got, err)
+	}
+}
+
+func TestRecordingLimits(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	got, err := s.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l := got.RecordingLimits(); l.Retention != 7*24*time.Hour || l.Cap != 2<<30 || l.KeepFree != 1<<30 {
+		t.Fatalf("default limits %+v, want 7 days, 2 GiB, 1 GiB free", l)
+	}
+	got.RecordingRetentionDays, got.RecordingCapMiB = 90, 64
+	if err := s.Save(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := s.Get(ctx); again.RecordingLimits().Retention != 90*24*time.Hour || again.RecordingLimits().Cap != 64<<20 {
+		t.Fatalf("saved limits %+v", again.RecordingLimits())
 	}
 }

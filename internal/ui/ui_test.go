@@ -22,6 +22,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/db"
 	"github.com/Oni-giri/browser-pier/internal/handoff"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
+	"github.com/Oni-giri/browser-pier/internal/recording"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/sessions/sessionstest"
 	"github.com/Oni-giri/browser-pier/internal/settings"
@@ -33,11 +34,13 @@ type fixture struct {
 	handoffs *handoff.Service
 	web      *auth.Web
 	tokens   *auth.Tokens
-	settings *settings.Store
-	srv      *httptest.Server
-	client   *http.Client
-	ram      int
-	free     int64 // what the host has available, for HostFree
+	// recordings is the store of session recordings (PROJ-23).
+	recordings *recording.Store
+	settings   *settings.Store
+	srv        *httptest.Server
+	client     *http.Client
+	ram        int
+	free       int64 // what the host has available, for HostFree
 	// emptied counts the browser's clipboard emptyings (PROJ-194).
 	emptied atomic.Int32
 }
@@ -91,7 +94,9 @@ func newFixture(t *testing.T) *fixture {
 	web := auth.NewWeb(admin, tokens, log, auth.WebOptions{CookieSecure: "auto"})
 	f := &fixture{t: t, m: m, handoffs: handoff.New(d, m, log), web: web, tokens: tokens, settings: settings.New(d)}
 	emptied = &f.emptied
-	app := New(m, web, f.handoffs, f.settings, log, Options{HostMemory: 16 << 30, HostFree: func() int64 { return f.free }, SetRAMLimit: func(p int) { f.ram = p }})
+	f.recordings = recording.NewStore(filepath.Join(dir, "recordings"), log)
+	app := New(m, web, f.handoffs, f.settings, log, Options{HostMemory: 16 << 30, HostFree: func() int64 { return f.free }, SetRAMLimit: func(p int) { f.ram = p },
+		Recordings: f.recordings})
 	mux := http.NewServeMux()
 	web.Register(mux)
 	app.Register(mux)
@@ -598,9 +603,11 @@ func TestExportAndImport(t *testing.T) {
 	p := profiles.New("google")
 	p.DefaultMode, p.Width, p.Height = profiles.ModeAPI, 1280, 800
 	p.Site, p.IconGlyph, p.IconColor = "mail.google.com", "envelope", "sky"
+	p.Record = true
 	if _, err := f.m.Profiles().Create(ctx, p); err != nil {
 		t.Fatal(err)
 	}
+	f.recorded() // recordings stay where they are: not in the archive
 	cookies := filepath.Join(f.m.Layout().ProfileDir("google"), "chrome", "Default", "Cookies")
 	if err := os.MkdirAll(filepath.Dir(cookies), 0o700); err != nil {
 		t.Fatal(err)
@@ -659,6 +666,20 @@ func TestExportAndImport(t *testing.T) {
 	if err != nil || copied.DefaultMode != profiles.ModeAPI || copied.Width != 1280 ||
 		copied.Site != "mail.google.com" || copied.IconGlyph != "envelope" || copied.IconColor != "sky" {
 		t.Fatalf("imported profile %+v, %v", copied, err)
+	}
+	if copied.Record {
+		t.Fatal("an imported profile records sessions")
+	}
+	if got := f.recordings.Sessions("google-copy"); len(got) != 0 {
+		t.Fatal("recordings came with the import")
+	}
+	if err := filepath.WalkDir(f.m.Layout().ProfileDir("google-copy"), func(path string, _ os.DirEntry, err error) error {
+		if strings.HasSuffix(path, ".mp4") || strings.Contains(path, "recordings") {
+			t.Errorf("%s came with the import", path)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
 	}
 	if f.get("/profiles/google-copy/icon").code != http.StatusOK {
 		t.Fatal("the icon didn't come with the import")

@@ -323,6 +323,12 @@ func TestProfiles(t *testing.T) {
 	if !p.BlockAds {
 		t.Fatalf("a new profile doesn't block ads: %+v", p)
 	}
+	// Recording is the admin's alone (PROJ-23): no field an agent can set.
+	for _, field := range []string{"record", "record_sessions", "Record", "recording"} {
+		if code := f.call(f.all, http.MethodPost, "/api/profiles", `{"name": "r", "`+field+`": true}`, nil); code != http.StatusBadRequest {
+			t.Fatalf("%s through the API: %d", field, code)
+		}
+	}
 	if code := f.call(f.all, http.MethodPost, "/api/profiles", `{"name": "z", "block_ads": false}`, nil); code != http.StatusBadRequest {
 		t.Fatalf("block_ads off through the API: %d", code)
 	}

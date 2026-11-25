@@ -31,6 +31,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/handoff"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
+	"github.com/Oni-giri/browser-pier/internal/recording"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
@@ -101,6 +102,18 @@ func newRealAPI(t *testing.T) agent {
 	var list bytes.Buffer
 	_, _ = domainset.Build(testBlocklist).WriteTo(&list)
 	m.SetBlocklist(list.Bytes)
+	if recordAll() {
+		// The same tests with every session recorded (PROJ-23): recording
+		// must change nothing a page or an agent sees.
+		store := recording.NewStore(filepath.Join(dir, "recordings"), log)
+		rec := recording.NewRecorder(store, m.RecordStream, log)
+		t.Cleanup(func() {
+			total, _ := store.Usage()
+			t.Logf("recorded %d bytes", total)
+		})
+		t.Cleanup(rec.Close)
+		m.SetRecorder(rec, store)
+	}
 	t.Cleanup(func() {
 		for _, s := range m.List() {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -139,10 +152,15 @@ func (a agent) allowLocalNetwork(t *testing.T, name string) {
 		t.Fatal(err)
 	}
 	p.LocalNetwork = true
+	p.Record = recordAll()
 	if _, err := a.m.Profiles().Update(context.Background(), p); err != nil {
 		t.Fatal(err)
 	}
 }
+
+// recordAll: BROWSERPIER_TEST_RECORD=1 runs these tests with recording on
+// for every profile that reaches the test sites.
+func recordAll() bool { return os.Getenv("BROWSERPIER_TEST_RECORD") == "1" }
 
 // TestAgentKeepsItsLoginThroughTheAPI is the done-when through the API an
 // agent uses: create a profile, start it, log in over the CDP proxy, stop
