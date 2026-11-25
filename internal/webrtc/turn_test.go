@@ -161,7 +161,7 @@ func TestRelayAdvertisesTheTURNServersWayIn(t *testing.T) {
 			_, offer := viewerOffer(t, pion.Configuration{})
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			v, answer, err := r.Connect(ctx, "google", offer, func([]byte, func(string)) {})
+			v, answer, err := r.Connect(ctx, "google", offer, func([]byte, func(string)) {}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -317,7 +317,7 @@ func relayOnlyConnects(t *testing.T, r *Relay, turnIP string, servers []ICEServe
 		case heard <- string(msg):
 		default:
 		}
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

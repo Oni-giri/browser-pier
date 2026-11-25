@@ -107,7 +107,7 @@ func TestRelayStreamsVideoAndCarriesInput(t *testing.T) {
 		mu.Lock()
 		inputs = append(inputs, string(b))
 		mu.Unlock()
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

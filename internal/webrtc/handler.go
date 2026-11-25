@@ -163,7 +163,10 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 	control, gen := vw.control, vw.gen // read before the data channel can change them
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	v, answer, err := h.relay.Connect(ctx, profile, in.SDP, vw.message)
+	// The page's input channel closing ends its control, as the page
+	// itself takes it (live.js): the video may stay connected, but no
+	// message can come to drive or hand back the browser.
+	v, answer, err := h.relay.Connect(ctx, profile, in.SDP, vw.message, vw.handBack)
 	if err != nil {
 		if control {
 			h.m.ReleaseControlGen(s.ID, gen)
@@ -376,8 +379,8 @@ func (v *viewer) setClipboard(ctx context.Context, id int, text string, paste bo
 	say(map[string]any{"type": "clipboard-set", "id": id})
 }
 
-// handBack runs when the viewer goes: control returns to agents with no
-// key or button left held.
+// handBack runs when the viewer goes, or its input channel closes:
+// control returns to agents with no key or button left held.
 func (v *viewer) handBack() {
 	v.mu.Lock()
 	defer v.mu.Unlock()

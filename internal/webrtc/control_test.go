@@ -2,11 +2,15 @@ package webrtc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	pion "github.com/pion/webrtc/v4"
 
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
@@ -225,5 +229,76 @@ func TestRepeatedTakeAsksWhoHasControl(t *testing.T) {
 	}
 	if got := strings.Join(c.took(), " "); got != "events" {
 		t.Errorf("the browser got %q", got)
+	}
+}
+
+// Closing the live view's input channel ends its control, though the
+// video stays connected: no message can come any more to drive the
+// browser or hand it back (PROJ-196).
+func TestClosingTheInputChannelHandsBack(t *testing.T) {
+	var c fakeClipboard
+	h, m, _ := offerFixtureWith(t, c.routes, slog.New(slog.DiscardHandler))
+	pc, err := pion.NewPeerConnection(pion.Configuration{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = pc.Close() }()
+	if _, err := pc.AddTransceiverFromKind(pion.RTPCodecTypeVideo, pion.RTPTransceiverInit{Direction: pion.RTPTransceiverDirectionRecvonly}); err != nil {
+		t.Fatal(err)
+	}
+	dc, err := pc.CreateDataChannel("input", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened := make(chan struct{})
+	dc.OnOpen(func() { close(opened) })
+	sdp, err := pc.CreateOffer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gathered := pion.GatheringCompletePromise(pc)
+	if err := pc.SetLocalDescription(sdp); err != nil {
+		t.Fatal(err)
+	}
+	<-gathered
+	body, _ := json.Marshal(map[string]string{"sdp": pc.LocalDescription().SDP})
+	rec := offer(h, OfferOptions{Control: true}, string(body))
+	var answer struct {
+		SDP     string `json:"sdp"`
+		Control bool   `json:"control"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &answer) != nil || !answer.Control {
+		t.Fatalf("offer: %d %s", rec.Code, rec.Body)
+	}
+	if err := pc.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: answer.SDP}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-opened:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the input channel never opened")
+	}
+	if got, _ := m.Live("google"); !got.HumanControl {
+		t.Fatal("no control to begin with")
+	}
+	if err := dc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got, _ := m.Live("google")
+		if !got.HumanControl {
+			if got.Viewers != 1 {
+				t.Errorf("viewers %d: the video should still be connected", got.Viewers)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("still under the closed channel's control")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if pc.ConnectionState() != pion.PeerConnectionStateConnected {
+		t.Errorf("the connection is %s", pc.ConnectionState())
 	}
 }

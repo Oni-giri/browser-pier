@@ -145,8 +145,9 @@ func (v *Viewer) Close() { _ = v.pc.Close() }
 
 // Connect answers a viewer's SDP offer for profile's browser. Messages the
 // viewer sends on its data channel are passed to input, in order, with a
-// function that replies on the same channel.
-func (r *Relay) Connect(ctx context.Context, profile string, offer string, input func(msg []byte, reply func(string))) (*Viewer, string, error) {
+// function that replies on the same channel; closed, if set, is called
+// when a data channel closes, though the video may stay connected.
+func (r *Relay) Connect(ctx context.Context, profile string, offer string, input func(msg []byte, reply func(string)), closed func()) (*Viewer, string, error) {
 	pc, err := r.api.NewPeerConnection(webrtc.Configuration{})
 	if err != nil {
 		return nil, "", err
@@ -181,6 +182,9 @@ func (r *Relay) Connect(ctx context.Context, profile string, offer string, input
 	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
 		reply := func(s string) { _ = dc.SendText(s) }
 		dc.OnMessage(func(msg webrtc.DataChannelMessage) { input(msg.Data, reply) })
+		if closed != nil {
+			dc.OnClose(func() { go closed() }) // it may wait: not on pion's goroutine
+		}
 	})
 	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
 		switch s {
