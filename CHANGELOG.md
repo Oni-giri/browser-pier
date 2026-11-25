@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.4.0
+
+**Before you update:** the browser definition changed (the browser image now has a clipboard tool), so browsers started by 0.3.x are closed gracefully on the first start of 0.4.0, logins kept, and start again under the new definition the next time they're used.
+
+**Changed for people running BrowserPier**
+- **Copy and paste in the live view.** Ctrl/⌘+C, X and V now work inside the remote browser, and on a Mac ⌘ shortcuts (⌘A, ⌘C, ⌘V, ⌘Z…) act as Ctrl. To move text between your computer and the browser, use the new **Clipboard** button in the live view's bar:
+  - Opening the box (or Refresh) shows what the browser has copied, and **Copy** puts it on your clipboard.
+  - Paste your own text into the box, then **Send to browser** to put it on the browser's clipboard for the rest of your takeover, or **Paste into page** to paste it straight in.
+  - The box is text only, up to 10,000 characters sent at once. The browser's clipboard is read only when you open or refresh the box, never in the background.
+- **The browser's clipboard is emptied when you hand back,** however the takeover ends (Hand back, a handoff's Done or expiry, closing or reloading the page), so the agent can't paste what you copied or sent, by keyboard or middle-click.
+- **The status pill moved into the live view's bar,** so it no longer covers the browser's tabs and address bar.
+- **Full screen** for the live view on the profile page and the handoff page, with Take control / Hand back (and the handoff's Done and Can't do this) still at hand. Esc leaves full screen and releases the keyboard. On iPhone, where the browser has no full screen, the view fills the window instead. The remote browser's size never changes.
+- **On a phone, Type** types its text again (the clipboard box covers pasting), so fields that refuse pasting can still be filled.
+- A live view that can't connect says why and to reload, instead of waiting with no picture.
+
+**Changed for agents**
+- After a person's takeover ends, the browser's clipboard and its selection are empty, before the agent gets the browser back.
+- The activity log says "Clipboard set" or "Pasted from the clipboard box" when the person used the box; it never shows the text or its length.
+
 ## 0.3.0
 
 **Before you update:** the browser definition changed, so browsers started by 0.2.x are closed gracefully on the first start of 0.3.0, logins kept, and start again under the new definition the next time they're used.

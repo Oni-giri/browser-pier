@@ -20,6 +20,13 @@ import (
 // offerFixture is a running fake browser and a Handler for it.
 func offerFixture(t *testing.T) (*Handler, *sessions.Manager, sessions.Session) {
 	t.Helper()
+	return offerFixtureWith(t, nil, slog.New(slog.DiscardHandler))
+}
+
+// offerFixtureWith is offerFixture with routes of its own on the fake
+// container's control socket, and log as the logger.
+func offerFixtureWith(t *testing.T, routes func(*http.ServeMux), log *slog.Logger) (*Handler, *sessions.Manager, sessions.Session) {
+	t.Helper()
 	ctx := context.Background()
 	dir, err := os.MkdirTemp("", "of")
 	if err != nil {
@@ -31,10 +38,12 @@ func offerFixture(t *testing.T) (*Handler, *sessions.Manager, sessions.Session) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
-	log := slog.New(slog.DiscardHandler)
 	rt := sessionstest.New(dir)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok\n") })
+	if routes != nil {
+		routes(mux)
+	}
 	rt.Control = mux
 	m, err := sessions.NewManager(d, rt, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)
 	if err != nil {

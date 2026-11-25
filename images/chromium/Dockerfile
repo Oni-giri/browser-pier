@@ -33,7 +33,7 @@ COPY --from=no-terminal /no-terminal.deb /tmp/
 RUN apt-get update \
  && apt-get install -y --no-install-recommends /tmp/no-terminal.deb \
  && apt-get install -y --no-install-recommends \
-      chromium chromium-l10n xvfb xdotool jwm \
+      chromium chromium-l10n xvfb xdotool xclip jwm \
       gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-ugly \
       fonts-liberation fonts-dejavu-core fonts-noto-color-emoji fonts-noto-cjk \
       ca-certificates tzdata \
@@ -49,6 +49,7 @@ RUN apt-get update \
 # en-US whatever LANGUAGE says, and Intl's locale contradicts
 # navigator.languages, which matches the exit location.
 RUN for el in ximagesrc videoconvert videoscale x264enc mp4mux fdsink; do gst-inspect-1.0 "$el" >/dev/null || { echo "missing GStreamer element $el"; exit 1; }; done \
+ && { command -v xclip >/dev/null || { echo "missing xclip, the live view's clipboard box"; exit 1; }; } \
  && for l in de fr es ja; do test -f /usr/lib/chromium/locales/$l.pak || { echo "missing Chromium locale $l"; exit 1; }; done \
  && tr '\0' '\n' < /usr/lib/chromium/chromium > /tmp/strings \
  && for sw in user-data-dir remote-debugging-port password-store disable-blink-features use-angle enable-unsafe-swiftshader \

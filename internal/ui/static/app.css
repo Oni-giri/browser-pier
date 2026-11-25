@@ -408,19 +408,44 @@ input[type=range]{width:100%;accent-color:var(--ink)}
 .crumbs .sep{color:var(--line-strong)}
 .crumbs h1{margin:0;font-size:22px;font-weight:600;letter-spacing:-.6px}
 .live{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:14px;align-items:start}
-@media (max-width:1100px){.live{grid-template-columns:1fr}}
+@media (max-width:1100px){.live{grid-template-columns:minmax(0,1fr)}}
 .viewer{background:var(--surface);border-radius:16px;box-shadow:var(--ring);padding:10px;display:flex;flex-direction:column;gap:10px}
 .viewer.driving{box-shadow:0 0 0 2px var(--blue),0 0 0 6px var(--blue-tint)}
-.viewer-bar{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--ink-2)}
-.viewer-bar .addr{flex:1;min-width:0;height:32px;display:flex;align-items:center;padding:0 12px;border-radius:8px;background:var(--fill);font-family:var(--mono);font-size:12.5px;color:var(--ink-body);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.viewer-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;font-size:13px;color:var(--ink-2)}
+.viewer-bar .addr{flex:1 1 160px;min-width:0;height:32px;display:flex;align-items:center;padding:0 12px;border-radius:8px;background:var(--fill);font-family:var(--mono);font-size:12.5px;color:var(--ink-body);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 #stage{position:relative;aspect-ratio:var(--ratio,16/10);border-radius:10px;overflow:hidden;background:var(--stage-bg);touch-action:none}
 #screen{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;transform-origin:0 0;outline:none;filter:var(--preview-filter)}
 /* A site is shown as it is, dimmed in dark, but not while you drive it. */
 #stage.control #screen,.handoff #screen{filter:none}
-#who{position:absolute;left:12px;top:12px;z-index:2}
-#who.pill{background:var(--overlay);color:var(--on-accent)}
-#who.pill::before{background:var(--grey-dot)}
-#who.you::before{background:var(--blue)}#who.agent::before{background:var(--green)}#who.help::before{background:var(--orange)}
+/* Who drives: a pill in the bar, never over the browser, whose tabs and
+   address bar are in that corner (PROJ-193). */
+#who{flex:0 1 auto;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+#who.you{background:var(--blue-tint);color:var(--blue-text)}#who.you::before{background:var(--blue)}
+#who.agent{background:var(--green-tint);color:var(--green-text)}#who.agent::before{background:var(--green)}
+#who.help{background:var(--orange-tint);color:var(--orange-text)}#who.help::before{background:var(--orange)}
+/* Full screen (PROJ-193): the viewer (bar, stream, hint) fills the screen,
+   through the Fullscreen API or, where there is none (iPhone), fixed over
+   the page. The stream is scaled to fit, never cropped; the browser's own
+   size doesn't change. */
+.full-only{display:none}
+[data-viewer].full .full-only{display:inline-flex}
+[data-viewer].full{position:fixed;inset:0;z-index:95;margin:0;border-radius:0;box-shadow:none;background:var(--bg);display:flex;flex-direction:column;gap:8px;
+  padding:calc(8px + env(safe-area-inset-top)) calc(8px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left))}
+[data-viewer].full:has(#stage.control){box-shadow:inset 0 0 0 2px var(--blue)}
+[data-viewer].full #stage{flex:1;min-height:0;width:100%;max-width:none;aspect-ratio:auto;border-radius:8px}
+[data-viewer].full .ho-tools{flex-wrap:wrap;box-shadow:none;padding:0 0 0 4px;background:none}
+[data-viewer].full .ho-hint{margin:0 4px}
+body.full-open{overflow:hidden}
+/* The clipboard box (PROJ-194): a popover under the bar, inside the
+   viewer, so full screen keeps it. */
+.viewer-bar,.ho-tools{position:relative}
+.clipbox{position:absolute;right:0;top:calc(100% + 6px);z-index:30;box-sizing:border-box;width:min(400px,calc(100vw - 32px));padding:12px;border-radius:12px;background:var(--surface);box-shadow:0 0 0 1px var(--line),0 12px 32px var(--shadow-pop);display:flex;flex-direction:column;gap:8px;color:var(--ink);font-size:14px}
+.ho-tools .clipbox{right:8px}
+.clipbox-head{display:flex;align-items:center;gap:6px}
+.clipbox-head b{flex:1;font-weight:500}
+.clipbox textarea.input{min-height:110px;max-height:40vh;font-family:var(--mono);font-size:12.5px;line-height:1.45}
+.clipbox p{margin:0;min-height:1.4em}
+.clipbox-actions{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 #note{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);background:var(--overlay-strong);color:var(--on-accent);border-radius:10px;padding:7px 12px;font-size:13px;pointer-events:none;opacity:0;transition:opacity .2s;white-space:nowrap}
 #note.show{opacity:1}
 #hint{font-size:13px;color:var(--ink-3);padding:0 4px 2px}
@@ -531,9 +556,7 @@ body.handoff{background:radial-gradient(280px 190px at 50% -10px,rgba(47,107,255
 .ho-error{margin:8px 0;color:var(--red-text);font-size:14px}
 .ho-bottom{position:sticky;bottom:0;padding:16px 0 calc(8px + env(safe-area-inset-bottom));margin-top:24px;background:linear-gradient(transparent,var(--bg) 30%)}
 .ho-bottom .btn{min-height:50px;font-size:16px;border-radius:12px}
-.ho-tools{display:flex;align-items:center;gap:8px;padding:8px 16px;background:var(--surface);box-shadow:0 1px 0 var(--line),0 -1px 0 var(--line)}
-.ho-tools #who{position:static;background:var(--blue-tint);color:var(--blue-text)}
-.ho-tools #who::before{background:var(--blue)}
+.ho-tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 16px;background:var(--surface);box-shadow:0 1px 0 var(--line),0 -1px 0 var(--line)}
 #stage.ho-stage{max-width:calc(72vh * var(--ratio));margin:0 auto;border-radius:0}
 .ho-hint{margin:6px 16px 0}
 textarea.input{height:auto;padding:10px 12px;resize:vertical}

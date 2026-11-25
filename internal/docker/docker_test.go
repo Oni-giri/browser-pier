@@ -341,6 +341,7 @@ func TestOutdated(t *testing.T) {
 		{settled, Spec, true},
 		{settled, "1;apparmor=browserpier", true}, // an older definition
 		{settled, "3;apparmor=browserpier", true}, // 0.2.x's, before PROJ-112/113/119
+		{settled, "4;apparmor=browserpier", true}, // 0.3.x's, before PROJ-194
 		{settled, "", true},
 		// Until the choice is known, a browser under any choice runs on;
 		// not an older definition, though.

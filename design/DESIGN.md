@@ -192,3 +192,4 @@ Live view, the browser previews on profile cards and the Overview's needs-you pr
 - Frosted needs-you chip and warm emphasis card
 - Toast (bottom centre, `ink`) and unsaved-changes bar (Settings)
 - Code block (dark, with tabs and a Copy button)
+- Clipboard box (live view and handoff page): a Clipboard button in the viewer's bar, only for the person with control, opens a popover under the bar (surface, radius 12, the menu's ring and shadow), inside the viewer so full screen keeps it. A title with Refresh and ×, a mono textarea (text you copy), a caption line for state and errors, then Copy on the left and Send to browser and Paste into page (primary) on the right. Keys typed in it stay on the page; Esc closes it. See `screens/live-view.html`.

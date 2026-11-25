@@ -9,21 +9,44 @@
   const offerURL = root.dataset.offer || `/live/${encodeURIComponent(profile)}/offer`;
   const statusURL = root.dataset.status || `/live/${encodeURIComponent(profile)}/status`;
   const iceURL = root.dataset.ice || `/live/${encodeURIComponent(profile)}/ice`;
+  // A page whose offer brings control (a handoff) keeps its own pill until
+  // the offer has answered: until then the status says "Needs help", as
+  // nobody has control yet.
+  let offerAnswered = !root.dataset.offer;
+  // connectError, once set, is why this view couldn't connect: it stays in
+  // the pill and the hint, which say to reload.
+  let connectError = "";
   // ?ice=relay connects only through the TURN server: a way to check it works.
   const relayOnly = new URLSearchParams(location.search).get("ice") === "relay";
   const video = document.getElementById("screen");
   const stage = document.getElementById("stage");
   const who = document.getElementById("who");
-  const takeBtn = document.getElementById("take");
+  // Take control / Hand back: the page's button, and the bar's for full
+  // screen.
+  const takeBtns = [...document.querySelectorAll("[data-take]")];
+  const viewer = document.querySelector("[data-viewer]");
+  const fullBtn = document.getElementById("full");
   const typeBtn = document.getElementById("type");
   const fitBtn = document.getElementById("fit");
   const hint = document.getElementById("hint");
   const note = document.getElementById("note");
   const touch = matchMedia("(pointer: coarse)").matches;
+  // On a Mac, ⌘ is sent as Ctrl: the browser runs on Linux, where Super
+  // does nothing and Ctrl makes the shortcuts (PROJ-194).
+  const mac = /Mac|iPhone|iPad|iPod/.test(navigator.platform || "") || (navigator.userAgentData && navigator.userAgentData.platform === "macOS");
+  const cmd = mac ? "⌘" : "Ctrl+";
+  // The clipboard box (PROJ-194), for the person with control.
+  const clipBtn = document.getElementById("clip");
+  const clipBox = document.getElementById("clipbox");
+  const clipText = document.getElementById("cliptext");
+  const clipMsg = document.getElementById("clipmsg");
+  // maxClipSet is the most the box sends at once, as BrowserPier caps it.
+  const maxClipSet = 10000;
 
   let dc = null;
   let control = false;
   let keyboard = false; // keys go to the browser (released with Esc)
+  let full = false; // the viewer fills the screen
   let status = {};
   let zoom = 1, panX = 0, panY = 0;
 
@@ -70,21 +93,34 @@
       else if (status.human_control) { label = "Someone else has control"; }
       else { label = "Idle"; }
     } else if (s === "starting") { label = "Starting…"; }
-    who.textContent = label;
-    who.className = "pill " + cls;
+    if (s === undefined && control) { label = "You have control"; cls = "you"; }
+    // Until the first status, the page's own words stay ("Connecting…",
+    // or the handoff page's "You're driving", in blue, until its offer
+    // has answered).
+    if (connectError) { label = connectError; cls = ""; }
+    if (((s !== undefined || control) && offerAnswered) || connectError) {
+      who.textContent = label;
+      who.className = "pill " + cls;
+    }
     // While it waits for help the agent is paused, so a person can always take over.
     const agentDriving = s === "running" && !!(status.in_use_by && status.in_use_by.length);
-    if (takeBtn) {
-      takeBtn.textContent = control ? "Hand back" : "Take control";
-      if (takeBtn.classList.contains("btn")) takeBtn.classList.toggle("blue", !control);
-      takeBtn.disabled = !dc || dc.readyState !== "open" || (!control && (agentDriving || status.human_control || (s !== "running" && s !== "needs_help")));
+    for (const b of takeBtns) {
+      b.textContent = control ? "Hand back" : "Take control";
+      b.classList.toggle("blue", !control);
+      b.disabled = !dc || dc.readyState !== "open" || (!control && (agentDriving || status.human_control || (s !== "running" && s !== "needs_help")));
     }
     typeBtn.hidden = !(control && touch);
     fitBtn.hidden = !touch;
+    if (clipBtn) clipBtn.hidden = !control;
+    if (!control) closeClip();
     stage.classList.toggle("control", control);
-    hint.textContent = control
-      ? (touch ? `Tap to click. Pinch to zoom. ${typeBtn.textContent} sends text.` : keyboard ? "Your keyboard goes to the browser. Esc releases it." : "Click the screen to send your keyboard to the browser.")
-      : "View only. Take control to use the mouse and keyboard.";
+    const box = " Clipboard moves text between your clipboard and the browser's.";
+    hint.textContent = (control
+      ? (touch ? `Tap to click. Pinch to zoom. ${typeBtn.textContent} sends text.` + box
+        : (keyboard ? `Your keyboard goes to the browser${mac ? ", ⌘ as Ctrl" : ""}. Esc releases it.` : "Click the screen to send your keyboard to the browser.") + box)
+      : "View only. Take control to use the mouse and keyboard.") + (full && !touch ? " Esc leaves full screen." : "");
+    if (connectError) hint.textContent = "Reload the page to try again.";
+    if (fullBtn) fullBtn.textContent = full ? "Exit full screen" : "Full screen";
   }
 
   async function poll() {
@@ -121,6 +157,7 @@
         if (keyboard) video.focus();
         render(); poll();
       }
+      if (/^clipboard/.test(m.type)) clipAnswer(m);
       if (m.type === "error") { say(m.msg); poll(); }
     };
     pc.ontrack = (e) => { video.srcObject = e.streams[0] || new MediaStream([e.track]); };
@@ -141,14 +178,139 @@
     const r = await fetch(offerURL, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sdp: pc.localDescription.sdp }),
     });
-    if (!r.ok) { who.textContent = (await r.text()).trim() || "Couldn't connect"; return; }
+    if (!r.ok) { failed((await r.text()).trim() || "Couldn't connect"); return; }
     const answer = await r.json();
     await pc.setRemoteDescription({ type: "answer", sdp: answer.sdp });
-    if (answer.control) { control = true; keyboard = !touch; status.human_control = true; render(); }
+    offerAnswered = true;
+    if (answer.control) { control = true; keyboard = !touch; status.human_control = true; }
+    render();
   }
 
-  if (takeBtn) takeBtn.onclick = () => send({ type: control ? "release" : "take" });
+  for (const b of takeBtns) b.onclick = () => send({ type: control ? "release" : "take" });
+
+  // Full screen (PROJ-193): the Fullscreen API where there is one, else
+  // (iPhone Safari, or a refusal) the viewer fixed over the page. Only the
+  // picture is scaled: the browser's own window keeps its size.
+  function setFull(on) {
+    // However full screen ends (Esc, the browser's own exit, the bar's
+    // button), the keyboard comes back to this page.
+    if (!on && keyboard) { lift(); keyboard = false; }
+    full = on;
+    viewer.classList.toggle("full", on);
+    document.body.classList.toggle("full-open", on);
+    render();
+  }
+  async function leaveFull() {
+    if (document.fullscreenElement) { try { await document.exitFullscreen(); } catch (_) { /* gone already */ } }
+    setFull(false);
+  }
+  if (fullBtn && viewer) fullBtn.onclick = async () => {
+    if (full) return leaveFull();
+    setFull(true);
+    if (viewer.requestFullscreen) {
+      try { await viewer.requestFullscreen({ navigationUI: "hide" }); } catch (_) { /* the fixed view stays */ }
+    }
+    if (control && !touch) { keyboard = true; video.focus(); render(); }
+  };
+  // Esc leaves the Fullscreen API's full screen before a page sees it: it
+  // also releases the keyboard, as Esc does outside it.
+  document.addEventListener("fullscreenchange", () => {
+    if (!document.fullscreenElement && full) setFull(false);
+  });
   typeBtn.onclick = () => { const text = prompt("Type into the browser"); if (text) send({ type: "text", text }); };
+
+  // The clipboard box (PROJ-194): the browser's clipboard, read into it
+  // only when it opens or Refresh is pressed (never polled, so a page
+  // can't put text in it on its own), and text sent from it, which stays
+  // on the browser's clipboard until the person's control ends. Keys
+  // typed in it stay on this page.
+  let clipReq = null, clipID = 0;
+  // clipEdited: the box holds text the person typed or pasted there and
+  // hasn't sent. Opening the box again keeps it; only Refresh replaces it.
+  let clipEdited = false;
+  // clipEdits counts the person's edits, so a read can tell whether they
+  // typed while it was on its way.
+  let clipEdits = 0;
+  if (clipText) clipText.addEventListener("input", () => { clipEdited = true; clipEdits++; });
+  function clipSay(text) { clipMsg.textContent = text; }
+  function clipBusy(on) { for (const b of clipBox.querySelectorAll("[data-clip=refresh],[data-clip=send],[data-clip=paste]")) b.disabled = on; }
+  // clipAsk sends one request, answered by its id (clipAnswer): done
+  // with the answer, or fail, if set, with the error's words.
+  function clipAsk(msg, busy, done, fail) {
+    const id = ++clipID;
+    clearTimeout(clipReq && clipReq.timer);
+    clipReq = { id, done, fail: fail || clipSay, timer: setTimeout(() => clipAnswer({ type: "clipboard-error", id, msg: "The browser didn't answer." }), 10000) };
+    clipSay(busy); clipBusy(true);
+    flush(); // keys pressed before go first
+    send({ ...msg, id });
+  }
+  function clipAnswer(m) {
+    if (!clipReq || m.id !== clipReq.id) return;
+    const { done, fail, timer } = clipReq;
+    clipReq = null; clearTimeout(timer); clipBusy(false);
+    if (m.type === "clipboard-error") fail(m.msg || "That didn't work.");
+    else done(m);
+  }
+  // refreshClip reads the browser's clipboard into the box. Refresh's
+  // read replaces what is there; the read that opening the box starts
+  // (auto) doesn't, if the person typed or pasted while it was on its way.
+  function refreshClip(auto) {
+    const edits = clipEdits;
+    const typedSince = () => auto === true && clipEdits !== edits;
+    clipAsk({ type: "clipboard" }, "Reading the browser's clipboard…", (m) => {
+      if (typedSince()) { clipSay("Your text isn't sent yet. Refresh replaces it with the browser's clipboard."); return; }
+      clipText.value = m.text || ""; clipEdited = false;
+      clipSay(m.text ? "The browser's clipboard. Copy puts it on yours." : "The browser's clipboard is empty. Type or paste text here to send it.");
+    }, (msg) => {
+      // What an earlier read left would pass for the browser's clipboard
+      // now: it goes. Text the person typed stays, said to be theirs.
+      if (!clipEdited && !typedSince()) clipText.value = "";
+      clipSay(clipEdited ? `${msg} The text here is yours, not sent yet.` : msg);
+    });
+  }
+  function openClip() {
+    if (!clipBox || !control) return;
+    clipBox.hidden = false; clipBtn.setAttribute("aria-expanded", "true");
+    // Typing goes to the box, not the browser (a phone's keyboard opens
+    // only when the person taps it).
+    if (!touch) clipText.focus();
+    if (clipEdited) clipSay("Your text isn't sent yet. Refresh replaces it with the browser's clipboard.");
+    else refreshClip(true);
+  }
+  function closeClip() {
+    if (!clipBox || clipBox.hidden) return;
+    if (clipReq) { clearTimeout(clipReq.timer); clipReq = null; clipBusy(false); }
+    clipBox.hidden = true; clipBtn.setAttribute("aria-expanded", "false");
+  }
+  function sendClip(paste) {
+    const text = clipText.value.replace(/\r\n?/g, "\n");
+    if (!text) { clipSay("There's no text to send."); return; }
+    const n = [...text].length;
+    if (n > maxClipSet) { clipSay(`That's ${n.toLocaleString()} characters: at most ${maxClipSet.toLocaleString()} can be sent at once.`); return; }
+    clipAsk({ type: "clipboard-set", text, paste }, paste ? "Pasting…" : "Sending…", () => {
+      clipEdited = false;
+      clipSay(paste ? "Pasted into the page. It stays on the browser's clipboard until you hand back." : `On the browser's clipboard until you hand back: ${cmd}V pastes it there.`);
+    });
+  }
+  async function copyClip() {
+    const text = clipText.value;
+    if (!text) { clipSay("There's nothing to copy."); return; }
+    // Where this browser won't write its clipboard (plain HTTP, or a
+    // refusal), the text is selected to copy by hand.
+    if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+      try { await navigator.clipboard.writeText(text); clipSay("Copied"); return; } catch (_) { /* by hand */ }
+    }
+    clipText.focus(); clipText.select();
+    clipSay(touch ? "Selected: copy it from the menu." : `Selected: press ${cmd}C to copy it.`);
+  }
+  if (clipBtn && clipBox) {
+    clipBtn.onclick = () => (clipBox.hidden ? openClip() : closeClip());
+    clipBox.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-clip]");
+      if (!b) return;
+      ({ refresh: () => refreshClip(false), close: closeClip, copy: copyClip, send: () => sendClip(false), paste: () => sendClip(true) })[b.dataset.clip]();
+    });
+  }
   fitBtn.onclick = () => { zoom = 1; panX = panY = 0; applyZoom(); };
   // The stage takes the stream's shape: the profile's screen size may have
   // changed since this browser started.
@@ -179,7 +341,8 @@
     PageUp: "Prior", PageDown: "Next", ArrowLeft: "Left", ArrowRight: "Right", ArrowUp: "Up", ArrowDown: "Down",
     CapsLock: "Caps_Lock", " ": "space", ContextMenu: "Menu",
   };
-  const byCode = { ShiftLeft: "Shift_L", ShiftRight: "Shift_R", ControlLeft: "Control_L", ControlRight: "Control_R", AltLeft: "Alt_L", AltRight: "Alt_R", MetaLeft: "Super_L", MetaRight: "Super_R" };
+  const byCode = { ShiftLeft: "Shift_L", ShiftRight: "Shift_R", ControlLeft: "Control_L", ControlRight: "Control_R", AltLeft: "Alt_L", AltRight: "Alt_R",
+    MetaLeft: mac ? "Control_L" : "Super_L", MetaRight: mac ? "Control_R" : "Super_R" };
   function keysym(e) {
     if (byCode[e.code]) return byCode[e.code];
     if (named[e.key]) return named[e.key];
@@ -188,19 +351,62 @@
     return null;
   }
   // lift sends what's queued, then lets go of every held key and button.
-  function lift() { flush(); send({ type: "lift" }); }
+  function lift() { flush(); send({ type: "lift" }); held.clear(); }
+  // releaseKeys gives the keyboard back to this page.
+  function releaseKeys() { lift(); keyboard = false; render(); }
+  // Keys held in the browser, by the physical key, with the keysym sent:
+  // a key's keyup can name another keysym than its keydown (Shift let go
+  // first: "A" down, "a" up), and must let go of what went down.
+  const held = new Map();
+  const modifier = (e) => ["Shift", "Control", "Alt", "AltGraph", "Meta", "CapsLock"].includes(e.key);
   addEventListener("keydown", (e) => {
+    // The fixed full screen has no browser Esc of its own: Esc leaves it,
+    // and releases the keyboard if it was captured.
+    // In the clipboard box, keys stay on this page; Esc closes it.
+    if (clipBox && clipBox.contains(e.target)) {
+      if (e.key === "Escape") { e.preventDefault(); closeClip(); clipBtn.focus(); }
+      return;
+    }
+    if (e.key === "Escape" && full && !document.fullscreenElement) {
+      e.preventDefault();
+      leaveFull();
+      return;
+    }
     if (!control || !keyboard) return;
-    if (e.key === "Escape") { e.preventDefault(); lift(); keyboard = false; render(); say("Keyboard released. Click the screen to send it again."); return; }
+    if (e.key === "Escape") { e.preventDefault(); releaseKeys(); say("Keyboard released. Click the screen to send it again."); return; }
+    // Every key goes to the browser, Ctrl+C, X and V included: copy and
+    // paste work inside it, on its own clipboard.
     const k = keysym(e); if (!k) return;
-    e.preventDefault(); push({ t: "keydown", k });
+    e.preventDefault();
+    if (mac && e.metaKey && !modifier(e)) {
+      // A Mac sends no keyup for a key pressed with ⌘ down: a tap, so it
+      // isn't held (and repeated) in the browser; its repeats are taps.
+      push({ t: "keydown", k }); push({ t: "keyup", k });
+      return;
+    }
+    const code = e.code || k;
+    if (held.has(code) && held.get(code) !== k) push({ t: "keyup", k: held.get(code) });
+    push({ t: "keydown", k }); held.set(code, k);
   });
   addEventListener("keyup", (e) => {
-    if (!control || !keyboard || e.key === "Escape") return;
-    const k = keysym(e); if (!k) return;
-    e.preventDefault(); push({ t: "keyup", k });
+    if (!control || e.key === "Escape") return;
+    const code = e.code || keysym(e);
+    if (!code) return;
+    // A key that went down in the browser always goes up there, wherever
+    // the focus has moved since (a button of the clipboard box, say), as
+    // the keysym it went down as.
+    if (held.has(code)) { push({ t: "keyup", k: held.get(code) }); held.delete(code); }
+    // In the box, the key is the page's (Space presses its buttons).
+    if (keyboard && !(clipBox && clipBox.contains(e.target))) e.preventDefault();
   });
   addEventListener("blur", () => { if (control) lift(); });
+  // A field of this page (the handoff's note) or anything in the clipboard
+  // box takes the keyboard back, letting go of every key held: what is
+  // typed or pasted there stays here.
+  addEventListener("focusin", (e) => {
+    const t = e.target;
+    if (keyboard && t !== video && t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || (clipBox && clipBox.contains(t)))) releaseKeys();
+  });
 
   // Phone: tap to click, pinch to zoom, drag to pan when zoomed.
   function applyZoom() { video.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`; }
@@ -232,7 +438,18 @@
     if (e.touches.length === 0) { touches = 0; startDist = 0; tapStart = null; }
   });
 
-  connect().catch((err) => { who.textContent = "Couldn't connect: " + err.message; });
+  // failed shows why this view couldn't connect, for good: in the pill,
+  // the hint, and a note over the stream, each saying to reload.
+  function failed(why) {
+    connectError = why;
+    render();
+    // A refusal's own words end in a full stop already.
+    say(why.replace(/[.!?]\s*$/, "") + ". Reload the page to try again.");
+    clearTimeout(say.t); // the note stays
+  }
+  // A network error before the offer's answer (the fetch throwing) is a
+  // failure like a refused answer.
+  connect().catch((err) => failed("Couldn't connect: " + ((err && err.message) || "network error")));
   poll();
   setInterval(poll, 2000);
   render();

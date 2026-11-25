@@ -291,9 +291,11 @@ func TestRecordingStopsForAPerson(t *testing.T) {
 	personTypes := func(text string) {
 		t.Helper()
 		// What the live view sends for a person's paste (viewer.message).
-		if err := r.m.HumanInput(s.ID); err != nil {
+		done, err := r.m.HumanInput(s.ID)
+		if err != nil {
 			t.Fatalf("the person has no control: %v", err)
 		}
+		defer done() // once the input has reached the browser
 		resp, err := control.Post("http://control/input/type", "application/json",
 			strings.NewReader(fmt.Sprintf(`{"text": %q, "pace": "instant"}`, text)))
 		if err != nil {

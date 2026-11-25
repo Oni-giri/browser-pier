@@ -41,6 +41,22 @@ type fixture struct {
 	// tabs; tabs is what its Target.getTargets answers (watch_test.go).
 	cdp  *cdptest.Browser
 	tabs *fakeTabs
+	// emptied counts the browser's clipboard emptyings, with whether a
+	// person still had control as each happened (PROJ-194).
+	emptied *clipRecord
+}
+
+type clipRecord struct {
+	mu       sync.Mutex
+	controls []bool
+}
+
+func (c *clipRecord) took() []bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := c.controls
+	c.controls = nil
+	return out
 }
 
 func newFixture(t *testing.T, policy profiles.HandoffPolicy, opts auth.WebOptions) *fixture {
@@ -63,12 +79,21 @@ func newFixture(t *testing.T, policy profiles.HandoffPolicy, opts auth.WebOption
 	tabs := &fakeTabs{}
 	tabs.set(tab{ID: "T1", Typ: "page", URL: "https://accounts.google.com/signin/v2?continue=https%3A%2F%2Fevil.example%2Fpay+now"})
 	mux.HandleFunc("GET /cdp/json/list", tabs.serveList)
+	emptied := &clipRecord{}
+	var m *sessions.Manager
+	mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) {
+		s, _ := m.Live("google")
+		emptied.mu.Lock()
+		emptied.controls = append(emptied.controls, s.HumanControl)
+		emptied.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
 	// No CDP: what the handoff reads of the browser, it reads over HTTP.
 	b := cdptest.New(func(m cdptest.Message) (any, error) {
 		return nil, cdptest.Error{Message: "not in the fake: " + m.Method}
 	})
 	rt.Control = b.Handler(mux)
-	m, err := sessions.NewManager(d, rt, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)
+	m, err = sessions.NewManager(d, rt, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +128,7 @@ func newFixture(t *testing.T, policy profiles.HandoffPolicy, opts auth.WebOption
 	srv := httptest.NewServer(new(http.CrossOriginProtection).Handler(hmux))
 	t.Cleanup(srv.Close)
 	t.Cleanup(svc.Close)
-	return &fixture{t: t, m: m, svc: svc, admin: admin, srv: srv, cdp: b, tabs: tabs}
+	return &fixture{t: t, m: m, svc: svc, admin: admin, srv: srv, cdp: b, tabs: tabs, emptied: emptied}
 }
 
 func (f *fixture) running() sessions.Session {
@@ -233,6 +258,32 @@ func TestPINFlowHandsBack(t *testing.T) {
 	}
 	if p := f.do(phone, "GET", "/h/"+token, nil, nil); p.code != http.StatusOK || !strings.Contains(p.body, "Done, hand back") {
 		t.Fatalf("control page: %d", p.code)
+	} else if tools := between(p.body, `class="ho-tools"`, "</div>"); !strings.Contains(tools, `id="who"`) || !strings.Contains(tools, `id="full"`) ||
+		!strings.Contains(between(p.body, "data-viewer", `class="ho"`), `id="stage"`) {
+		// The pill and the full-screen button in the tools, and the stream
+		// in the viewer that goes full screen (PROJ-193).
+		t.Errorf("the control page's tools: %s", tools)
+	} else if !strings.Contains(tools, `id="who" class="pill you"`) {
+		// Blue from the start, not grey until the script runs.
+		t.Errorf("the pill isn't blue: %s", tools)
+	} else {
+		// Done and Can't do this are in the tools too, for full screen,
+		// where the page's own form is hidden: they submit that form, note
+		// and all (PROJ-193).
+		for _, status := range []string{"done", "cant"} {
+			if !strings.Contains(tools, `type="submit" form="finish" name="status" value="`+status+`"`) {
+				t.Errorf("no %s button for full screen in the tools: %s", status, tools)
+			}
+		}
+		if !strings.Contains(between(p.body, `<form method="post" action="/h/`+token+`/finish" id="finish">`, "</form>"), `name="note"`) {
+			t.Error("the finish form lost its note")
+		}
+		// The clipboard box, in the tools and so in full screen too
+		// (PROJ-194).
+		if !strings.Contains(tools, `<button id="clip" class="btn small" type="button" aria-expanded="false" aria-controls="clipbox" hidden>Clipboard</button>`) ||
+			!strings.Contains(between(p.body, "data-viewer", `id="stage"`), `<textarea id="cliptext"`) {
+			t.Errorf("no clipboard box in the tools: %s", between(p.body, "data-viewer", `id="stage"`))
+		}
 	}
 	// The link works once: another browser is refused, even with the PIN.
 	other := browser()
@@ -829,5 +880,54 @@ func TestHandoffPageSaysWhenItHandsBackByItself(t *testing.T) {
 	}
 	if p := g.do(phone, "GET", "/h/"+token, nil, nil); !strings.Contains(p.body, `id="finish"`) || strings.Contains(p.body, "hands back by itself") {
 		t.Fatalf("without until_url: %s", p.body)
+	}
+}
+
+// between is s from the first from to the next to after it, "" if either
+// is missing.
+func between(s, from, to string) string {
+	i := strings.Index(s, from)
+	if i < 0 {
+		return ""
+	}
+	j := strings.Index(s[i:], to)
+	if j < 0 {
+		return ""
+	}
+	return s[i : i+j]
+}
+
+// However a handoff ends while the person has control (Done here, or it
+// expires), the browser's clipboard is emptied while they still have it,
+// before the agent gets the browser back (PROJ-194).
+func TestHandoffEndEmptiesTheClipboard(t *testing.T) {
+	for name, end := range map[string]func(f *fixture, h Handoff){
+		"done": func(f *fixture, h Handoff) {
+			if _, err := f.svc.Finish(context.Background(), h, Done, ""); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"expiry": func(f *fixture, h Handoff) {
+			later := time.Now().Add(Lifetime + time.Second)
+			f.svc.now = func() time.Time { return later }
+			if got, err := f.svc.Get(context.Background(), h.ID); err != nil || got.Status != Expired {
+				t.Fatalf("after 15 minutes: %+v, %v", got, err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, profiles.PolicyLink, auth.WebOptions{})
+			h, _ := f.open("")
+			if err := f.m.TakeControl(h.SessionID); err != nil {
+				t.Fatal(err)
+			}
+			end(f, h)
+			if got := f.emptied.took(); len(got) != 1 || !got[0] {
+				t.Fatalf("emptied %d times, with control %v; want once, while the person had it", len(got), got)
+			}
+			if s, _ := f.m.Live("google"); s.HumanControl || s.State != sessions.Running {
+				t.Errorf("after the handoff: %+v", s)
+			}
+		})
 	}
 }

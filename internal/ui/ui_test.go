@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -40,6 +41,8 @@ type fixture struct {
 	client     *http.Client
 	ram        int
 	free       int64 // what the host has available, for HostFree
+	// emptied counts the browser's clipboard emptyings (PROJ-194).
+	emptied atomic.Int32
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -69,6 +72,11 @@ func newFixture(t *testing.T) *fixture {
 	ctl.HandleFunc("GET /cdp/json/list", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `[{"type":"page","url":"https://accounts.example.com/signin"}]`)
 	})
+	var emptied *atomic.Int32
+	ctl.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) {
+		emptied.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	})
 	rt.Control = ctl
 	m, err := sessions.NewManager(d, rt, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)
 	if err != nil {
@@ -85,6 +93,7 @@ func newFixture(t *testing.T) *fixture {
 	tokens := auth.NewTokens(d)
 	web := auth.NewWeb(admin, tokens, log, auth.WebOptions{CookieSecure: "auto"})
 	f := &fixture{t: t, m: m, handoffs: handoff.New(d, m, log), web: web, tokens: tokens, settings: settings.New(d)}
+	emptied = &f.emptied
 	f.recordings = recording.NewStore(filepath.Join(dir, "recordings"), log)
 	app := New(m, web, f.handoffs, f.settings, log, Options{HostMemory: 16 << 30, HostFree: func() int64 { return f.free }, SetRAMLimit: func(p int) { f.ram = p },
 		Recordings: f.recordings})
@@ -201,6 +210,30 @@ func TestEveryPageRenders(t *testing.T) {
 	want(t, f.get("/profiles/new"), http.StatusOK, "Create profile")
 	want(t, f.get("/profiles/new", "HX-Request", "true"), http.StatusOK, "<dialog data-open")
 	want(t, f.get("/profiles/google"), http.StatusOK, `id="stage"`, "/static/live.js", "Enter the 2FA code", "Done, hand back", "Paused, waiting for you")
+	// Who drives is said in the bar, not over the browser; full screen is
+	// in the bar too, with its own Take control (PROJ-193).
+	if r := f.get("/profiles/google"); !strings.Contains(between(r.body, `class="viewer-bar"`, `id="stage"`), `id="who"`) ||
+		strings.Contains(between(r.body, `id="stage"`, `id="hint"`), `id="who"`) ||
+		!strings.Contains(between(r.body, `class="viewer-bar"`, `id="stage"`), `id="full"`) ||
+		strings.Count(r.body, "data-take") != 2 {
+		t.Errorf("the live view's bar: %s", between(r.body, `class="viewer"`, `id="hint"`))
+	}
+	if r := f.get("/profiles/github"); strings.Contains(r.body, `id="full"`) || strings.Contains(r.body, `id="who"`) || strings.Contains(r.body, `id="clip"`) {
+		t.Error("a stopped profile has a full-screen button, a status pill or a clipboard box")
+	}
+	// The clipboard box's button is in the bar, hidden until the viewer has
+	// control, and the box is inside the viewer, so full screen keeps both
+	// (PROJ-194).
+	if r := f.get("/profiles/google"); !strings.Contains(between(r.body, `class="viewer-bar"`, `id="stage"`), `<button id="clip" class="btn small" type="button" aria-expanded="false" aria-controls="clipbox" hidden>Clipboard</button>`) ||
+		!strings.Contains(between(r.body, "data-viewer", `id="stage"`), `<textarea id="cliptext"`) {
+		t.Errorf("the clipboard box: %s", between(r.body, `class="viewer"`, `id="hint"`))
+	} else {
+		for _, b := range []string{"refresh", "copy", "send", "paste"} {
+			if !strings.Contains(between(r.body, `id="clipbox"`, `id="stage"`), `data-clip="`+b+`"`) {
+				t.Errorf("the clipboard box has no %s button", b)
+			}
+		}
+	}
 	want(t, f.get("/profiles/google"), http.StatusOK, "<dt>Ads and trackers</dt><dd class=\"num\">42 blocked</dd>")
 	want(t, f.get("/profiles/github"), http.StatusOK, "<dt>Ads and trackers</dt><dd>On</dd>")
 	want(t, f.get("/profiles/github"), http.StatusOK, "Start browser", "This browser is stopped",
@@ -448,6 +481,40 @@ func TestHandBackFinishesTheHandoff(t *testing.T) {
 	}
 	if s, _ := f.m.Live("google"); s.State != sessions.Running {
 		t.Fatalf("browser not given back: %s", s.State)
+	}
+}
+
+// The profile page's Hand back form empties the browser's clipboard as
+// it ends the person's control, with a help request open or not
+// (PROJ-194).
+func TestHandBackFormEmptiesTheClipboard(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.profile("google")
+	s, _, _ := f.m.Start(ctx, "google", "")
+	if err := f.m.TakeControl(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.post("/profiles/google/handback", url.Values{}); r.code != http.StatusSeeOther {
+		t.Fatalf("hand back: %d", r.code)
+	}
+	if n := f.emptied.Load(); n != 1 {
+		t.Fatalf("emptied %d times", n)
+	}
+	if _, _, err := f.handoffs.Create(ctx, s.ID, "research-bot", handoff.SensitiveInput, "Enter the 2FA code", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.TakeControl(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.post("/profiles/google/handback", url.Values{"status": {"done"}}); r.code != http.StatusSeeOther {
+		t.Fatalf("hand back: %d", r.code)
+	}
+	if n := f.emptied.Load(); n != 2 {
+		t.Fatalf("emptied %d times", n)
+	}
+	if s, _ := f.m.Live("google"); s.HumanControl {
+		t.Error("still under the person's control")
 	}
 }
 
@@ -724,4 +791,18 @@ func TestOrangeOnlyWhenSomeoneIsNeeded(t *testing.T) {
 			t.Fatalf("%s: %q", grain, r.header.Get("Cache-Control"))
 		}
 	}
+}
+
+// between is s from the first from to the next to after it, "" if either
+// is missing.
+func between(s, from, to string) string {
+	i := strings.Index(s, from)
+	if i < 0 {
+		return ""
+	}
+	j := strings.Index(s[i:], to)
+	if j < 0 {
+		return ""
+	}
+	return s[i : i+j]
 }

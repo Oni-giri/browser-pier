@@ -50,8 +50,10 @@ const (
 // keeps session-only cookies (RestoreOnStartup, PROJ-112), moves Visual
 // input at a hand's pace (PROJ-113), and blocks the ad and tracker list
 // in the egress forwarder, with BROWSERPIER_BLOCK_ADS and /proxy/exempt
-// (PROJ-119): the orchestrator relies on all three.
-const Spec = "4"
+// (PROJ-119): the orchestrator relies on all three; 5 adds xclip and the
+// entrypoint's /input/clipboard and /input/paste, which the orchestrator
+// calls to empty the clipboard when a person's control ends (PROJ-194).
+const Spec = "5"
 
 const (
 	// StopTimeout is how long a browser container gets to stop before Docker

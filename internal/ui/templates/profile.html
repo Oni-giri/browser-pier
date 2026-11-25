@@ -9,7 +9,7 @@
     <div class="actions">
       {{if .Live}}
         <button class="btn" type="button" data-dialog="stop-dialog" data-name="{{.Name}}" data-agent="{{if .Session.InUseBy}}{{join .Session.InUseBy ", "}}{{end}}">Stop browser</button>
-        {{if .Preview}}<button id="take" class="btn blue" type="button" disabled>Take control</button>{{end}}
+        {{if .Preview}}<button id="take" class="btn blue" type="button" data-take disabled>Take control</button>{{end}}
       {{else}}
         <a class="btn" href="/profiles/{{.Name}}/edit">Edit settings</a>
         <form method="post" action="/profiles/{{.Name}}/start" data-busy="Starting…"{{if .StartNow}} data-autosubmit{{end}}><input type="hidden" name="back" value="/profiles/{{.Name}}"><button class="btn primary" type="submit">{{if eq .Status.Key "failed"}}Retry{{else}}Start browser{{end}}</button></form>
@@ -18,17 +18,26 @@
     </div>
   </div>
   <div class="live">
-    <section class="viewer" aria-label="Browser">
+    <section class="viewer" aria-label="Browser" data-viewer>
       <div class="viewer-bar">
+        {{if .Preview}}<span id="who" class="pill">Connecting…</span>{{end}}
         <span class="addr">{{if and .Ask .Ask.Origin}}{{.Ask.Origin}}{{else}}{{.Name}}{{end}}</span>
         <span class="num">{{.Width}} × {{.Height}}{{if .Preview}} · 30 fps{{end}}</span>
         <button id="type" class="btn small" type="button" hidden>Type</button>
         <button id="fit" class="btn small" type="button" hidden>Fit</button>
+        {{if .Preview}}<button id="clip" class="btn small" type="button" aria-expanded="false" aria-controls="clipbox" hidden>Clipboard</button>
+        <button class="btn small blue full-only" type="button" data-take disabled>Take control</button>
+        <button id="full" class="btn small" type="button">Full screen</button>
+        <div id="clipbox" class="clipbox" role="dialog" aria-labelledby="clip-title" hidden>
+          <div class="clipbox-head"><b id="clip-title">Browser clipboard</b><button class="btn small" type="button" data-clip="refresh">Refresh</button><button class="btn small" type="button" data-clip="close" aria-label="Close">×</button></div>
+          <textarea id="cliptext" class="input" rows="5" spellcheck="false" autocomplete="off" aria-label="Text on the browser's clipboard"></textarea>
+          <p id="clipmsg" class="caption" role="status"></p>
+          <div class="clipbox-actions"><button class="btn small" type="button" data-clip="copy">Copy</button><span class="grow"></span><button class="btn small" type="button" data-clip="send">Send to browser</button><button class="btn small primary" type="button" data-clip="paste">Paste into page</button></div>
+        </div>{{end}}
       </div>
       <div id="stage" style="--ratio:{{.Width}}/{{.Height}}">
         {{if .Preview}}
           <video id="screen" autoplay playsinline muted tabindex="0" aria-label="Live view of {{.Name}}"></video>
-          <span id="who" class="pill">Connecting…</span>
           <div id="note" role="status"></div>
         {{else}}
           <div class="stage-off">

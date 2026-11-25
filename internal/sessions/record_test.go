@@ -114,7 +114,8 @@ func TestTakeControlStopsTheRecorderBeforeItReturns(t *testing.T) {
 						rec.note("person has it")
 						return
 					}
-				} else if f.m.HumanInput(s.ID) == nil {
+				} else if done, err := f.m.HumanInput(s.ID); err == nil {
+					done()
 					rec.note("person has it")
 					return
 				}

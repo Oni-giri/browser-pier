@@ -39,6 +39,9 @@ type visual struct {
 	moved bool
 	// live is the live view's continuous mouse and keyboard.
 	live *liveInput
+	// clip is the live view's clipboard box's side of the X clipboard
+	// (clipboard.go).
+	clip clipState
 }
 
 // maxTypeLen caps one type action; at human pace, which takes about a
@@ -50,7 +53,7 @@ const (
 )
 
 func newVisual(width, height int) *visual {
-	return &visual{width: width, height: height, run: runCommand, output: runStdout, mot: motion.NewRandom(), live: newLiveInput(width, height)}
+	return &visual{width: width, height: height, run: runCommand, output: runStdout, mot: motion.NewRandom(), live: newLiveInput(width, height), clip: clipState{hold: holdClipboard, read: readSelection}}
 }
 
 func (v *visual) register(mux *http.ServeMux) {
@@ -64,6 +67,7 @@ func (v *visual) register(mux *http.ServeMux) {
 		mux.HandleFunc("POST /input/events", v.live.events)
 		mux.HandleFunc("POST /input/release", v.live.release)
 	}
+	v.registerClipboard(mux)
 }
 
 // screenshotArgs captures one frame as PNG to fd 3, scaled to width (and

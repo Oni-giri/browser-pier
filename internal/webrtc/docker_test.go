@@ -80,12 +80,20 @@ func TestWatchingWhileRecording(t *testing.T) {
 // test ends.
 func startBrowser(t *testing.T) (*sessions.Manager, string) {
 	t.Helper()
-	return startBrowserWith(t, false)
+	return startBrowserIn(t, "", nil)
 }
 
 // startBrowserWith is startBrowser, with the profile's Record sessions
 // setting and a real recorder when record is set.
 func startBrowserWith(t *testing.T, record bool) (*sessions.Manager, string) {
+	t.Helper()
+	return startBrowserIn(t, "", func(p *profiles.Profile) { p.Record = record })
+}
+
+// startBrowserIn is startBrowser in mode ("" for the profile's default),
+// with the profile changed by change first, if set, and a real recorder
+// if the change turns its Record sessions setting on (PROJ-23).
+func startBrowserIn(t *testing.T, mode profiles.Mode, change func(*profiles.Profile)) (*sessions.Manager, string) {
 	t.Helper()
 	image := os.Getenv("BROWSERPIER_TEST_IMAGE")
 	if image == "" {
@@ -117,8 +125,10 @@ func startBrowserWith(t *testing.T, record bool) (*sessions.Manager, string) {
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", "browserpier-"+name).Run() })
 	p := profiles.New(name)
 	p.Width, p.Height = 1280, 800
-	p.Record = record
-	if record {
+	if change != nil {
+		change(&p)
+	}
+	if p.Record {
 		store := recording.NewStore(filepath.Join(dir, "recordings"), slog.New(slog.DiscardHandler))
 		rec := recording.NewRecorder(store, m.RecordStream, slog.New(slog.DiscardHandler))
 		t.Cleanup(rec.Close)
@@ -127,7 +137,7 @@ func startBrowserWith(t *testing.T, record bool) (*sessions.Manager, string) {
 	if _, err := m.Profiles().Create(ctx, p); err != nil {
 		t.Fatal(err)
 	}
-	s, _, err := m.Start(ctx, name, "")
+	s, _, err := m.Start(ctx, name, mode)
 	if err != nil {
 		t.Fatal(err)
 	}
