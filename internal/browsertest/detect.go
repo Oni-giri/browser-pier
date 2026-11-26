@@ -69,6 +69,11 @@ type Detector struct {
 
 	mu     sync.Mutex
 	events []InputEvent
+	// value is the input recorder's textarea's text as the page last
+	// reported it, and valueSeq that report's number: reports can arrive
+	// out of order.
+	value    string
+	valueSeq int
 }
 
 // InputEvent is a mouse or key event as a page's own script records it.
@@ -79,14 +84,19 @@ type InputEvent struct {
 	X    float64 `json:"x"`    // clientX and clientY, for mouse events
 	Y    float64 `json:"y"`
 	Key  string  `json:"key"`
+	// Code and KeyCode are a key event's code and keyCode: which key the
+	// page thinks it was.
+	Code    string `json:"code"`
+	KeyCode int    `json:"keyCode"`
 	// Target is the id of the element under it, if it has one.
 	Target  string `json:"target"`
 	Trusted bool   `json:"trusted"` // isTrusted
 }
 
 // inputPage records every mouse and key event, in the capture phase, and
-// posts them back in batches. Its textarea (#text) fills the top 40% of
-// the viewport; buttons #a and #b sit 400 px apart, below it.
+// posts them back in batches, and reports its textarea's text whenever it
+// changes (Value). Its textarea (#text) fills the top 40% of the
+// viewport; buttons #a and #b sit 400 px apart, below it.
 const inputPage = `<!doctype html><title>Input recorder</title>
 <style>html, body { margin: 0; height: 100%; } #text { position: fixed; left: 0; top: 0; width: 100%; height: 40%; box-sizing: border-box; font-size: 16px; }
 button { position: fixed; top: 70%; width: 120px; height: 40px; } #a { left: 200px; } #b { left: 600px; }</style>
@@ -95,13 +105,20 @@ button { position: fixed; top: 70%; width: 120px; height: 40px; } #a { left: 200
 let n = 0, batch = [];
 for (const type of ['mousemove', 'mousedown', 'mouseup', 'keydown', 'keyup']) {
   addEventListener(type, e => batch.push({n: n++, type, t: e.timeStamp, x: e.clientX || 0, y: e.clientY || 0,
-    key: e.key || '', target: (e.target && e.target.id) || '', trusted: e.isTrusted}), true);
+    key: e.key || '', code: e.code || '', keyCode: e.keyCode || 0, target: (e.target && e.target.id) || '', trusted: e.isTrusted}), true);
 }
 setInterval(() => {
   if (!batch.length) return;
   const b = batch; batch = [];
   fetch('/events', {method: 'POST', body: JSON.stringify(b), keepalive: true});
 }, 100);
+const text = document.getElementById('text');
+let seq = 0, last = '';
+setInterval(() => {
+  if (text.value === last) return;
+  last = text.value;
+  fetch('/value', {method: 'POST', body: JSON.stringify({seq: ++seq, value: last}), keepalive: true});
+}, 50);
 </script>`
 
 // detectPage runs its checks on load, waits for the console check to be
@@ -173,6 +190,22 @@ func NewDetector(t *testing.T, host string) *Detector {
 		d.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	})
+	mux.HandleFunc("POST /value", func(w http.ResponseWriter, r *http.Request) {
+		var v struct {
+			Seq   int    `json:"seq"`
+			Value string `json:"value"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&v); err != nil {
+			t.Errorf("textarea value: %v", err)
+			return
+		}
+		d.mu.Lock()
+		if v.Seq > d.valueSeq {
+			d.value, d.valueSeq = v.Value, v.Seq
+		}
+		d.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("POST /report", func(w http.ResponseWriter, r *http.Request) {
 		var s Signals
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&s); err != nil {
@@ -214,6 +247,14 @@ func (d *Detector) ResetEvents() {
 	d.mu.Lock()
 	d.events = nil
 	d.mu.Unlock()
+}
+
+// Value is the input recorder's textarea's text, as the page last
+// reported it (within about 50 ms of a change).
+func (d *Detector) Value() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.value
 }
 
 // WaitEvents waits up to 20 s until the events recorded satisfy done, and
