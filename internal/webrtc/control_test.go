@@ -613,3 +613,29 @@ func TestHeldUpSetNeverActsAfterTheHandBack(t *testing.T) {
 		done()
 	}
 }
+
+// A handoff's offer whose handoff registration (Opened) stalls still
+// loses its control if no input channel opens within inputOpenWait of
+// the grant: the clock starts with the grant (PROJ-196).
+func TestInputChannelClockStartsAtTheGrant(t *testing.T) {
+	was := inputOpenWait
+	inputOpenWait = 300 * time.Millisecond
+	t.Cleanup(func() { inputOpenWait = was })
+	var c fakeClipboard
+	h, m, _ := offerFixtureWith(t, c.routes, slog.New(slog.DiscardHandler))
+	pv := newPionViewer(t) // video only
+	stall := make(chan struct{})
+	defer close(stall)
+	answered := make(chan struct{})
+	go func() {
+		defer close(answered)
+		offer(h, OfferOptions{Control: true, Opened: func(*Viewer) { <-stall }}, pv.body)
+	}()
+	awaitHuman(t, m, true, 5*time.Second)
+	awaitHuman(t, m, false, 3*time.Second)
+	select {
+	case <-answered:
+		t.Error("the registration didn't stall")
+	default:
+	}
+}

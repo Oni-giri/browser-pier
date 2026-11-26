@@ -161,11 +161,19 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 		return
 	}
 	vw := &viewer{h: h, session: s.ID, sock: h.m.Layout().ControlSocket(profile), allowed: o.Allowed, handoff: o.Handoff, helpEpoch: o.HelpEpoch}
+	// opened closes once the page's input channel is open; gone once the
+	// viewer has gone, or never connected.
+	opened, gone := make(chan struct{}), make(chan struct{})
+	var openOnce, goneOnce sync.Once
+	markGone := func() { goneOnce.Do(func() { close(gone) }) }
 	// A viewer promised control gets it or isn't connected: a page that
 	// thinks it drives while it only watches would send input into nothing.
-	var granted time.Time
+	// control and gen are read here, before anything else (the timer
+	// below, the data channel) can change the viewer's.
+	var control bool
+	var gen uint64
 	if o.Control {
-		gen, err := vw.take()
+		g, err := vw.take()
 		if err != nil {
 			unwatch()
 			msg := "The browser isn't running."
@@ -182,23 +190,36 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 			http.Error(w, msg, http.StatusConflict)
 			return
 		}
-		vw.control, vw.gen = true, gen
-		granted = time.Now()
+		vw.control, vw.gen = true, g
+		control, gen = true, g
+		// Control from now on, but no input channel yet: if none opens
+		// within inputOpenWait of now (a video-only offer, one stuck
+		// negotiating, or a registration that stalls), the control ends,
+		// rather than stay with a page that can't use or hand it back.
+		// The timer starts here, with the grant, whatever comes after.
+		go func() {
+			t := time.NewTimer(inputOpenWait)
+			defer t.Stop()
+			select {
+			case <-opened:
+			case <-gone:
+			case <-t.C:
+				vw.handBack()
+			}
+		}()
 	}
-	control, gen := vw.control, vw.gen // read before the data channel can change them
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	// The page's input channel closing ends its control, as the page
 	// itself takes it (live.js): the video may stay connected, but no
 	// message can come to drive or hand back the browser.
-	opened := make(chan struct{})
-	var openOnce sync.Once
 	v, answer, err := h.relay.Connect(ctx, profile, in.SDP, Input{
 		Message: vw.message,
 		Opened:  func() { openOnce.Do(func() { close(opened) }) },
 		Closed:  vw.handBack,
 	})
 	if err != nil {
+		markGone()
 		if control {
 			h.m.ReleaseControlGen(s.ID, gen)
 		}
@@ -212,25 +233,10 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 	}
 	go func() {
 		<-v.Done()
+		markGone()
 		vw.handBack()
 		unwatch()
 	}()
-	if control {
-		// Control from the start, but no input channel yet: if none
-		// opens (a video-only offer, or one stuck negotiating) within
-		// inputOpenWait of control being granted, the control ends,
-		// rather than stay with a page that can't use or hand it back.
-		go func() {
-			t := time.NewTimer(time.Until(granted.Add(inputOpenWait)))
-			defer t.Stop()
-			select {
-			case <-opened:
-			case <-v.Done():
-			case <-t.C:
-				vw.handBack()
-			}
-		}()
-	}
 	w.Header().Set("Content-Type", "application/json")
 	// control says whether this viewer starts with the mouse and keyboard.
 	_ = json.NewEncoder(w).Encode(map[string]any{"sdp": answer, "control": control})
