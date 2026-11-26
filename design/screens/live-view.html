@@ -154,17 +154,87 @@ a{color:#0F172A}a:hover{color:#000000}
       </section>
     </aside>
   </div>
+  <sc-if value="{{chooser}}" hint-placeholder-val="{{false}}">
+    <!-- File chooser (PROJ-181): a page asked for a file while you have control -->
+    <div aria-hidden="true" style="position: fixed; inset: 0; z-index: 20; background: rgba(15,23,42,0.36)"></div>
+    <div style="position: fixed; inset: 0; z-index: 21; box-sizing: border-box; padding: 40px 16px; display: flex; align-items: center; justify-content: center">
+      <section role="dialog" aria-modal="true" aria-labelledby="fc-title" style="width: 100%; max-width: 480px; max-height: 100%; background: #FFFFFF; color: #0F172A; border-radius: 16px; overflow: hidden; box-shadow: 0 0 0 1px #E2E8F0, 0 30px 80px rgba(15,23,42,0.22); display: flex; flex-direction: column">
+        <div style="padding: 20px 20px 14px; display: flex; flex-direction: column; gap: 4px">
+          <h2 id="fc-title" style="margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.4px">{{fcTitle}}</h2>
+          <p style="margin: 0; font-size: 14px; line-height: 1.5; color: #475569">{{fcLead}}</p>
+        </div>
+        <div style="flex: 1; min-height: 0; overflow-y: auto; padding: 0 20px">
+          <sc-if value="{{fcList}}" hint-placeholder-val="{{true}}">
+            <ul role="list" aria-label="Uploads" style="margin: 0; padding: 4px; list-style: none; background: #F1F5F9; border-radius: 12px; display: flex; flex-direction: column; gap: 2px">
+              <sc-for list="{{fcFiles}}" as="f" hint-placeholder-count="3">
+                <li><label style="min-height: 52px; box-sizing: border-box; padding: 8px 12px; display: flex; align-items: center; gap: 12px; border-radius: 9px; background: {{f.bg}}; box-shadow: {{f.ring}}; cursor: pointer">
+                  <input type="{{fcKind}}" name="fc-file" checked="{{f.on}}" onChange="{{f.pick}}" style="flex: none; margin: 0; width: 16px; height: 16px; accent-color: #2F6BFF">
+                  <span aria-hidden="true" style="flex: none; width: 32px; height: 32px; border-radius: 8px; background: #EEF3FF; color: #1D4ED8; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5"></path></svg></span>
+                  <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px"><span style="font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{f.name}}</span><span style="font-size: 12px; color: #64748B; font-variant-numeric: tabular-nums">{{f.meta}}</span></span>
+                </label></li>
+              </sc-for>
+            </ul>
+          </sc-if>
+          <sc-if value="{{fcEmpty}}" hint-placeholder-val="{{false}}">
+            <p style="margin: 0; padding: 18px 16px; background: #F1F5F9; border-radius: 12px; font-size: 14px; line-height: 1.5; color: #475569; text-align: center">No uploads in this profile yet. Upload one from this device, or ask the agent to send it.</p>
+          </sc-if>
+          <sc-if value="{{fcUploading}}" hint-placeholder-val="{{false}}">
+            <div role="status" style="padding: 14px 16px; background: #F1F5F9; border-radius: 12px; display: flex; flex-direction: column; gap: 8px">
+              <span style="font-size: 14px"><span style="font-weight: 500">Uploading IMG_2207.jpg…</span> <span style="color: #64748B; font-variant-numeric: tabular-nums">2.4 of 3.9 MB</span></span>
+              <span aria-hidden="true" style="height: 6px; border-radius: 3px; background: #E2E8F0; overflow: hidden"><span style="display: block; width: 62%; height: 100%; border-radius: 3px; background: #2F6BFF"></span></span>
+            </div>
+          </sc-if>
+          <p style="margin: 12px 0 0; font-size: 12px; line-height: 1.5; color: #64748B">The page gets only what you choose. Unanswered, its chooser closes in 4 min.</p>
+        </div>
+        <div style="margin-top: 16px; padding: 14px 20px 20px; border-top: 1px solid #EEF2F7; display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
+          <button type="button" onClick="{{fcUpload}}" style="min-height: 36px; padding: 0 14px; border: 0; border-radius: 8px; font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer; background: #FFFFFF; box-shadow: 0 0 0 1px #E2E8F0, 0 1px 2px rgba(15,23,42,0.05); color: #0F172A; display: flex; align-items: center; justify-content: center; gap: 8px"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5"></path><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"></path></svg>Upload from this device</button>
+          <span style="flex: 1"></span><button type="button" onClick="{{fcClose}}" style="min-height: 36px; padding: 0 14px; border: 0; border-radius: 8px; font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer; background: #FFFFFF; box-shadow: 0 0 0 1px #E2E8F0, 0 1px 2px rgba(15,23,42,0.05); color: #0F172A">Cancel</button><button type="button" onClick="{{fcClose}}" disabled="{{fcNone}}" style="min-height: 36px; padding: 0 14px; border: 0; border-radius: 8px; font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer; background: #0F172A; color: #FFFFFF; box-shadow: inset 0 1px 0 rgba(255,255,255,0.12); opacity: {{fcChooseOpacity}}">{{fcChooseLabel}}</button>
+        </div>
+      </section>
+    </div>
+  </sc-if>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":960}}'>
+<script type="text/x-dc" data-dc-script data-props='{"chooser":{"editor":"enum","options":["none","one","several","empty","uploading"],"default":"none"},"$preview":{"width":1440,"height":960}}'>
 class Component extends DCLogic {
   constructor(props) {
     super(props);
     this.state = { human: true, copied: false, clip: true, clipMsg: 'The browser’s clipboard. Copy puts it on yours.' };
   }
+  chooserVals() {
+    const kind = this.props.chooser || 'none';
+    if (kind === 'none' || this.state.fcClosed) return { chooser: false };
+    const many = kind === 'several';
+    const picked = this.state.fcPicked || [0];
+    const files = (kind === 'empty' || kind === 'uploading') ? [] : [
+      { name: 'passport-scan.pdf', meta: '1.2 MB · 3 min ago' },
+      { name: 'proof-of-address.jpg', meta: '640 KB · yesterday' },
+      { name: 'cv-2026.pdf', meta: '210 KB · 2 days ago' }
+    ].map((f, i) => {
+      const on = picked.includes(i);
+      return Object.assign(f, {
+        on, bg: on ? '#FAFBFF' : 'transparent',
+        ring: on ? '0 0 0 1.5px #2F6BFF' : 'none',
+        pick: () => this.setState({ fcPicked: many ? (on ? picked.filter((j) => j !== i) : picked.concat(i)) : [i] })
+      });
+    });
+    const n = files.filter((f) => f.on).length;
+    return {
+      chooser: true,
+      fcTitle: many ? 'Choose files for the page' : 'Choose a file for the page',
+      fcLead: many ? 'The page asked for files. Pick any of this profile’s uploads, or upload one from this device.' : 'The page asked for a file. Pick one of this profile’s uploads, or upload one from this device.',
+      fcKind: many ? 'checkbox' : 'radio',
+      fcFiles: files, fcList: files.length > 0, fcEmpty: kind === 'empty', fcUploading: kind === 'uploading',
+      fcNone: n === 0, fcChooseOpacity: n === 0 ? '0.5' : '1',
+      fcChooseLabel: many && n > 1 ? `Choose ${n} files` : 'Choose',
+      fcClose: () => this.setState({ fcClosed: true }),
+      fcUpload: () => this.setState({ fcClosed: true })
+    };
+  }
   renderVals() {
     const h = this.state.human;
     return {
+      ...this.chooserVals(),
       human: h,
       pressed: h ? 'true' : 'false',
       ctlLabel: h ? 'Hand back to agent' : 'Take control',

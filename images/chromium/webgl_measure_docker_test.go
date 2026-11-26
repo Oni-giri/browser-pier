@@ -50,7 +50,10 @@ requestAnimationFrame(f);
 // host. MEASURE_HEAVY_URL is the heavy site (it needs the internet),
 // MEASURE_SECONDS each sample's length, MEASURE_TRIANGLES how many
 // triangles the WebGL page draws a frame (3000 keeps every core busy), and MEASURE_ENV adds container
-// settings (KEY=VALUE, separated by ";").
+// settings (KEY=VALUE, separated by ";"). Since PROJ-165 the entrypoint
+// sets LP_NUM_THREADS and MESA_SHADER_CACHE_DISABLE for Chromium after the
+// container's environment, so MEASURE_ENV can't change those two: measure
+// with another image for that.
 func TestMeasureWebGLCost(t *testing.T) {
 	image := testImage(t)
 	s := browsertest.NewSite(t, browsertest.SiteHost(t))
@@ -172,7 +175,7 @@ func TestMeasureWebGLCost(t *testing.T) {
 	p.Navigate(strings.NewReplacer("\n", "", "{{N}}", strconv.Itoa(envInt("MEASURE_TRIANGLES", 3000))).Replace(webglScene))
 	settle()
 	sample("WebGL page", false, func() {}, frames)
-	t.Logf("WebGL page: %.0f frames a second", rate())
+	t.Logf("WebGL page: %.1f frames a second", rate())
 	sample("WebGL page, watched", true, func() {}, nil)
 	// What the X display, and so the stream, shows of the canvas.
 	if c, ok := screenAt(t, b, 640, 450); ok {

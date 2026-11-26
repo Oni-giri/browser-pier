@@ -33,7 +33,7 @@ COPY --from=no-terminal /no-terminal.deb /tmp/
 RUN apt-get update \
  && apt-get install -y --no-install-recommends /tmp/no-terminal.deb \
  && apt-get install -y --no-install-recommends \
-      chromium chromium-l10n xvfb xdotool xclip jwm \
+      chromium chromium-l10n xvfb xdotool xclip jwm dbus-daemon \
       libgl1 libglx-mesa0 \
       gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-ugly \
       fonts-liberation fonts-dejavu-core fonts-noto-color-emoji fonts-noto-cjk \
@@ -42,6 +42,17 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* /tmp/no-terminal.deb \
  && for t in x-terminal-emulator xterm urxvt rxvt gnome-terminal konsole; do \
       ! command -v "$t" >/dev/null || { echo "a terminal emulator was installed: $t"; exit 1; }; done
+RUN command -v dbus-daemon >/dev/null || { echo "dbus-daemon is missing"; exit 1; }
+# The session bus (entrypoint/sessionbus.go) is the entrypoint's own
+# dbus-daemon, and the file chooser portal on it is the entrypoint
+# (portal.go). Nothing else may answer for the portal: no
+# xdg-desktop-portal or backend, and no D-Bus service file that would
+# start one (the bus has no service directory anyway).
+RUN for t in xdg-desktop-portal xdg-desktop-portal-gtk xdg-desktop-portal-gnome xdg-desktop-portal-kde; do \
+      ! dpkg -s "$t" >/dev/null 2>&1 || { echo "a portal was installed: $t"; exit 1; }; done \
+ && ! ls /usr/libexec/xdg-desktop-portal* /usr/lib/xdg-desktop-portal* >/dev/null 2>&1 \
+ && ! grep -rlis 'portal' /usr/share/dbus-1/services /usr/share/dbus-1/system-services /etc/dbus-1 2>/dev/null | grep -q . \
+ || { echo "a desktop portal, or a service file for one, is in the image"; exit 1; }
 
 # Fail the build, not the first session, if a plugin or a switch the entrypoint
 # relies on is missing. Chromium ignores unknown switches silently, so each
@@ -60,7 +71,7 @@ RUN for el in ximagesrc videoconvert videoscale x264enc mp4mux fdsink; do gst-in
  && { command -v xclip >/dev/null || { echo "missing xclip, the live view's clipboard box"; exit 1; }; } \
  && for l in de fr es ja; do test -f /usr/lib/chromium/locales/$l.pak || { echo "missing Chromium locale $l"; exit 1; }; done \
  && tr '\0' '\n' < /usr/lib/chromium/chromium > /tmp/strings \
- && for sw in user-data-dir remote-debugging-port password-store disable-blink-features ignore-gpu-blocklist disable-gpu-compositing \
+ && for sw in user-data-dir remote-debugging-port password-store disable-blink-features ignore-gpu-blocklist disable-gpu-compositing gpu-sandbox-failures-fatal \
                proxy-bypass-list webrtc-ip-handling-policy disable-component-update disable-background-networking no-first-run \
                no-default-browser-check hide-crash-restore-bubble noerrdialogs window-position window-size disable-dev-shm-usage proxy-server host-resolver-rules \
                disable-features; do \
@@ -76,13 +87,19 @@ RUN for el in ximagesrc videoconvert videoscale x264enc mp4mux fdsink; do gst-in
 # files and their linkage only: there's no GL client here to load the driver
 # with, so the Docker tests' webgl subtest checks the load. (libgl1 and
 # libglx-mesa0 come with xvfb anyway; they're named because Chromium needs them.)
+# Mesa must also read the two settings the entrypoint gives Chromium, so it
+# starts no thread before the GPU process's sandbox (PROJ-165); a Mesa that
+# ignored them would leave that process unsandboxed, or with
+# --gpu-sandbox-failures-fatal, without WebGL.
 RUN glvnd=$(ldconfig -p | sed -n 's/^\tlibGL\.so\.1 .*=> //p' | head -n 1) \
  && glx=$(ldconfig -p | sed -n 's/^\tlibGLX_mesa\.so\.0 .*=> //p' | head -n 1) \
  && gallium=$(ls /usr/lib/*/libgallium-*.so 2>/dev/null | head -n 1) \
  && for so in "$glvnd" "$glx" "$gallium"; do test -n "$so" || { echo "missing a GL library for llvmpipe"; exit 1; }; done \
  && for so in "$glvnd" "$glx" "$gallium"; do out=$(ldd "$so") || { echo "ldd can't read $so"; exit 1; }; \
       if echo "$out" | grep 'not found'; then echo "$so, a GL library for llvmpipe, can't load"; exit 1; fi; done \
- && if ! LC_ALL=C grep -qaF llvmpipe "$gallium"; then echo "$gallium has no llvmpipe"; exit 1; fi
+ && if ! LC_ALL=C grep -qaF llvmpipe "$gallium"; then echo "$gallium has no llvmpipe"; exit 1; fi \
+ && for v in LP_NUM_THREADS MESA_SHADER_CACHE_DISABLE; do \
+      LC_ALL=C grep -qaF "$v" "$gallium" || { echo "$gallium doesn't read $v, which Chromium's GPU sandbox needs"; exit 1; }; done
 
 # Chromium runs as pier (uid 1000) by default. The orchestrator runs it as its
 # own uid instead, so it owns the profile files; HOME is set to a path any uid

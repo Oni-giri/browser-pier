@@ -18,17 +18,17 @@ func TestPageLeasesAreNotConnections(t *testing.T) {
 	if got, _ := f.m.Live("google"); len(got.InUseBy) != 0 {
 		t.Errorf("a page call shows as a connection: %v", got.InUseBy)
 	}
-	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrAgentDriving) {
+	if err := f.m.TakeControl(s.ID, "person"); !errors.Is(err, ErrAgentDriving) {
 		t.Fatalf("take control during a page call = %v", err)
 	}
 	ls.Release()
 	ls.Release() // twice is fine
-	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrAgentDriving) {
+	if err := f.m.TakeControl(s.ID, "person"); !errors.Is(err, ErrAgentDriving) {
 		t.Fatalf("take control just after a page call = %v", err)
 	}
 	advance(agentQuiet + time.Second)
 	gen := ls.Generation
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.m.PageLease(context.Background(), s.ID, "tok"); !errors.Is(err, ErrHumanDriving) {
@@ -293,7 +293,7 @@ func TestTakeControlBreaksOffABreakablePageCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	advance(time.Minute)
-	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrAgentDriving) {
+	if err := f.m.TakeControl(s.ID, "person"); !errors.Is(err, ErrAgentDriving) {
 		t.Fatalf("take control during a long read = %v", err)
 	}
 	read.Release()
@@ -304,12 +304,12 @@ func TestTakeControlBreaksOffABreakablePageCall(t *testing.T) {
 	}
 	act.Breakable()
 	advance(takeOverAfter - time.Millisecond)
-	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrAgentDriving) {
+	if err := f.m.TakeControl(s.ID, "person"); !errors.Is(err, ErrAgentDriving) {
 		t.Fatalf("take control in act's first %s = %v", takeOverAfter, err)
 	}
 	advance(time.Millisecond)
 	took := make(chan error, 1)
-	go func() { took <- f.m.TakeControl(s.ID) }()
+	go func() { took <- f.m.TakeControl(s.ID, "person") }()
 	if err := leaseEnds(t, act); !errors.Is(err, ErrTookControl) {
 		t.Fatalf("act's lease ended for %v", err)
 	}

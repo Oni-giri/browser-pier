@@ -652,35 +652,47 @@ func TestBrowserEnvironment(t *testing.T) {
 		if g := line("GPU process crash count"); g != "0" {
 			t.Errorf("GPU process crash count: %q", g)
 		}
-		// Chromium 156 here reports its GPU process unsandboxed whether
-		// WebGL is on SwiftShader or llvmpipe: it has the container's
-		// seccomp filter but not Chromium's own (ANTI-BOT.md, PROJ-165).
-		// Pinned, so a change either way is noticed.
-		switch sb := line("Sandboxed"); sb {
-		case "false":
-			t.Log("GPU process: Sandboxed false, as before PROJ-148 (PROJ-165)")
-		case "true":
-			t.Error("chrome://gpu now says the GPU process is sandboxed: tighten this test to require it (PROJ-165)")
-		default:
-			t.Errorf("chrome://gpu's Sandboxed line is %q; has the report changed?", sb)
+		// The GPU process has Chromium's own seccomp sandbox (PROJ-165):
+		// before it, chrome://gpu said Sandboxed false, with SwiftShader as
+		// with llvmpipe, as Mesa's threads kept the sandbox from starting.
+		if sb := line("Sandboxed"); sb != "true" {
+			t.Errorf("chrome://gpu says the GPU process is Sandboxed: %q, want true", sb)
 		}
-		// What it does have: a process of its own, no new privileges, and
-		// at least the container's seccomp filter.
+		// Checked in /proc too, for every GPU process (one restarting
+		// would make two): no new privileges, and more seccomp filters than
+		// the container's own (its entry process, pid 1, has just those):
+		// the container's and Chromium's GPU policy, as renderers have.
+		// Counted against pid 1, not a fixed 2, so a runtime that stacks
+		// filters of its own can't pass for Chromium's.
+		m := regexp.MustCompile(`(?m)^Seccomp_filters:\s*(\d+)`).FindStringSubmatch(docker(t, "exec", b.name, "cat", "/proc/1/status"))
+		if m == nil {
+			t.Fatal("no Seccomp_filters line in the entry process's /proc status")
+		}
+		base, _ := strconv.Atoi(m[1])
+		if base < 1 {
+			t.Errorf("the container's entry process has %d seccomp filters, want the container's own", base)
+		}
 		status := docker(t, "exec", b.name, "sh", "-c", `for d in /proc/[0-9]*; do
 			case $(tr '\0' ' ' < $d/cmdline 2>/dev/null) in /usr/lib/chromium/*--type=gpu-process*)
-				grep -aE '^(NoNewPrivs|Seccomp|Seccomp_filters):' $d/status;; esac; done`)
-		field := func(name string) int {
-			m := regexp.MustCompile(`(?m)^` + name + `:\s*(\d+)`).FindStringSubmatch(status)
-			if m == nil {
-				return -1
+				echo "pid ${d#/proc/}"; grep -aE '^(NoNewPrivs|Seccomp|Seccomp_filters):' $d/status;; esac; done`)
+		procs := regexp.MustCompile(`(?m)^pid `).Split(status, -1)[1:]
+		if len(procs) == 0 {
+			t.Errorf("no GPU process in /proc:\n%s", status)
+		}
+		for _, proc := range procs {
+			field := func(name string) int {
+				m := regexp.MustCompile(`(?m)^` + name + `:\s*(\d+)`).FindStringSubmatch(proc)
+				if m == nil {
+					return -1
+				}
+				n, _ := strconv.Atoi(m[1])
+				return n
 			}
-			n, _ := strconv.Atoi(m[1])
-			return n
+			if field("NoNewPrivs") != 1 || field("Seccomp") != 2 || field("Seccomp_filters") <= base {
+				t.Errorf("a GPU process isn't under Chromium's seccomp filter on top of the container's %d, with no new privileges:\npid %s", base, proc)
+			}
 		}
-		if field("NoNewPrivs") != 1 || field("Seccomp") != 2 || field("Seccomp_filters") < 1 {
-			t.Errorf("the GPU process isn't under a seccomp filter with no new privileges:\n%s", status)
-		}
-		t.Logf("GPU process: %s", strings.Join(strings.Fields(status), " "))
+		t.Logf("GPU process: %s; the container's filters: %d", strings.Join(strings.Fields(status), " "), base)
 	})
 	// A canvas drawn with WebGL shows on the X display, which screenshots
 	// and the live stream read, and isn't black or empty there.
@@ -853,10 +865,13 @@ func TestBrowserEnvironment(t *testing.T) {
 }
 
 // checkGPUProcess fails if the GPU process failed to start or crashed: then
-// Chromium starts it again and again, and falls back to no WebGL.
+// Chromium starts it again and again, and falls back to no WebGL. That
+// includes its sandbox failing to start, which is fatal to it.
 func checkGPUProcess(t *testing.T, logs string) {
 	t.Helper()
-	for _, bad := range []string{"Exiting GPU process due to errors during initialization", "GPU process exited unexpectedly", "GPU process isn't usable"} {
+	for _, bad := range []string{"Exiting GPU process due to errors during initialization", "GPU process exited unexpectedly", "GPU process isn't usable",
+		// The GPU sandbox couldn't start (PROJ-165).
+		"InitializeSandbox() called with multiple threads"} {
 		if strings.Contains(logs, bad) {
 			t.Fatalf("the GPU process failed (%s):\n%s", bad, logs)
 		}
@@ -976,5 +991,161 @@ func TestWebGLRendererIsStable(t *testing.T) {
 	}
 	if other := read(newVolume(t)); other != first {
 		t.Errorf("another profile's renderer is %q, the first's %q", other, first)
+	}
+}
+
+// TestNoPortalNoBrowser (PROJ-181): a browser whose session bus can't
+// start doesn't start, rather than fall back to Chromium's GTK dialog,
+// which lets whoever drives it hand a page any file in the container
+// (PROJ-183). Here the bus's folder is taken by one of the wrong mode.
+func TestNoPortalNoBrowser(t *testing.T) {
+	image := testImage(t)
+	seccomp, err := filepath.Abs("seccomp.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid := docker(t, "run", "--rm", "--entrypoint", "id", image, "-u")
+	sockDir := t.TempDir()
+	if err := os.Chmod(sockDir, 0o777); err != nil { // the container's user creates the socket
+		t.Fatal(err)
+	}
+	name := fmt.Sprintf("bp-test-%d", time.Now().UnixNano())
+	run := append([]string{"run", "-d", "--name", name, "--security-opt", "seccomp=" + seccomp}, appArmor(t, image, seccomp)...)
+	docker(t, append(run, "--shm-size=1g", "-v", newVolume(t)+":/profile", "-v", sockDir+":/run/browserpier",
+		"--mount", "type=tmpfs,destination=/tmp/browserpier-bus-"+uid+",tmpfs-mode=0755", image)...)
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
+	for deadline := time.Now().Add(60 * time.Second); docker(t, "inspect", "-f", "{{.State.Running}}", name) == "true"; time.Sleep(250 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the browser kept running without its session bus")
+		}
+	}
+	out, _ := exec.Command("docker", "logs", name).CombinedOutput()
+	logs := string(out)
+	if code := docker(t, "inspect", "-f", "{{.State.ExitCode}}", name); code == "0" || !strings.Contains(logs, "the session bus for the file chooser portal: session bus folder") || strings.Contains(logs, `msg=ready`) {
+		t.Fatalf("exit %s, want a failure naming the session bus, before ready:\n%s", code, logs)
+	}
+}
+
+// TestSessionBus (PROJ-152): the browser container's session bus and
+// file chooser portal. The bus runs, listens on one path socket in a
+// 0700 folder and nowhere else (no TCP, no abstract socket); only
+// Chromium has its address; no desktop portal or terminal is in the
+// image; Chromium's renderers can't reach the socket; the sandbox holds.
+func TestSessionBus(t *testing.T) {
+	image := testImage(t)
+	b := startBrowser(t, image, newVolume(t)) // the defaults: the portal is always on (PROJ-181)
+	sh := func(script string) string {
+		t.Helper()
+		return docker(t, "exec", b.name, "sh", "-c", script)
+	}
+	pidOf := func(pattern string) string {
+		t.Helper()
+		pid := sh("for p in /proc/[0-9]*; do tr '\\0' ' ' < $p/cmdline 2>/dev/null | grep -q -- '" + pattern + "' && { echo ${p#/proc/}; break; }; done")
+		if pid == "" {
+			t.Fatalf("no process matches %s", pattern)
+		}
+		return pid
+	}
+	bus := pidOf("^dbus-daemon --config-file=/tmp/browserpier-bus-")
+	uid := sh("id -u")
+	dir := "/tmp/browserpier-bus-" + uid
+	if got := sh("stat -c '%a %u %F' " + dir); got != "700 "+uid+" directory" {
+		t.Errorf("bus folder: %s", got)
+	}
+	// The bus's own sockets, by inode, against the kernel's tables.
+	inodes := strings.Fields(sh("ls -l /proc/" + bus + "/fd 2>/dev/null | sed -n 's/.*socket:\\[\\([0-9]*\\)\\]/\\1/p'"))
+	if len(inodes) == 0 {
+		t.Fatal("the bus has no sockets")
+	}
+	unix := sh("cat /proc/net/unix")
+	listening := 0
+	for _, line := range strings.Split(unix, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 7 || !slices.Contains(inodes, f[6]) {
+			continue
+		}
+		path := ""
+		if len(f) > 7 {
+			path = f[7]
+		}
+		if strings.HasPrefix(path, "@") {
+			t.Errorf("the bus has an abstract socket: %s", line)
+		}
+		if f[3] == "00010000" { // listening
+			listening++
+			if path != dir+"/bus" {
+				t.Errorf("the bus listens on %q", path)
+			}
+		}
+	}
+	if listening != 1 {
+		t.Errorf("the bus listens on %d unix sockets, want 1", listening)
+	}
+	for _, table := range []string{"tcp", "tcp6", "udp", "udp6"} {
+		for _, line := range strings.Split(sh("cat /proc/net/"+table+" 2>/dev/null || true"), "\n") {
+			f := strings.Fields(line)
+			if len(f) > 9 && slices.Contains(inodes, f[9]) {
+				t.Errorf("the bus has a %s socket: %s", table, line)
+			}
+		}
+	}
+	// Only Chromium is told where the bus is. Its own environment can't
+	// be read (it makes itself undumpable), so: it is on the bus.
+	env := func(pid string) string { return sh("tr '\\0' '\\n' < /proc/" + pid + "/environ") }
+	browserPid := pidOf("^/usr/lib/chromium/chromium --user-data-dir")
+	call := func(method string, args ...string) string {
+		return sh("dbus-send --bus=unix:path=" + dir + "/bus --print-reply --dest=org.freedesktop.DBus / org.freedesktop.DBus." + method + " " + strings.Join(args, " ") + " 2>/dev/null || true")
+	}
+	onBus := false
+	for _, name := range regexp.MustCompile(`string "(:[0-9.]+)"`).FindAllStringSubmatch(call("ListNames"), -1) {
+		if pid := regexp.MustCompile(`uint32 ([0-9]+)`).FindStringSubmatch(call("GetConnectionUnixProcessID", "string:"+name[1])); pid != nil && pid[1] == browserPid {
+			onBus = true
+		}
+	}
+	if !onBus {
+		t.Error("Chromium isn't on the session bus")
+	}
+	for _, p := range []string{"^Xvfb ", "^jwm ", "^/usr/local/bin/browserpier-entrypoint"} {
+		if strings.Contains(env(pidOf(p)), "DBUS_SESSION_BUS_ADDRESS") {
+			t.Errorf("%s has the bus's address", p)
+		}
+	}
+	// Nothing else to answer for the portal, nothing to open a terminal.
+	if out := sh("ls /usr/libexec/xdg-desktop-portal* /usr/lib/xdg-desktop-portal* 2>/dev/null; command -v xdg-desktop-portal x-terminal-emulator xterm 2>/dev/null; true"); out != "" {
+		t.Errorf("in the image: %s", out)
+	}
+	// Each renderer is sandboxed: seccomp, and its root an empty folder,
+	// where no path reaches the bus's socket.
+	renderers := strings.Fields(sh("for p in /proc/[0-9]*; do tr '\\0' ' ' < $p/cmdline 2>/dev/null | grep -q -- '--type=renderer' && echo ${p#/proc/}; done; true"))
+	if len(renderers) == 0 {
+		t.Fatal("no renderer")
+	}
+	checked := 0
+	for _, r := range renderers {
+		root := sh("readlink /proc/" + r + "/root 2>/dev/null || true")
+		seccomp := sh("grep Seccomp: /proc/" + r + "/status 2>/dev/null || true")
+		if root == "" && seccomp == "" {
+			continue // exited meanwhile
+		}
+		checked++
+		if root == "/" || !strings.Contains(seccomp, "2") {
+			t.Errorf("renderer %s: root %q, %s: it could reach %s", r, root, seccomp, dir+"/bus")
+		}
+	}
+	if checked == 0 {
+		t.Error("no renderer to check")
+	}
+	// The portal answers on the control socket.
+	resp, err := b.http.Get("http://control/chooser")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"choosers":[]`) {
+		t.Errorf("GET /chooser: %d %s", resp.StatusCode, body)
+	}
+	if logs := b.logs(); strings.Contains(logs, "no session bus") || strings.Contains(logs, "no file chooser portal") {
+		t.Errorf("the portal didn't start:\n%s", logs)
 	}
 }

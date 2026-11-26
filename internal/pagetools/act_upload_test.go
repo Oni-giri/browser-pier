@@ -184,7 +184,7 @@ func TestActUploadRefusals(t *testing.T) {
 		want   string
 	}{
 		{"several files to a single input", Step{Action: "upload", Ref: r["Attach"], Files: []string{"report.pdf", "photo.jpg"}}, 422, "takes one file"},
-		{"a button", Step{Action: "upload", Ref: r["Upload a file"], Files: []string{"report.pdf"}}, 422, "file_upload handoff"},
+		{"a button", Step{Action: "upload", Ref: r["Upload a file"], Files: []string{"report.pdf"}}, 422, "choose_files"},
 		{"a disabled input", Step{Action: "upload", Ref: r["Attach nothing"], Files: []string{"report.pdf"}}, 422, "disabled"},
 		{"a missing file", Step{Action: "upload", Ref: r["Attach"], Files: []string{"x"}}, 422, `no uploaded file named "x"; upload it first with upload_file`},
 		{"a link out of the folder", Step{Action: "upload", Ref: r["Attach"], Files: []string{"link.txt"}}, 422, `no uploaded file named "link.txt"`},
