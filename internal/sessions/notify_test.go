@@ -153,8 +153,20 @@ func TestStopsAndShutdownsTellNothing(t *testing.T) {
 	if last.State != Failed || last.Error != "BrowserPier was shutting down" {
 		t.Fatalf("the last session: %+v", last)
 	}
+	endedWithBrowserPier(t, f.m)
 	if got := c.all(); len(got) != 0 {
 		t.Errorf("queued %v", got)
+	}
+}
+
+// endedWithBrowserPier checks the activity log's last run ended with
+// BrowserPier, not in a failure: the webhook and the log share one set of
+// reasons (EndReason), and only a failed one tells the webhook.
+func endedWithBrowserPier(t *testing.T, m *Manager) {
+	t.Helper()
+	r, ok := m.LastRun("google")
+	if !ok || r.End != EndShutdown || r.End.Failed() || r.EndText != "Stopped with BrowserPier" {
+		t.Errorf("the last run: %v %q (kept %v)", r.End, r.EndText, ok)
 	}
 }
 
@@ -187,6 +199,7 @@ func TestAShutdownDuringCreateTellsNothing(t *testing.T) {
 	if last.State != Failed || !strings.HasPrefix(last.Error, "BrowserPier was shutting down") {
 		t.Errorf("the last session: %s %q", last.State, last.Error)
 	}
+	endedWithBrowserPier(t, f.m)
 	if got := c.all(); len(got) != 0 {
 		t.Errorf("queued %v", got)
 	}
