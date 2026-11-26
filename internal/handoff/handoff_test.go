@@ -1069,3 +1069,50 @@ func TestHandoffOfferAfterItsHandoffEndedTakesNothing(t *testing.T) {
 		done()
 	}
 }
+
+// Ending a handoff no one opened is one step in the manager: an admin
+// who takes control the moment the browser stops waiting for help keeps
+// it; the handoff's end never reaches their takeover (PROJ-196).
+func TestHandoffEndLeavesALaterTakeoverAlone(t *testing.T) {
+	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
+	s := f.running()
+	ctx := context.Background()
+	for i := range 20 {
+		h, _, err := f.svc.Create(ctx, s.ID, "research-bot", SensitiveInput, "Enter the 2FA code", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		// An admin on the profile page takes control as soon as the
+		// browser runs again (Running, so this take is theirs, not the
+		// handoff's helper's).
+		took := make(chan bool, 1)
+		stop := make(chan struct{})
+		go func() {
+			for {
+				select {
+				case <-stop:
+					took <- false
+					return
+				default:
+				}
+				if sess, _ := f.m.Live("google"); sess.State == sessions.Running {
+					if f.m.TakeControl(s.ID) == nil {
+						took <- true
+						return
+					}
+				}
+			}
+		}()
+		if _, err := f.svc.Finish(ctx, h, Done, ""); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(20 * time.Millisecond)
+		close(stop)
+		if <-took {
+			if sess, _ := f.m.Live("google"); !sess.HumanControl {
+				t.Fatalf("round %d: the admin's takeover, taken after the handoff's Needs help, was ended by the handoff", i)
+			}
+			f.m.ReleaseControl(s.ID)
+		}
+	}
+}

@@ -1176,6 +1176,38 @@ func TestReconcileFencesAndNumbersAbove(t *testing.T) {
 	}
 }
 
+// A handoff's end ends the control of the person helping, taken while
+// the browser waited for help, in the same step as the browser stops
+// waiting; never a takeover begun after that (an admin's on the profile
+// page), even by an end that comes late (PROJ-196).
+func TestEndHandoffEndsOnlyTheHelpersControl(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.TakeControl(s.ID); err != nil { // the person helping
+		t.Fatal(err)
+	}
+	if err := f.m.EndHandoff(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := f.m.Live("google"); got.State != Running || got.HumanControl {
+		t.Fatalf("after the handoff: %s, person in control %v", got.State, got.HumanControl)
+	}
+	// Someone takes control once the browser is the agents' again; the
+	// handoff's end, come again late, leaves them be.
+	if err := f.m.TakeControl(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.EndHandoff(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := f.m.Live("google"); !got.HumanControl {
+		t.Error("a takeover begun after the handoff was ended by it")
+	}
+}
+
 // A browser picked up after BrowserPier restarts that doesn't fence its
 // takeovers in time is stopped, not handed to agents with whatever a
 // person's control left under way in it (PROJ-196).

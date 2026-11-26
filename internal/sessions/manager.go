@@ -1266,17 +1266,46 @@ func (m *Manager) runStop(l *live, attempt *stopAttempt, cid string) {
 	close(attempt.done)
 }
 
-// SetNeedsHelp moves a running session to Needs help and back.
+// SetNeedsHelp moves a running session to Needs help and back. A handoff
+// ends with EndHandoff, which also ends its person's control.
 func (m *Manager) SetNeedsHelp(id string, needsHelp bool) (Session, error) {
-	from, to := Running, NeedsHelp
-	if !needsHelp {
-		from, to = NeedsHelp, Running
-	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.findLocked(id)
 	if l == nil {
 		return Session{}, ErrNotRunning
+	}
+	return m.setNeedsHelpLocked(l, needsHelp)
+}
+
+// EndHandoff ends a handoff's hold on the browser, in one step under
+// m.mu: the browser stops waiting for help (SetNeedsHelp(false)), and
+// the control of whoever has it then, the person helping, begins to end
+// (ReleaseControl). It returns once agents have the browser. Whoever
+// takes control after it is someone else, whose control this never ends:
+// there is no moment, between the two, for a take to fall into (PROJ-196).
+func (m *Manager) EndHandoff(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l := m.findLocked(id)
+	if l == nil {
+		return ErrNotRunning
+	}
+	// Only a browser that still waits for this help: a takeover after
+	// the help ended (or with none asked for) is someone else's.
+	helping := l.sess.State == NeedsHelp || (l.sess.State == Stopping && l.stop != nil && l.stopPrev == NeedsHelp)
+	_, err := m.setNeedsHelpLocked(l, false)
+	if helping && l.human {
+		m.releaseLocked(l, id)
+	}
+	return err
+}
+
+// setNeedsHelpLocked is SetNeedsHelp, with m.mu held.
+func (m *Manager) setNeedsHelpLocked(l *live, needsHelp bool) (Session, error) {
+	from, to := Running, NeedsHelp
+	if !needsHelp {
+		from, to = NeedsHelp, Running
 	}
 	switch l.sess.State {
 	case to:

@@ -545,13 +545,13 @@ func (s *Service) end(ctx context.Context, h Handoff, status Status, note string
 		return cur, err
 	}
 	h.Status, h.Note, h.Auto = status, note, how == endAuto
-	// The browser stops waiting for help first: from then on no live view
-	// of this handoff can take control (TakeControlInHandoff), and agents
-	// still wait, for the person's control, if any, to end just below.
-	if _, err := s.m.SetNeedsHelp(h.SessionID, false); err != nil && !errors.Is(err, sessions.ErrNotRunning) {
+	// One step: the browser stops waiting for help, so no live view of
+	// this handoff can take control any more (TakeControlInHandoff), and
+	// the control of the person helping, if any, begins to end; agents
+	// wait for that. A take after this is someone else's, left alone.
+	if err := s.m.EndHandoff(h.SessionID); err != nil && !errors.Is(err, sessions.ErrNotRunning) {
 		s.log.Warn("handing the browser back", "handoff", h.ID, "err", err)
 	}
-	s.m.ReleaseControl(h.SessionID)
 	logNote := finishedNotes[status]
 	if h.Auto {
 		logNote = autoDoneLog
