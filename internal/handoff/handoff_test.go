@@ -1173,3 +1173,217 @@ func TestWedgedBrowserDoesntHoldTheSweep(t *testing.T) {
 		done()
 	}
 }
+
+// holdLifts makes the browser's lift wait until the returned function is
+// called (or the test ends): the hand-back is under way meanwhile.
+func holdLifts(t *testing.T, f *fixture) (letGo func()) {
+	t.Helper()
+	gate := make(chan struct{})
+	var once sync.Once
+	letGo = func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(letGo)
+	hold := func() { <-gate }
+	f.onLift.Store(&hold)
+	return letGo
+}
+
+func shortHandBack(f *fixture) { f.svc.handBackWait = 300 * time.Millisecond }
+
+// An agent is never told a handoff has ended while its browser is still
+// being handed back: not by the expiry that ends it, nor by a question
+// that arrives during the hand-back. It hears handing_back, and the
+// final status once its agents are let in (PROJ-196).
+func TestAgentHearsTheEndOnlyOnceHandedBack(t *testing.T) {
+	for _, how := range []string{"expiry", "done, then a question"} {
+		t.Run(how, func(t *testing.T) {
+			f := newFixture(t, profiles.PolicyLink, auth.WebOptions{})
+			shortHandBack(f)
+			ctx := context.Background()
+			h, _ := f.open("")
+			if err := f.m.TakeControl(h.SessionID); err != nil { // a person helps
+				t.Fatal(err)
+			}
+			letGo := holdLifts(t, f)
+			want := Expired
+			if how == "expiry" {
+				later := time.Now().Add(Lifetime + time.Second)
+				f.svc.now = func() time.Time { return later }
+			} else {
+				want = Done
+				if _, err := f.svc.Finish(ctx, h, Done, ""); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := f.svc.Wait(ctx, h.ID, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status.Final() {
+				t.Errorf("told %s while the browser is still being handed back", got.Status)
+			}
+			if got.Status != HandingBack {
+				t.Errorf("told %s, want %s", got.Status, HandingBack)
+			}
+			if _, done, err := f.m.AgentInput(ctx, h.SessionID); !errors.Is(err, sessions.ErrHumanDriving) {
+				if err == nil {
+					done()
+				}
+				t.Fatalf("agent input mid-hand-back = %v", err)
+			}
+			letGo()
+			got, err = f.svc.Wait(ctx, h.ID, 5*time.Second)
+			if err != nil || got.Status != want {
+				t.Fatalf("after the hand-back: %s, %v; want %s", got.Status, err, want)
+			}
+			if _, done, err := f.m.AgentInput(ctx, h.SessionID); err != nil {
+				t.Fatalf("agent input once told %s = %v", got.Status, err)
+			} else {
+				done()
+			}
+		})
+	}
+}
+
+// A handoff page closed, then reloaded, gets control back, even while the
+// closed page's takeover is still being handed back (PROJ-196).
+func TestClosedThenReloadedHandoffPageGetsControlBack(t *testing.T) {
+	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
+	h, token := f.open("")
+	phone := browser()
+	if p := f.do(phone, "POST", "/h/"+token+"/pin", url.Values{"pin": {"4821"}}, nil); p.code != http.StatusSeeOther {
+		t.Fatalf("right PIN: %d %s", p.code, p.body)
+	}
+	offer := func(sdp string) reply {
+		req, _ := http.NewRequest(http.MethodPost, f.srv.URL+"/h/"+token+"/offer", strings.NewReader(sdp))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := phone.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		b, _ := io.ReadAll(resp.Body)
+		return reply{code: resp.StatusCode, body: string(b)}
+	}
+	// The first page connects for real.
+	pc, err := pionwebrtc.NewPeerConnection(pionwebrtc.Configuration{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = pc.Close() }()
+	if _, err := pc.AddTransceiverFromKind(pionwebrtc.RTPCodecTypeVideo, pionwebrtc.RTPTransceiverInit{Direction: pionwebrtc.RTPTransceiverDirectionRecvonly}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pc.CreateDataChannel("input", nil); err != nil {
+		t.Fatal(err)
+	}
+	connected := make(chan struct{})
+	var once sync.Once
+	pc.OnConnectionStateChange(func(s pionwebrtc.PeerConnectionState) {
+		if s == pionwebrtc.PeerConnectionStateConnected {
+			once.Do(func() { close(connected) })
+		}
+	})
+	o, _ := pc.CreateOffer(nil)
+	gathered := pionwebrtc.GatheringCompletePromise(pc)
+	_ = pc.SetLocalDescription(o)
+	<-gathered
+	body, _ := json.Marshal(map[string]string{"sdp": pc.LocalDescription().SDP})
+	r := offer(string(body))
+	var answer struct{ SDP string }
+	if r.code != http.StatusOK || json.Unmarshal([]byte(r.body), &answer) != nil {
+		t.Fatalf("first offer: %d %s", r.code, r.body)
+	}
+	if err := pc.SetRemoteDescription(pionwebrtc.SessionDescription{Type: pionwebrtc.SDPTypeAnswer, SDP: answer.SDP}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-connected:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first page never connected")
+	}
+	// Its hand-back will be slow; the page closes, and the browser sees
+	// it go.
+	release := make(chan struct{})
+	var lifted sync.Once
+	slow := func() {
+		lifted.Do(func() { close(release) })
+		time.Sleep(500 * time.Millisecond)
+	}
+	f.onLift.Store(&slow)
+	_ = pc.Close()
+	select {
+	case <-release:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the closed page's takeover was never handed back")
+	}
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		f.svc.mu.Lock()
+		n := len(f.svc.viewers[h.ID])
+		f.svc.mu.Unlock()
+		if n == 0 {
+			break
+		}
+	}
+	// The reloaded page, while that hand-back is under way.
+	if r := offer(pionOffer(t)); r.code != http.StatusOK || !strings.Contains(r.body, `"control":true`) {
+		t.Fatalf("the reloaded page's offer: %d %s", r.code, r.body)
+	}
+}
+
+// A handoff is never stored open without the help epoch it opened: not
+// even while the browser is still going to Needs help (waiting for the
+// agent's call under way), so a restart then always finds it (PROJ-196).
+func TestOpenHandoffAlwaysHasItsEpoch(t *testing.T) {
+	f := newFixture(t, profiles.PolicyLink, auth.WebOptions{})
+	ctx := context.Background()
+	s := f.running()
+	lease, err := f.m.PageLease(ctx, s.ID, "tok") // an agent's call under way
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened := make(chan Handoff, 1)
+	go func() {
+		h, _, err := f.svc.Create(ctx, s.ID, "research-bot", SensitiveInput, "Enter the 2FA code", "")
+		if err != nil {
+			t.Error(err)
+		}
+		opened <- h
+	}()
+	time.Sleep(100 * time.Millisecond) // it waits for the call to end
+	var zero int
+	if err := f.svc.db.QueryRow(`SELECT count(*) FROM handoffs WHERE status = 'pending' AND help_epoch = 0`).Scan(&zero); err != nil {
+		t.Fatal(err)
+	}
+	if zero != 0 {
+		t.Errorf("%d open handoff stored without its help epoch", zero)
+	}
+	lease.Release()
+	h := <-opened
+	epoch, _ := f.m.HelpEpoch(s.ID)
+	var stored uint64
+	if err := f.svc.db.QueryRow(`SELECT help_epoch FROM handoffs WHERE id = ?`, h.ID).Scan(&stored); err != nil || stored == 0 || stored != epoch {
+		t.Fatalf("stored help epoch %d, %v; the browser's %d", stored, err, epoch)
+	}
+}
+
+// A handoff whose stored help epoch isn't its browser's (stored by an
+// older BrowserPier) still ends the help its browser waits for, logged,
+// rather than leave its agent paused for good (PROJ-196).
+func TestHandoffEndRepairsAMismatchedEpoch(t *testing.T) {
+	f := newFixture(t, profiles.PolicyLink, auth.WebOptions{})
+	ctx := context.Background()
+	h, _ := f.open("")
+	if _, err := f.svc.db.Exec(`UPDATE handoffs SET help_epoch = 99 WHERE id = ?`, h.ID); err != nil {
+		t.Fatal(err)
+	}
+	h, err := f.svc.Get(ctx, h.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Finish(ctx, h, Done, ""); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := f.m.Live("google"); s.State != sessions.Running {
+		t.Fatalf("after the handoff: %s", s.State)
+	}
+}

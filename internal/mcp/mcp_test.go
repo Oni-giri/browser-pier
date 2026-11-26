@@ -47,6 +47,9 @@ type fixture struct {
 	types  []string // and to type
 	// onClick, if set, runs as the fake browser clicks: a download, say.
 	onClick func()
+	// liftGate, if set, holds the browser's lift (a hand-back) until it
+	// is closed.
+	liftGate chan struct{}
 	// pageURL is the one tab's address, as /json/list answers it (a
 	// handoff's until_url watch); "" for a sign-in page.
 	pageURL string
@@ -148,6 +151,15 @@ func (f *fixture) browser() http.Handler {
 		f.types = append(f.types, string(b))
 		f.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		gate := f.liftGate
+		f.mu.Unlock()
+		if gate != nil {
+			<-gate
+		}
+		sessionstest.AnswerLift(w, r)
 	})
 	mux.HandleFunc("POST /input/click", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
@@ -514,5 +526,55 @@ func TestStartBrowserSaysWhetherAdsAreBlocked(t *testing.T) {
 	_, out = call(t, cs, "start_browser", map[string]any{"profile": "google"})
 	if !strings.Contains(out, "Ads and trackers are blocked") || strings.Contains(out, "no list") {
 		t.Errorf("start_browser with a list: %s", out)
+	}
+}
+
+// wait_for_handoff never says a handoff has ended while the browser is
+// still being handed back: it keeps waiting, and says so once the agent
+// has the browser (PROJ-196).
+func TestWaitForHandoffWaitsForTheHandBack(t *testing.T) {
+	f := newFixture(t)
+	cs := f.connect(f.all, versions[0], nil)
+	ctx := context.Background()
+	s, _, _ := f.m.Start(ctx, "google", "")
+	call(t, cs, "request_handoff", map[string]any{"session_id": s.ID, "reason": "captcha", "detail": "Solve the CAPTCHA"})
+	open, _ := f.handoffs.Pending(ctx)
+	if len(open) != 1 {
+		t.Fatalf("pending: %+v", open)
+	}
+	if err := f.m.TakeControl(s.ID); err != nil { // the person helps
+		t.Fatal(err)
+	}
+	gate := make(chan struct{})
+	f.mu.Lock()
+	f.liftGate = gate
+	f.mu.Unlock()
+	defer func() {
+		select {
+		case <-gate:
+		default:
+			close(gate)
+		}
+	}()
+	if _, err := f.handoffs.Finish(ctx, open[0], handoff.Done, ""); err != nil {
+		t.Fatal(err)
+	}
+	_, out := call(t, cs, "wait_for_handoff", map[string]any{"handoff_id": open[0].ID, "seconds": 1})
+	if !strings.Contains(out, "Still waiting") {
+		t.Errorf("wait_for_handoff mid-hand-back: %s", out)
+	}
+	if _, done, err := f.m.AgentInput(ctx, s.ID); err == nil {
+		done()
+		t.Fatal("agents were let in mid-hand-back")
+	}
+	close(gate)
+	_, out = call(t, cs, "wait_for_handoff", map[string]any{"handoff_id": open[0].ID, "seconds": 5})
+	if !strings.Contains(out, "done") {
+		t.Fatalf("wait_for_handoff after: %s", out)
+	}
+	if _, done, err := f.m.AgentInput(ctx, s.ID); err != nil {
+		t.Fatalf("agent input once told done = %v", err)
+	} else {
+		done()
 	}
 }

@@ -1473,3 +1473,38 @@ func TestStuckHandBackCanBeStopped(t *testing.T) {
 		})
 	}
 }
+
+// A browser waiting for help since before help epochs were saved (0)
+// gets one after a restart, saved, and its open handoff's row is given
+// the same, so that handoff's end ends it (PROJ-196).
+func TestReconcileGivesTheOpenHandoffItsEpoch(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	if _, err := f.m.OpenHelp(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	openHandoffRow(t, f.m, s, 0)
+	if _, err := f.m.db.Exec(`UPDATE sessions SET help_epoch = 0 WHERE id = ?`, s.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.m.Close()
+
+	m := f.manager()
+	if err := m.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	epoch, ok := m.HelpEpoch(s.ID)
+	if !ok || epoch == 0 {
+		t.Fatalf("HelpEpoch after the restart = %d, %v", epoch, ok)
+	}
+	var row uint64
+	if err := m.db.QueryRow(`SELECT help_epoch FROM handoffs WHERE session_id = ? AND status = 'pending'`, s.ID).Scan(&row); err != nil || row != epoch {
+		t.Fatalf("the open handoff's epoch %d, %v; the browser's %d", row, err, epoch)
+	}
+	if _, err := m.EndHandoff(s.ID, row); err != nil {
+		t.Fatalf("ending the handoff = %v", err)
+	}
+	if got, _ := m.Live("google"); got.State != Running {
+		t.Errorf("after the handoff: %s", got.State)
+	}
+}

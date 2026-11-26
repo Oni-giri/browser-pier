@@ -332,6 +332,18 @@ func (m *Manager) ReleaseControl(id string) {
 	_ = m.HandBack(context.Background(), id)
 }
 
+// HandingBack returns, while the person's control of session id is
+// ending (a hand-back under way), a channel closed once agents have the
+// browser; nil otherwise. It starts nothing.
+func (m *Manager) HandingBack(id string) <-chan struct{} {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if l := m.findLocked(id); l != nil && l.releasing {
+		return l.released
+	}
+	return nil
+}
+
 // HandBack is ReleaseControl, waiting no longer than ctx: the hand-back
 // goes on without the caller if ctx ends first, and ctx's error is
 // returned.

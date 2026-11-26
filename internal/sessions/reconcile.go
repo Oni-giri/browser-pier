@@ -82,10 +82,19 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		// Takeovers go on from the highest one handed out, saved before
 		// it was (PROJ-196): the browser may have seen any of them.
 		l.generation = s.takeoverGen
-		if s.State == NeedsHelp && l.sess.helpEpoch == 0 {
-			// Waiting for help since before help epochs were saved: one
-			// of its own, never 0 (HelpEpoch).
-			l.sess.helpEpoch = 1
+		if s.State == NeedsHelp {
+			if l.sess.helpEpoch == 0 {
+				// Waiting for help since before help epochs were saved:
+				// one of its own, never 0 (HelpEpoch), saved.
+				l.sess.helpEpoch = 1
+				if err := updateSession(ctx, m.db, l.sess); err != nil {
+					m.log.Error("saving session state", "session", s.ID, "err", err)
+				}
+			}
+			// The open handoff names this help, so its end ends it.
+			if _, err := m.db.ExecContext(ctx, `UPDATE handoffs SET help_epoch = ? WHERE session_id = ? AND status = 'pending'`, l.sess.helpEpoch, s.ID); err != nil {
+				m.log.Error("saving the open handoff's help epoch", "session", s.ID, "err", err)
+			}
 		}
 		if p, err := m.profiles.Get(ctx, s.Profile); err == nil {
 			// Recorded again by the same rules: a Needs help session
