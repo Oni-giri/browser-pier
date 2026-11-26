@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"time"
 )
 
 // liveInput feeds a person's mouse and keyboard from the live view to the
@@ -21,24 +22,41 @@ import (
 // becomes text in an xdotool script (which can run programs).
 type liveInput struct {
 	width, height int
-	start         func() (ioWriteCloser, error)
+	start         func() (*xdo, error)
 
-	mu    sync.Mutex
-	stdin io.WriteCloser
-	held  map[string]bool // keys and buttons down, to release on hand-back
+	mu sync.Mutex
+	x  *xdo // the running xdotool, nil until the next input starts one
+	// held are the keys and buttons down, to release on hand-back, each
+	// with the takeover that pressed it: a hand-back lets go only of its
+	// own takeover's and earlier ones'.
+	held map[string]uint64
 	// fence refuses what a person sends once their takeover has ended
 	// (fence.go); the clipboard box's side shares it.
 	fence *takeoverFence
 }
 
 func newLiveInput(width, height int) *liveInput {
-	return &liveInput{width: width, height: height, held: map[string]bool{}, start: startXdotool, fence: &takeoverFence{}}
+	return &liveInput{width: width, height: height, held: map[string]uint64{}, start: startXdotool, fence: &takeoverFence{}}
 }
 
-// ioWriteCloser is xdotool's stdin.
-type ioWriteCloser = io.WriteCloser
+// xdo is one running "xdotool -": its stdin, a channel closed once it has
+// exited, and a way to kill it.
+type xdo struct {
+	stdin  io.WriteCloser
+	exited <-chan struct{}
+	kill   func()
+}
 
-func startXdotool() (ioWriteCloser, error) {
+// writeWait bounds a write to xdotool's stdin: one that doesn't read it
+// (stalled, its pipe full) is killed, so a write never holds the input,
+// or the fence (fence.go), for longer. drainWait bounds how long drain
+// waits for xdotool to run what it was given. Tests shorten them.
+var (
+	writeWait = 2 * time.Second
+	drainWait = 2 * time.Second
+)
+
+func startXdotool() (*xdo, error) {
 	cmd := exec.Command("xdotool", "-")
 	cmd.Env = append(os.Environ(), "DISPLAY="+display)
 	cmd.Stderr = os.Stderr
@@ -46,12 +64,13 @@ func startXdotool() (ioWriteCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	exited, err := procs.start(cmd)
+	status, err := procs.start(cmd)
 	if err != nil {
 		return nil, err
 	}
-	go func() { <-exited }()
-	return in, nil
+	exited := make(chan struct{})
+	go func() { <-status; close(exited) }()
+	return &xdo{stdin: in, exited: exited, kill: func() { _ = cmd.Process.Kill() }}, nil
 }
 
 // event is one input from a viewer.
@@ -103,30 +122,78 @@ func (li *liveInput) lines(e event) ([]string, error) {
 	return nil, fmt.Errorf("event %q: want move, down, up, wheel, keydown or keyup", e.T)
 }
 
-// send writes commands to xdotool, starting it if needed.
+// send writes commands to xdotool, starting it if needed. li.mu must be
+// held. They are queued, not yet run: drain waits for that.
 func (li *liveInput) send(lines []string) error {
 	for attempt := 0; attempt < 2; attempt++ {
-		if li.stdin == nil {
-			in, err := li.start()
+		if li.x == nil {
+			x, err := li.start()
 			if err != nil {
 				return err
 			}
-			li.stdin = in
+			li.x = x
 		}
+		x := li.x
+		// An xdotool that doesn't read its input within writeWait is
+		// killed, which ends the write.
+		watchdog := time.AfterFunc(writeWait, x.kill)
 		var err error
 		for _, l := range lines {
-			if _, err = io.WriteString(li.stdin, l+"\n"); err != nil {
+			if _, err = io.WriteString(x.stdin, l+"\n"); err != nil {
 				break
 			}
 		}
+		watchdog.Stop()
 		if err == nil {
 			return nil
 		}
 		// xdotool went away: start a new one and try again.
-		_ = li.stdin.Close()
-		li.stdin = nil
+		x.kill()
+		_ = x.stdin.Close()
+		li.x = nil
 	}
 	return errors.New("xdotool isn't taking input")
+}
+
+// drain closes the running xdotool's input and waits for it to run what
+// it was given and exit (drainWait; then it is killed, and whatever it
+// hadn't run never runs). The next input starts a new one. li.mu must be
+// held.
+func (li *liveInput) drain() {
+	x := li.x
+	if x == nil {
+		return
+	}
+	li.x = nil
+	_ = x.stdin.Close()
+	t := time.NewTimer(drainWait)
+	defer t.Stop()
+	select {
+	case <-x.exited:
+		return
+	case <-t.C:
+	}
+	x.kill()
+	<-x.exited
+}
+
+// releases are the commands that let go of the keys and buttons held by
+// takeover upTo or an earlier one, in a stable order.
+func (li *liveInput) releases(upTo uint64) (names, lines []string) {
+	for h, gen := range li.held {
+		if gen <= upTo {
+			names = append(names, h)
+		}
+	}
+	sort.Strings(names)
+	for _, h := range names {
+		if h[0] == 'b' {
+			lines = append(lines, "mouseup "+h[1:])
+		} else {
+			lines = append(lines, "keyup "+h[1:])
+		}
+	}
+	return names, lines
 }
 
 func (li *liveInput) events(w http.ResponseWriter, r *http.Request) {
@@ -170,13 +237,13 @@ func (li *liveInput) events(w http.ResponseWriter, r *http.Request) {
 	for _, e := range evs {
 		switch e.T {
 		case "down":
-			li.held["b"+strconv.Itoa(e.B)] = true
-			held["b"+strconv.Itoa(e.B)] = true
+			li.held["b"+strconv.Itoa(e.B)] = gen
+			held["b"+strconv.Itoa(e.B)] = gen
 		case "up":
 			delete(held, "b"+strconv.Itoa(e.B))
 		case "keydown":
-			li.held["k"+e.K] = true
-			held["k"+e.K] = true
+			li.held["k"+e.K] = gen
+			held["k"+e.K] = gen
 		case "keyup":
 			delete(held, "k"+e.K)
 		}
@@ -189,32 +256,62 @@ func (li *liveInput) events(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// release lets go of every key and button still down, so a viewer who
+// release lets go of the keys and buttons still down, so a viewer who
 // disconnects mid-drag or mid-shortcut leaves nothing stuck. They are
 // forgotten only once xdotool has taken the releases: if it fails, they
 // are still held here, so the orchestrator's next try sends them again
 // (letting go of one already up is harmless).
 //
-// The orchestrator's lift as a takeover ends names it in fenceHeader:
-// the fence goes up first, once the person's actions under way are
-// over, so nothing from that takeover can act after this lift (or the
-// emptying that follows it), and the answer gives the fence. The
-// person's own lift (their page losing focus) names their takeover
-// instead, and is refused once it has ended.
+// The orchestrator's lift as takeover N ends names N in fenceHeader. In
+// one step, under the fence's write lock (so once the persons' actions
+// under way are over), it fences N: nothing from N or earlier acts from
+// then on. Then the live xdotool is drained, so whatever input it had
+// queued has run, the keys and buttons N or an earlier takeover holds
+// are let go through a fresh one, drained too, and only then does it
+// answer 200 with the fence. A lift for N held up past the start of a
+// later takeover (fence.go's stale) still fences N, which costs the later
+// one nothing, but touches neither its input nor its keys.
+//
+// The person's own lift (their page losing focus) names their takeover
+// instead, is refused once it has ended, and lets go of their keys.
 func (li *liveInput) release(w http.ResponseWriter, r *http.Request) {
 	gen, person, err := li.fence.takeover(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	n, all, fenced, err := fenceRequest(r)
+	n, fenced, err := fenceRequest(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	var fence uint64
 	if fenced {
-		fence = li.fence.raise(n, all)
+		fence, err := li.fence.cleanup(n, func(stale bool) error {
+			if stale {
+				return nil
+			}
+			li.mu.Lock()
+			defer li.mu.Unlock()
+			li.drain()
+			names, lines := li.releases(n)
+			if len(lines) == 0 {
+				return nil
+			}
+			if err := li.send(lines); err != nil {
+				return err
+			}
+			li.drain()
+			for _, h := range names {
+				delete(li.held, h)
+			}
+			return nil
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		answerFence(w, fence)
+		return
 	}
 	done, ok := li.fence.admit(gen, person)
 	if !ok {
@@ -224,29 +321,15 @@ func (li *liveInput) release(w http.ResponseWriter, r *http.Request) {
 	defer done()
 	li.mu.Lock()
 	defer li.mu.Unlock()
-	names := make([]string, 0, len(li.held))
-	for h := range li.held {
-		names = append(names, h)
-	}
-	sort.Strings(names)
-	var lines []string
-	for _, h := range names {
-		if h[0] == 'b' {
-			lines = append(lines, "mouseup "+h[1:])
-		} else {
-			lines = append(lines, "keyup "+h[1:])
-		}
-	}
+	names, lines := li.releases(gen)
 	if len(lines) > 0 {
 		if err := li.send(lines); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
-	li.held = map[string]bool{}
-	if fenced {
-		answerFence(w, fence)
-		return
+	for _, h := range names {
+		delete(li.held, h)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -18,12 +18,18 @@ import (
 // 409, however long it was held up on its way here (PROJ-196). Agents'
 // input names no takeover and is never fenced.
 //
-// The orchestrator only lets agents back in once the fence is in place,
-// and a new takeover's number is always above every fence: within a
-// session the orchestrator counts up, and a new session is a new
-// container, whose fence starts at 0. After the orchestrator restarts,
-// its lift fences "all", every takeover seen so far, and it numbers the
-// next takeovers above the fence answered.
+// The orchestrator only lets agents back in once the fence is in place
+// (a 200 answer giving it), and a new takeover's number is always above
+// every fence: within a session the orchestrator counts up, saving each
+// number before handing it out, and a new session is a new container,
+// whose fence starts at 0. After the orchestrator restarts, its lift
+// fences the highest number it saved, so a request of the BrowserPier
+// before it is refused however late its handler runs, and it numbers
+// the next takeovers above it.
+//
+// The hand-back's cleanup (the lift, the clipboard's emptying) names the
+// takeover it is for, and does nothing to a later takeover that has
+// begun meanwhile (a call held up past its time): see cleanup.
 const (
 	takeoverHeader = "X-BrowserPier-Takeover" // sessions.TakeoverHeader
 	fenceHeader    = "X-BrowserPier-Fence"    // sessions.FenceHeader
@@ -40,13 +46,12 @@ type takeoverFence struct {
 	// up (and the lift and emptying that follow undo it) or is refused.
 	mu sync.RWMutex
 	n  uint64 // the fence: takeovers up to n have ended
-	// seen is the highest takeover any request has named, as it arrived.
-	seen atomic.Uint64
+	// admitted is the highest takeover an action was admitted for.
+	admitted atomic.Uint64
 }
 
-// takeover reads the takeover a request names, as it arrives, before
-// anything else is done with it. person is false for one that names none
-// (an agent's input, the orchestrator's own calls).
+// takeover reads the takeover a request names. person is false for one
+// that names none (an agent's input, the orchestrator's own calls).
 func (f *takeoverFence) takeover(r *http.Request) (gen uint64, person bool, err error) {
 	s := r.Header.Get(takeoverHeader)
 	if s == "" {
@@ -55,12 +60,6 @@ func (f *takeoverFence) takeover(r *http.Request) (gen uint64, person bool, err 
 	gen, err = strconv.ParseUint(s, 10, 64)
 	if err != nil || gen == 0 {
 		return 0, false, errors.New(takeoverHeader + ": want a takeover number")
-	}
-	for {
-		old := f.seen.Load()
-		if gen <= old || f.seen.CompareAndSwap(old, gen) {
-			break
-		}
 	}
 	return gen, true, nil
 }
@@ -78,37 +77,50 @@ func (f *takeoverFence) admit(gen uint64, person bool) (done func(), ok bool) {
 		f.mu.RUnlock()
 		return nil, false
 	}
+	for {
+		old := f.admitted.Load()
+		if gen <= old || f.admitted.CompareAndSwap(old, gen) {
+			break
+		}
+	}
 	return f.mu.RUnlock, true
 }
 
-// raise puts the fence at n at least, or with all, at every takeover seen
-// so far too, once the persons' actions under way are over, and returns
-// it.
-func (f *takeoverFence) raise(n uint64, all bool) uint64 {
+// cleanup runs a hand-back's cleanup for takeover n (do), in one step
+// under the fence's write lock, so once the persons' actions under way
+// are over and with none starting meanwhile: it puts the fence at n at
+// least first, then calls do with stale set if a takeover above n has
+// already been admitted, whose input, keys and clipboard do must leave
+// alone (a cleanup held up past its time). It returns the fence.
+func (f *takeoverFence) cleanup(n uint64, do func(stale bool) error) (uint64, error) {
+	if f == nil {
+		return n, do(false)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if all {
-		n = max(n, f.seen.Load())
-	}
 	f.n = max(f.n, n)
-	return f.n
+	return f.n, do(f.admitted.Load() > n)
 }
 
-// fenceRequest reads a lift's fenceHeader: a takeover number or "all".
-// set is false when there is none.
-func fenceRequest(r *http.Request) (n uint64, all, set bool, err error) {
+// raise puts the fence at n at least, once the persons' actions under way
+// are over, and returns it.
+func (f *takeoverFence) raise(n uint64) uint64 {
+	fence, _ := f.cleanup(n, func(bool) error { return nil })
+	return fence
+}
+
+// fenceRequest reads a cleanup's fenceHeader: the takeover it is for. set
+// is false when there is none.
+func fenceRequest(r *http.Request) (n uint64, set bool, err error) {
 	s := r.Header.Get(fenceHeader)
-	switch s {
-	case "":
-		return 0, false, false, nil
-	case "all":
-		return 0, true, true, nil
+	if s == "" {
+		return 0, false, nil
 	}
 	n, err = strconv.ParseUint(s, 10, 64)
 	if err != nil {
-		return 0, false, false, errors.New(fenceHeader + `: want a takeover number or "all"`)
+		return 0, false, errors.New(fenceHeader + ": want a takeover number")
 	}
-	return n, false, true, nil
+	return n, true, nil
 }
 
 // refuseFenced answers an operation from a takeover that ended.

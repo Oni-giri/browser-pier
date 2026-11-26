@@ -59,8 +59,11 @@ const (
 // orchestrator's second try at the lift lets go of what the first
 // failed to (PROJ-196); 8 fences a person's takeover as it ends
 // (X-BrowserPier-Takeover, X-BrowserPier-Fence): the orchestrator lets
-// agents back in only once the browser refuses whatever of that
-// takeover is still on its way (PROJ-196).
+// agents back in only once the browser answers 200 with the fence,
+// having refused whatever of that takeover is still on its way and run
+// the live input it had queued, and each cleanup (the lift, the
+// clipboard's emptying) names its takeover, leaving a later one alone
+// (PROJ-196).
 const Spec = "8"
 
 const (

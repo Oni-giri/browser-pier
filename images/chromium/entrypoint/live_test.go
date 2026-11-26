@@ -28,13 +28,35 @@ func (f *fakeXdotool) Write(p []byte) (int, error) {
 
 func (f *fakeXdotool) Close() error { return nil }
 
+// proc is one run of the fake xdotool: it runs what it is given at once,
+// so it has run it all once its input is closed; killing it breaks it.
+func (f *fakeXdotool) proc() *xdo {
+	exited := make(chan struct{})
+	var once sync.Once
+	end := func() { once.Do(func() { close(exited) }) }
+	return &xdo{stdin: fakeStdin{f, end}, exited: exited, kill: func() {
+		f.mu.Lock()
+		f.broken = true
+		f.mu.Unlock()
+		end()
+	}}
+}
+
+type fakeStdin struct {
+	f   *fakeXdotool
+	end func()
+}
+
+func (s fakeStdin) Write(p []byte) (int, error) { return s.f.Write(p) }
+func (s fakeStdin) Close() error                { s.end(); return nil }
+
 func newTestLive(fakes ...*fakeXdotool) (*liveInput, *int) {
 	starts := 0
 	li := newLiveInput(1280, 800)
-	li.start = func() (ioWriteCloser, error) {
+	li.start = func() (*xdo, error) {
 		f := fakes[starts]
 		starts++
-		return f, nil
+		return f.proc(), nil
 	}
 	return li, &starts
 }
