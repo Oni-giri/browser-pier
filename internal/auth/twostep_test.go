@@ -94,7 +94,7 @@ func twoStepAdmin(t *testing.T) (*Admin, *sql.DB, *time.Time, []byte, []string) 
 	now := time.Unix(1_800_000_000, 0)
 	a.now = func() time.Time { return now }
 	secret := NewTOTPSecret()
-	codes, err := a.EnableTwoStep(context.Background(), secret, TOTPCode(secret, now), "")
+	codes, _, err := a.EnableTwoStep(context.Background(), secret, TOTPCode(secret, now), "")
 	if err != nil {
 		t.Fatal(err)
 	}

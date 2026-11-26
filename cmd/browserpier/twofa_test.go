@@ -40,7 +40,7 @@ func TestTwoFACommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	secret := auth.NewTOTPSecret()
-	codes, err := admin.EnableTwoStep(ctx, secret, auth.TOTPCode(secret, time.Now()), "")
+	codes, _, err := admin.EnableTwoStep(ctx, secret, auth.TOTPCode(secret, time.Now()), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestTwoFACommandPartialState(t *testing.T) {
 		t.Fatal(err)
 	}
 	secret := auth.NewTOTPSecret()
-	if _, err := admin.EnableTwoStep(ctx, secret, auth.TOTPCode(secret, time.Now()), ""); err != nil {
+	if _, _, err := admin.EnableTwoStep(ctx, secret, auth.TOTPCode(secret, time.Now()), ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := d.Exec(`DELETE FROM settings WHERE key = 'totp_secret'`); err != nil {

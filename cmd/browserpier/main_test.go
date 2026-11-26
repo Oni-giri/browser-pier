@@ -227,7 +227,7 @@ func TestAgentsUnaffectedByTwoStep(t *testing.T) {
 	h, admin, tokens := testServer(t)
 	ctx := context.Background()
 	secret := auth.NewTOTPSecret()
-	if _, err := admin.EnableTwoStep(ctx, secret, auth.TOTPCode(secret, time.Now()), ""); err != nil {
+	if _, _, err := admin.EnableTwoStep(ctx, secret, auth.TOTPCode(secret, time.Now()), ""); err != nil {
 		t.Fatal(err)
 	}
 	_, token, err := tokens.Create(ctx, "agent", true, nil)

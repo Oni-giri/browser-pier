@@ -194,20 +194,30 @@ func (a *Admin) storePassword(ctx context.Context, password, keepCookie string) 
 // DeviceTTL is how long a device that signed in stays known.
 const DeviceTTL = 365 * 24 * time.Hour
 
-// NewDeviceToken marks a browser that just signed in as known. Known
-// devices skip the global sign-in throttle, so an attack from elsewhere
-// never slows the owner's usual browsers (OWASP's "device cookie").
-func (a *Admin) NewDeviceToken(ctx context.Context) (string, error) {
-	key, err := a.setting(ctx, "device_key")
-	if err != nil {
-		return "", err
-	}
+// A device cookie marks a browser that signed in as known. Known devices
+// skip the global sign-in throttle, so an attack from elsewhere never
+// slows the owner's usual browsers (OWASP's "device cookie"). It is made
+// under the device key in the same transaction as the session it comes
+// with (deviceKeyTx), or with the key a rotation just wrote, so a key
+// that rotates after a sign-in (two-step turned on, the password
+// changed) can't sign the cookie of a browser that rotation signed out.
+func (a *Admin) deviceToken(key string) string {
 	id := randomString(16) + "." + strconv.FormatInt(a.now().Add(DeviceTTL).Unix(), 10)
-	return id + "." + deviceMAC(key, id), nil
+	return id + "." + deviceMAC(key, id)
 }
 
-// KnownDevice reports whether v came from NewDeviceToken, under the
-// current password, and hasn't expired.
+// deviceKeyTx reads the device key inside a transaction.
+func deviceKeyTx(ctx context.Context, tx *sql.Tx) (string, error) {
+	var key string
+	err := tx.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = 'device_key'`).Scan(&key)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return key, err
+}
+
+// KnownDevice reports whether v is a device cookie made under the current
+// device key, and hasn't expired.
 func (a *Admin) KnownDevice(ctx context.Context, v string) bool {
 	i := strings.LastIndexByte(v, '.')
 	if i < 0 {
@@ -247,66 +257,91 @@ func (a *Admin) verify(ctx context.Context, hash, secret string) (bool, error) {
 	return VerifySecret(hash, secret), nil
 }
 
+// grant is what a finished sign-in hands the browser: its session's
+// cookie and a device cookie, made in one transaction under the same
+// credentials.
+type grant struct {
+	cookie  string
+	session AdminSession
+	device  string
+}
+
 // SignIn checks the password and, if it is right, replaces the browser's
 // old session (oldCookie, if any) with a new one, in one transaction. It
 // returns ErrWrongPassword for a wrong password, and ErrNeedsCode, with
 // no session, when two-step sign-in is on.
 func (a *Admin) SignIn(ctx context.Context, password string, remember bool, userAgent, oldCookie string) (string, AdminSession, error) {
-	cookie, s, _, err := a.signIn(ctx, password, remember, userAgent, oldCookie)
-	return cookie, s, err
+	g, _, err := a.signIn(ctx, password, remember, userAgent, oldCookie)
+	return g.cookie, g.session, err
 }
 
-// signIn is SignIn, also returning, with ErrNeedsCode, a proof of the
-// password step for finishSignIn: the SHA-256 of the stored password
-// hash, so a password changed in between voids it. The two-step state is
-// read only after a right password, so a wrong one never tells whether
-// it is on, and a state that can't be read refuses the sign-in.
-func (a *Admin) signIn(ctx context.Context, password string, remember bool, userAgent, oldCookie string) (string, AdminSession, string, error) {
+// signIn is SignIn, also returning the device cookie, and, with
+// ErrNeedsCode, a proof of the password step for finishSignIn: the
+// SHA-256 of the stored password hash, so a password changed in between
+// voids it. The two-step state is read only after a right password, so a
+// wrong one never tells whether it is on, and a state that can't be read
+// refuses the sign-in.
+func (a *Admin) signIn(ctx context.Context, password string, remember bool, userAgent, oldCookie string) (grant, string, error) {
 	a.cred.RLock()
 	defer a.cred.RUnlock()
 	stored, err := a.setting(ctx, "admin_password_hash")
 	if err != nil {
-		return "", AdminSession{}, "", err
+		return grant{}, "", err
 	}
 	if stored == "" {
-		return "", AdminSession{}, "", ErrWrongPassword
+		return grant{}, "", ErrWrongPassword
 	}
 	ok, err := a.verify(ctx, stored, password)
 	if err != nil {
-		return "", AdminSession{}, "", err
+		return grant{}, "", err
 	}
 	if !ok {
-		return "", AdminSession{}, "", ErrWrongPassword
+		return grant{}, "", ErrWrongPassword
 	}
 	st, err := readTwoStep(ctx, a.db)
 	if err != nil {
-		return "", AdminSession{}, "", err
+		return grant{}, "", err
 	}
 	if st.on {
-		return "", AdminSession{}, hashToken(stored), ErrNeedsCode
+		return grant{}, hashToken(stored), ErrNeedsCode
 	}
-	cookie, s, err := a.replaceSession(ctx, remember, userAgent, oldCookie)
-	return cookie, s, "", err
+	g, err := a.replaceSession(ctx, remember, userAgent, oldCookie)
+	return g, "", err
 }
 
 // replaceSession ends oldCookie's session, if any, and starts a new one,
-// in one transaction.
-func (a *Admin) replaceSession(ctx context.Context, remember bool, userAgent, oldCookie string) (string, AdminSession, error) {
+// with its device cookie, in one transaction. The caller holds a.cred
+// for reading.
+func (a *Admin) replaceSession(ctx context.Context, remember bool, userAgent, oldCookie string) (grant, error) {
 	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {
-		return "", AdminSession{}, err
+		return grant{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	if oldCookie != "" {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM admin_sessions WHERE hash = ?`, hashToken(oldCookie)); err != nil {
-			return "", AdminSession{}, err
+			return grant{}, err
 		}
 	}
+	g, err := a.grantTx(ctx, tx, remember, userAgent)
+	if err != nil {
+		return grant{}, err
+	}
+	return g, tx.Commit()
+}
+
+// grantTx makes a session and its device cookie inside tx: the session
+// first, so the transaction already writes when the key is read.
+func (a *Admin) grantTx(ctx context.Context, tx *sql.Tx, remember bool, userAgent string) (grant, error) {
 	cookie, s, err := a.insertSession(ctx, tx, remember, userAgent)
 	if err != nil {
-		return "", AdminSession{}, err
+		return grant{}, err
 	}
-	return cookie, s, tx.Commit()
+	key, err := deviceKeyTx(ctx, tx)
+	if err != nil {
+		return grant{}, err
+	}
+	return grant{cookie: cookie, session: s, device: a.deviceToken(key)}, nil
 }
 
 // NewSession signs a browser in and returns its cookie value. Each login

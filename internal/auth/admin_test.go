@@ -241,11 +241,15 @@ func TestTurningTwoStepOn(t *testing.T) {
 	a.now = func() time.Time { return now }
 	mine, _, _ := a.NewSession(ctx, false, "")
 	other, _, _ := a.NewSession(ctx, true, "")
-	dev, _ := a.NewDeviceToken(ctx)
+	before, _, _ := a.signIn(ctx, "the-password", false, "", "")
+	dev := before.device
+	if !a.KnownDevice(ctx, dev) {
+		t.Fatal("a sign-in's device cookie isn't known")
+	}
 	secret := NewTOTPSecret()
 
 	// A wrong confirming code stores nothing.
-	if _, err := a.EnableTwoStep(ctx, secret, "123456", mine); !errors.Is(err, ErrWrongCode) {
+	if _, _, err := a.EnableTwoStep(ctx, secret, "123456", mine); !errors.Is(err, ErrWrongCode) {
 		t.Fatalf("wrong confirming code: %v", err)
 	}
 	if st, _ := a.TwoStep(ctx); st.On {
@@ -256,9 +260,12 @@ func TestTurningTwoStepOn(t *testing.T) {
 	}
 
 	code := TOTPCode(secret, now)
-	codes, err := a.EnableTwoStep(ctx, secret, code, mine)
+	codes, newDev, err := a.EnableTwoStep(ctx, secret, code, mine)
 	if err != nil || len(codes) != RecoveryCodes {
 		t.Fatalf("EnableTwoStep = %d codes, %v", len(codes), err)
+	}
+	if !a.KnownDevice(ctx, newDev) {
+		t.Fatal("the device cookie EnableTwoStep made isn't known")
 	}
 	st, err := a.TwoStep(ctx)
 	if err != nil || !st.On || !st.Since.Equal(now) || st.CodesLeft != RecoveryCodes {
@@ -278,11 +285,11 @@ func TestTurningTwoStepOn(t *testing.T) {
 	if _, _, err := a.SignIn(ctx, "the-password", false, "", ""); !errors.Is(err, ErrNeedsCode) {
 		t.Fatalf("the password alone: %v", err)
 	}
-	_, _, proof, _ := a.signIn(ctx, "the-password", false, "", "")
-	if _, _, err := a.finishSignIn(ctx, proof, code, codeTOTP, false, "", ""); !errors.Is(err, ErrWrongCode) {
+	_, proof, _ := a.signIn(ctx, "the-password", false, "", "")
+	if _, err := a.finishSignIn(ctx, proof, code, codeTOTP, false, "", ""); !errors.Is(err, ErrWrongCode) {
 		t.Fatalf("the confirming code signed in: %v", err)
 	}
-	if _, err := a.EnableTwoStep(ctx, NewTOTPSecret(), code, mine); !errors.Is(err, ErrTwoStepOn) && !errors.Is(err, ErrWrongCode) {
+	if _, _, err := a.EnableTwoStep(ctx, NewTOTPSecret(), code, mine); !errors.Is(err, ErrTwoStepOn) && !errors.Is(err, ErrWrongCode) {
 		t.Fatalf("turning on twice: %v", err)
 	}
 	if strings.Contains(logs.String(), EncodeTOTPSecret(secret)) || strings.Contains(logs.String(), code) {
@@ -332,16 +339,27 @@ func TestChangingTwoStepNeedsPasswordAndCode(t *testing.T) {
 	}
 	next := NewTOTPSecret()
 	*now = now.Add(30 * time.Second)
-	if err := a.ReplaceTwoStepApp(ctx, "", next, TOTPCode(next, *now), ""); err == nil {
+	if _, err := a.ReplaceTwoStepApp(ctx, "", next, TOTPCode(next, *now), ""); err == nil {
 		t.Fatal("replacing without ConfirmIdentity's mark")
 	}
-	if err := a.ReplaceTwoStepApp(ctx, mark, next, TOTPCode(secret, *now), ""); !errors.Is(err, ErrWrongCode) {
+	if _, err := a.ReplaceTwoStepApp(ctx, mark, next, TOTPCode(secret, *now), ""); !errors.Is(err, ErrWrongCode) {
 		t.Fatalf("replacing with the old app's code: %v", err)
 	}
-	if err := a.ReplaceTwoStepApp(ctx, mark, next, TOTPCode(next, *now), ""); err != nil {
+	// A browser signed in before the replace, with a recovery code.
+	_, proof, _ := a.signIn(ctx, "the-password", false, "", "")
+	rc, _ := classifyCode(fresh[1])
+	before, err := a.finishSignIn(ctx, proof, rc, codeRecovery, false, "", "")
+	if err != nil || !a.KnownDevice(ctx, before.device) {
+		t.Fatalf("sign-in before the replace: %v", err)
+	}
+	dev, err := a.ReplaceTwoStepApp(ctx, mark, next, TOTPCode(next, *now), "")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if st, _ := a.TwoStep(ctx); !st.On || st.CodesLeft != RecoveryCodes-1 {
+	if !a.KnownDevice(ctx, dev) || a.KnownDevice(ctx, before.device) {
+		t.Fatal("replacing the app: its device cookie isn't known, or one from before still is")
+	}
+	if st, _ := a.TwoStep(ctx); !st.On || st.CodesLeft != RecoveryCodes-2 {
 		t.Fatalf("after replacing: %+v", st)
 	}
 	secret = next
@@ -366,7 +384,7 @@ func TestEnvPasswordDoesNotTurnTwoStepOff(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	a.now = func() time.Time { return now }
 	secret := NewTOTPSecret()
-	if _, err := a.EnableTwoStep(ctx, secret, TOTPCode(secret, now), ""); err != nil {
+	if _, _, err := a.EnableTwoStep(ctx, secret, TOTPCode(secret, now), ""); err != nil {
 		t.Fatal(err)
 	}
 	cookie, _, _ := a.NewSession(ctx, true, "")
@@ -395,7 +413,7 @@ func TestChangePasswordLeavesTwoStepOn(t *testing.T) {
 		t.Fatal(err)
 	}
 	secret := NewTOTPSecret()
-	if _, err := a.EnableTwoStep(ctx, secret, TOTPCode(secret, time.Now()), ""); err != nil {
+	if _, _, err := a.EnableTwoStep(ctx, secret, TOTPCode(secret, time.Now()), ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.ChangePassword(ctx, "first-password", "second-password", ""); err != nil {
@@ -413,7 +431,7 @@ func TestChangePasswordLeavesTwoStepOn(t *testing.T) {
 func TestPasswordChangeVoidsAPendingStep(t *testing.T) {
 	ctx := context.Background()
 	a, _, now, secret, _ := twoStepAdmin(t)
-	_, _, proof, err := a.signIn(ctx, "the-password", false, "", "")
+	_, proof, err := a.signIn(ctx, "the-password", false, "", "")
 	if !errors.Is(err, ErrNeedsCode) {
 		t.Fatal(err)
 	}
@@ -423,7 +441,7 @@ func TestPasswordChangeVoidsAPendingStep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := a.finishSignIn(ctx, proof, TOTPCode(secret, *now), codeTOTP, false, "", ""); !errors.Is(err, ErrSignInAgain) {
+	if _, err := a.finishSignIn(ctx, proof, TOTPCode(secret, *now), codeTOTP, false, "", ""); !errors.Is(err, ErrSignInAgain) {
 		t.Fatalf("a step from before a password change: %v", err)
 	}
 }
@@ -440,12 +458,12 @@ func TestReplaceMarkVoidedByAReset(t *testing.T) {
 		t.Fatal(err)
 	}
 	again := NewTOTPSecret()
-	if _, err := a.EnableTwoStep(ctx, again, TOTPCode(again, *now), ""); err != nil {
+	if _, _, err := a.EnableTwoStep(ctx, again, TOTPCode(again, *now), ""); err != nil {
 		t.Fatal(err)
 	}
 	next := NewTOTPSecret()
 	*now = now.Add(30 * time.Second)
-	if err := a.ReplaceTwoStepApp(ctx, mark, next, TOTPCode(next, *now), ""); !errors.Is(err, ErrSignInAgain) {
+	if _, err := a.ReplaceTwoStepApp(ctx, mark, next, TOTPCode(next, *now), ""); !errors.Is(err, ErrSignInAgain) {
 		t.Fatalf("an old replace after a reset and a new secret: %v", err)
 	}
 	var stored string

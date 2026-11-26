@@ -576,7 +576,7 @@ func newTwoStepFixture(t *testing.T, opts WebOptions) *twoStepFixture {
 func (f *twoStepFixture) enable() {
 	f.t.Helper()
 	f.secret = NewTOTPSecret()
-	codes, err := f.admin.EnableTwoStep(context.Background(), f.secret, TOTPCode(f.secret, f.clock.now()), "")
+	codes, _, err := f.admin.EnableTwoStep(context.Background(), f.secret, TOTPCode(f.secret, f.clock.now()), "")
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -1180,4 +1180,78 @@ func TestCodeTriesInFlightSayAMoment(t *testing.T) {
 	if resp, body := f.enter(b, "", f.code()); resp.StatusCode != http.StatusTooManyRequests || !strings.Contains(body, "Try again in a moment") || strings.Contains(body, "minute") {
 		t.Fatalf("tries in flight: %d %s", resp.StatusCode, body)
 	}
+}
+
+// A credential change that lands between a sign-in's commit and its
+// cookies (two-step turned on, the app replaced, the password changed:
+// each signs out every browser and rotates the device key) leaves that
+// browser with no trusted device cookie: the cookie was made with the
+// session, under the key of the moment, not read again afterwards.
+func TestDeviceCookieFromBeforeAKeyRotationIsntTrusted(t *testing.T) {
+	ctx := context.Background()
+	race := func(t *testing.T, f *webFixture, change func() error, signIn func(c *http.Client) reply) {
+		t.Helper()
+		var once sync.Once
+		var changeErr error
+		hook := func() { once.Do(func() { changeErr = change() }) }
+		testHookBeforeCookies.Store(&hook)
+		t.Cleanup(func() { testHookBeforeCookies.Store(nil) })
+		b := f.browser()
+		resp := signIn(b)
+		testHookBeforeCookies.Store(nil)
+		if changeErr != nil {
+			t.Fatal(changeErr)
+		}
+		session, device := cookieNamed(resp.Cookies(), CookieName), cookieNamed(resp.Cookies(), DeviceCookie)
+		if resp.StatusCode != http.StatusSeeOther || session == nil || device == nil {
+			t.Fatalf("sign-in: %d, session %v, device %v", resp.StatusCode, session != nil, device != nil)
+		}
+		if _, err := f.admin.Session(ctx, session.Value); !errors.Is(err, ErrNoSession) {
+			t.Fatalf("the change didn't sign the browser out: %v", err)
+		}
+		if f.admin.KnownDevice(ctx, device.Value) {
+			t.Fatal("a browser signed out by a key rotation holds a trusted device cookie")
+		}
+	}
+	password := func(f *webFixture) func(c *http.Client) reply {
+		return func(c *http.Client) reply {
+			resp, _ := f.post(c, "/login", url.Values{"password": {"the-admin-password"}})
+			return resp
+		}
+	}
+
+	t.Run("two-step turned on", func(t *testing.T) {
+		f := newWebFixture(t, "the-admin-password", WebOptions{})
+		race(t, f, func() error {
+			s := NewTOTPSecret()
+			_, _, err := f.admin.EnableTwoStep(ctx, s, TOTPCode(s, time.Now()), "")
+			return err
+		}, password(f))
+	})
+	t.Run("password changed", func(t *testing.T) {
+		f := newWebFixture(t, "", WebOptions{})
+		code := f.admin.setupCode
+		if err := f.admin.Setup(ctx, code, "the-admin-password"); err != nil {
+			t.Fatal(err)
+		}
+		race(t, f, func() error {
+			return f.admin.ChangePassword(ctx, "the-admin-password", "another-password", "")
+		}, password(f))
+	})
+	t.Run("app replaced during the code step", func(t *testing.T) {
+		f := newTwoStepFixture(t, WebOptions{})
+		mark, err := f.admin.ConfirmIdentity(ctx, "the-admin-password", f.codes[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		race(t, f.webFixture, func() error {
+			s := NewTOTPSecret()
+			_, err := f.admin.ReplaceTwoStepApp(ctx, mark, s, TOTPCode(s, f.clock.now()), "")
+			return err
+		}, func(c *http.Client) reply {
+			f.password(c, "", nil)
+			resp, _ := f.enter(c, "", f.code())
+			return resp
+		})
+	})
 }

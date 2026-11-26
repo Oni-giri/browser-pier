@@ -165,11 +165,12 @@ func (u *UI) twoStepConfirm(w http.ResponseWriter, r *http.Request) {
 	admin := u.web.Admin()
 	code := r.PostFormValue("code")
 	var codes []string
+	var device string
 	var err error
 	if d.replace {
-		err = admin.ReplaceTwoStepApp(r.Context(), d.mark, d.secret, code, keep)
+		device, err = admin.ReplaceTwoStepApp(r.Context(), d.mark, d.secret, code, keep)
 	} else {
-		codes, err = admin.EnableTwoStep(r.Context(), d.secret, code, keep)
+		codes, device, err = admin.EnableTwoStep(r.Context(), d.secret, code, keep)
 	}
 	switch {
 	case errors.Is(err, auth.ErrWrongCode):
@@ -189,8 +190,9 @@ func (u *UI) twoStepConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u.dropDraft(r)
-	// The device key rotated: this browser stays known with a fresh cookie.
-	u.web.SetDeviceCookie(w, r)
+	// The device key rotated: this browser stays known with a cookie made
+	// under the new key in the same step.
+	u.web.SetDeviceCookie(w, r, device)
 	if d.replace {
 		u.log.Info("authenticator app replaced from the UI; other devices signed out")
 		done(w, r, "/settings", "Authenticator app replaced. Other devices are signed out", false)

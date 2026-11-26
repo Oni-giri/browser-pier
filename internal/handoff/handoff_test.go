@@ -367,7 +367,7 @@ func TestLinkOnlyAndSignIn(t *testing.T) {
 	// With two-step sign-in on (PROJ-162), the password alone doesn't
 	// open a Full sign-in link; the code does, and the browser lands on it.
 	secret := auth.NewTOTPSecret()
-	if _, err := g.admin.EnableTwoStep(context.Background(), secret, auth.TOTPCode(secret, time.Now()), ""); err != nil {
+	if _, _, err := g.admin.EnableTwoStep(context.Background(), secret, auth.TOTPCode(secret, time.Now()), ""); err != nil {
 		t.Fatal(err)
 	}
 	phone = browser()

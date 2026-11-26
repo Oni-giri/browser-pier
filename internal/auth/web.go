@@ -413,7 +413,7 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(CookieName); err == nil {
 		oldCookie = c.Value
 	}
-	value, s, proof, err := w.admin.signIn(r.Context(), r.PostFormValue("password"), d.Remember, r.UserAgent(), oldCookie)
+	g, proof, err := w.admin.signIn(r.Context(), r.PostFormValue("password"), d.Remember, r.UserAgent(), oldCookie)
 	if errors.Is(err, ErrWrongPassword) {
 		left := mine.Fail()
 		if global != nil {
@@ -462,7 +462,10 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 	if device != nil {
 		device.Succeed()
 	}
-	w.setCookies(rw, r, value, s)
+	if hook := testHookBeforeCookies.Load(); hook != nil {
+		(*hook)()
+	}
+	w.setCookies(rw, r, g)
 	w.log.Info("admin signed in", "ip", ip, "remember", d.Remember)
 	http.Redirect(rw, r, d.Next, http.StatusSeeOther)
 }
@@ -596,37 +599,45 @@ func (w *Web) locked(rw http.ResponseWriter, r *http.Request, d pageData, wait t
 	w.render(rw, r, http.StatusTooManyRequests, "login", d)
 }
 
+// testHookBeforeCookies, set by a test, runs after a sign-in committed
+// and before its cookies are set, where a credential change could slip in.
+var testHookBeforeCookies atomic.Pointer[func()]
+
 // setCookies hands the browser its new session cookie, and a device
-// cookie that marks it as known for future sign-ins. It is called only
-// once every step of the sign-in passed.
-func (w *Web) setCookies(rw http.ResponseWriter, r *http.Request, value string, s AdminSession) {
+// cookie that marks it as known for future sign-ins, both made in the
+// sign-in's transaction. It is called only once every step of the
+// sign-in passed.
+func (w *Web) setCookies(rw http.ResponseWriter, r *http.Request, g grant) {
 	//nolint:gosec // Secure is set whenever served over HTTPS; plain-HTTP private setups can't store a Secure cookie
 	c := &http.Cookie{
 		Name:     CookieName,
-		Value:    value,
+		Value:    g.cookie,
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   w.SecureCookie(r),
 		SameSite: http.SameSiteLaxMode,
 	}
-	if s.Remember {
-		c.Expires = s.ExpiresAt
+	if g.session.Remember {
+		c.Expires = g.session.ExpiresAt
 	}
 	http.SetCookie(rw, c)
-	w.SetDeviceCookie(rw, r)
+	w.SetDeviceCookie(rw, r, g.device)
 }
 
-// SetDeviceCookie marks the signed-in browser as known, with a device
-// cookie made under the current device key: after a sign-in, and after
-// turning on two-step sign-in, which rotates the key.
-func (w *Web) SetDeviceCookie(rw http.ResponseWriter, r *http.Request) {
-	if device, err := w.admin.NewDeviceToken(r.Context()); err == nil {
-		//nolint:gosec // as in setCookies
-		http.SetCookie(rw, &http.Cookie{
-			Name: DeviceCookie, Value: device, Path: "/login", HttpOnly: true,
-			Secure: w.SecureCookie(r), SameSite: http.SameSiteLaxMode, Expires: time.Now().Add(DeviceTTL),
-		})
+// SetDeviceCookie hands the browser a device cookie that BrowserPier made
+// together with the change it goes with: a sign-in, or turning on or
+// replacing two-step sign-in, which rotate the device key. It never
+// reads the key itself: a key read later could have rotated since, under
+// a change that signed this browser out.
+func (w *Web) SetDeviceCookie(rw http.ResponseWriter, r *http.Request, device string) {
+	if device == "" {
+		return
 	}
+	//nolint:gosec // as in setCookies
+	http.SetCookie(rw, &http.Cookie{
+		Name: DeviceCookie, Value: device, Path: "/login", HttpOnly: true,
+		Secure: w.SecureCookie(r), SameSite: http.SameSiteLaxMode, Expires: time.Now().Add(DeviceTTL),
+	})
 }
 
 func (w *Web) logout(rw http.ResponseWriter, r *http.Request) {
@@ -692,13 +703,13 @@ func (w *Web) doSetup(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	attempt.Succeed()
-	value, s, err := w.admin.SignIn(r.Context(), password, false, r.UserAgent(), "")
+	g, _, err := w.admin.signIn(r.Context(), password, false, r.UserAgent(), "")
 	if err != nil {
 		// The password is set; only the automatic sign-in failed.
 		w.log.Error("signing in after setup", "err", err)
 		http.Redirect(rw, r, "/login", http.StatusSeeOther)
 		return
 	}
-	w.setCookies(rw, r, value, s)
+	w.setCookies(rw, r, g)
 	http.Redirect(rw, r, "/", http.StatusSeeOther)
 }

@@ -208,7 +208,7 @@ func (w *Web) loginCode(rw http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(CookieName); err == nil {
 		oldCookie = c.Value
 	}
-	value, s, err := w.admin.finishSignIn(r.Context(), p.proof, code, kind, p.remember, r.UserAgent(), oldCookie)
+	g, err := w.admin.finishSignIn(r.Context(), p.proof, code, kind, p.remember, r.UserAgent(), oldCookie)
 	switch {
 	case errors.Is(err, ErrWrongCode):
 		left := mine.Fail()
@@ -262,7 +262,10 @@ func (w *Web) loginCode(rw http.ResponseWriter, r *http.Request) {
 		account.Cancel() // the account's count never clears on a success
 	}
 	w.clearStepCookie(rw, r)
-	w.setCookies(rw, r, value, s)
+	if hook := testHookBeforeCookies.Load(); hook != nil {
+		(*hook)()
+	}
+	w.setCookies(rw, r, g)
 	w.log.Info("admin signed in", "ip", ip, "remember", p.remember, "second_step", kind.String())
 	http.Redirect(rw, r, safeNext(p.next), http.StatusSeeOther)
 }

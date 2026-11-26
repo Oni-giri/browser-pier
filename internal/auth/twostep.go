@@ -364,52 +364,53 @@ func (a *Admin) useCode(ctx context.Context, tx *sql.Tx, st twoStepState, code s
 var testHookBeforeCodeTx atomic.Pointer[func()]
 
 // finishSignIn is the second step: with the proof from the password step
-// and a right code, it records the code's use and makes the session in
-// one transaction, so a code whose use can't be written opens nothing.
-func (a *Admin) finishSignIn(ctx context.Context, proof, code string, kind codeKind, remember bool, userAgent, oldCookie string) (string, AdminSession, error) {
+// and a right code, it records the code's use and makes the session and
+// its device cookie in one transaction, so a code whose use can't be
+// written opens nothing.
+func (a *Admin) finishSignIn(ctx context.Context, proof, code string, kind codeKind, remember bool, userAgent, oldCookie string) (grant, error) {
 	a.cred.RLock()
 	defer a.cred.RUnlock()
 	st, err := readTwoStep(ctx, a.db)
 	if err != nil {
-		return "", AdminSession{}, err
+		return grant{}, err
 	}
 	if !st.on {
-		return "", AdminSession{}, ErrSignInAgain
+		return grant{}, ErrSignInAgain
 	}
 	if kind == codeNone {
-		return "", AdminSession{}, ErrWrongCode
+		return grant{}, ErrWrongCode
 	}
 	if hook := testHookBeforeCodeTx.Load(); hook != nil {
 		(*hook)()
 	}
 	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {
-		return "", AdminSession{}, err
+		return grant{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	var stored string
 	if err := tx.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = 'admin_password_hash'`).Scan(&stored); err != nil {
-		return "", AdminSession{}, err
+		return grant{}, err
 	}
 	if !hmac.Equal([]byte(hashToken(stored)), []byte(proof)) {
-		return "", AdminSession{}, ErrSignInAgain
+		return grant{}, ErrSignInAgain
 	}
 	if err := a.useCode(ctx, tx, st, code, kind); err != nil {
-		return "", AdminSession{}, err
+		return grant{}, err
 	}
 	if oldCookie != "" {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM admin_sessions WHERE hash = ?`, hashToken(oldCookie)); err != nil {
-			return "", AdminSession{}, err
+			return grant{}, err
 		}
 	}
-	cookie, s, err := a.insertSession(ctx, tx, remember, userAgent)
+	g, err := a.grantTx(ctx, tx, remember, userAgent)
 	if err != nil {
-		return "", AdminSession{}, err
+		return grant{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return "", AdminSession{}, err
+		return grant{}, err
 	}
-	return cookie, s, nil
+	return g, nil
 }
 
 // checkPasswordAndState checks the current password, then reads the
@@ -512,43 +513,44 @@ func (a *Admin) storeRecoveryCodes(ctx context.Context, tx *sql.Tx) ([]string, e
 // EnableTwoStep turns two-step sign-in on with secret, once code shows
 // the app has it. The code's step counts as used. Every other browser is
 // signed out and the device key rotates, in the same transaction. It
-// returns the ten recovery codes, shown once.
-func (a *Admin) EnableTwoStep(ctx context.Context, secret []byte, code, keepCookie string) ([]string, error) {
-	var codes []string
-	err := a.storeSecret(ctx, secret, code, keepCookie, "", func(tx *sql.Tx) error {
+// returns the ten recovery codes, shown once, and a device cookie under
+// the new key for the browser that turned it on.
+func (a *Admin) EnableTwoStep(ctx context.Context, secret []byte, code, keepCookie string) (codes []string, device string, err error) {
+	device, err = a.storeSecret(ctx, secret, code, keepCookie, "", func(tx *sql.Tx) error {
 		var err error
 		codes, err = a.storeRecoveryCodes(ctx, tx)
 		return err
 	})
-	return codes, err
+	return codes, device, err
 }
 
 // ReplaceTwoStepApp moves two-step sign-in to a new secret (a new phone),
 // once code shows the app has it. The recovery codes stay. As turning
-// on, it signs out every other browser and rotates the device key. The
-// caller has checked the password and a code first: mark is what
-// ConfirmIdentity returned, and the secret must still be the one it saw.
-func (a *Admin) ReplaceTwoStepApp(ctx context.Context, mark string, secret []byte, code, keepCookie string) error {
+// on, it signs out every other browser, rotates the device key and
+// returns a device cookie under the new one. The caller has checked the
+// password and a code first: mark is what ConfirmIdentity returned, and
+// the secret must still be the one it saw.
+func (a *Admin) ReplaceTwoStepApp(ctx context.Context, mark string, secret []byte, code, keepCookie string) (device string, err error) {
 	if mark == "" {
-		return ErrSignInAgain
+		return "", ErrSignInAgain
 	}
 	return a.storeSecret(ctx, secret, code, keepCookie, mark, nil)
 }
 
 // storeSecret turns two-step on with secret, or, with replaceMark, moves
 // it from the secret that mark names to this one.
-func (a *Admin) storeSecret(ctx context.Context, secret []byte, code, keepCookie, replaceMark string, then func(*sql.Tx) error) error {
+func (a *Admin) storeSecret(ctx context.Context, secret []byte, code, keepCookie, replaceMark string, then func(*sql.Tx) error) (device string, err error) {
 	replace := replaceMark != ""
 	if len(secret) != totpSecretLen {
-		return errors.New("bad secret")
+		return "", errors.New("bad secret")
 	}
 	n, kind := classifyCode(code)
 	if kind != codeTOTP {
-		return ErrWrongCode
+		return "", ErrWrongCode
 	}
 	step, ok := matchTOTP(secret, n, a.now(), math.MinInt32)
 	if !ok {
-		return ErrWrongCode
+		return "", ErrWrongCode
 	}
 	// Held for writing, so no sign-in that read "off" makes a session
 	// on the password alone after this commits.
@@ -556,43 +558,47 @@ func (a *Admin) storeSecret(ctx context.Context, secret []byte, code, keepCookie
 	defer a.cred.Unlock()
 	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() { _ = tx.Rollback() }()
 	st, err := readTwoStep(ctx, tx)
 	switch {
 	case err != nil:
-		return err
+		return "", err
 	case !replace && st.on:
-		return ErrTwoStepOn
+		return "", ErrTwoStepOn
 	case replace && !st.on:
-		return ErrTwoStepOff
+		return "", ErrTwoStepOff
 	case replace && !hmac.Equal([]byte(hashToken(st.stored)), []byte(replaceMark)):
-		return ErrSignInAgain // reset and turned on again since the password and code were checked
+		return "", ErrSignInAgain // reset and turned on again since the password and code were checked
 	}
+	key := randomString(32)
 	rows := [][2]string{
 		{keyTOTPSecret, EncodeTOTPSecret(secret)},
 		{keyTOTPLast, strconv.FormatInt(step, 10)},
-		{"device_key", randomString(32)},
+		{"device_key", key},
 	}
 	if !replace {
 		rows = append(rows, [2]string{keyTOTPEnabled, strconv.FormatInt(a.now().UnixMilli(), 10)})
 	}
 	for _, kv := range rows {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`, kv[0], kv[1]); err != nil {
-			return err
+			return "", err
 		}
 	}
 	if keepCookie == "" {
 		keepCookie = "-" // matches no session
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM admin_sessions WHERE hash != ?`, hashToken(keepCookie)); err != nil {
-		return err
+		return "", err
 	}
 	if then != nil {
 		if err := then(tx); err != nil {
-			return err
+			return "", err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return a.deviceToken(key), nil
 }
