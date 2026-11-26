@@ -30,6 +30,9 @@ type FakeRuntime struct {
 	StopStatus  int
 	StopErr     error   // Stop fails with this, leaving the container running
 	StartErrs   []error // each Start fails with the next of these, while any are left
+	// BeforeCreate, if set, is called (without the lock) as Create
+	// begins; an error it returns fails the Create.
+	BeforeCreate func(ctx context.Context) error
 	// BeforeStop, if set, is called (without the lock) as Stop begins.
 	BeforeStop func(id string)
 	// AfterStop, if set, is called (without the lock) once Stop has made
@@ -59,7 +62,15 @@ func New(dataDir string) *FakeRuntime {
 	return &FakeRuntime{dataDir: dataDir, Containers: map[string]*FakeContainer{}}
 }
 
-func (f *FakeRuntime) Create(_ context.Context, spec docker.BrowserSpec) (string, error) {
+func (f *FakeRuntime) Create(ctx context.Context, spec docker.BrowserSpec) (string, error) {
+	f.Mu.Lock()
+	before := f.BeforeCreate
+	f.Mu.Unlock()
+	if before != nil {
+		if err := before(ctx); err != nil {
+			return "", err
+		}
+	}
 	f.Mu.Lock()
 	defer f.Mu.Unlock()
 	for _, c := range f.Containers {

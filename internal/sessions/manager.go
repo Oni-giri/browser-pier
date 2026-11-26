@@ -817,13 +817,22 @@ func capRunes(s string, n int) string {
 	return s
 }
 
-// abort fails a session whose container never got going.
+// abort fails a session whose container never got going. With
+// BrowserPier shutting down, which cancels whatever the start was
+// waiting on, it is no failure to tell anyone of.
 func (m *Manager) abort(l *live, cid, reason string) {
 	lastLog := ""
 	if cid != "" {
 		lastLog = m.cleanup(cid)
 	}
-	m.end(l, lastLog, func(s *Session) { s.State, s.Error, l.how = Failed, reason, FailedToStart })
+	closing := m.ctx.Err() != nil
+	m.end(l, lastLog, func(s *Session) {
+		if closing {
+			s.State, s.Error = Failed, "BrowserPier was shutting down: "+reason
+			return
+		}
+		s.State, s.Error, l.how = Failed, reason, FailedToStart
+	})
 }
 
 // proxyFile is where the proxy URL waits for the entrypoint, which reads

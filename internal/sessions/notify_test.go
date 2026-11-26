@@ -157,3 +157,37 @@ func TestStopsAndShutdownsTellNothing(t *testing.T) {
 		t.Errorf("queued %v", got)
 	}
 }
+
+// TestAShutdownDuringCreateTellsNothing: BrowserPier closing while the
+// runtime creates the container cancels the Create; the start fails, as
+// a shutdown, not as a browser.failed.
+func TestAShutdownDuringCreateTellsNothing(t *testing.T) {
+	f := newFixture(t)
+	c := tellFailures(t, f.m)
+	creating := make(chan struct{})
+	f.rt.BeforeCreate = func(ctx context.Context) error {
+		close(creating)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	started := make(chan error, 1)
+	go func() {
+		_, _, err := f.m.Start(context.Background(), "google", "")
+		started <- err
+	}()
+	<-creating
+	f.m.Close()
+	if err := <-started; err == nil {
+		t.Fatal("Start succeeded")
+	}
+	last, err := f.m.LastSession(context.Background(), "google")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last.State != Failed || !strings.HasPrefix(last.Error, "BrowserPier was shutting down") {
+		t.Errorf("the last session: %s %q", last.State, last.Error)
+	}
+	if got := c.all(); len(got) != 0 {
+		t.Errorf("queued %v", got)
+	}
+}
