@@ -4,6 +4,7 @@ package chromium
 
 import (
 	"context"
+	"fmt"
 	"image/color"
 	"image/png"
 	"io"
@@ -89,20 +90,37 @@ func TestMeasureWebGLCost(t *testing.T) {
 	}
 	// sample runs during for the window, while it reads the container's
 	// CPU time and peak memory, and what the live stream costs if watch.
-	sample := func(name string, watch bool, during func()) {
-		var streamed int64
+	// edge, if set, runs right as the window opens and right as it closes,
+	// before the readings that follow it, so a rate it measures covers the
+	// window alone.
+	sample := func(name string, watch bool, during func(), edge func()) {
 		ctx, cancel := context.WithTimeout(context.Background(), window)
 		defer cancel()
+		type result struct {
+			n   int64
+			err error
+		}
+		var stream chan result
 		if watch {
+			stream = make(chan result, 1)
 			go func() {
 				req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://control/stream", nil)
 				resp, err := b.http.Do(req)
 				if err != nil {
+					stream <- result{err: err}
 					return
 				}
 				defer func() { _ = resp.Body.Close() }()
-				streamed, _ = io.Copy(io.Discard, resp.Body)
+				if resp.StatusCode != http.StatusOK {
+					stream <- result{err: fmt.Errorf("stream: %s", resp.Status)}
+					return
+				}
+				n, _ := io.Copy(io.Discard, resp.Body) // ends with the window
+				stream <- result{n: n}
 			}()
+		}
+		if edge != nil {
+			edge()
 		}
 		cpu0, t0 := cpuUsec(), time.Now()
 		var peak int64
@@ -113,23 +131,49 @@ func TestMeasureWebGLCost(t *testing.T) {
 			}
 			time.Sleep(500 * time.Millisecond)
 		}
+		if edge != nil {
+			edge()
+		}
 		cpu := float64(cpuUsec()-cpu0) / float64(time.Since(t0).Microseconds()) * 100
+		var streamed int64
+		if watch {
+			r := <-stream
+			if r.err != nil || r.n == 0 {
+				t.Fatalf("%s: the live stream wasn't watched (%d bytes): %v", name, r.n, r.err)
+			}
+			streamed = r.n
+		}
 		stats := docker(t, "stats", "--no-stream", "--format", "{{.MemUsage}}", b.name)
 		t.Logf("%-22s CPU %4.0f%% of a core, memory peak %4d MB, now %s (docker stats); GPU process %s; stream %d KB",
 			name+":", cpu, peak, stats, gpu(), streamed>>10)
 	}
+	// frames reads the WebGL page's frame counter at each edge of a
+	// window; rate is the frames a second between the last two reads.
+	var marks []struct {
+		f  float64
+		at time.Time
+	}
+	frames := func() {
+		f, _ := p.Eval("window.frames_").(float64)
+		marks = append(marks, struct {
+			f  float64
+			at time.Time
+		}{f, time.Now()})
+	}
+	rate := func() float64 {
+		a, z := marks[len(marks)-2], marks[len(marks)-1]
+		return (z.f - a.f) / z.at.Sub(a.at).Seconds()
+	}
 	settle := func() { time.Sleep(5 * time.Second) }
 
 	settle()
-	sample("idle page", false, func() {})
+	sample("idle page", false, func() {}, nil)
 
 	p.Navigate(strings.NewReplacer("\n", "", "{{N}}", strconv.Itoa(envInt("MEASURE_TRIANGLES", 3000))).Replace(webglScene))
 	settle()
-	f0, _ := p.Eval("window.frames_").(float64)
-	sample("WebGL page", false, func() {})
-	f1, _ := p.Eval("window.frames_").(float64)
-	t.Logf("WebGL page: %.0f frames a second", (f1-f0)/window.Seconds())
-	sample("WebGL page, watched", true, func() {})
+	sample("WebGL page", false, func() {}, frames)
+	t.Logf("WebGL page: %.0f frames a second", rate())
+	sample("WebGL page, watched", true, func() {}, nil)
 	// What the X display, and so the stream, shows of the canvas.
 	if c, ok := screenAt(t, b, 640, 450); ok {
 		t.Logf("WebGL page on the X display at its centre: %v (black is 0,0,0)", c)
@@ -138,10 +182,10 @@ func TestMeasureWebGLCost(t *testing.T) {
 	p.Call("Page.navigate", map[string]any{"url": heavy})
 	time.Sleep(10 * time.Second)
 	scroll := func() { b.input(t, "/input/scroll", `{"x": 640, "y": 400, "dy": 2}`) }
-	sample("heavy site, scrolled", false, scroll)
+	sample("heavy site, scrolled", false, scroll, nil)
 	p.Call("Page.navigate", map[string]any{"url": heavy})
 	time.Sleep(10 * time.Second)
-	sample("heavy site, watched", true, scroll)
+	sample("heavy site, watched", true, scroll, nil)
 	p.Close()
 	t.Logf("stop: exit %s", b.stop())
 }
