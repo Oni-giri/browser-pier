@@ -12,9 +12,9 @@ import (
 	"time"
 )
 
-// fakeX is an X server with a window tree, answering the few requests
+// fakeXServer is an X server with a window tree, answering the few requests
 // xconn makes over a pipe.
-type fakeX struct {
+type fakeXServer struct {
 	root  uint32
 	wins  map[uint32]*fakeWin
 	atoms map[string]uint32
@@ -33,14 +33,14 @@ type fakeWin struct {
 	props    map[string]string
 }
 
-func newFakeX() *fakeX {
-	f := &fakeX{root: 0x100, wins: map[uint32]*fakeWin{}, atoms: map[string]uint32{"WM_STATE": 40, "WM_CLASS": 67, "WM_WINDOW_ROLE": 300}, gone: map[uint32]bool{}}
+func newFakeXServer() *fakeXServer {
+	f := &fakeXServer{root: 0x100, wins: map[uint32]*fakeWin{}, atoms: map[string]uint32{"WM_STATE": 40, "WM_CLASS": 67, "WM_WINDOW_ROLE": 300}, gone: map[uint32]bool{}}
 	f.wins[f.root] = &fakeWin{viewable: true, box: rect{0, 0, 1280, 800}}
 	return f
 }
 
 // add puts window id on top of parent's children.
-func (f *fakeX) add(id, parent uint32, w fakeWin) {
+func (f *fakeXServer) add(id, parent uint32, w fakeWin) {
 	w.parent = parent
 	f.wins[id] = &w
 	f.wins[parent].kids = append(f.wins[parent].kids, id)
@@ -48,7 +48,7 @@ func (f *fakeX) add(id, parent uint32, w fakeWin) {
 
 // connect starts serving on one end of a pipe and returns a client on
 // the other.
-func (f *fakeX) connect(t *testing.T) *xconn {
+func (f *fakeXServer) connect(t *testing.T) *xconn {
 	t.Helper()
 	cli, srv := net.Pipe()
 	t.Cleanup(func() { _ = cli.Close(); _ = srv.Close() })
@@ -63,7 +63,7 @@ func (f *fakeX) connect(t *testing.T) *xconn {
 	return x
 }
 
-func (f *fakeX) serve(c net.Conn) {
+func (f *fakeXServer) serve(c net.Conn) {
 	le := binary.LittleEndian
 	setup := make([]byte, 12)
 	if _, err := io.ReadFull(c, setup); err != nil || setup[0] != 'l' {
@@ -160,8 +160,8 @@ func (f *fakeX) serve(c net.Conn) {
 
 // browserDesktop is the tree BrowserPier's container has: the taskbar,
 // and the browser window in JWM's frame.
-func browserDesktop() *fakeX {
-	f := newFakeX()
+func browserDesktop() *fakeXServer {
+	f := newFakeXServer()
 	f.add(0x200, f.root, fakeWin{viewable: true, override: true, box: rect{0, 768, 1280, 32}}) // the taskbar
 	f.add(0x300, f.root, fakeWin{viewable: true, box: rect{0, 0, 1280, 768}})                  // JWM's frame
 	f.add(0x400002, 0x300, fakeWin{viewable: true, box: rect{0, 0, 1280, 768},
@@ -219,7 +219,7 @@ func TestWindowsAtSeesWhatIsOnTop(t *testing.T) {
 }
 
 func TestWindowsAtOnAnEmptyScreen(t *testing.T) {
-	f := newFakeX()
+	f := newFakeXServer()
 	got, err := f.connect(t).windowsAt(10, 10)
 	if err != nil || len(got) != 0 {
 		t.Fatalf("%+v %v", got, err)
