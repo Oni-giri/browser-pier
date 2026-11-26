@@ -92,11 +92,46 @@ func (m *Manager) TakeControl(id string) error {
 // way and someone else has taken the browser, nothing they still send
 // reaches it (PROJ-196).
 func (m *Manager) TakeControlGen(id string) (gen uint64, err error) {
+	return m.takeControl(id, 0)
+}
+
+// ErrHandoffEnded: the handoff a Take control was for has ended.
+var ErrHandoffEnded = errors.New("the handoff has ended")
+
+// HelpEpoch says which time the session went to Needs help, while it
+// waits for help: a handoff's live view reads it while its handoff is
+// open, and takes control with it (TakeControlInHandoff).
+func (m *Manager) HelpEpoch(id string) (uint64, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l := m.findLocked(id)
+	if l == nil || l.sess.State != NeedsHelp {
+		return 0, false
+	}
+	return l.helpEpoch, true
+}
+
+// TakeControlInHandoff is TakeControlGen for a handoff's live view: only
+// while the session still waits for the help it asked for as epoch
+// (HelpEpoch), checked in the same step as the take and again once
+// whatever it waited for has ended; otherwise ErrHandoffEnded. A
+// handoff's link that outlives its handoff, even by a moment, never
+// takes the browser back from the agent it was handed back to.
+func (m *Manager) TakeControlInHandoff(id string, epoch uint64) (gen uint64, err error) {
+	return m.takeControl(id, epoch)
+}
+
+// takeControl is TakeControlGen, and with epoch, TakeControlInHandoff.
+func (m *Manager) takeControl(id string, epoch uint64) (gen uint64, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.findLocked(id)
 	if l == nil || (l.sess.State != Running && l.sess.State != NeedsHelp) {
 		return 0, ErrNotRunning
+	}
+	handoffOver := func() bool { return epoch != 0 && (l.sess.State != NeedsHelp || l.helpEpoch != epoch) }
+	if handoffOver() {
+		return 0, ErrHandoffEnded
 	}
 	now := m.now()
 	breakOff := false
@@ -155,6 +190,10 @@ func (m *Manager) TakeControlGen(id string) (gen uint64, err error) {
 			// (PROJ-200), as it would have had it woken first.
 			m.untakeLocked(l, gen)
 			return 0, ErrNotRunning
+		}
+		if handoffOver() {
+			m.untakeLocked(l, gen)
+			return 0, ErrHandoffEnded
 		}
 		if !l.human || l.humanGen != gen || l.releasing {
 			// Handed back meanwhile (the profile page's Hand back, a

@@ -1001,3 +1001,71 @@ func TestHandoffOfferNeverTakesTheNextSession(t *testing.T) {
 		done()
 	}
 }
+
+// A handoff that ends while its live view's offer is under way (after
+// the link was checked, before control is taken) takes nothing: the
+// browser is the agent's again, not the stale page's (PROJ-196).
+func TestHandoffOfferAfterItsHandoffEndedTakesNothing(t *testing.T) {
+	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
+	h, token := f.open("")
+	phone := browser()
+	if p := f.do(phone, "POST", "/h/"+token+"/pin", url.Values{"pin": {"4821"}}, nil); p.code != http.StatusSeeOther {
+		t.Fatalf("right PIN: %d %s", p.code, p.body)
+	}
+	offer := func() reply {
+		req, _ := http.NewRequest(http.MethodPost, f.srv.URL+"/h/"+token+"/offer", strings.NewReader(pionOffer(t)))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := phone.Do(req)
+		if err != nil {
+			t.Error(err)
+			return reply{}
+		}
+		defer func() { _ = resp.Body.Close() }()
+		b, _ := io.ReadAll(resp.Body)
+		return reply{code: resp.StatusCode, body: string(b)}
+	}
+	if r := offer(); r.code != http.StatusOK || !strings.Contains(r.body, `"control":true`) {
+		t.Fatalf("offer: %d %s", r.code, r.body)
+	}
+	// The page reloads: its new offer passes the link's checks, then
+	// waits for the old view's hand-back, held up here.
+	entered, gate := make(chan struct{}), make(chan struct{})
+	var once, opened sync.Once
+	letGo := func() { opened.Do(func() { close(gate) }) }
+	defer letGo()
+	hold := func() { once.Do(func() { close(entered); <-gate }) }
+	f.onLift.Store(&hold)
+	second := make(chan reply, 1)
+	go func() { second <- offer() }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reloaded page's offer never got to the old view's hand-back")
+	}
+	// Meanwhile the handoff ends (Done, on another device).
+	finished := make(chan error, 1)
+	go func() {
+		_, err := f.svc.Finish(context.Background(), h, Done, "")
+		finished <- err
+	}()
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		if s, _ := f.m.Live("google"); s.State == sessions.Running {
+			break
+		}
+	}
+	letGo()
+	if err := <-finished; err != nil {
+		t.Fatal(err)
+	}
+	if r := <-second; r.code == http.StatusOK {
+		t.Errorf("the offer for the ended handoff connected (%d)", r.code)
+	}
+	if s, _ := f.m.Live("google"); s.State != sessions.Running || s.HumanControl {
+		t.Fatalf("after the handoff: %s, person in control %v", s.State, s.HumanControl)
+	}
+	if _, done, err := f.m.AgentInput(context.Background(), h.SessionID); err != nil {
+		t.Fatalf("the agent = %v", err)
+	} else {
+		done()
+	}
+}

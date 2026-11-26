@@ -349,6 +349,17 @@ func (w *Web) offer(rw http.ResponseWriter, r *http.Request) {
 		http.Error(rw, "this link isn't open here", http.StatusForbidden)
 		return
 	}
+	// Which time the browser went to Needs help, read while the handoff
+	// is open: read first, then the handoff found still open, so it is
+	// this handoff's (or a later one's, which only refuses). The take
+	// names it, and fails in the same step if the browser no longer
+	// waits for that help: a handoff ending while this offer is under
+	// way takes nothing back from the agent (PROJ-196).
+	epoch, ok := w.m.HelpEpoch(h.SessionID)
+	if cur, err := w.svc.Get(r.Context(), h.ID); !ok || err != nil || cur.Status != Pending {
+		http.Error(rw, "this link isn't open here", http.StatusForbidden)
+		return
+	}
 	// This browser holds the link, so an earlier view of it is a page
 	// since reloaded: replace it rather than refuse "someone else has control".
 	w.svc.replaceViewers(r.Context(), h)
@@ -364,7 +375,8 @@ func (w *Web) offer(rw http.ResponseWriter, r *http.Request) {
 		// The session this link is for: if it ended and another started
 		// on the profile meanwhile, the offer is refused, and that one is
 		// never taken.
-		Session: h.SessionID,
+		Session:   h.SessionID,
+		HelpEpoch: epoch,
 	})
 }
 

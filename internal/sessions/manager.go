@@ -181,6 +181,10 @@ type live struct {
 	// stops counts the stops begun, failed ones included: a Take control
 	// that waited across one gives up (TakeControlGen).
 	stops uint64
+	// helpEpoch counts the times the session went to Needs help: a
+	// handoff's Take control names the one it was opened in
+	// (TakeControlInHandoff).
+	helpEpoch uint64
 	// takeCtx is for the person's operations admitted under the takeover
 	// in progress (HumanInput): a child of opCtx, cancelled the moment
 	// its hand-back begins, so nothing admitted for it can reach the
@@ -1301,6 +1305,7 @@ func (m *Manager) SetNeedsHelp(id string, needsHelp bool) (Session, error) {
 			// connections close, and new ones are refused until hand-back.
 			l.disconnectLocked()
 			l.generation++
+			l.helpEpoch++
 			// Page calls and agent input under way are cancelled (a long
 			// human-paced type breaks off at once); they finish before
 			// the person gets the browser. New ones are refused from now

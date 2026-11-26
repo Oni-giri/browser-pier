@@ -976,3 +976,52 @@ func TestAdmittedInputCantOutliveTheHandBack(t *testing.T) {
 		done()
 	}
 }
+
+// A handoff's Take control names the Needs help it was opened in: once
+// that has ended, it takes nothing, in the same step, and an agent's
+// long action goes on (PROJ-196).
+func TestTakeControlInAnEndedHandoff(t *testing.T) {
+	f := newFixture(t)
+	advance := f.clock()
+	s := f.start(f.m)
+	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	epoch, ok := f.m.HelpEpoch(s.ID)
+	if !ok || epoch == 0 {
+		t.Fatalf("HelpEpoch = %d, %v", epoch, ok)
+	}
+	if _, err := f.m.SetNeedsHelp(s.ID, false); err != nil { // the handoff ends
+		t.Fatal(err)
+	}
+	if _, ok := f.m.HelpEpoch(s.ID); ok {
+		t.Error("a help epoch while Running")
+	}
+	ctx, done, err := f.m.AgentInput(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer done()
+	advance(takeOverAfter) // long enough to be broken off by a take
+	if _, err := f.m.TakeControlInHandoff(s.ID, epoch); !errors.Is(err, ErrHandoffEnded) {
+		t.Fatalf("a take for the ended handoff = %v, want ErrHandoffEnded", err)
+	}
+	if ctx.Err() != nil {
+		t.Error("the agent's action was broken off")
+	}
+	if got, _ := f.m.Live("google"); got.HumanControl {
+		t.Error("taken")
+	}
+	// A later handoff has another epoch: the old one's take fails there too.
+	done()
+	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.m.TakeControlInHandoff(s.ID, epoch); !errors.Is(err, ErrHandoffEnded) {
+		t.Errorf("the old handoff's take in a new one = %v, want ErrHandoffEnded", err)
+	}
+	next, _ := f.m.HelpEpoch(s.ID)
+	if _, err := f.m.TakeControlInHandoff(s.ID, next); err != nil {
+		t.Errorf("the open handoff's take = %v", err)
+	}
+}

@@ -450,3 +450,41 @@ func TestOfferForAStoppedSessionTakesNothing(t *testing.T) {
 		t.Error("the new session was taken")
 	}
 }
+
+// A handoff's live view whose handoff has ended takes nothing, at its
+// offer or by a later take, though its session is the same and running:
+// an agent's long action goes on (PROJ-196).
+func TestHandoffViewAfterItsHandoffEndedTakesNothing(t *testing.T) {
+	var c fakeClipboard
+	h, m, s := offerFixtureWith(t, c.routes, slog.New(slog.DiscardHandler))
+	if _, err := m.SetNeedsHelp(s.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	epoch, ok := m.HelpEpoch(s.ID)
+	if !ok {
+		t.Fatal("no help epoch")
+	}
+	if _, err := m.SetNeedsHelp(s.ID, false); err != nil { // the handoff ends
+		t.Fatal(err)
+	}
+	ctx, done, err := m.AgentInput(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer done()
+	time.Sleep(3100 * time.Millisecond) // long enough for a take to break it off
+	pv := newPionViewer(t, InputLabel)
+	if rec := offer(h, OfferOptions{Control: true, Session: s.ID, HelpEpoch: epoch}, pv.body); rec.Code != http.StatusConflict {
+		t.Fatalf("the ended handoff's offer: %d %s", rec.Code, rec.Body)
+	}
+	old := newTalk(t, &viewer{h: h, session: s.ID, sock: m.Layout().ControlSocket("google"), helpEpoch: epoch})
+	if r := old.send(`{"type":"take"}`); len(r) != 1 || r[0]["type"] != "error" {
+		t.Errorf("the ended handoff's view taking control: %v", r)
+	}
+	if ctx.Err() != nil {
+		t.Error("the agent's action was broken off")
+	}
+	if got, _ := m.Live("google"); got.HumanControl {
+		t.Error("taken")
+	}
+}
