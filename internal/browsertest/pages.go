@@ -82,6 +82,12 @@ var pageSitePages = map[string]string{ //nolint:gosec // test pages, not credent
 <label><input type="checkbox" name="remember"> Remember me</label>
 <button>Sign in</button>
 </form></main>`,
+	// A button that fills the window and counts its clicks (PROJ-156: a
+	// repeated call clicks once), in either mode: an agent finds it by
+	// its name, or clicks anywhere on the screen.
+	"/counter": `<!doctype html><title>Counter</title>` + report + `
+<body style="margin:0"><button onclick="n++; this.textContent = 'Add one (' + n + ')'; report('counted')" style="position:fixed;inset:0;width:100%;height:100%;font-size:40px">Add one</button>
+<script>let n = 0; report('counter loaded')</script></body>`,
 	// A long form: its last fields are far below the fold.
 	"/long-form": `<!doctype html><title>Long form</title><main><h1>Application</h1><form>` + longForm() + `<button type="button" onclick="this.textContent='Sent'">Send application</button></form></main>`,
 	// A nav of 200 links and a cookie banner before a small form.

@@ -48,6 +48,8 @@ var toolArgs = map[string]map[string]any{
 	"request_handoff":  {"session_id": "s1", "reason": "captcha", "detail": "Solve it"},
 	"wait_for_handoff": {"handoff_id": "h1", "seconds": 1},
 	"cancel_handoff":   {"handoff_id": "h1"},
+	"call_status":      {"session_id": "s1", "call_id": "c1"},
+	"session_status":   {"session_id": "s1"},
 }
 
 // leakyAPI stands in for the agent API with no scrub of its own: every

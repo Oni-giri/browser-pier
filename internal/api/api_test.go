@@ -91,6 +91,13 @@ func (b *browser) handler() http.Handler {
 					_ = conn.Write(r.Context(), typ, out)
 					continue
 				}
+				if call.Method == "Target.attachToTarget" {
+					// The page tools get no further: they answer at once
+					// that the tab can't be reached.
+					out, _ := json.Marshal(map[string]any{"id": call.ID, "error": map[string]any{"code": -32000, "message": "No target with given id found"}})
+					_ = conn.Write(r.Context(), typ, out)
+					continue
+				}
 			}
 			_ = conn.Write(r.Context(), typ, append([]byte("echo:"), msg...))
 		}
@@ -121,6 +128,10 @@ func (b *browser) handler() http.Handler {
 		b.mu.Unlock()
 		if onInput != nil {
 			onInput(r.URL.Path)
+		}
+		if strings.Contains(string(body), "boom") {
+			http.Error(w, "xdotool failed", http.StatusInternalServerError)
+			return
 		}
 		if strings.Contains(string(body), "99999") {
 			http.Error(w, "(99999, 1) is outside the 1440x900 screen", http.StatusBadRequest)
@@ -207,6 +218,13 @@ type fixture struct {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
+	return newFixtureLogging(t, slog.New(slog.DiscardHandler))
+}
+
+// newFixtureLogging is newFixture, with the manager and the API logging
+// to log.
+func newFixtureLogging(t *testing.T, log *slog.Logger) *fixture {
+	t.Helper()
 	ctx := context.Background()
 	dir, err := os.MkdirTemp("", "bp")
 	if err != nil {
@@ -218,7 +236,6 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
-	log := slog.New(slog.DiscardHandler)
 	f := &fixture{t: t, b: &browser{}, rt: sessionstest.New(dir), tokens: auth.NewTokens(d), profiles: profiles.NewStore(d), db: d}
 	f.rt.Control = f.b.handler()
 	f.m, err = sessions.NewManager(d, f.rt, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)

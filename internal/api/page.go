@@ -1,8 +1,8 @@
 package api
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -17,14 +17,14 @@ import (
 // take the same JSON as the MCP tools, and answer {"text": "..."}, the
 // same text the MCP tools return, with page content fenced.
 func (a *API) registerPageTools(mux Router) {
-	t := a.agent
+	t, c := a.agent, a.agentCall
 	mux.Handle("POST /api/sessions/{id}/snapshot", t(pageTool(a, (*pagetools.Tools).Snapshot)))
 	mux.Handle("POST /api/sessions/{id}/find", t(pageTool(a, (*pagetools.Tools).Find)))
-	mux.Handle("POST /api/sessions/{id}/navigate", t(pageTool(a, (*pagetools.Tools).Navigate)))
-	mux.Handle("POST /api/sessions/{id}/act", t(pageToolNotice(a, (*pagetools.Tools).Act)))
+	mux.Handle("POST /api/sessions/{id}/navigate", c("navigate", pageTool(a, (*pagetools.Tools).Navigate)))
+	mux.Handle("POST /api/sessions/{id}/act", c("act", pageToolNotice(a, (*pagetools.Tools).Act)))
 	mux.Handle("POST /api/sessions/{id}/wait", t(pageTool(a, (*pagetools.Tools).WaitFor)))
 	mux.Handle("GET /api/sessions/{id}/tabs", t(pageTool(a, (*pagetools.Tools).Tabs)))
-	mux.Handle("POST /api/sessions/{id}/tabs", t(pageTool(a, (*pagetools.Tools).Tabs)))
+	mux.Handle("POST /api/sessions/{id}/tabs", c("tabs", pageTool(a, (*pagetools.Tools).Tabs)))
 	mux.Handle("POST /api/sessions/{id}/content", t(a.content))
 }
 
@@ -57,9 +57,7 @@ func pageToolWith[In any](a *API, f pageFunc[In], notice bool) http.HandlerFunc 
 			return
 		}
 		if strings.TrimSpace(string(body)) != "" {
-			dec := json.NewDecoder(strings.NewReader(string(body)))
-			dec.DisallowUnknownFields()
-			if err := dec.Decode(&in); err != nil {
+			if err := decodeOne(bytes.NewReader(body), &in); err != nil {
 				writeError(w, http.StatusBadRequest, "bad JSON: "+err.Error())
 				return
 			}

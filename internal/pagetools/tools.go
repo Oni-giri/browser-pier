@@ -506,7 +506,7 @@ func (c *call) eval(ctx context.Context, expr string, out any) error {
 
 // note adds to the session's activity log: the action and refs only,
 // never page text or typed text.
-func (c *call) note(what string) { c.t.m.Note(c.sess.ID, c.who.Agent, what) }
+func (c *call) note(what string) { c.t.m.NoteFor(c.ctx, c.sess.ID, c.who.Agent, what) }
 
 // result fences what a tool says from the page, with any new-tab notices,
 // and adds trailer (BrowserPier's own words) after the fence.

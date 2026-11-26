@@ -62,7 +62,7 @@ func (s *Server) uploadFile(ctx context.Context, req *sdk.CallToolRequest, in up
 	if int64(len(b)) > max {
 		return nil, nil, toolError(fmt.Sprintf("the file is over %s; upload_file takes at most that (POST /api/sessions/%s/files takes up to 100 MiB)", mib(max), in.SessionID))
 	}
-	r, err := s.callRaw(ctx, req.Extra, "POST", "/api/sessions/"+url.PathEscape(in.SessionID)+"/files?name="+url.QueryEscape(in.Name), "application/octet-stream", bytes.NewReader(b))
+	r, err := s.callRaw(ctx, req.Extra, "POST", "/api/sessions/"+url.PathEscape(in.SessionID)+"/files?name="+url.QueryEscape(in.Name), "application/octet-stream", bytes.NewReader(b), nil)
 	if err != nil {
 		return nil, nil, err
 	}
