@@ -64,7 +64,7 @@ func chromiumArgs(c config, smallShm bool) []string {
 	return args
 }
 
-// chromiumEnv is what Chromium's environment adds to the container's.
+// mesaEnv is what Chromium's environment (chromiumEnv) adds for Mesa.
 // Mesa reads both settings in the GPU process, as GL starts (PROJ-165):
 // llvmpipe would start one rasteriser thread per CPU, and Mesa's shader
 // disk cache a writer thread, and Chromium's GPU sandbox can only start
@@ -75,6 +75,6 @@ func chromiumArgs(c config, smallShm bool) []string {
 // (ANTI-BOT.md).
 // The disk cache is lost with the container anyway, and the sandbox
 // would keep it from opening its files.
-func chromiumEnv() []string {
+func mesaEnv() []string {
 	return []string{"LP_NUM_THREADS=0", "MESA_SHADER_CACHE_DISABLE=true"}
 }

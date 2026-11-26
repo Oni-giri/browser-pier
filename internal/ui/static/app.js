@@ -44,8 +44,8 @@
       return;
     }
     if (e.target.closest("[data-close]")) { e.target.closest("dialog").close(); return; }
-    // A click on the backdrop closes a dialog.
-    if (e.target.tagName === "DIALOG" && e.target.open) {
+    // A click on the backdrop closes a dialog, unless it waits for an answer.
+    if (e.target.tagName === "DIALOG" && e.target.open && !e.target.hasAttribute("data-keep")) {
       const r = e.target.getBoundingClientRect();
       if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) e.target.close();
     }

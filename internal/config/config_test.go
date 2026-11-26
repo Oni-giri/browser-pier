@@ -179,3 +179,21 @@ func TestTURNRejectsBadValues(t *testing.T) {
 		})
 	}
 }
+
+// PROJ-159: browsers get the daemon's own user namespace, or Podman's
+// keep-id; anything else is refused at start-up, naming the variable.
+func TestUsernsMode(t *testing.T) {
+	for _, v := range []string{"", "keep-id", "keep-id:uid=1000,gid=1000", "keep-id:size=65536", "keep-id:uid=1000,gid=1000,size=65536"} {
+		c, err := load(env(map[string]string{"BROWSERPIER_USERNS_MODE": v}))
+		if err != nil || c.UsernsMode != v {
+			t.Errorf("%q: %q, %v", v, c.UsernsMode, err)
+		}
+	}
+	for _, v := range []string{"host", "private", "auto", "nomap", "ns:/proc/1/ns/user", "keep-id:", "keep-id:uid=x", "keep-id;host", " keep-id", "Keep-id",
+		"keep-id:typo=1000", "keep-id:uid=1000,typo=1", "keep-id:uid=1,uid=2", "keep-id:uid=4294967296"} {
+		_, err := load(env(map[string]string{"BROWSERPIER_USERNS_MODE": v}))
+		if err == nil || !strings.HasPrefix(err.Error(), "BROWSERPIER_USERNS_MODE: ") {
+			t.Errorf("%q: %v", v, err)
+		}
+	}
+}

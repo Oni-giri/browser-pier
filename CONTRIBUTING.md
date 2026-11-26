@@ -122,4 +122,14 @@ curl -H "Authorization: Bearer $TOKEN" -X DELETE localhost:7437/api/sessions/<id
 - Write tests alongside the code.
 - If the code and the spec disagree, raise it rather than diverging, and update SPEC.md when a decision changes.
 
+### Changing what a container gets
+
+Every container BrowserPier creates passes the create guard (`internal/docker/guard.go`) right before Docker sees it. The guard states, per kind of container (`browser`, `sandbox-check`), the value of every field BrowserPier sets, and refuses any other field that is set at all. It restates the builders' values on purpose instead of calling them, so don't make it derive anything from `browserConfig` or a `BrowserSpec`. To give a container something new (a device, a mount, a network, a limit, an environment variable for the entrypoint):
+
+1. Allow it in the guard first: name the field in `guardNamed` and check its exact value for the kinds that get it (for an environment variable, add its name to `guardBrowserEnv`).
+2. Then change the builder (`browserConfig`, `browserCreateOptions` or `sandboxCheckOptions`).
+3. Then the tests: a row in `TestGuardRefusesEachWidening` for each way the new value could be wrong, and the golden bodies in `internal/docker/testdata` (`go test ./internal/docker -run TestCreateBodiesAreUnchanged -update-golden`), whose diff shows the change.
+
+A new kind of container is a new `createKind` and a new case in `checkCreate`, written by hand. A new Docker operation (an exec, a network, a copy) is a deliberate edit of the list in `TestDockerOperationsAreAClosedSet`. Only `internal/docker` may import the Docker SDK.
+
 CI lints, tests and builds every push and pull request. It publishes both images to ghcr.io from `main` (tag `edge`) and from `v*` tags, which also make the GitHub release. See [RELEASING.md](RELEASING.md).
