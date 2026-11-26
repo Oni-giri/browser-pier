@@ -376,9 +376,10 @@ const controlWait = 10 * time.Second
 
 // typeWait bounds the Type button's call, which may type up to 2,000
 // characters: 12 ms a key at instant pace, and, for characters the
-// keyboard map lacks, stretches of up to 16 bound keys that each wait
-// 0.3 s for Chromium (PROJ-195). 60 ms a character covers text where
-// every character is a new one.
+// keyboard map lacks, stretches of as many bound keys as the map has
+// spare (13 with the image's layout data) that each take about 0.55 s
+// (PROJ-195). 60 ms a character covers text where every character is a
+// new one.
 func typeWait(text string) time.Duration {
 	return controlWait + time.Duration(utf8.RuneCountInString(text))*60*time.Millisecond
 }
