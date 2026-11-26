@@ -22,21 +22,29 @@ type fatalLine struct {
 	buf    []byte // the line being written
 	last   string // FATAL
 	error  string // ERROR
-	// warn, if set, is told once when the GPU process can't start its
-	// sandbox (gpuSandboxFailed).
-	warn      func(msg string)
-	gpuWarned bool
+	// warn, if set, is told once when a GPU process exits because it
+	// couldn't start its sandbox (gpuSandboxFailed, then gpuNotMonoThreaded).
+	warn       func(msg string)
+	gpuWaiting bool // gpuSandboxFailed was the last sandbox line
+	gpuWarned  bool
 }
 
-// gpuSandboxFailed is how Chromium says the GPU process can't start its
-// seccomp sandbox: in a WARNING without --gpu-sandbox-failures-fatal, in
-// an ERROR just before the FATAL "Current process is not mono-threaded!"
-// with it (PROJ-165). The FATAL line doesn't name the process; this does.
-const gpuSandboxFailed = "InitializeSandbox() called with multiple threads in process gpu-process"
+// gpuSandboxFailed is how Chromium says a GPU process found other threads
+// when it went to start its seccomp sandbox. With
+// --gpu-sandbox-failures-fatal (PROJ-165) it's an ERROR, and Chromium then
+// waits for the process to become single-threaded: if it does, the sandbox
+// starts and nothing is lost; if not, the FATAL gpuNotMonoThreaded follows
+// and the process exits. That FATAL line doesn't name the process; this
+// one does.
+const (
+	gpuSandboxFailed   = "InitializeSandbox() called with multiple threads in process gpu-process"
+	gpuNotMonoThreaded = "Current process is not mono-threaded"
+)
 
-// gpuSandboxWarning is what the admin reads in the browser's log then:
-// the browser keeps running, but without WebGL, and the page can't say so.
-const gpuSandboxWarning = "the GPU process couldn't start its sandbox, so it exits; Chromium will run it without GL, and pages get no WebGL"
+// gpuSandboxWarning is what the admin reads in the browser's log when a
+// GPU process did exit for it: Chromium restarts it, and if that keeps
+// failing, runs it without GL, so pages get no WebGL and can't say why.
+const gpuSandboxWarning = "a GPU process exited because it couldn't start its sandbox; Chromium restarts it, and if that keeps failing, pages get no WebGL"
 
 // watchFatal points cmd's output at a pipe read by a fatalLine, which
 // tells warn (if not nil) what an admin should know. Call started once cmd
@@ -70,9 +78,17 @@ func (f *fatalLine) Write(p []byte) (int, error) {
 			break
 		}
 		line := string(f.buf[:i])
-		if !f.gpuWarned && f.warn != nil && strings.Contains(line, gpuSandboxFailed) {
-			f.gpuWarned = true
-			f.warn(gpuSandboxWarning)
+		switch {
+		case strings.Contains(line, gpuSandboxFailed):
+			f.gpuWaiting = true
+		case strings.Contains(line, "InitializeSandbox() called with multiple threads"):
+			f.gpuWaiting = false // another process type's
+		case f.gpuWaiting && strings.Contains(line, gpuNotMonoThreaded) && chromiumLine(line, "FATAL") != "":
+			f.gpuWaiting = false
+			if !f.gpuWarned && f.warn != nil {
+				f.gpuWarned = true
+				f.warn(gpuSandboxWarning)
+			}
 		}
 		if m := chromiumLine(line, "FATAL"); m != "" {
 			f.last = m

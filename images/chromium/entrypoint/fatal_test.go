@@ -66,9 +66,9 @@ func TestFatalLineFallsBackToTheLastError(t *testing.T) {
 	}
 }
 
-// TestFatalLineWarnsOnceWhenTheGPUSandboxFails: the browser lives on
-// without WebGL, so the admin is told, once, however often Chromium
-// restarts the GPU process (PROJ-165).
+// TestFatalLineWarnsOnceWhenTheGPUSandboxFails: a GPU process that exits
+// for want of its sandbox can leave the browser without WebGL, so the
+// admin is told, once, however often Chromium restarts it (PROJ-165).
 func TestFatalLineWarnsOnceWhenTheGPUSandboxFails(t *testing.T) {
 	var warned []string
 	f := &fatalLine{copied: make(chan struct{}), warn: func(m string) { warned = append(warned, m) }}
@@ -86,13 +86,26 @@ func TestFatalLineWarnsOnceWhenTheGPUSandboxFails(t *testing.T) {
 		t.Fatalf("warned %q, want %q once", warned, gpuSandboxWarning)
 	}
 
+	// Chromium waits after the ERROR line; when the process becomes
+	// single-threaded in time, the sandbox starts and nothing is said.
+	warned = nil
+	f = &fatalLine{copied: make(chan struct{}), warn: func(m string) { warned = append(warned, m) }}
+	close(f.copied)
+	_, _ = f.Write([]byte("[9:9:0:ERROR:sandbox/policy/linux/sandbox_linux.cc:394] " + gpuSandboxFailed + ". Try waiting for /proc to be updated.\n" +
+		"[9:9:0:VERBOSE1:sandbox/policy/linux/sandbox_linux.cc:78] Activated seccomp-bpf sandbox for process type: gpu-process.\n" +
+		"[6:6:0:INFO:x.cc:1] something else\n"))
+	if len(warned) != 0 {
+		t.Fatalf("warned %q after a retry that worked", warned)
+	}
+
 	// Other lines, a renderer's sandbox included, say nothing.
 	warned = nil
 	f = &fatalLine{copied: make(chan struct{}), warn: func(m string) { warned = append(warned, m) }}
 	close(f.copied)
 	_, _ = f.Write([]byte("[5:1:0:VERBOSE1:sandbox/policy/linux/sandbox_linux.cc:78] Activated seccomp-bpf sandbox for process type: gpu-process.\n" +
 		"[6:6:0:FATAL:sandbox/linux/services/credentials.cc:137] Check failed: . : Permission denied (13)\n" +
-		"[7:7:0:ERROR:sandbox/policy/linux/sandbox_linux.cc:394] InitializeSandbox() called with multiple threads in process renderer.\n"))
+		"[7:7:0:ERROR:sandbox/policy/linux/sandbox_linux.cc:394] InitializeSandbox() called with multiple threads in process renderer.\n" +
+		"[7:7:0:FATAL:sandbox/linux/services/thread_helpers.cc:104] Current process is not mono-threaded! (iterations: 30)\n"))
 	if len(warned) != 0 {
 		t.Fatalf("warned %q", warned)
 	}
