@@ -10,7 +10,7 @@
   <form id="defaults" method="post" action="/settings" data-track data-busy="Saving…"></form>
   <div class="bento">
     <section class="cell span-6" aria-labelledby="pin-title">
-      <div class="cell-head"><h2 class="cell-title big" id="pin-title">Handoff PIN</h2>{{if .PINChangedAt.IsZero}}<span class="pill help">Not set</span>{{else}}<span class="pill running">Set · changed {{ago .PINChangedAt}}</span>{{end}}</div>
+      <div class="cell-head"><h2 class="cell-title big" id="pin-title">Handoff PIN</h2>{{if .PINChangedAt.IsZero}}<span class="pill">Not set</span>{{else}}<span class="pill running">Set · changed {{ago .PINChangedAt}}</span>{{end}}</div>
       <p class="small" style="margin:0 0 14px;color:var(--ink-2)">Asked on your phone before a handoff link opens a browser. Agents never see it. Five wrong tries cancel the link.</p>
       {{if and .Error (eq .ErrorFor "pin")}}<p class="errors" role="alert">{{.Error}}</p>{{end}}
       <details{{if or (eq .ErrorFor "pin") .PINChangedAt.IsZero}} open{{end}} class="reveal">
@@ -55,9 +55,15 @@
     <section class="cell span-7" aria-labelledby="proxy-title">
       <h2 class="cell-title big" id="proxy-title" style="margin:0">Default proxy</h2>
       <p class="small" style="margin:2px 0 14px;color:var(--ink-2)">Used by new profiles unless they set their own. Leave empty to use this server’s connection.</p>
-      <label class="sr-only" for="proxy">Proxy URL</label>
-      <input class="input mono" id="proxy" name="proxy" value="{{.Proxy}}" form="defaults" placeholder="socks5://user:pass@host:port" autocomplete="off" spellcheck="false">
-      <ul class="checks" style="margin:14px 0 0"><li>Time zone and language follow the proxy’s location</li></ul>
+      <div data-proxy>
+        <label class="sr-only" for="proxy">Proxy URL</label>
+        <div class="proxy-row">
+          <input class="input mono" id="proxy" name="proxy" value="{{.Proxy}}" form="defaults" placeholder="socks5://user:pass@host:port" autocomplete="off" spellcheck="false">
+          <button class="btn" type="button" data-proxy-test="settings"{{if not .Proxy}} disabled{{end}}>Test</button>
+        </div>
+        <div class="proxy-result" data-proxy-result aria-live="polite" hidden></div>
+      </div>
+      <ul class="checks" style="margin:14px 0 0"><li>Time zone and language follow the proxy’s location</li><li><code>{sticky}</code> in the user name or password becomes a code of each profile’s own, so each profile keeps its own exit IP</li></ul>
       <div class="field" style="margin:18px 0 0">
         <input type="hidden" name="block_ads_field" value="1" form="defaults">
         <label class="check"><input type="checkbox" name="block_ads" value="1" form="defaults"{{if .DefaultBlockAds}} checked{{end}}> Block ads and trackers in new profiles</label>

@@ -9,7 +9,10 @@ import (
 	"image/png"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -104,6 +107,99 @@ func TestComputerForwardsInput(t *testing.T) {
 	// The browser's own refusal comes back as it is.
 	if code, _, raw := f.computer(s.ID, `{"action": "scroll", "x": 99999, "y": 1, "dy": 1}`); code != http.StatusBadRequest || !strings.Contains(string(raw), "outside") {
 		t.Fatalf("off screen: %d %s", code, raw)
+	}
+}
+
+// TestComputerOpen: open sends the browser the address as navigate would
+// open it, and refuses what navigate refuses, before the browser sees it
+// (PROJ-164). The log names its origin only.
+func TestComputerOpen(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.all, "google", "visual")
+	for body, want := range map[string]string{
+		`{"action": "open", "url": "https://example.com/a b?q=1"}`:               `/input/open {"url":"https://example.com/a%20b?q=1"}`,
+		`{"action": "open", "url": " HTTP://Example.com/x ", "pace": "instant"}`: `/input/open {"url":"http://Example.com/x","pace":"instant"}`,
+		// A space in the query reaches the browser encoded, as navigate sends it.
+		`{"action": "open", "url": "https://example.com/?q=a b"}`: `/input/open {"url":"https://example.com/?q=a%20b"}`,
+		// So is anything past ASCII, as UTF-8.
+		`{"action": "open", "url": "https://example.com/?q=café"}`: `/input/open {"url":"https://example.com/?q=caf%C3%A9"}`,
+	} {
+		if code, _, raw := f.computer(s.ID, body); code != http.StatusNoContent {
+			t.Fatalf("%s: %d %s", body, code, raw)
+		}
+		if got := f.lastInput(); got != want {
+			t.Errorf("%s: forwarded %s, want %s", body, got, want)
+		}
+	}
+	f.b.mu.Lock()
+	sent := len(f.b.inputs)
+	f.b.mu.Unlock()
+	for body, want := range map[string]string{
+		`{"action": "open"}`: "url: ",
+		`{"action": "open", "url": "javascript:alert(1)"}`:                                   "only http and https",
+		`{"action": "open", "url": "file:///etc/passwd"}`:                                    "only http and https",
+		`{"action": "open", "url": "https://me:pw@example.com/"}`:                            "user name or password",
+		`{"action": "open", "url": "https:///x"}`:                                            "no host",
+		`{"action": "open", "url": "https://example.com/", "pace": 1}`:                       "",
+		`{"action": "open", "url": "https://example.com/` + strings.Repeat("a", 8200) + `"}`: "too long",
+	} {
+		code, _, raw := f.computer(s.ID, body)
+		if code != http.StatusBadRequest || !strings.Contains(string(raw), want) {
+			t.Errorf("%.60s: %d %s", body, code, raw)
+		}
+	}
+	f.b.mu.Lock()
+	if len(f.b.inputs) != sent {
+		t.Errorf("refused addresses reached the browser: %q", f.b.inputs[sent:])
+	}
+	f.b.mu.Unlock()
+	got := strings.Join(f.whats(s.ID), "\n")
+	if !strings.Contains(got, "claude: Opened https://example.com in the address bar") || strings.Contains(got, "/a") || strings.Contains(got, "q=1") {
+		t.Fatalf("activity:\n%s", got)
+	}
+}
+
+// An open while a person has the browser is refused before anything
+// reaches it: not even the ad-list exemption for its host, which would
+// change what the person's browser blocks (PROJ-164). Once the agent may
+// act, an open that the browser refuses (the address bar covered) has
+// still exempted its host, as navigate does.
+func TestComputerOpenWhileAPersonDrives(t *testing.T) {
+	f := newFixture(t)
+	f.m.SetBlocklist(func() []byte { return []byte("# browserpier domain set 1\nads.example.com\n") })
+	s := f.start(f.all, "google", "visual")
+	if !s.BlockAds {
+		t.Fatal("the session doesn't block ads")
+	}
+	exempts := func() []string {
+		f.b.mu.Lock()
+		defer f.b.mu.Unlock()
+		return slices.Clone(f.b.exempts)
+	}
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, raw := f.computer(s.ID, `{"action": "open", "url": "https://tracker.example/"}`); code != http.StatusConflict {
+		t.Fatalf("open while a person drives: %d %s", code, raw)
+	}
+	if got := exempts(); len(got) != 0 || f.lastInput() != "" {
+		t.Fatalf("while a person drives: exempted %q, sent %q", got, f.lastInput())
+	}
+	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := f.computer(s.ID, `{"action": "open", "url": "https://tracker.example/"}`); code != http.StatusConflict || len(exempts()) != 0 {
+		t.Fatalf("open during a handoff: %d, exempted %q", code, exempts())
+	}
+	if _, err := f.m.SetNeedsHelp(s.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	f.m.ReleaseControl(s.ID)
+	if code, _, raw := f.computer(s.ID, `{"action": "open", "url": "https://tracker.example/"}`); code != http.StatusNoContent {
+		t.Fatalf("open: %d %s", code, raw)
+	}
+	if got := exempts(); !slices.Equal(got, []string{"tracker.example"}) {
+		t.Fatalf("exempted %q", got)
 	}
 }
 
@@ -243,6 +339,59 @@ func TestHandoffInterruptsALongAction(t *testing.T) {
 	}
 }
 
+// A handoff requested while the browser waits out the gap after a
+// shortcut (PROJ-151) is granted at once, well within the 250 ms cap:
+// the wait ends with the agent's request, sending nothing, and the
+// agent's next input is refused as during any handoff.
+func TestHandoffDuringTheShortcutGap(t *testing.T) {
+	f := newFixture(t)
+	f.b.mu.Lock()
+	// Long, so a handoff granted in time can only have broken the wait off.
+	f.b.shortcutGap = 10 * time.Second
+	f.b.mu.Unlock()
+	s := f.start(f.all, "google", "visual")
+	if code, _, raw := f.computer(s.ID, `{"action": "key", "keys": "ctrl+l"}`); code != http.StatusNoContent {
+		t.Fatalf("ctrl+l: %d %s", code, raw)
+	}
+	type answer struct {
+		code int
+		raw  []byte
+	}
+	got := make(chan answer, 1)
+	go func() {
+		code, _, raw := f.computer(s.ID, `{"action": "type", "text": "example.com"}`)
+		got <- answer{code, raw}
+	}()
+	for deadline := time.Now().Add(5 * time.Second); f.lastInput() != "waiting"; {
+		if time.Now().After(deadline) {
+			t.Fatalf("the type never waited: %q", f.lastInput())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	start := time.Now()
+	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 250*time.Millisecond {
+		t.Fatalf("the handoff was granted after %v, over the 250 ms cap", d)
+	}
+	if a := <-got; a.code != http.StatusConflict || !strings.Contains(string(a.raw), "handoff") {
+		t.Fatalf("the type cut short answered %d %s", a.code, a.raw)
+	}
+	for deadline := time.Now().Add(5 * time.Second); f.lastInput() != "wait cut short"; {
+		if time.Now().After(deadline) {
+			t.Fatalf("the browser didn't break the wait off: %q", f.lastInput())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if code, _, raw := f.computer(s.ID, `{"action": "key", "keys": "Return"}`); code != http.StatusConflict {
+		t.Fatalf("a key during the handoff: %d %s", code, raw)
+	}
+	if got := f.lastInput(); got != "wait cut short" {
+		t.Fatalf("input reached the browser after the handoff: %q", got)
+	}
+}
+
 // One input at a time: a second while a long one is under way is refused.
 func TestComputerOneInputAtATime(t *testing.T) {
 	f := newFixture(t)
@@ -274,7 +423,7 @@ func TestComputerOneInputAtATime(t *testing.T) {
 func TestComputerWhileAPersonDrives(t *testing.T) {
 	f := newFixture(t)
 	s := f.start(f.all, "google", "visual")
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatal(err)
 	}
 	var e map[string]string
@@ -361,5 +510,111 @@ func TestComputerScreenshotOverTheCap(t *testing.T) {
 	code, _, raw := f.computer(s.ID, `{"action": "click", "x": 10, "y": 10, "screenshot": true, "width": 640}`)
 	if code != http.StatusOK || string(raw) != "PNG:640" {
 		t.Fatalf("at the cap: %d %q", code, raw)
+	}
+}
+
+// Revoking a token breaks off its long human-paced type at once, as it
+// does its page calls, whether from the UI or the token CLI (the
+// revocation watcher) (PROJ-166).
+func TestRevokingATokenInterruptsItsType(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	s := f.start(f.all, "google", "visual")
+	tok, secret, err := f.tokens.Create(ctx, "doomed", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type answer struct {
+		code int
+		raw  []byte
+	}
+	got := make(chan answer, 1)
+	go func() {
+		req, _ := http.NewRequest(http.MethodPost, f.srv.URL+"/api/sessions/"+s.ID+"/type", strings.NewReader(`{"text": "typed slowly"}`))
+		req.Header.Set("Authorization", "Bearer "+secret)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			got <- answer{0, []byte(err.Error())}
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		raw, _ := io.ReadAll(resp.Body)
+		got <- answer{resp.StatusCode, raw}
+	}()
+	waitFor(t, func() bool { return f.lastInput() != "" })
+	// A check before the revocation leaves it be.
+	f.api.checkRevocations(ctx)
+	if err := f.tokens.Revoke(ctx, tok.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.api.checkRevocations(ctx)
+	var a answer
+	select {
+	case a = <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the type went on after its token was revoked")
+	}
+	if a.code != http.StatusUnauthorized || !strings.Contains(string(a.raw), "input broke off: the agent token was revoked") {
+		t.Fatalf("the type cut short answered %d %s", a.code, a.raw)
+	}
+	waitFor(t, func() bool { return f.lastInput() == "cut short" })
+	if got := strings.Join(f.whats(s.ID), "\n"); !strings.HasSuffix(got, "doomed: Typing interrupted") {
+		t.Fatalf("activity:\n%s", got)
+	}
+}
+
+// gatedBody is a request body that says when the handler starts reading
+// it, then waits to be let go.
+type gatedBody struct {
+	r       io.Reader
+	reading chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (g *gatedBody) Read(p []byte) (int, error) {
+	g.once.Do(func() { close(g.reading) })
+	<-g.release
+	return g.r.Read(p)
+}
+
+// A token revoked after its request was let in, while the body is still
+// being read (before the input is registered, where the revocation has
+// nothing to break off), sends no input: it answers 401 (PROJ-166).
+func TestATokenRevokedBeforeItsInputBeginsSendsNone(t *testing.T) {
+	for _, route := range []string{"type", "click", "computer"} {
+		t.Run(route, func(t *testing.T) {
+			f := newFixture(t)
+			ctx := context.Background()
+			s := f.start(f.all, "google", "visual")
+			tok, secret, err := f.tokens.Create(ctx, "doomed", true, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := map[string]string{"type": `{"text": "hi"}`, "click": `{"x": 1, "y": 2}`, "computer": `{"action": "click", "x": 1, "y": 2}`}[route]
+			g := &gatedBody{r: strings.NewReader(body), reading: make(chan struct{}), release: make(chan struct{})}
+			req := httptest.NewRequest(http.MethodPost, "/api/sessions/"+s.ID+"/"+route, g)
+			req.Header.Set("Authorization", "Bearer "+secret)
+			rec := httptest.NewRecorder()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				f.srv.Config.Handler.ServeHTTP(rec, req)
+			}()
+			<-g.reading
+			// As the UI revokes: the token goes, then its connections.
+			if err := f.tokens.Revoke(ctx, tok.ID); err != nil {
+				t.Fatal(err)
+			}
+			f.m.DisconnectToken(tok.ID)
+			close(g.release)
+			<-done
+			if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "revoked") {
+				t.Fatalf("answered %d %s", rec.Code, rec.Body)
+			}
+			if in := f.lastInput(); in != "" {
+				t.Fatalf("the browser got %q", in)
+			}
+		})
 	}
 }

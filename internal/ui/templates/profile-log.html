@@ -1,0 +1,44 @@
+{{define "content"}}{{with .Data}}
+<div class="page" data-profile="{{.Name}}">
+  <div class="page-head" style="align-items:center">
+    <div>
+      <div class="crumbs">
+        <a href="/profiles">Profiles</a><span class="sep">/</span>{{template "icon" .}}<a href="/profiles/{{.Name}}">{{.Name}}</a><span class="sep">/</span><h1>Activity log</h1>
+      </div>
+      <p class="small muted" style="margin:6px 0 0">{{.Kept}}</p>
+    </div>
+    <div class="actions"><a class="btn" href="/profiles/{{.Name}}">Back to {{.Name}}</a></div>
+  </div>
+  <div class="log-page">
+    {{if .Live}}
+    <section class="cell" aria-labelledby="current-title">
+      <div class="cell-head">
+        <h2 class="cell-title big" id="current-title">Current run</h2>
+        <span class="pill {{.Status.Key}}">{{.Status.Label}}</span>
+      </div>
+      <p class="caption run-facts">Started {{if ne (dayName .Session.CreatedAt) "Today"}}{{dayName .Session.CreatedAt}} {{end}}{{hhmm .Session.CreatedAt}} · {{.ModeLabel}} mode · {{len .Current}} {{plural (len .Current) "entry" "entries"}}</p>
+      {{if .Current}}<ol class="log">{{range .Current}}{{template "log-entry" (logLine . ($.Data.LogLink .At))}}{{end}}</ol>
+      {{else}}<p class="small muted" style="margin:0">Nothing yet. What agents do in this browser shows up here.</p>{{end}}
+    </section>
+    {{end}}
+    <section class="cell" aria-labelledby="runs-title">
+      <div class="cell-head"><h2 class="cell-title big" id="runs-title">Previous runs</h2></div>
+      {{if .Runs}}
+      <ul class="runs">{{range $i, $r := .Runs}}
+        <li id="run-{{.SessionID}}">
+          <details class="run"{{if and (eq $i 0) (not $.Data.Live)}} open{{end}}>
+            <summary>
+              <span class="run-when"><b>{{dayName .Started}} {{hhmm .Started}}–{{hhmm .Ended}}</b><span class="caption">{{.Starter}} · {{.ModeLabel}} mode · {{len .Entries}} {{plural (len .Entries) "entry" "entries"}}</span></span>
+              <span class="run-end{{if .Failed}} failed{{end}}">{{.EndText}}</span>
+            </summary>
+            {{if .Entries}}<ol class="log">{{range .Entries}}{{template "log-entry" (logLine . "")}}{{end}}</ol>{{end}}
+          </details>
+        </li>{{end}}
+      </ul>
+      {{else}}
+      <p class="small muted" style="margin:0">None kept. When this browser stops, what happened in it shows here.</p>
+      {{end}}
+    </section>
+  </div>
+</div>
+{{end}}{{end}}

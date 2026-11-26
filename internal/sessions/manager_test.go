@@ -267,6 +267,31 @@ func TestStartRetriesOnceWhenTheAppArmorProfileIsGone(t *testing.T) {
 	}
 }
 
+// PROJ-159: a body the create guard refuses fails the start with the
+// field's name, and leaves nothing running for the profile.
+func TestStartFailsWhenTheGuardRefusesTheContainer(t *testing.T) {
+	f := newFixture(t)
+	f.rt.CreateErr = fmt.Errorf("refused to create the browser container: HostConfig.Devices is set: %w", docker.ErrOutsideEnvelope)
+	s, _, err := f.m.Start(context.Background(), "google", "")
+	if !errors.Is(err, ErrStartFailed) || s.State != Failed || !strings.HasPrefix(s.Error, "refused to create the browser container: HostConfig.Devices is set") {
+		t.Fatalf("Start = %+v, %v", s, err)
+	}
+	if got := f.stored(s.ID); got.State != Failed || got.Error != s.Error {
+		t.Fatalf("stored %+v", got)
+	}
+	if _, ok := f.m.Live("google"); ok {
+		t.Fatal("a refused start left a live session")
+	}
+	if f.rt.Creates != 0 || f.rt.Count() != 0 {
+		t.Fatalf("%d creates, %d containers", f.rt.Creates, f.rt.Count())
+	}
+	// Nothing to retry on its own: the next start asks again.
+	f.rt.CreateErr = nil
+	if s := f.start(f.m); s.State != Running {
+		t.Fatalf("after the fix: %+v", s)
+	}
+}
+
 func TestBrowserCrashFailsTheSession(t *testing.T) {
 	f := newFixture(t)
 	s := f.start(f.m)

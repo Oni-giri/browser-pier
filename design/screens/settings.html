@@ -58,20 +58,21 @@ input[type=range]:focus{box-shadow:none!important}
       <section class="g-cell" aria-labelledby="st-pin" style="--s: 6; padding: 20px; background: #FFFFFF; border-radius: 16px; box-shadow: 0 0 0 1px rgba(37,64,140,0.07), 0 1px 2px rgba(37,64,140,0.06), 0 10px 28px -12px rgba(37,64,140,0.20); display: flex; flex-direction: column; gap: 14px">
         <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px">
           <h2 id="st-pin" style="margin: 0; font-size: 16px; font-weight: 600">Handoff PIN</h2>
-          <span style="display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 999px; background: #ECFDF3; color: #15803D; font-size: 12px; font-weight: 500"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #16A34A"></span>Set · changed 12 days ago</span>
+          <sc-if value="{{pinSet}}" hint-placeholder-val="{{true}}"><span style="display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 999px; background: #ECFDF3; color: #15803D; font-size: 12px; font-weight: 500"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #16A34A"></span>{{pinChanged}}</span></sc-if>
+          <sc-if value="{{noPin}}" hint-placeholder-val="{{false}}"><span style="display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 999px; background: #F1F5F9; color: #475569; font-size: 12px; font-weight: 500"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #94A3B8"></span>Not set</span></sc-if>
         </div>
         <p style="margin: 0; font-size: 14px; line-height: 1.55; color: #475569">Asked on your phone before a handoff link opens a browser. Agents never see it. Five wrong tries cancel the link.</p>
         <sc-if value="{{pinIdle}}" hint-placeholder-val="{{true}}">
-          <button type="button" onClick="{{editPin}}" style="align-self: flex-start; min-height: 34px; padding: 0 12px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0, 0 1px 2px rgba(15,23,42,0.05); color: #0F172A; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Change PIN</button>
+          <button type="button" onClick="{{editPin}}" style="align-self: flex-start; min-height: 34px; padding: 0 12px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0, 0 1px 2px rgba(15,23,42,0.05); color: #0F172A; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer">{{pinAction}}</button>
         </sc-if>
         <sc-if value="{{pinEditing}}" hint-placeholder-val="{{false}}">
           <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px">
-            <label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 500">Current PIN<input type="password" inputmode="numeric" autocomplete="off" value="123456" style="height: 38px; box-sizing: border-box; padding: 0 10px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; font-family: inherit; font-size: 16px; letter-spacing: 4px"></label>
+            <sc-if value="{{pinSet}}" hint-placeholder-val="{{true}}"><label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 500">Current PIN<input type="password" inputmode="numeric" autocomplete="off" value="123456" style="height: 38px; box-sizing: border-box; padding: 0 10px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; font-family: inherit; font-size: 16px; letter-spacing: 4px"></label></sc-if>
             <label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 500">New PIN<input type="password" inputmode="numeric" autocomplete="off" placeholder="6 digits" style="height: 38px; box-sizing: border-box; padding: 0 10px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; font-family: inherit; font-size: 16px; letter-spacing: 4px"></label>
           </div>
           <div style="display: flex; gap: 8px">
             <button type="button" onClick="{{savePin}}" style="min-height: 34px; padding: 0 12px; background: #0F172A; border: 0; border-radius: 8px; color: #FFFFFF; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer; box-shadow: inset 0 1px 0 rgba(255,255,255,0.12)">Save PIN</button>
-            <button type="button" onClick="{{cancelPin}}" style="min-height: 34px; padding: 0 12px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; color: #0F172A; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Cancel</button>
+            <sc-if value="{{pinSet}}" hint-placeholder-val="{{true}}"><button type="button" onClick="{{cancelPin}}" style="min-height: 34px; padding: 0 12px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; color: #0F172A; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Cancel</button></sc-if>
           </div>
         </sc-if>
       </section>
@@ -134,11 +135,15 @@ input[type=range]:focus{box-shadow:none!important}
         </div>
         <div style="display: flex; gap: 8px">
           <label for="st-proxy-url" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Proxy URL</label>
-          <input id="st-proxy-url" type="text" placeholder="socks5://user:pass@host:port" style="flex: 1; min-width: 0; height: 38px; box-sizing: border-box; padding: 0 10px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; color: #0F172A; font-family: 'Geist Mono', monospace; font-size: 13px">
-          <button type="button" onClick="{{testProxy}}" style="min-height: 38px; padding: 0 12px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0, 0 1px 2px rgba(15,23,42,0.05); color: #0F172A; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Test</button>
+          <input id="st-proxy-url" type="text" value="{{proxy}}" onInput="{{setProxy}}" placeholder="socks5://user:pass@host:port" style="flex: 1; min-width: 0; height: 38px; box-sizing: border-box; padding: 0 10px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; color: #0F172A; font-family: 'Geist Mono', monospace; font-size: 13px">
+          <button type="button" onClick="{{testProxy}}" disabled="{{noProxy}}" style="opacity: {{testOpacity}}; min-height: 38px; padding: 0 12px; background: #FFFFFF; border: 0; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0, 0 1px 2px rgba(15,23,42,0.05); color: #0F172A; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Test</button>
         </div>
         <sc-if value="{{proxyTested}}" hint-placeholder-val="{{false}}">
-          <span style="font-size: 13px; color: #15803D">No proxy set, so browsers go out from this server: Frankfurt, DE · Europe/Berlin · de-DE</span>
+          <div style="display: flex; flex-direction: column; gap: 4px; font-size: 13px">
+            <span style="color: #15803D; font-weight: 500">Works. It exits at <span style="font-family: 'Geist Mono', monospace">198.51.100.23</span>, in DE.</span>
+            <span style="color: #64748B">A browser there runs in Europe/Berlin, in de-DE (de-DE, de, en-US, en). One lookup through the proxy took 312 ms.</span>
+            <span style="color: #64748B">The proxy and this result weren’t saved.</span>
+          </div>
         </sc-if>
         <label style="display: flex; align-items: center; gap: 10px; min-height: 32px; font-size: 14px"><input type="checkbox" checked style="width: 16px; height: 16px; accent-color: #0F172A">Match timezone and language to the proxy’s location</label>
       </section>
@@ -217,12 +222,12 @@ input[type=range]:focus{box-shadow:none!important}
   </sc-if>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+<script type="text/x-dc" data-dc-script data-props='{"noPin":{"editor":"boolean","default":false},"$preview":{"width":1440,"height":1000}}'>
 class Component extends DCLogic {
   constructor(props) {
     super(props);
     this.saved = { ram: 70, policy: 'pin', idle: 15 };
-    this.state = { ...this.saved, pin: 'idle', proxyTested: false, toast: null, theme: 'system', secretShown: true };
+    this.state = { ...this.saved, pin: props.noPin ? 'editing' : 'idle', pinSet: !props.noPin, pinChanged: '12 days ago', proxy: '', proxyTested: false, toast: null, theme: 'system', secretShown: true };
   }
   flash(msg) {
     this.setState({ toast: msg });
@@ -246,9 +251,12 @@ class Component extends DCLogic {
     const dirty = s.ram !== this.saved.ram || s.policy !== this.saved.policy || s.idle !== this.saved.idle;
     return {
       pinIdle: s.pin === 'idle', pinEditing: s.pin === 'editing',
+      pinSet: s.pinSet, noPin: !s.pinSet,
+      pinAction: s.pinSet ? 'Change PIN' : 'Set PIN',
+      pinChanged: 'Set · changed ' + s.pinChanged,
       editPin: () => this.setState({ pin: 'editing' }),
       cancelPin: () => this.setState({ pin: 'idle' }),
-      savePin: () => { this.setState({ pin: 'idle' }); this.flash('Handoff PIN changed'); },
+      savePin: () => { this.setState({ pin: 'idle', pinSet: true, pinChanged: 'just now' }); this.flash('PIN saved'); },
       policies: P.map((p) => ({ ...p, ...seg(p.id === s.policy), on: p.id === s.policy ? 'true' : 'false', pick: () => this.setState({ policy: p.id }) })),
       policyHint: cur.hint,
       ram: s.ram, ramGb, fits: Math.max(0, Math.floor((16 * s.ram / 100 - 7.1) / 0.9)),
@@ -265,8 +273,13 @@ class Component extends DCLogic {
         };
       }),
       themes: [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([id, title]) => ({ title, ...seg(id === s.theme), on: id === s.theme ? 'true' : 'false', pick: () => { this.setState({ theme: id }); this.flash('Appearance saved'); } })),
+      proxy: s.proxy,
       proxyTested: s.proxyTested,
-      testProxy: () => this.setState({ proxyTested: true }),
+      // Test is off while the field is empty, and an edit clears its result.
+      setProxy: (e) => this.setState({ proxy: e.target.value, proxyTested: false }),
+      noProxy: !s.proxy.trim(),
+      testOpacity: s.proxy.trim() ? '1' : '0.5',
+      testProxy: () => { if (s.proxy.trim()) this.setState({ proxyTested: true }); },
       dirty: dirty && !s.toast,
       discard: () => this.setState({ ...this.saved }),
       save: () => { this.saved = { ram: s.ram, policy: s.policy, idle: s.idle }; this.flash('Settings saved'); },

@@ -36,6 +36,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			m.log.Warn("checking the recordings folder", "err", err)
 		}
 	}
+	m.removeProxyTestDir()
 	containers, err := m.rt.List(ctx)
 	if err != nil {
 		return err
@@ -56,6 +57,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	type stop struct {
 		id, why string
 		level   slog.Level
+		reason  StopReason
 	}
 	var outdated []stop
 	type starting struct {
@@ -79,11 +81,14 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			// isn't, and a running one only from the agent's next action.
 			l.record = p.Record
 		}
+		// The run's log was in the BrowserPier before (PROJ-158).
+		l.noteLocked(m.now(), KindSession, restartedNote)
 		switch {
 		case !ok:
 			m.mu.Unlock()
-			m.end(l, "", func(s *Session) {
-				s.State, s.Error, l.how = Failed, "the browser container was gone when BrowserPier restarted", Lost
+			m.end(l, "", func(s *Session) StopReason {
+				s.State, s.Error = Failed, "the browser container was gone when BrowserPier restarted"
+				return endLost
 			})
 			m.mu.Lock()
 			continue
@@ -96,9 +101,9 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			outdatedStarting = append(outdatedStarting, starting{l, c.ID})
 			continue
 		case m.rt.Outdated(c.Spec) && (s.State == Running || s.State == NeedsHelp):
-			outdated = append(outdated, stop{s.ID, "an older BrowserPier started", slog.LevelInfo})
+			outdated = append(outdated, stop{s.ID, "an older BrowserPier started", slog.LevelInfo, stopOutdated})
 		case s.HadFills && (s.State == Running || s.State == NeedsHelp):
-			outdated = append(outdated, stop{s.ID, "had secrets typed into it, which went with the restart", slog.LevelWarn})
+			outdated = append(outdated, stop{s.ID, "had secrets typed into it, which went with the restart", slog.LevelWarn, stopSecrets})
 		case s.State == Running || s.State == NeedsHelp:
 			running = append(running, pickedUp{s.ID, s.Profile})
 		}
@@ -146,7 +151,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		old.Go(func() {
 			ctx, cancel := context.WithTimeout(m.ctx, stopTimeout+30*time.Second)
 			defer cancel()
-			if _, err := m.Stop(ctx, o.id); err != nil {
+			if _, err := m.StopFor(ctx, o.id, o.reason); err != nil {
 				errs[i] = fmt.Errorf("stopping session %s, which %s: %w", o.id, o.why, err)
 			}
 		})

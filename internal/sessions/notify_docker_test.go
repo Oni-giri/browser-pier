@@ -47,7 +47,7 @@ func TestABrowserThatDiesTellsTheWebhook(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go n.Run(ctx)
-	m.OnFailed(func(s Session, how Failure) { n.BrowserFailed(s.Profile, string(how)) })
+	m.OnFailed(func(s Session, how EndReason) { n.BrowserFailed(s.Profile, string(how)) })
 
 	s := startRunning(t, m, name)
 	if out, err := exec.Command("docker", "kill", s.ContainerID).CombinedOutput(); err != nil {

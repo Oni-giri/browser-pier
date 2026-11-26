@@ -46,7 +46,7 @@ func tellFailures(t *testing.T, m *Manager) *failures {
 	if _, err := n.Save(context.Background(), notify.Change{URL: "https://hooks.example.com/x", On: map[notify.Kind]bool{notify.BrowserFailed: true}}); err != nil {
 		t.Fatal(err)
 	}
-	m.OnFailed(func(s Session, how Failure) { n.BrowserFailed(s.Profile, string(how)) })
+	m.OnFailed(func(s Session, how EndReason) { n.BrowserFailed(s.Profile, string(how)) })
 	return c
 }
 

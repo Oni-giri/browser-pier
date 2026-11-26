@@ -29,5 +29,6 @@ coverage.*
 *.swp
 .DS_Store
 
-# A stray go build of images/chromium/entrypoint lands here.
+# A stray go build of images/chromium/entrypoint lands at the root or in its folder.
 /entrypoint
+/images/chromium/entrypoint/entrypoint
