@@ -85,16 +85,30 @@ func TestChromiumArgs(t *testing.T) {
 		"--no-first-run",
 		"--window-position=0,0",
 		"--window-size=1280,768", // above the 32px taskbar
+		// WebGL on llvmpipe (PROJ-148).
+		"--ignore-gpu-blocklist",
+		"--disable-gpu-compositing",
 	} {
 		if !slices.Contains(args, want) {
 			t.Errorf("missing %s", want)
 		}
 	}
 	for _, a := range args {
-		for _, banned := range []string{"--enable-automation", "--headless", "--no-sandbox", "--user-agent"} {
-			if strings.HasPrefix(a, banned) {
+		for _, banned := range []string{"--enable-automation", "--headless", "--no-sandbox", "--user-agent",
+			// No switch that takes the GPU process out of its own process
+			// or drops a sandbox, and WebGL has one renderer, llvmpipe,
+			// with no SwiftShader to fall back on.
+			"--disable-gpu-sandbox", "--in-process-gpu", "--disable-seccomp-filter-sandbox",
+			"--disable-gpu", "--use-gl=swiftshader", "--use-angle=swiftshader", "--enable-unsafe-swiftshader",
+		} {
+			// A switch alone or with a value; --disable-gpu-compositing
+			// isn't --disable-gpu.
+			if a == banned || strings.HasPrefix(a, banned+"=") {
 				t.Errorf("must not pass %s", a)
 			}
+		}
+		if strings.Contains(strings.ToLower(a), "swiftshader") {
+			t.Errorf("must not pass %s: WebGL runs on llvmpipe", a)
 		}
 	}
 	if slices.Contains(args, "--disable-dev-shm-usage") {

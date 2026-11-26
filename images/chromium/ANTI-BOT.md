@@ -21,10 +21,10 @@ Visual mode was driven only through the address bar, clicks and screenshots. API
 
 | Page | Visual mode | API mode |
 |---|---|---|
-| [bot.sannysoft.com](https://bot.sannysoft.com/) | All pass except **WebGL renderer: SwiftShader** | Same |
+| [bot.sannysoft.com](https://bot.sannysoft.com/) | All pass except **WebGL renderer: SwiftShader**; all pass since WebGL moved to llvmpipe (PROJ-148: measured from a residential connection, not this OVH address; see below) | Same |
 | [BrowserScan bot detection](https://www.browserscan.net/bot-detection) | **Normal** (webdriver, user agent, CDP, navigator) | **Normal**: its CDP check doesn't catch Playwright on Chromium 156 |
 | [deviceandbrowserinfo: Are you a bot?](https://deviceandbrowserinfo.com/are_you_a_bot) | **"You are human!"**, every signal false | **"You are a bot!"**: `isAutomatedWithCDP` (main thread and workers) |
-| [CreepJS](https://abrahamjuliot.github.io/creepjs/) | 0% headless, 0% stealth, 50% "like headless"; 44% since PROJ-29's taskbar | Same |
+| [CreepJS](https://abrahamjuliot.github.io/creepjs/) | 0% headless, 0% stealth, 50% "like headless"; 44% since PROJ-29's taskbar, 38% since PROJ-148's llvmpipe (residential connection, not this OVH address; see below) | Same |
 | [nowsecure.nl](https://nowsecure.nl/), [scrapingcourse.com Cloudflare challenge](https://www.scrapingcourse.com/cloudflare-challenge) | Cloudflare's interactive checkbox | Same |
 
 **How to read these:**
@@ -38,7 +38,7 @@ Visual mode was driven only through the address bar, clicks and screenshots. API
 
 None of these is spoofed, by design (SPEC §10). They come from the container:
 
-- **SwiftShader WebGL renderer.** There's no GPU in the container, so WebGL is software-rendered and says so. It's the one red line on sannysoft, and a known server signal. Giving containers the host's GPU would fix it where there is one (PROJ-30).
+- **Software WebGL renderer.** There's no GPU in the container, so WebGL is software-rendered and says so: `ANGLE (Mesa, llvmpipe (LLVM 19.1.7 256 bits), OpenGL 4.5)` since PROJ-148, which is what a Linux desktop or VM without a GPU driver reports. That is no longer SwiftShader, which was the one red line on sannysoft and an item of CreepJS's "like headless", but a detector can still read llvmpipe as "a VM, or no GPU". Giving containers the host's GPU would replace it where there is one (PROJ-30).
 - **A 0×0 window, often, as a page starts.** In both modes, a page's first inline script often sees `outerWidth` and `outerHeight` as 0, which headless browsers report. It reads normally once the page has loaded. A window manager didn't change it (PROJ-29, below). The likely cause, from reading Chromium's source and not verified: a new document's widget hears its window's bounds from the browser only once it's shown, after the commit, while the renderer may already be running the page's first script (`RenderWidgetHostImpl::SendScreenRects` skips hidden widgets). If so, desktop Chrome does the same. PROJ-65 checks both.
 - **No speech voices** (`speechSynthesis.getVoices()` is empty), as on many Linux desktops.
 
@@ -62,7 +62,67 @@ Measured on Chromium 156 with `TestMeasureWindowAtLoad` (`go test -tags 'docker 
 | … Visual, the same tab again | 24 of 30 | 28 of 30 |
 | … API mode, `Page.navigate` | 16 of 30 | 18 of 30 |
 
-So the taskbar hint is gone, and the 0×0 at load is unchanged (see Signals that remain). On CreepJS, in Visual mode on this machine, "like headless" went from 50% to 44%: `noTaskbar` is now false. Of what it still counts, SwiftShader is the container's; the rest (`noWebShare`, `noContentIndex`, `noContactsManager`, `noDownlinkMax`: APIs desktop Linux Chromium doesn't have, and the default light theme) aren't about the container. The rate depends on timing: these runs, on 2026-11-12, shared 6 CPUs with other work, and PROJ-15 saw about a third.
+So the taskbar hint is gone, and the 0×0 at load is unchanged (see Signals that remain). On CreepJS, in Visual mode on this machine, "like headless" went from 50% to 44%: `noTaskbar` is now false. Of what it still counts, SwiftShader was the container's (gone since PROJ-148, below); the rest (`noWebShare`, `noContentIndex`, `noContactsManager`, `noDownlinkMax`: APIs desktop Linux Chromium doesn't have, and the default light theme) aren't about the container. The rate depends on timing: these runs, on 2026-11-12, shared 6 CPUs with other work, and PROJ-15 saw about a third.
+
+## WebGL on llvmpipe (PROJ-148)
+
+WebGL used to run on SwiftShader (`--use-angle=swiftshader --enable-unsafe-swiftshader`), whose renderer string pages read as a headless or server sign. It now runs on **Mesa's llvmpipe**, the renderer of a Linux desktop or VM without a GPU driver. It is still software rendering, and the string says so; it's not spoofed, and there's no fallback.
+
+Measured on 2026-11-17 with Chromium 156.0.8078.79, Debian trixie's Mesa 25.0.7-2+deb13u1 and LLVM 19.1.7, on amd64 only: a 6-vCPU VM on an AMD Ryzen 9 6900HX, under rootless Podman. Both renderers ran on the same host, the same day, through the same **residential** connection (not PROJ-15's OVH datacenter address), with exit-location matching on. The SwiftShader runs used the image before the change, the same Chromium; flags were swapped with a throwaway wrapper during the spike.
+
+**The switches.** `--ignore-gpu-blocklist` alone, with no `--use-angle`, puts WebGL on llvmpipe: ANGLE's default backend on Linux is OpenGL, through Xvfb's GLX (`chrome://gpu`: `GL implementation parts (gl=egl-angle,angle=opengl)`, display type `ANGLE_OPENGL`). No EGL package is needed. Without that switch Chromium blocks llvmpipe: `chrome://gpu` says `WebGL: Disabled`, `getContext('webgl')` returns null, and compositing falls back to software; so that switch is required, and the tests fail with "no WebGL" without it. `--disable-gpu-compositing` keeps page compositing in software (see the cost below); WebGL then reads `Hardware accelerated but at reduced performance` in `chrome://gpu`, and renders as before.
+
+**Packages: none new, and the image is the same size.** `xvfb` already pulls in Mesa's GLX and llvmpipe (`xvfb` → `libgl1` → `libglx0` → `libglx-mesa0` → `mesa-libgallium`, 41 MB, which links `libllvm19`, 124 MB). The Dockerfile now names `libgl1` and `libglx-mesa0`, which Chromium needs, and the build fails if libGL, the Mesa GLX library or the gallium driver is missing, lacks llvmpipe or can't resolve its libraries. That checks the files and their linkage, not an actual load: the image has no GL client to load the driver with at build time (Xvfb reports nothing about GLX as it starts), so the load is checked by the Docker tests' `webgl` subtest. amd64 image: 1,100,647,500 bytes before, 1,100,647,108 after. arm64: not measured here; the dependency chain is the same in Debian.
+
+**The renderer string**, exactly, from `UNMASKED_VENDOR_WEBGL` / `UNMASKED_RENDERER_WEBGL`:
+
+| | Vendor | Renderer |
+|---|---|---|
+| Before (SwiftShader) | `Google Inc. (Google)` | `ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)` |
+| After, amd64 (AVX2) | `Google Inc. (Mesa)` | `ANGLE (Mesa, llvmpipe (LLVM 19.1.7 256 bits), OpenGL 4.5)` |
+| After, arm64 | not run here | expected `… (LLVM 19.1.7 128 bits) …`, unchecked |
+
+What varies: the LLVM version (and Mesa's, in `chrome://gpu`) changes with the image's Debian packages, and the vector width comes from the host CPU (256 bits with AVX2, 128 without it, as with SSE4 or NEON). So the string is the same for every profile on a host and image (`TestWebGLRendererIsStable`), changes once when an image update moves LLVM, and can change when a profile moves to a host with a different CPU. WebGL parameters change with it (`MAX_TEXTURE_SIZE` 16384 instead of 8192, line and point ranges, extension counts), and so do WebGL and canvas hashes, once, at the update.
+
+**WebGL1 and WebGL2** both give a context and draw a triangle that reads back exactly (`51,204,102,255` with `readPixels`), and a WebGL canvas shows on the X display, which screenshots and the live stream read, with or without `--disable-gpu-compositing` (`TestBrowserEnvironment/webgl` and `webgl on screen`).
+
+**Sandbox.** `chrome://sandbox` still says "You are adequately sandboxed" (namespaces and seccomp-BPF). `seccomp.json` and the AppArmor profile are unchanged, and llvmpipe's JIT works under BrowserPier's seccomp profile (the AppArmor profiles weren't checked, see below). The GPU process is in a process of its own (`In-process GPU: false`) and has never crashed in these runs. `chrome://gpu` says `Sandboxed: false` for it, **with SwiftShader too**: its `/proc` status shows only the container's seccomp filter (`Seccomp_filters: 1`), where renderers have Chromium's as well (2). Nothing here changed that; `--gpu-sandbox-start-early` sandboxes it, but GL then fails to start and pages get no WebGL. PROJ-165 looks into it. AppArmor: this rootless Podman has none (it refuses `apparmor=browserpier`; `unconfined` is the same as its default), so only "no AppArmor" ran here; the `browserpier` and Docker-default choices weren't.
+
+**Cost**, `TestMeasureWebGLCost` (`go test -tags 'docker measure' -run TestMeasureWebGLCost -v ./images/chromium/`), a 1280×800 screen, 20-second samples of the container's cgroup (memory as `docker stats` counts it, which the RAM limit uses; CPU in percent of one core). The WebGL page redraws 40 large, blended, full-window triangles a frame; the heavy site is a long Wikipedia article scrolled through Visual mode every half second; "watched" reads the live stream at the same time.
+
+| | SwiftShader | llvmpipe, GPU compositing | llvmpipe, `--disable-gpu-compositing` (chosen) |
+|---|---|---|---|
+| First page loaded, from `docker run` | 1.5–2.0 s | 1.2–1.6 s | 1.6–1.8 s |
+| Idle page: CPU, memory | 7–8%, 238–240 MB | 7–8%, 242–246 MB | 7%, 220–222 MB |
+| WebGL page | 48 fps, 376% CPU, 314–321 MB | 62 fps, 274% CPU, 300 MB | 63 fps, 240–281% CPU, 294–299 MB |
+| WebGL page, watched | 386% CPU, 397–401 MB | 297% CPU, 385 MB | 265–300% CPU, 385–387 MB |
+| Heavy site, scrolled | 83–84% CPU, 390–401 MB | 34–35% CPU, 379–381 MB | 20% CPU, 342–381 MB |
+| Heavy site, watched | 83–85% CPU, 484–487 MB | 47–48% CPU, 472–503 MB | 34–37% CPU, 425–476 MB |
+| GPU process | 120–185 MB, 20–22 threads | 197–252 MB, 25–26 threads | 159–239 MB, 24 threads |
+
+The frame rates here were counted over the 20-second window plus the readings that followed it (a second or more), so they read high: the 63 fps is the 60 fps frame cap. Every column was read the same way, so the comparison holds. The measure now times the window alone (after the PR #79 review).
+
+With 3,000 triangles every core is busy either way: SwiftShader drew 2 frames a second, llvmpipe 4. So llvmpipe draws WebGL faster for less CPU, and the container's memory stays where it was, well inside SPEC §3's 1–2 GB a browser. Compositing pages in software as well cut the CPU of scrolling an ordinary page by about 40% against compositing them through llvmpipe (and by three quarters against SwiftShader, which composited every page), so the image passes `--disable-gpu-compositing` too.
+
+**Threads.** llvmpipe starts one rasteriser thread per CPU the process may run on (6 here; 2 with Chromium pinned to two CPUs), where SwiftShader started 6 whatever the pinning. Pinned to two CPUs, llvmpipe drew the WebGL page at 60 fps for 183% CPU, SwiftShader at 24 fps for 187%; `LP_NUM_THREADS=1` cut llvmpipe to 36 fps and saved 7 MB. The threads sleep unless a page draws WebGL, and a container's CPU limit caps what they can take in total, so `LP_NUM_THREADS` isn't set. It doesn't show in the renderer string; a page sees only `navigator.hardwareConcurrency`, which follows the CPUs and not llvmpipe, and how fast it draws.
+
+**Detection pages**, Visual mode (the address bar through xdotool, screenshots; each page's text read over CDP only after it had shown its results), same connection, before and after:
+
+| Page | SwiftShader | llvmpipe |
+|---|---|---|
+| bot.sannysoft.com | All pass except **WebGL renderer** (it fails anything containing "Swift") | **All pass**, the 19 fingerprint-scanner checks too |
+| CreepJS | 0% headless, 0% stealth, **44% like headless** (`hasSwiftShader: true`); GPU confidence "moderate" | 0% headless, 0% stealth, **38% like headless** (`hasSwiftShader: false`); GPU confidence "high" |
+| BrowserScan bot detection | Normal | Normal |
+| BrowserScan fingerprint | Authenticity 100%, bot detection No | Authenticity 100%, bot detection No |
+| deviceandbrowserinfo: Are you a bot? | "You are human!", every signal false | "You are human!", every signal false, `isWebGLInconsistent` and `hasInconsistentGPUFeatures` included |
+
+What CreepJS still counts in "like headless" is `noWebShare`, `noContentIndex`, `noContactsManager`, `noDownlinkMax` (APIs desktop Linux Chromium doesn't have) and the default light theme (`hasKnownBgColor`, `prefersLightColor`); none comes from the container now. **Decision: go**, on amd64: sannysoft's WebGL line and CreepJS improved, nothing got worse, and it costs less.
+
+**Existing profiles.** `TestLoginSurvivesImageUpgrade` signed in with the 0.2.1 image (SwiftShader), then started that profile, its `GPUCache` folders included, on the new image: it kept the login, WebGL worked on llvmpipe, and the GPU process didn't fail. The renderer, and with it WebGL and canvas hashes, changes once for such a profile.
+
+**Not run here, so unverified:** arm64 (CI builds the arm64 image under emulation, and the build-time library check runs there; no Docker test has run on arm64, so WebGL on llvmpipe there is unchecked, and since there's no fallback, an arm64 failure would mean no WebGL at all: run `TestBrowserEnvironment` and `TestWebGLRendererIsStable` on an arm64 host or the Umbrel before a release ships this), the Umbrel, llvmpipe's JIT under the `browserpier` and Docker-default AppArmor profiles (CI's Docker job, on Docker with AppArmor, covers one of them once the branch runs there), and PROJ-15's OVH datacenter address. The **go** above is for amd64 without AppArmor.
+
+`TestVisualModeLooksLikeAPerson`, `TestPageToolsStayQuiet`, `TestContentStaysQuiet`, the login tests and `TestMeasureWindowAtLoad` (window 1280×768 and `availHeight` 768 in all 70 loads, as in PROJ-29's table) pass unchanged.
 
 ## Continue where you left off (PROJ-112)
 

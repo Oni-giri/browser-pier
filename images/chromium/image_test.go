@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -107,9 +108,10 @@ type browser struct {
 	http    *http.Client
 }
 
-func startBrowser(t *testing.T, image, volume string) *browser {
+// startBrowser runs the image on volume; env adds KEY=VALUE settings.
+func startBrowser(t *testing.T, image, volume string, env ...string) *browser {
 	t.Helper()
-	return startBrowserEnv(t, image, volume)
+	return startBrowserEnv(t, image, volume, env...)
 }
 
 // startBrowserEnv is startBrowser with more environment for the
@@ -125,8 +127,14 @@ func startBrowserEnv(t *testing.T, image, volume string, env ...string) *browser
 		t.Fatal(err)
 	}
 	name := fmt.Sprintf("bp-test-%d", time.Now().UnixNano())
+	// The orchestrator's own confinement (internal/docker's browserConfig):
+	// its seccomp profile, no new privileges, every capability dropped but
+	// the one the sandbox uses, so what these tests see of the sandbox
+	// doesn't depend on the runtime's defaults.
 	run := append([]string{"run", "-d", "--name", name,
-		"--security-opt", "seccomp=" + seccomp},
+		"--security-opt", "seccomp=" + seccomp,
+		"--security-opt", "no-new-privileges",
+		"--cap-drop", "ALL", "--cap-add", "SYS_CHROOT"},
 		appArmor(t, image, seccomp)...)
 	run = append(run,
 		"--shm-size=1g",
@@ -286,6 +294,64 @@ func TestLoginSurvivesStopStartAndRebuild(t *testing.T) {
 		t.Fatalf("after rebuild the site saw session %q, want %q", got, token)
 	}
 	b.stop()
+}
+
+// TestLoginSurvivesImageUpgrade: a profile made by an older image, with its
+// GPU caches, starts cleanly on this one and keeps its login. It needs the
+// older image, named by BROWSERPIER_TEST_OLD_IMAGE (0.2.1 for PROJ-148,
+// whose WebGL renderer moved from SwiftShader to llvmpipe). CI doesn't set
+// it: run it by hand when the image changes (CONTRIBUTING.md).
+func TestLoginSurvivesImageUpgrade(t *testing.T) {
+	image := testImage(t)
+	old := os.Getenv("BROWSERPIER_TEST_OLD_IMAGE")
+	if old == "" {
+		t.Skip("BROWSERPIER_TEST_OLD_IMAGE not set")
+	}
+	s := browsertest.NewSite(t, browsertest.SiteHost(t))
+	vol := newVolume(t)
+
+	b := startBrowser(t, old, vol)
+	p := b.page()
+	token := s.Login(t, p)
+	p.Navigate("about:blank")
+	before := readWebGL(t, p)["webgl"]
+	p.Close()
+	if code := b.stop(); code != "0" {
+		t.Fatalf("exit code after stop = %s, want 0\n%s", code, b.logs())
+	}
+	if before == nil {
+		t.Fatalf("no WebGL on %s: the old profile has no renderer state to carry over", old)
+	}
+	// The old renderer left shader caches for the new one to find: looked
+	// at before the new browser starts, which would create the folder itself.
+	if out := docker(t, "run", "--rm", "--network", "none", "-v", vol+":/profile:ro", "--entrypoint", "sh", image,
+		"-c", "find /profile/GPUCache /profile/Default/GPUCache -type f 2>/dev/null | head -n 1"); out == "" {
+		t.Fatal("no GPUCache files in the old profile: the test isn't checking what it should")
+	}
+
+	b = startBrowser(t, image, vol)
+	p = b.page()
+	if got := s.Account(t, p); got != token {
+		t.Fatalf("on the new image the site saw session %q, want %q", got, token)
+	}
+	p.Navigate("about:blank")
+	after := readWebGL(t, p)
+	p.Close()
+	if code := b.stop(); code != "0" {
+		t.Fatalf("exit code after stop = %s, want 0\n%s", code, b.logs())
+	}
+	checkGPUProcess(t, b.logs())
+	for _, kind := range []string{"webgl", "webgl2"} {
+		w := after[kind]
+		if w == nil {
+			t.Fatalf("no %s on the new image: %v", kind, after)
+		}
+		if !strings.Contains(w.Renderer, "llvmpipe") || w.Pixel != triangleRGBA {
+			t.Errorf("%s on the new image: renderer %q, pixel %s, want llvmpipe drawing %s", kind, w.Renderer, w.Pixel, triangleRGBA)
+		}
+	}
+	t.Logf("renderer on %s: %s / %s", old, before.Vendor, before.Renderer)
+	t.Logf("renderer on %s: %s / %s", image, after["webgl"].Vendor, after["webgl"].Renderer)
 }
 
 // TestKillLosesFreshLogin is the negative control for the test above: without
@@ -464,14 +530,23 @@ func TestBrowserEnvironment(t *testing.T) {
 		}
 	})
 	t.Run("webgl", func(t *testing.T) {
-		v := p.Eval(`(() => { const gl = document.createElement('canvas').getContext('webgl');
-			if (!gl) return null;
-			const d = gl.getExtension('WEBGL_debug_renderer_info');
-			return d ? gl.getParameter(d.UNMASKED_RENDERER_WEBGL) : 'unknown'; })()`)
-		if v == nil {
-			t.Fatal("no WebGL context")
+		// WebGL and WebGL2 both render on llvmpipe, and draw (PROJ-148).
+		for kind, gl := range readWebGL(t, p) {
+			if gl == nil {
+				t.Errorf("no %s context", kind)
+				continue
+			}
+			t.Logf("%s: %s / %s", kind, gl.Vendor, gl.Renderer)
+			if !strings.Contains(gl.Renderer, "llvmpipe") {
+				t.Errorf("%s renders on %q, want llvmpipe", kind, gl.Renderer)
+			}
+			if strings.Contains(strings.ToLower(gl.Vendor+gl.Renderer), "swiftshader") {
+				t.Errorf("%s is on SwiftShader: %s / %s", kind, gl.Vendor, gl.Renderer)
+			}
+			if gl.Pixel != triangleRGBA {
+				t.Errorf("%s drew a triangle that reads back as %s, want %s", kind, gl.Pixel, triangleRGBA)
+			}
 		}
-		t.Logf("WebGL renderer: %v", v)
 	})
 	t.Run("webrtc sends no unproxied udp", func(t *testing.T) {
 		// With no proxy, disable_non_proxied_udp leaves WebRTC no UDP candidates at all.
@@ -512,6 +587,82 @@ func TestBrowserEnvironment(t *testing.T) {
 		if out := docker(t, "exec", b.name, "xdotool", "getmouselocation"); !strings.HasPrefix(out, "x:40 y:50 ") {
 			t.Fatalf("mouse at %q, want x:40 y:50", out)
 		}
+	})
+	t.Run("gpu", func(t *testing.T) {
+		p.Navigate("chrome://gpu/")
+		var text string
+		deadline := time.Now().Add(10 * time.Second)
+		for !strings.Contains(text, "GPU process crash count") {
+			if time.Now().After(deadline) {
+				t.Fatalf("chrome://gpu has no driver information:\n%s", text)
+			}
+			time.Sleep(200 * time.Millisecond)
+			text, _ = p.Eval(deepText).(string)
+		}
+		row := func(name string) (string, bool) {
+			m := regexp.MustCompile(`(?m)^\s*\*?\s*` + regexp.QuoteMeta(name) + `\s*:\s*(.*?)\s*$`).FindStringSubmatch(text)
+			if m == nil {
+				return "", false
+			}
+			return m[1], true
+		}
+		line := func(name string) string { v, _ := row(name); return v }
+		// With software compositing Chromium says "Hardware accelerated but
+		// at reduced performance"; blocked, it says "Disabled" or "Software
+		// only, hardware acceleration unavailable".
+		if w := line("WebGL"); !strings.HasPrefix(w, "Hardware accelerated") {
+			t.Errorf("chrome://gpu says WebGL: %q", w)
+		}
+		// Chromium 156's report has no WebGL2 row (WebGL's covers both);
+		// the webgl subtest checks a webgl2 context draws. If a WebGL2 row
+		// comes back, it must say the same.
+		if w, ok := row("WebGL2"); ok && !strings.HasPrefix(w, "Hardware accelerated") {
+			t.Errorf("chrome://gpu says WebGL2: %q", w)
+		}
+		if g := line("GL implementation parts"); g != "(gl=egl-angle,angle=opengl)" {
+			t.Errorf("GL implementation parts %q, want ANGLE's OpenGL backend", g)
+		}
+		if g := line("In-process GPU"); g != "false" {
+			t.Errorf("In-process GPU: %q, want a GPU process of its own", g)
+		}
+		if g := line("GPU process crash count"); g != "0" {
+			t.Errorf("GPU process crash count: %q", g)
+		}
+		// Chromium 156 here reports its GPU process unsandboxed whether
+		// WebGL is on SwiftShader or llvmpipe: it has the container's
+		// seccomp filter but not Chromium's own (ANTI-BOT.md, PROJ-165).
+		// Pinned, so a change either way is noticed.
+		switch sb := line("Sandboxed"); sb {
+		case "false":
+			t.Log("GPU process: Sandboxed false, as before PROJ-148 (PROJ-165)")
+		case "true":
+			t.Error("chrome://gpu now says the GPU process is sandboxed: tighten this test to require it (PROJ-165)")
+		default:
+			t.Errorf("chrome://gpu's Sandboxed line is %q; has the report changed?", sb)
+		}
+		// What it does have: a process of its own, no new privileges, and
+		// at least the container's seccomp filter.
+		status := docker(t, "exec", b.name, "sh", "-c", `for d in /proc/[0-9]*; do
+			case $(tr '\0' ' ' < $d/cmdline 2>/dev/null) in /usr/lib/chromium/*--type=gpu-process*)
+				grep -aE '^(NoNewPrivs|Seccomp|Seccomp_filters):' $d/status;; esac; done`)
+		field := func(name string) int {
+			m := regexp.MustCompile(`(?m)^` + name + `:\s*(\d+)`).FindStringSubmatch(status)
+			if m == nil {
+				return -1
+			}
+			n, _ := strconv.Atoi(m[1])
+			return n
+		}
+		if field("NoNewPrivs") != 1 || field("Seccomp") != 2 || field("Seccomp_filters") < 1 {
+			t.Errorf("the GPU process isn't under a seccomp filter with no new privileges:\n%s", status)
+		}
+		t.Logf("GPU process: %s", strings.Join(strings.Fields(status), " "))
+	})
+	// A canvas drawn with WebGL shows on the X display, which screenshots
+	// and the live stream read, and isn't black or empty there.
+	t.Run("webgl on screen", func(t *testing.T) {
+		p.Navigate(trianglePage)
+		b.onScreen(t, 640, pageTop(t, p)+200, color.RGBA{0x33, 0xcc, 0x66, 0xff})
 	})
 	// Test pages paint their targets blue, so a test can see they're on screen.
 	blue := color.RGBA{0x2f, 0x6b, 0xff, 0xff}
@@ -673,6 +824,134 @@ func TestBrowserEnvironment(t *testing.T) {
 	}
 	if logs := b.logs(); bytes.Contains([]byte(logs), []byte("No usable sandbox")) {
 		t.Fatalf("Chromium had no sandbox:\n%s", logs)
+	}
+	checkGPUProcess(t, b.logs())
+}
+
+// checkGPUProcess fails if the GPU process failed to start or crashed: then
+// Chromium starts it again and again, and falls back to no WebGL.
+func checkGPUProcess(t *testing.T, logs string) {
+	t.Helper()
+	for _, bad := range []string{"Exiting GPU process due to errors during initialization", "GPU process exited unexpectedly", "GPU process isn't usable"} {
+		if strings.Contains(logs, bad) {
+			t.Fatalf("the GPU process failed (%s):\n%s", bad, logs)
+		}
+	}
+}
+
+// triangleRGBA is the colour readWebGL's triangle and trianglePage draw,
+// (0.2, 0.8, 0.4) as bytes.
+const triangleRGBA = "51,204,102,255"
+
+// webGLInfo is what a page reads from one kind of WebGL context.
+type webGLInfo struct {
+	Vendor, Renderer string
+	// Pixel is the middle of a triangle drawn over the whole canvas, read
+	// back with readPixels as "R,G,B,A".
+	Pixel string
+}
+
+// readWebGL reads the unmasked vendor and renderer of a webgl and a webgl2
+// context, and has each draw a triangle and read it back. A kind with no
+// context maps to nil.
+func readWebGL(t *testing.T, p *browsertest.CDP) map[string]*webGLInfo {
+	t.Helper()
+	v, _ := p.Eval(`(() => {
+		const out = {};
+		for (const kind of ['webgl', 'webgl2']) {
+			const c = document.createElement('canvas'); c.width = c.height = 64;
+			const gl = c.getContext(kind);
+			if (!gl) { out[kind] = null; continue; }
+			const d = gl.getExtension('WEBGL_debug_renderer_info');
+			const v2 = kind === 'webgl2';
+			const vs = v2 ? '#version 300 es\nin vec2 p; void main() { gl_Position = vec4(p, 0.0, 1.0); }'
+				: 'attribute vec2 p; void main() { gl_Position = vec4(p, 0.0, 1.0); }';
+			const fs = v2 ? '#version 300 es\nprecision mediump float; out vec4 o; void main() { o = vec4(0.2, 0.8, 0.4, 1.0); }'
+				: 'precision mediump float; void main() { gl_FragColor = vec4(0.2, 0.8, 0.4, 1.0); }';
+			const prog = gl.createProgram();
+			for (const [type, src] of [[gl.VERTEX_SHADER, vs], [gl.FRAGMENT_SHADER, fs]]) {
+				const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); gl.attachShader(prog, s);
+			}
+			gl.linkProgram(prog); gl.useProgram(prog);
+			gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+			gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+			const loc = gl.getAttribLocation(prog, 'p');
+			gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+			gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT); gl.drawArrays(gl.TRIANGLES, 0, 3);
+			const px = new Uint8Array(4); gl.readPixels(32, 32, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+			out[kind] = { vendor: d ? gl.getParameter(d.UNMASKED_VENDOR_WEBGL) : '',
+				renderer: d ? gl.getParameter(d.UNMASKED_RENDERER_WEBGL) : '', pixel: Array.from(px).join(',') };
+		}
+		return JSON.stringify(out);
+	})()`).(string)
+	var out map[string]*webGLInfo
+	if err := json.Unmarshal([]byte(v), &out); err != nil || len(out) != 2 {
+		t.Fatalf("reading WebGL: %q: %v", v, err)
+	}
+	return out
+}
+
+// trianglePage fills the window with a canvas and draws readWebGL's
+// triangle on it with WebGL, covering the whole canvas.
+const trianglePage = `data:text/html,<body style="margin:0"><canvas id="c" style="display:block;width:100vw;height:100vh"></canvas><script>` +
+	`const c = document.getElementById('c'); c.width = innerWidth; c.height = innerHeight; const gl = c.getContext('webgl');` +
+	`const sh = (t, s) => { const x = gl.createShader(t); gl.shaderSource(x, s); gl.compileShader(x); return x; };` +
+	`const p = gl.createProgram(); gl.attachShader(p, sh(gl.VERTEX_SHADER, 'attribute vec2 a; void main() { gl_Position = vec4(a, 0.0, 1.0); }'));` +
+	`gl.attachShader(p, sh(gl.FRAGMENT_SHADER, 'precision mediump float; void main() { gl_FragColor = vec4(0.2, 0.8, 0.4, 1.0); }'));` +
+	`gl.linkProgram(p); gl.useProgram(p); gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());` +
+	`gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);` +
+	`gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);` +
+	`gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT); gl.drawArrays(gl.TRIANGLES, 0, 3);</script>`
+
+// deepText is a page's text, shadow roots included (chrome://gpu keeps
+// its report in one), a block per line.
+const deepText = `(() => { const walk = n => { let s = ''; if (n.shadowRoot) s += walk(n.shadowRoot);
+	for (const c of n.childNodes) {
+		if (c.nodeType === 3) s += c.textContent;
+		else if (c.nodeType === 1 && !/^(STYLE|SCRIPT)$/.test(c.tagName) || c.nodeType === 11) { s += walk(c); if (c.nodeType === 1 && /^(DIV|LI|TR|P|H\d)$/.test(c.tagName)) s += '\n'; }
+	}
+	return s; }; return walk(document.body); })()`
+
+// pageTop is the height of the browser's UI above the page.
+func pageTop(t *testing.T, p *browsertest.CDP) int {
+	t.Helper()
+	h, _ := p.Eval("window.outerHeight - window.innerHeight").(float64)
+	return int(h)
+}
+
+// TestWebGLRendererIsStable: a profile sees the same WebGL renderer each
+// time it starts, and so does every profile on the same host and image
+// (PROJ-148). There's one renderer and no fallback to change to.
+func TestWebGLRendererIsStable(t *testing.T) {
+	image := testImage(t)
+	vol := newVolume(t)
+	read := func(volume string) string {
+		t.Helper()
+		b := startBrowser(t, image, volume)
+		p := b.page()
+		p.Navigate("about:blank")
+		gl := readWebGL(t, p)
+		p.Close()
+		if code := b.stop(); code != "0" {
+			t.Fatalf("exit code after stop = %s, want 0\n%s", code, b.logs())
+		}
+		checkGPUProcess(t, b.logs())
+		if gl["webgl"] == nil || gl["webgl2"] == nil {
+			t.Fatalf("no WebGL: %v", gl)
+		}
+		r := gl["webgl"].Vendor + " / " + gl["webgl"].Renderer
+		if r2 := gl["webgl2"].Vendor + " / " + gl["webgl2"].Renderer; r2 != r {
+			t.Errorf("webgl says %q, webgl2 %q", r, r2)
+		}
+		return r
+	}
+	first := read(vol)
+	t.Logf("renderer: %s", first)
+	if again := read(vol); again != first {
+		t.Errorf("after a restart the profile's renderer is %q, was %q", again, first)
+	}
+	if other := read(newVolume(t)); other != first {
+		t.Errorf("another profile's renderer is %q, the first's %q", other, first)
 	}
 }
 
