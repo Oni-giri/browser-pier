@@ -177,6 +177,10 @@ func validAutoStop(d time.Duration) bool {
 	return false
 }
 
+// ValidProxy checks a proxy URL or template by the rules a profile's is
+// saved with. Its errors never echo the URL.
+func ValidProxy(raw string) error { return validProxy(raw) }
+
 // validProxy checks the proxy URL or template without ever echoing it,
 // since it may hold a password. A template is checked filled in with a
 // sample token, so what the browser gets passes the same rules.

@@ -49,6 +49,27 @@ func guardClient(t *testing.T, podman bool, plan appArmorPlan) *Client {
 	return c
 }
 
+// goldenProxyTest is the proxy test's spec under c's host data dir, as
+// sessions.Manager.TestProxy makes it.
+func goldenProxyTest(c *Client) ProxyTestSpec {
+	return ProxyTestSpec{Dir: filepath.Join(c.hostDataDir, "proxytest"), GeoURL: "https://ipinfo.io/json"}
+}
+
+// allKinds are the kinds of container BrowserPier creates.
+var allKinds = []createKind{kindBrowser, kindSandboxCheck, kindProxyTest}
+
+// bodyOf is a valid body of kind under the AppArmor option opt, made by
+// the real builder.
+func bodyOf(c *Client, kind createKind, opt string) client.ContainerCreateOptions {
+	switch kind {
+	case kindSandboxCheck:
+		return c.sandboxCheckOptions(opt)
+	case kindProxyTest:
+		return c.proxyTestOptions(opt, goldenProxyTest(c))
+	}
+	return c.browserCreateOptions(opt, goldenSpec())
+}
+
 func TestGuardAcceptsWhatTheBuildersMake(t *testing.T) {
 	for _, podman := range []bool{false, true} {
 		for _, p := range guardPlans {
@@ -59,6 +80,9 @@ func TestGuardAcceptsWhatTheBuildersMake(t *testing.T) {
 				}
 				if err := c.checkCreate(kindSandboxCheck, c.sandboxCheckOptions(opt)); err != nil {
 					t.Errorf("podman %t, plan %s, %q: check refused: %v", podman, p.name, opt, err)
+				}
+				if err := c.checkCreate(kindProxyTest, c.proxyTestOptions(opt, goldenProxyTest(c))); err != nil {
+					t.Errorf("podman %t, plan %s, %q: proxy test refused: %v", podman, p.name, opt, err)
 				}
 			}
 		}
@@ -84,6 +108,9 @@ func TestGuardAcceptsWhatTheBuildersMake(t *testing.T) {
 	spec.ProfileDir, spec.ControlDir, spec.FilesDir = filepath.Join(dir, "profiles/google/chrome"), filepath.Join(dir, "profiles/google/run"), filepath.Join(dir, "profiles/google/files")
 	if err := c.checkCreate(kindBrowser, c.browserCreateOptions("", spec)); err != nil {
 		t.Errorf("under a temp dir: %v", err)
+	}
+	if err := c.checkCreate(kindProxyTest, c.proxyTestOptions("", goldenProxyTest(c))); err != nil {
+		t.Errorf("the proxy test under a temp dir: %v", err)
 	}
 }
 
@@ -168,6 +195,21 @@ var (
 	tr          = true
 	other       = 31
 )
+
+func pidsOf(n int64) *int64 { return &n }
+
+// proxyLimits gives h the proxy test's limits.
+func proxyLimits(h *container.HostConfig) {
+	h.Memory, h.MemorySwap, h.PidsLimit = ProxyTestMemory, ProxyTestMemory, pidsOf(ProxyTestPids)
+}
+
+// browserMounts are a browser's three folders, as the proxy test must
+// never get them.
+var browserMounts = []mount.Mount{
+	{Type: mount.TypeBind, Source: "/srv/bp/profiles/google/chrome", Target: "/profile"},
+	{Type: mount.TypeBind, Source: "/srv/bp/profiles/google/run", Target: "/run/browserpier"},
+	{Type: mount.TypeBind, Source: "/srv/bp/profiles/google/files", Target: "/files"},
+}
 
 var widenings = []widening{
 	{name: "another image", mutate: cfgOf(func(c *container.Config) { c.Image = "evil/chromium:latest" }), field: "Config.Image"},
@@ -299,16 +341,97 @@ var widenings = []widening{
 		h.Mounts = []mount.Mount{{Type: mount.TypeBind, Source: "/srv/bp/profiles/google/chrome", Target: "/profile"}}
 	}), field: "HostConfig.Mounts"},
 	{name: "a network for the check", kind: kindSandboxCheck, mutate: hostOf(func(h *container.HostConfig) { h.NetworkMode = "" }), field: "HostConfig.NetworkMode"},
+	// Limits belong to the proxy test alone.
+	{name: "MemorySwap on a browser", mutate: hostOf(func(h *container.HostConfig) { h.MemorySwap = 1 << 30 }), field: "HostConfig.MemorySwap"},
+	{name: "PidsLimit on a browser", mutate: hostOf(func(h *container.HostConfig) { h.PidsLimit = pidsOf(64) }), field: "HostConfig.PidsLimit"},
+	{name: "the proxy test's limits on a browser", mutate: hostOf(proxyLimits), field: "HostConfig.Memory"},
+	{name: "Memory on the check", kind: kindSandboxCheck, mutate: hostOf(func(h *container.HostConfig) { h.Memory = 128 << 20 }), field: "HostConfig.Memory"},
+	{name: "PidsLimit on the check", kind: kindSandboxCheck, mutate: hostOf(func(h *container.HostConfig) { h.PidsLimit = pidsOf(64) }), field: "HostConfig.PidsLimit"},
+	{name: "the check's CapAdd emptied", kind: kindSandboxCheck, mutate: hostOf(func(h *container.HostConfig) { h.CapAdd = nil }), field: "HostConfig.CapAdd"},
+	{name: "the check's CapAdd widened", kind: kindSandboxCheck, mutate: hostOf(func(h *container.HostConfig) { h.CapAdd = append(h.CapAdd, "NET_ADMIN") }), field: "HostConfig.CapAdd"},
+
+	// The proxy test (PROJ-154).
+	{name: "another image on the proxy test", kind: kindProxyTest, mutate: cfgOf(func(c *container.Config) { c.Image = "evil/chromium:latest" }), field: "Config.Image"},
+	{name: "root on the proxy test", kind: kindProxyTest, mutate: cfgOf(func(c *container.Config) { c.User = "0:0" }), field: "Config.User"},
+	{name: "UsernsMode host on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.UsernsMode = "host" }), field: "HostConfig.UsernsMode"},
+	{name: "CapDrop emptied on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.CapDrop = nil }), field: "HostConfig.CapDrop"},
+	{name: "SYS_CHROOT on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.CapAdd = []string{"SYS_CHROOT"} }), field: "HostConfig.CapAdd"},
+	{name: "an empty CapAdd on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.CapAdd = []string{} }), field: "HostConfig.CapAdd"},
+	{name: "no seccomp on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) {
+		h.SecurityOpt = replaceOpt(h.SecurityOpt, "seccomp=", "")
+	}), field: "HostConfig.SecurityOpt"},
+	{name: "no no-new-privileges on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) {
+		h.SecurityOpt = replaceOpt(h.SecurityOpt, "no-new-privileges", "")
+	}), field: "HostConfig.SecurityOpt"},
+	{name: "Init true on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.Init = &tr }), field: "HostConfig.Init"},
+	{name: "Privileged on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.Privileged = true }), field: "HostConfig.Privileged"},
+	{name: "PortBindings on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) {
+		h.PortBindings = network.PortMap{network.MustParsePort("9222/tcp"): {{HostPort: "9222"}}}
+	}), field: "HostConfig.PortBindings"},
+	{name: "managed, as a browser", kind: kindProxyTest, mutate: cfgOf(func(c *container.Config) { c.Labels[LabelManaged] = "true" }), field: "Config.Labels"},
+	{name: "the proxy test unlabelled", kind: kindProxyTest, mutate: cfgOf(func(c *container.Config) { delete(c.Labels, LabelProxyTest) }), field: "Config.Labels"},
+	{name: "the proxy test label false", kind: kindProxyTest, mutate: cfgOf(func(c *container.Config) { c.Labels[LabelProxyTest] = "false" }), field: "Config.Labels"},
+	{name: "another instance on the proxy test", kind: kindProxyTest, mutate: cfgOf(func(c *container.Config) { c.Labels[LabelInstance] = "i2" }), field: "Config.Labels"},
+	{name: "the check's labels on the proxy test", kind: kindProxyTest, mutate: cfgOf(func(c *container.Config) {
+		c.Labels = map[string]string{LabelCheck: "true", LabelInstance: "i1"}
+	}), field: "Config.Labels"},
+	{name: "a browser's name on the proxy test", kind: kindProxyTest, mutate: func(o *client.ContainerCreateOptions) { o.Name = "browserpier-google" }, field: "ContainerCreateOptions.Name"},
+	{name: "the check's name on the proxy test", kind: kindProxyTest, mutate: func(o *client.ContainerCreateOptions) { o.Name = "browserpier_check_i1" }, field: "ContainerCreateOptions.Name"},
+	{name: "no environment on the proxy test", kind: kindProxyTest, mutate: cfgOf(func(c *container.Config) { c.Env = nil }), field: "Config.Env"},
+	{name: "a second variable on the proxy test", kind: kindProxyTest, mutate: cfgOf(func(c *container.Config) { c.Env = append(c.Env, "BROWSERPIER_SCREEN=1x1") }), field: "Config.Env"},
+	{name: "the endpoint twice on the proxy test", kind: kindProxyTest, mutate: cfgOf(func(c *container.Config) { c.Env = append(c.Env, c.Env[0]) }), field: "Config.Env"},
+	{name: "the proxy in the environment", kind: kindProxyTest, mutate: cfgOf(func(c *container.Config) {
+		c.Env = []string{"HTTPS_PROXY=http://user:pw@evil.example:8080"}
+	}), field: "Config.Env"},
+	{name: "a browser variable in place of the endpoint", kind: kindProxyTest, mutate: cfgOf(func(c *container.Config) { c.Env = []string{"BROWSERPIER_GEO_TZ=Europe/Paris"} }), field: "Config.Env"},
+	{name: "an empty endpoint", kind: kindProxyTest, mutate: cfgOf(func(c *container.Config) { c.Env = []string{"BROWSERPIER_GEOIP_URL="} }), field: "Config.Env"},
+	{name: "no equals sign on the proxy test", kind: kindProxyTest, mutate: cfgOf(func(c *container.Config) { c.Env = []string{"BROWSERPIER_GEOIP_URL"} }), field: "Config.Env"},
+	{name: "a newline in the endpoint", kind: kindProxyTest, mutate: func(o *client.ContainerCreateOptions) {
+		setEnv(o, "BROWSERPIER_GEOIP_URL", "https://ipinfo.io/json\nBROWSERPIER_SCREEN=1x1")
+	}, field: "Config.Env"},
+	{name: "a CR in the endpoint", kind: kindProxyTest, mutate: func(o *client.ContainerCreateOptions) { setEnv(o, "BROWSERPIER_GEOIP_URL", "https://ipinfo.io/json\r") }, field: "Config.Env"},
+	{name: "a NUL in the endpoint", kind: kindProxyTest, mutate: func(o *client.ContainerCreateOptions) {
+		setEnv(o, "BROWSERPIER_GEOIP_URL", "https://ipinfo.io/json\x00")
+	}, field: "Config.Env"},
+	{name: "no Cmd on the proxy test", kind: kindProxyTest, mutate: cfgOf(func(c *container.Config) { c.Cmd = nil }), field: "Config.Cmd"},
+	{name: "the sandbox check's Cmd on the proxy test", kind: kindProxyTest, mutate: cfgOf(func(c *container.Config) { c.Cmd = []string{"sandbox-check"} }), field: "Config.Cmd"},
+	{name: "an argument after proxy-check", kind: kindProxyTest, mutate: cfgOf(func(c *container.Config) { c.Cmd = append(c.Cmd, "--debug") }), field: "Config.Cmd"},
+	{name: "Entrypoint on the proxy test", kind: kindProxyTest, mutate: cfgOf(func(c *container.Config) { c.Entrypoint = []string{"/bin/sh"} }), field: "Config.Entrypoint"},
+	{name: "StopTimeout on the proxy test", kind: kindProxyTest, mutate: cfgOf(func(c *container.Config) { c.StopTimeout = &other }), field: "Config.StopTimeout"},
+	{name: "NetworkMode none on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.NetworkMode = "none" }), field: "HostConfig.NetworkMode"},
+	{name: "NetworkMode host on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.NetworkMode = "host" }), field: "HostConfig.NetworkMode"},
+	{name: "ShmSize on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.ShmSize = 1 << 30 }), field: "HostConfig.ShmSize"},
+	{name: "no memory limit on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.Memory = 0 }), field: "HostConfig.Memory"},
+	{name: "more memory on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.Memory, h.MemorySwap = 1<<30, 1<<30 }), field: "HostConfig.Memory"},
+	{name: "swap on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.MemorySwap = 2 * ProxyTestMemory }), field: "HostConfig.MemorySwap"},
+	{name: "unlimited swap on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.MemorySwap = -1 }), field: "HostConfig.MemorySwap"},
+	{name: "no MemorySwap on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.MemorySwap = 0 }), field: "HostConfig.MemorySwap"},
+	{name: "no pids limit on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.PidsLimit = nil }), field: "HostConfig.PidsLimit"},
+	{name: "more pids on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.PidsLimit = pidsOf(65) }), field: "HostConfig.PidsLimit"},
+	{name: "unlimited pids on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.PidsLimit = pidsOf(-1) }), field: "HostConfig.PidsLimit"},
+	{name: "another Resources field on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.NanoCPUs = 1 }), field: "HostConfig.NanoCPUs"},
+	{name: "no mount on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.Mounts = nil }), field: "HostConfig.Mounts"},
+	{name: "a browser's mounts on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) {
+		h.Mounts = slices.Clone(browserMounts)
+	}), field: "HostConfig.Mounts"},
+	{name: "a second mount on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) {
+		h.Mounts = append(h.Mounts, mount.Mount{Type: mount.TypeBind, Source: "/srv/bp/proxytest", Target: "/files"})
+	}), field: "HostConfig.Mounts"},
+	{name: "a profile's run folder on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.Mounts[0].Source = "/srv/bp/profiles/google/run" }), field: "HostConfig.Mounts[0].Source"},
+	{name: "the data dir on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.Mounts[0].Source = "/srv/bp" }), field: "HostConfig.Mounts[0].Source"},
+	{name: "a .. out of the proxy test's folder", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.Mounts[0].Source = "/srv/bp/proxytest/../profiles" }), field: "HostConfig.Mounts[0].Source"},
+	{name: "the Docker socket on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.Mounts[0].Source = "/var/run/docker.sock" }), field: "HostConfig.Mounts[0].Source"},
+	{name: "the proxy test's folder at /profile", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.Mounts[0].Target = "/profile" }), field: "HostConfig.Mounts[0].Target"},
+	{name: "a volume on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.Mounts[0].Type = mount.TypeVolume }), field: "HostConfig.Mounts[0].Type"},
+	{name: "read-only on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.Mounts[0].ReadOnly = true }), field: "HostConfig.Mounts[0].ReadOnly"},
+	{name: "Binds on the proxy test", kind: kindProxyTest, mutate: hostOf(func(h *container.HostConfig) { h.Binds = []string{"/:/host"} }), field: "HostConfig.Binds"},
 	{name: "Config unset", mutate: func(o *client.ContainerCreateOptions) { o.Config = nil }, field: "Config"},
 	{name: "HostConfig unset", mutate: func(o *client.ContainerCreateOptions) { o.HostConfig = nil }, field: "HostConfig"},
 }
 
 // body builds a fresh valid body of kind with the real builders.
 func (w widening) body(c *Client) client.ContainerCreateOptions {
-	if w.kind == kindSandboxCheck {
-		return c.sandboxCheckOptions(w.opt)
-	}
-	return c.browserCreateOptions(w.opt, goldenSpec())
+	return bodyOf(c, w.kind, w.opt)
 }
 
 func (w widening) client(t *testing.T) (*Client, createKind) {
@@ -389,7 +512,7 @@ func TestGuardRefusesAnyUnnamedField(t *testing.T) {
 		kinds  []createKind
 		get    func(o *client.ContainerCreateOptions) reflect.Value
 	}
-	both := []createKind{kindBrowser, kindSandboxCheck}
+	both := allKinds
 	targets := []target{
 		{reflect.TypeFor[client.ContainerCreateOptions](), "ContainerCreateOptions", both, func(o *client.ContainerCreateOptions) reflect.Value { return reflect.ValueOf(o).Elem() }},
 		{reflect.TypeFor[container.Config](), "Config", both, func(o *client.ContainerCreateOptions) reflect.Value { return reflect.ValueOf(o.Config).Elem() }},
@@ -397,7 +520,7 @@ func TestGuardRefusesAnyUnnamedField(t *testing.T) {
 		{reflect.TypeFor[container.Resources](), "HostConfig", both, func(o *client.ContainerCreateOptions) reflect.Value {
 			return reflect.ValueOf(&o.HostConfig.Resources).Elem()
 		}},
-		{reflect.TypeFor[mount.Mount](), "HostConfig.Mounts[0]", []createKind{kindBrowser}, func(o *client.ContainerCreateOptions) reflect.Value {
+		{reflect.TypeFor[mount.Mount](), "HostConfig.Mounts[0]", []createKind{kindBrowser, kindProxyTest}, func(o *client.ContainerCreateOptions) reflect.Value {
 			return reflect.ValueOf(&o.HostConfig.Mounts[0]).Elem()
 		}},
 	}
@@ -410,10 +533,7 @@ func TestGuardRefusesAnyUnnamedField(t *testing.T) {
 				continue // checked by value, or walked as Resources
 			}
 			for _, kind := range tg.kinds {
-				o := c.browserCreateOptions("", goldenSpec())
-				if kind == kindSandboxCheck {
-					o = c.sandboxCheckOptions("")
-				}
+				o := bodyOf(c, kind, "")
 				fv := tg.get(&o).Field(i)
 				if !fv.CanSet() || !fill(fv) {
 					t.Errorf("%s.%s (%s): the test can't set it; teach fill its type", tg.prefix, f.Name, f.Type)
@@ -429,7 +549,7 @@ func TestGuardRefusesAnyUnnamedField(t *testing.T) {
 		}
 	}
 	t.Logf("%d unnamed fields refused", checked)
-	if checked < 100 {
+	if checked < 200 {
 		t.Fatalf("only %d fields checked: the walk misses some", checked)
 	}
 }
@@ -464,14 +584,18 @@ func TestGuardNamedFieldsExist(t *testing.T) {
 
 func TestGuardKindsDontMix(t *testing.T) {
 	c := guardClient(t, false, appArmorPlan{})
-	browser, check := c.browserCreateOptions("", goldenSpec()), c.sandboxCheckOptions("")
-	if err := c.checkCreate(kindBrowser, check); !errors.Is(err, ErrOutsideEnvelope) {
-		t.Errorf("the check's body as a browser: %v", err)
+	for _, as := range allKinds {
+		for _, of := range allKinds {
+			if as == of {
+				continue
+			}
+			if err := c.checkCreate(as, bodyOf(c, of, "")); !errors.Is(err, ErrOutsideEnvelope) {
+				t.Errorf("the %s's body as a %s: %v", of, as, err)
+			}
+		}
 	}
-	if err := c.checkCreate(kindSandboxCheck, browser); !errors.Is(err, ErrOutsideEnvelope) {
-		t.Errorf("a browser's body as the check: %v", err)
-	}
-	for _, kind := range []createKind{"", "proxy-test", "Browser"} {
+	browser := c.browserCreateOptions("", goldenSpec())
+	for _, kind := range []createKind{"", "proxy_test", "Proxy-test", "Browser"} {
 		if err := c.checkCreate(kind, browser); !errors.Is(err, ErrOutsideEnvelope) || !strings.Contains(err.Error(), "the kind is unknown") {
 			t.Errorf("kind %q: %v", kind, err)
 		}
@@ -518,6 +642,16 @@ func TestGuardRefusesABrowserBeforeUseDataDir(t *testing.T) {
 		}
 		assertNoValues(t, dir, err.Error())
 	}
+	// Nor the proxy test, whose one mount is computed from it too.
+	for _, dir := range []string{"", ".", "relative/dir"} {
+		c = guardClient(t, false, appArmorPlan{})
+		c.hostDataDir = dir
+		err := c.checkCreate(kindProxyTest, c.proxyTestOptions("", goldenProxyTest(c)))
+		if !errors.Is(err, ErrOutsideEnvelope) || !strings.Contains(err.Error(), "HostConfig.Mounts can't be checked before UseDataDir") {
+			t.Errorf("the proxy test, host data dir %q: %v", dir, err)
+		}
+		assertNoValues(t, dir, err.Error())
+	}
 	// Podman's seccomp path can't be checked either.
 	for _, dir := range []string{"", ".", "relative/dir"} {
 		c = guardClient(t, true, appArmorPlan{})
@@ -552,11 +686,8 @@ func TestGuardChecksTheClientsOwnSettings(t *testing.T) {
 	} {
 		c := guardClient(t, false, appArmorPlan{})
 		tweak(c)
-		for _, kind := range []createKind{kindBrowser, kindSandboxCheck} {
-			o := c.browserCreateOptions("", goldenSpec())
-			if kind == kindSandboxCheck {
-				o = c.sandboxCheckOptions("")
-			}
+		for _, kind := range allKinds {
+			o := bodyOf(c, kind, "")
 			if name == "root user" {
 				o.Config.User = "0:0"
 			}

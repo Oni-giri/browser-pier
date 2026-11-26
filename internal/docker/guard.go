@@ -7,7 +7,7 @@ package docker
 // the SDK's structs must be unset.
 //
 // The envelope is written apart from the builders (browserConfig, Create,
-// checkSandbox) on purpose: it restates their constants rather than
+// checkSandbox, proxyTestConfig and TestProxy) on purpose: it restates their constants rather than
 // calling them, so a mistake in a builder, or a change that widens a
 // container, is refused at run time instead of reaching the daemon. It
 // runs in the orchestrator's own process, so it catches BrowserPier's
@@ -49,13 +49,14 @@ type createKind string
 const (
 	kindBrowser      createKind = "browser"
 	kindSandboxCheck createKind = "sandbox-check"
+	kindProxyTest    createKind = "proxy-test"
 )
 
 // label is the kind as errors and logs show it: one of the constants, or
 // "unknown", never a string the guard didn't write.
 func (k createKind) label() string {
 	switch k {
-	case kindBrowser, kindSandboxCheck:
+	case kindBrowser, kindSandboxCheck, kindProxyTest:
 		return string(k)
 	}
 	return "unknown"
@@ -102,6 +103,12 @@ const (
 	guardShmSize     = 1 << 30 // /dev/shm of a browser, 1 GiB
 	guardCheckCmd    = "sandbox-check"
 	guardNoNewPrivs  = "no-new-privileges:true"
+	// The proxy test's (PROJ-154): its command, its one environment
+	// variable, and its hard limits, memory with no swap on top.
+	guardProxyCheckCmd   = "proxy-check"
+	guardProxyTestEnv    = "BROWSERPIER_GEOIP_URL"
+	guardProxyTestMemory = 128 << 20
+	guardProxyTestPids   = 64
 )
 
 var (
@@ -186,7 +193,7 @@ var guardNamed = map[reflect.Type][]string{
 	reflect.TypeFor[container.Config]():              {"Image", "User", "Labels", "Env", "Cmd", "StopTimeout"},
 	reflect.TypeFor[container.HostConfig](): {"CapDrop", "CapAdd", "SecurityOpt", "Mounts", "NetworkMode", "UsernsMode",
 		"ShmSize", "Init"},
-	reflect.TypeFor[container.Resources](): nil,
+	reflect.TypeFor[container.Resources](): {"Memory", "MemorySwap", "PidsLimit"},
 	reflect.TypeFor[mount.Mount]():         {"Type", "Source", "Target"},
 }
 
@@ -243,9 +250,6 @@ func (c *Client) checkCreate(kind createKind, o client.ContainerCreateOptions) e
 	if !slices.Equal(host.CapDrop, []string{"ALL"}) {
 		return g.refuse("HostConfig.CapDrop", "isn't exactly ALL")
 	}
-	if !slices.Equal(host.CapAdd, []string{"SYS_CHROOT"}) {
-		return g.refuse("HostConfig.CapAdd", "isn't exactly SYS_CHROOT")
-	}
 	apparmor, err := g.securityOpt(c, host.SecurityOpt)
 	if err != nil {
 		return err
@@ -263,16 +267,22 @@ func (c *Client) checkCreate(kind createKind, o client.ContainerCreateOptions) e
 		return g.browser(c, o, apparmor)
 	case kindSandboxCheck:
 		return g.sandboxCheck(c, o)
+	case kindProxyTest:
+		return g.proxyTest(c, o)
 	}
 	return g.refuse("the kind", "is unknown")
 }
 
 func (g guard) browser(c *Client, o client.ContainerCreateOptions, apparmor string) error {
 	cfg, host := o.Config, o.HostConfig
-	// Not "" (before UseDataDir) nor relative: the mounts' sources are
-	// computed from it, and only an absolute one says where they are.
-	if !filepath.IsAbs(c.hostDataDir) {
-		return g.refuse("HostConfig.Mounts", "can't be checked before UseDataDir gave an absolute host data dir")
+	if err := g.capAddChroot(host); err != nil {
+		return err
+	}
+	if err := g.noLimits(host); err != nil {
+		return err
+	}
+	if err := g.hostDataDir(c); err != nil {
+		return err
 	}
 	profile := cfg.Labels[LabelProfile]
 	spec := Spec
@@ -311,11 +321,17 @@ func (g guard) browser(c *Client, o client.ContainerCreateOptions, apparmor stri
 		"/profile":         filepath.Join(dir, "chrome"),
 		"/run/browserpier": filepath.Join(dir, "run"),
 		"/files":           filepath.Join(dir, "files"),
-	})
+	}, profileMounts)
 }
 
 func (g guard) sandboxCheck(c *Client, o client.ContainerCreateOptions) error {
 	cfg, host := o.Config, o.HostConfig
+	if err := g.capAddChroot(host); err != nil {
+		return err
+	}
+	if err := g.noLimits(host); err != nil {
+		return err
+	}
 	if err := g.labels(cfg.Labels, map[string]func(string) bool{
 		LabelCheck:    func(v string) bool { return v == "true" },
 		LabelInstance: func(v string) bool { return v == c.instance },
@@ -338,6 +354,101 @@ func (g guard) sandboxCheck(c *Client, o client.ContainerCreateOptions) error {
 		return g.refuse("HostConfig.ShmSize", "is set")
 	case host.Mounts != nil:
 		return g.refuse("HostConfig.Mounts", "is set")
+	}
+	return nil
+}
+
+// proxyTest is the proxy test's envelope (PROJ-154): a browser's
+// confinement and network, less SYS_CHROOT, shm and stop timeout, its
+// own folder as its only mount, the lookup endpoint as its only variable
+// (the proxy goes in as a file, never here), and hard limits.
+func (g guard) proxyTest(c *Client, o client.ContainerCreateOptions) error {
+	cfg, host := o.Config, o.HostConfig
+	if host.CapAdd != nil {
+		return g.refuse("HostConfig.CapAdd", "is set")
+	}
+	if err := g.labels(cfg.Labels, map[string]func(string) bool{
+		LabelProxyTest: func(v string) bool { return v == "true" },
+		LabelInstance:  func(v string) bool { return v == c.instance },
+	}); err != nil {
+		return err
+	}
+	if o.Name != "browserpier_proxytest_"+c.instance {
+		return g.refuse("ContainerCreateOptions.Name", "isn't the proxy test's container name")
+	}
+	if err := g.proxyTestEnv(cfg.Env); err != nil {
+		return err
+	}
+	switch {
+	case !slices.Equal(cfg.Cmd, []string{guardProxyCheckCmd}):
+		return g.refuse("Config.Cmd", "isn't the proxy check")
+	case cfg.StopTimeout != nil:
+		return g.refuse("Config.StopTimeout", "is set")
+	case host.NetworkMode != "": // a browser's network, where it reaches the proxy
+		return g.refuse("HostConfig.NetworkMode", "isn't the default network")
+	case host.ShmSize != 0:
+		return g.refuse("HostConfig.ShmSize", "is set")
+	case host.Memory != guardProxyTestMemory:
+		return g.refuse("HostConfig.Memory", "isn't 128 MiB")
+	case host.MemorySwap != guardProxyTestMemory:
+		return g.refuse("HostConfig.MemorySwap", "isn't the memory limit (no swap)")
+	case host.PidsLimit == nil || *host.PidsLimit != guardProxyTestPids:
+		return g.refuse("HostConfig.PidsLimit", "isn't 64")
+	}
+	if err := g.hostDataDir(c); err != nil {
+		return err
+	}
+	return g.mounts(host.Mounts, map[string]string{
+		"/run/browserpier": filepath.Join(c.hostDataDir, "proxytest"),
+	}, proxyTestMounts)
+}
+
+// proxyTestEnv checks the proxy test's environment: exactly the lookup
+// endpoint, non-empty, with no newline, CR or NUL.
+func (g guard) proxyTestEnv(env []string) error {
+	if len(env) != 1 {
+		return g.refuse("Config.Env", "isn't exactly the lookup endpoint")
+	}
+	name, value, ok := strings.Cut(env[0], "=")
+	switch {
+	case !ok || name != guardProxyTestEnv:
+		return g.refuse("Config.Env", "has a variable other than the lookup endpoint")
+	case value == "":
+		return g.refuse("Config.Env", "has an empty lookup endpoint")
+	case strings.ContainsAny(value, "\n\r\x00"):
+		return g.refuse("Config.Env", "has a value with a newline or NUL")
+	}
+	return nil
+}
+
+// capAddChroot is a browser's and the sandbox check's one capability:
+// Chromium's sandbox needs SYS_CHROOT.
+func (g guard) capAddChroot(host *container.HostConfig) error {
+	if !slices.Equal(host.CapAdd, []string{"SYS_CHROOT"}) {
+		return g.refuse("HostConfig.CapAdd", "isn't exactly SYS_CHROOT")
+	}
+	return nil
+}
+
+// noLimits: browsers and the sandbox check get no Docker memory or pids
+// limit (BrowserPier keeps the browsers' memory limit itself).
+func (g guard) noLimits(host *container.HostConfig) error {
+	switch {
+	case host.Memory != 0:
+		return g.refuse("HostConfig.Memory", "is set")
+	case host.MemorySwap != 0:
+		return g.refuse("HostConfig.MemorySwap", "is set")
+	case host.PidsLimit != nil:
+		return g.refuse("HostConfig.PidsLimit", "is set")
+	}
+	return nil
+}
+
+// hostDataDir: not "" (before UseDataDir) nor relative. Mounts' sources
+// are computed from it, and only an absolute one says where they are.
+func (g guard) hostDataDir(c *Client) error {
+	if !filepath.IsAbs(c.hostDataDir) {
+		return g.refuse("HostConfig.Mounts", "can't be checked before UseDataDir gave an absolute host data dir")
 	}
 	return nil
 }
@@ -491,12 +602,20 @@ func (g guard) securityOpt(c *Client, opts []string) (string, error) {
 	return apparmor, nil
 }
 
-// mounts checks a browser's bind mounts: exactly want's targets, each from
-// its source, every other field of the mount unset.
-func (g guard) mounts(got []mount.Mount, want map[string]string) error {
+// mountWords are what a refusal of mounts says, by kind: never a path.
+type mountWords struct{ count, target, source string }
+
+var (
+	profileMounts   = mountWords{"aren't exactly the profile's three folders", "isn't one of the profile's folders", "isn't the profile's folder"}
+	proxyTestMounts = mountWords{"aren't exactly the proxy test's own folder", "isn't where the proxy test's folder goes", "isn't the proxy test's folder"}
+)
+
+// mounts checks bind mounts: exactly want's targets, each from its
+// source, every other field of the mount unset.
+func (g guard) mounts(got []mount.Mount, want map[string]string, words mountWords) error {
 	const field = "HostConfig.Mounts"
 	if len(got) != len(want) {
-		return g.refuse(field, "aren't exactly the profile's three folders")
+		return g.refuse(field, words.count)
 	}
 	seen := map[string]bool{}
 	for i, m := range got {
@@ -509,11 +628,11 @@ func (g guard) mounts(got []mount.Mount, want map[string]string) error {
 		}
 		src, ok := want[m.Target]
 		if !ok || seen[m.Target] {
-			return g.refuse(name+".Target", "isn't one of the profile's folders")
+			return g.refuse(name+".Target", words.target)
 		}
 		seen[m.Target] = true
 		if filepath.Clean(m.Source) != filepath.Clean(src) {
-			return g.refuse(name+".Source", "isn't the profile's folder")
+			return g.refuse(name+".Source", words.source)
 		}
 	}
 	return nil

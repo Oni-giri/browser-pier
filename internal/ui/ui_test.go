@@ -52,6 +52,8 @@ type fixture struct {
 	free   int64 // what the host has available, for HostFree
 	// emptied counts the browser's clipboard emptyings (PROJ-194).
 	emptied atomic.Int32
+	rt      *sessionstest.FakeRuntime
+	app     *UI
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -104,12 +106,13 @@ func newFixture(t *testing.T) *fixture {
 	tokens := auth.NewTokens(d)
 	web := auth.NewWeb(admin, tokens, log, auth.WebOptions{CookieSecure: "auto"})
 	fs := files.New(m.Layout().FilesDir, 1<<20, os.Getuid(), os.Getgid()) // a 1 MiB cap
-	f := &fixture{t: t, m: m, handoffs: handoff.New(d, m, log), web: web, tokens: tokens, settings: settings.New(d), files: fs, choosers: choosers,
+	f := &fixture{t: t, m: m, handoffs: handoff.New(d, m, log), web: web, tokens: tokens, settings: settings.New(d), files: fs, choosers: choosers, rt: rt,
 		picker: picker.New(m, fs, log)}
 	emptied = &f.emptied
 	f.recordings = recording.NewStore(filepath.Join(dir, "recordings"), log)
 	app := New(m, web, f.handoffs, f.settings, log, Options{HostMemory: 16 << 30, HostFree: func() int64 { return f.free }, SetRAMLimit: func(p int) { f.ram = p },
 		Recordings: f.recordings, Picker: f.picker})
+	f.app = app
 	mux := http.NewServeMux()
 	web.Register(mux)
 	app.Register(mux)

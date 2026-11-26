@@ -129,6 +129,9 @@ RUN apparmor_parser --skip-kernel-load --skip-cache /usr/share/browserpier/appar
 # The entrypoint has the sandbox check (`sandbox-check`), with which the
 # orchestrator picks the AppArmor profile; older images don't.
 LABEL io.browserpier.sandbox-check="1"
+# It has the proxy check (`proxy-check`) too, which the admin's Test button
+# runs; with an older image the button says to update it.
+LABEL io.browserpier.proxy-check="1"
 
 # Changing REBUILD forces a new image without reinstalling packages (used by the persistence test).
 ARG REBUILD=0

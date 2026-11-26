@@ -225,7 +225,7 @@ Leave `BROWSERPIER_LISTEN` and `BROWSERPIER_WEBRTC_PORT` alone with this compose
 | `BROWSERPIER_NET` | `10.247.74` | The compose network's first three numbers (compose only). |
 | `BROWSERPIER_VERSION` | the release the files came from | The image tag (compose only): a release such as `0.1.0` stays put, `latest` follows each release, `edge` follows the main branch. |
 | `BROWSERPIER_COOKIE_SECURE` | auto | `always` or `never` to override. |
-| `BROWSERPIER_GEOIP_URL` | `https://ifconfig.co/json` | How browsers find their exit location, to match time zone and language. `off` disables it. |
+| `BROWSERPIER_GEOIP_URL` | `https://ifconfig.co/json` | How browsers find their exit location, to match time zone and language. `off` disables it, and with it the Test button next to proxy fields, which looks the exit up the same way, from a short-lived browser-image container. |
 | `BROWSERPIER_BLOCKLIST_URLS` | Peter Lowe's ad servers and EasyPrivacy | The ad and tracker domain lists that profiles with Block ads and trackers on block, separated by commas or spaces; `none` for none. Hosts-format lists and Adblock Plus `||name^` rules are read; other rules are skipped. Downloaded into `<data dir>/blocklists/` and checked again every 4 days. |
 | `BROWSERPIER_LISTEN` | `:7437` | The app's address inside the container. |
 | `BROWSERPIER_BROWSER_IMAGE` | this release's | The browser image. Only BrowserPier's own. |
