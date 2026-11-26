@@ -177,7 +177,7 @@ func (a *API) computer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.m.Touch(s.ID)
-		a.m.Note(s.ID, tok.Name, "Waited "+strconv.FormatFloat(d.Seconds(), 'f', -1, 64)+" s")
+		a.m.NoteFor(r.Context(), s.ID, tok.Name, "Waited "+strconv.FormatFloat(d.Seconds(), 'f', -1, 64)+" s")
 		a.done(w, r, s, c)
 		return
 	}
@@ -198,6 +198,10 @@ func (a *API) computer(w http.ResponseWriter, r *http.Request) {
 	raw, err := json.Marshal(body)
 	if err != nil {
 		a.internal(w, "encoding an action", err)
+		return
+	}
+	if err := checkInput(path, raw); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	var first func(ctx context.Context)
@@ -240,6 +244,9 @@ func (a *API) done(w http.ResponseWriter, r *http.Request, s sessions.Session, c
 // after the screenshot is taken, so that a download notice gets the
 // screenshot's time to see a download start.
 func (a *API) doneWith(w http.ResponseWriter, r *http.Request, s sessions.Session, c computerRequest, before func()) {
+	before = func(set func()) func() {
+		return func() { set(); a.setChooserNotice(w, r, s) }
+	}(before)
 	if !c.Screenshot {
 		before()
 		w.WriteHeader(http.StatusNoContent)
@@ -325,7 +332,7 @@ func (a *API) zoom(w http.ResponseWriter, r *http.Request, c computerRequest) {
 		return
 	}
 	tok, _ := auth.TokenFromContext(r.Context())
-	a.m.Note(s.ID, tok.Name, "Zoomed into a region")
+	a.m.NoteFor(r.Context(), s.ID, tok.Name, "Zoomed into a region")
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("X-Screen-Width", strconv.Itoa(screen.Dx()))
 	w.Header().Set("X-Screen-Height", strconv.Itoa(screen.Dy()))

@@ -52,6 +52,10 @@ type fixture struct {
 	// pageURL is the one tab's address, as /json/list answers it (a
 	// handoff's until_url watch); "" for a sign-in page.
 	pageURL string
+	// choosers is the fake browser's open file choosers (GET /chooser's
+	// JSON list); chosen records each answer to one.
+	choosers string
+	chosen   []string
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -160,6 +164,22 @@ func (f *fixture) browser() http.Handler {
 			http.Error(w, "a pop-up window covers the browser's address bar: finish in it or close it", http.StatusConflict)
 			return
 		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /chooser", func(w http.ResponseWriter, _ *http.Request) {
+		f.mu.Lock()
+		list := f.choosers
+		f.mu.Unlock()
+		if list == "" {
+			list = "[]"
+		}
+		_, _ = io.WriteString(w, `{"choosers":`+list+`}`)
+	})
+	mux.HandleFunc("POST /chooser/{id}", func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		f.mu.Lock()
+		f.chosen = append(f.chosen, r.PathValue("id")+" "+string(b))
+		f.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("POST /input/click", func(w http.ResponseWriter, r *http.Request) {

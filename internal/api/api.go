@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -38,6 +39,7 @@ type API struct {
 	log      *slog.Logger
 	public   string // BROWSERPIER_PUBLIC_URL, if set
 	tools    *pagetools.Tools
+	choosers choosersSeen // file choosers the activity log has noted
 }
 
 func New(m *sessions.Manager, web *auth.Web, fs *files.Store, log *slog.Logger, publicURL string) *API {
@@ -46,7 +48,9 @@ func New(m *sessions.Manager, web *auth.Web, fs *files.Store, log *slog.Logger, 
 	if fs != nil {
 		m.OnEnd(fs.Forget) // what download notices keep about a session
 	}
-	return &API{m: m, web: web, files: fs, log: log, public: strings.TrimRight(publicURL, "/"), tools: tools}
+	a := &API{m: m, web: web, files: fs, log: log, public: strings.TrimRight(publicURL, "/"), tools: tools}
+	m.OnEnd(a.choosers.forget)
+	return a
 }
 
 // SetSettings makes profiles created through the API start from the
@@ -56,7 +60,7 @@ func (a *API) SetSettings(s *settings.Store) { a.settings = s }
 // Register adds the API's routes to mux. Each is an agent route (scrub.go)
 // but the CDP proxy's.
 func (a *API) Register(mux Router) {
-	t := a.agent
+	t, c := a.agent, a.agentCall
 	mux.Handle("GET /api/profiles", t(a.listProfiles))
 	mux.Handle("POST /api/profiles", t(a.createProfile))
 	mux.Handle("POST /api/sessions", t(a.startSession))
@@ -64,10 +68,14 @@ func (a *API) Register(mux Router) {
 	mux.Handle("GET /api/sessions/{id}", t(a.getSession))
 	mux.Handle("DELETE /api/sessions/{id}", t(a.stopSession))
 	mux.Handle("GET /api/sessions/{id}/screenshot", t(a.screenshot))
-	mux.Handle("POST /api/sessions/{id}/click", t(a.input("/input/click")))
-	mux.Handle("POST /api/sessions/{id}/type", t(a.input("/input/type")))
-	mux.Handle("POST /api/sessions/{id}/computer", t(a.computer))
+	mux.Handle("GET /api/sessions/{id}/calls/{call_id}", t(a.callStatus))
+	// The actions that change the page take a call id (PROJ-156).
+	mux.Handle("POST /api/sessions/{id}/click", c("click", a.input("/input/click")))
+	mux.Handle("POST /api/sessions/{id}/type", c("type", a.input("/input/type")))
+	mux.Handle("POST /api/sessions/{id}/computer", c("computer", a.computer))
 	mux.Handle("POST /api/sessions/{id}/files", t(a.uploadFile))
+	mux.Handle("GET /api/sessions/{id}/chooser", t(a.listChoosers))
+	mux.Handle("POST /api/sessions/{id}/chooser", t(a.choose))
 	mux.Handle("GET /api/profiles/{name}/files", t(a.listFiles))
 	mux.Handle("GET /api/profiles/{name}/files/{file}", t(a.getFile))
 	mux.Handle("DELETE /api/profiles/{name}/files/{file}", t(a.deleteFile))
@@ -80,9 +88,9 @@ func (a *API) Register(mux Router) {
 	// ticket as ?ticket=; never the token, which a proxy in front could log.
 	// It isn't scrubbed: raw CDP is full control of the browser, which can
 	// read any field's value (SPEC §11).
-	c := func(h http.HandlerFunc) http.Handler { return a.web.RequireTokenOrCDPTicket(h) }
-	mux.Handle("GET /cdp/{profile}", c(a.cdp))
-	mux.Handle("GET /cdp/{profile}/{path...}", c(a.cdp))
+	proxied := func(h http.HandlerFunc) http.Handler { return a.web.RequireTokenOrCDPTicket(h) }
+	mux.Handle("GET /cdp/{profile}", proxied(a.cdp))
+	mux.Handle("GET /cdp/{profile}/{path...}", proxied(a.cdp))
 }
 
 type profileJSON struct {
@@ -147,15 +155,17 @@ func (a *API) profileOut(p profiles.Profile) profileJSON {
 	return out
 }
 
+// redactProxy shows a profile's proxy without its password: a template
+// stays a template, its {sticky} never filled in.
 func redactProxy(raw string) string {
 	if raw == "" {
 		return ""
 	}
-	u, err := url.Parse(raw)
+	out, err := profiles.FormatProxy(raw, (*url.URL).Redacted)
 	if err != nil {
 		return "(set)"
 	}
-	return u.Redacted()
+	return out
 }
 
 func (a *API) listProfiles(w http.ResponseWriter, r *http.Request) {
@@ -359,7 +369,7 @@ func (a *API) startSession(w http.ResponseWriter, r *http.Request) {
 	}
 	allowAds := in.BlockAds != nil && !*in.BlockAds
 	before, wasLive := a.m.Live(in.Profile)
-	s, attached, err := a.m.StartWith(r.Context(), in.Profile, sessions.StartOptions{Mode: profiles.Mode(in.Mode), AllowAds: allowAds})
+	s, attached, err := a.m.StartWith(r.Context(), in.Profile, sessions.StartOptions{Mode: profiles.Mode(in.Mode), AllowAds: allowAds, By: tok.Name})
 	switch {
 	case errors.Is(err, profiles.ErrNotFound):
 		writeError(w, http.StatusNotFound, "no profile named "+strconv.Quote(in.Profile))
@@ -384,18 +394,18 @@ func (a *API) startSession(w http.ResponseWriter, r *http.Request) {
 	}
 	a.m.Touch(s.ID)
 	if allowAds && wasLive && before.ID == s.ID && before.BlockAds && !s.BlockAds {
-		a.m.Note(s.ID, tok.Name, "Turned ad and tracker blocking off for this session")
+		a.m.NoteFor(r.Context(), s.ID, tok.Name, "Turned ad and tracker blocking off for this session")
 	}
 	status := http.StatusCreated
 	if attached {
 		status = http.StatusOK
-		a.m.Note(s.ID, tok.Name, "Attached")
+		a.m.NoteFor(r.Context(), s.ID, tok.Name, "Attached")
 	} else {
 		what := "Started the browser"
 		if allowAds {
 			what += ", without ad and tracker blocking"
 		}
-		a.m.Note(s.ID, tok.Name, what)
+		a.m.NoteFor(r.Context(), s.ID, tok.Name, what)
 		a.log.Info("session started", "session", s.ID, "profile", s.Profile, "mode", s.Mode, "block_ads", s.BlockAds, "token", tok.Name)
 	}
 	writeJSON(w, status, a.sessionOut(r, s, attached))
@@ -457,9 +467,11 @@ func (a *API) session(w http.ResponseWriter, r *http.Request) (sessions.Session,
 	return s, true
 }
 
+// getSession answers with the session and the token's own calls on it:
+// those under way and its recent activity entries (PROJ-156).
 func (a *API) getSession(w http.ResponseWriter, r *http.Request) {
 	if s, ok := a.session(w, r); ok {
-		writeJSON(w, http.StatusOK, a.sessionOut(r, s, false))
+		writeJSON(w, http.StatusOK, a.sessionStatus(r, s))
 	}
 }
 
@@ -469,11 +481,12 @@ func (a *API) stopSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tok, _ := auth.TokenFromContext(r.Context())
-	// Noted first: the log goes with the session once it has stopped.
-	a.m.Note(s.ID, tok.Name, "Stopping the browser")
-	stopped, err := a.m.Stop(r.Context(), s.ID)
+	// Noted first: the live log ends with the session (its kept run then
+	// says who stopped it).
+	a.m.NoteFor(r.Context(), s.ID, tok.Name, "Stopping the browser")
+	stopped, err := a.m.StopFor(r.Context(), s.ID, sessions.StopByAgent(tok.Name))
 	if err != nil {
-		a.m.Note(s.ID, tok.Name, "Couldn't stop the browser") // still live, so still logged
+		a.m.NoteFor(r.Context(), s.ID, tok.Name, "Couldn't stop the browser") // still live, so still logged
 		if errors.Is(err, sessions.ErrClosed) {
 			writeError(w, http.StatusServiceUnavailable, "BrowserPier is shutting down")
 			return
@@ -518,7 +531,7 @@ func (a *API) screenshot(w http.ResponseWriter, r *http.Request) {
 	a.m.Touch(s.ID)
 	if a.sendScreenshot(w, r, s, target) {
 		tok, _ := auth.TokenFromContext(r.Context())
-		a.m.Note(s.ID, tok.Name, "Took a screenshot")
+		a.m.NoteFor(r.Context(), s.ID, tok.Name, "Took a screenshot")
 	}
 }
 
@@ -548,13 +561,19 @@ func (a *API) input(path string) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "body too large")
 			return
 		}
+		if !json.Valid(body) {
+			// Refused here, before the input's turn, rather than by the
+			// browser: a call id is then given back (PROJ-156).
+			writeError(w, http.StatusBadRequest, "bad JSON")
+			return
+		}
 		var mark *files.Mark
 		var wait time.Duration
+		var ms *int
 		if path == "/input/click" {
 			// A click may start a download (PROJ-116); the browser
 			// doesn't take download_wait_ms, which is BrowserPier's.
 			// When it is set, the click expects one (files.Mark.Expect).
-			var ms *int
 			if body, ms, err = takeDownloadWait(body); err == nil {
 				wait, err = files.DownloadWait(ms)
 			}
@@ -562,6 +581,12 @@ func (a *API) input(path string) http.HandlerFunc {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
+		}
+		if err := checkInput(path, body); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if path == "/input/click" {
 			mark = a.markDownloads(s)
 			if ms != nil {
 				mark.Expect(wait)
@@ -574,8 +599,58 @@ func (a *API) input(path string) http.HandlerFunc {
 			mark.Ended()
 			a.reportDownloads(w, r, s, mark, wait)
 		}
+		a.setChooserNotice(w, r, s)
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// checkInput refuses a /click or /type body the browser would refuse for
+// its shape, before the input's turn, so a call id is given back
+// (PROJ-156): fields of the wrong type or unknown, more after the JSON, a
+// pace or button it doesn't know, no text to type. The browser checks the
+// same again, and what only it knows (the screen's size, the text's
+// length at the pace asked).
+func checkInput(path string, body []byte) error {
+	var pace string
+	switch path {
+	case "/input/click":
+		// As the browser's clickRequest: no tags, so names match as
+		// encoding/json matches them, in any case.
+		var c struct {
+			X, Y   int
+			Button string
+			Double bool
+			Pace   string
+		}
+		if err := decodeOne(bytes.NewReader(body), &c); err != nil {
+			return errors.New("bad JSON: " + err.Error())
+		}
+		switch c.Button {
+		case "", "left", "middle", "right":
+		default:
+			return fmt.Errorf("button %q: want left, middle or right", c.Button)
+		}
+		pace = c.Pace
+	case "/input/type":
+		var t struct {
+			Text string
+			Pace string
+		}
+		if err := decodeOne(bytes.NewReader(body), &t); err != nil {
+			return errors.New("bad JSON: " + err.Error())
+		}
+		if t.Text == "" || !utf8.ValidString(t.Text) {
+			return errors.New("text: want non-empty UTF-8")
+		}
+		pace = t.Pace
+	default:
+		return nil
+	}
+	switch pace {
+	case "", "human", "instant":
+		return nil
+	}
+	return fmt.Errorf("pace %q: want human or instant", pace)
 }
 
 // takeDownloadWait takes download_wait_ms out of a click's JSON body,
@@ -610,7 +685,8 @@ func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, pa
 // done first (open's ad-list exemption) happens only if the agent may act,
 // not while a person has the browser (PROJ-164).
 func (a *API) actAfter(w http.ResponseWriter, r *http.Request, s sessions.Session, path string, body []byte, first func(ctx context.Context)) bool {
-	ctx, done, err := a.m.AgentInput(r.Context(), s.ID)
+	tok, _ := auth.TokenFromContext(r.Context())
+	ctx, done, err := a.m.AgentInput(r.Context(), s.ID, tok.ID)
 	if errors.Is(err, sessions.ErrInputBusy) {
 		writeError(w, http.StatusConflict, "another input is still running in this browser; wait for it to finish, then send this one")
 		return false
@@ -619,16 +695,30 @@ func (a *API) actAfter(w http.ResponseWriter, r *http.Request, s sessions.Sessio
 		writeError(w, http.StatusConflict, "a person has this browser (live view or a handoff); wait until they hand it back")
 		return false
 	}
-	// Until this returns: a handoff, the live view's Take control or a
-	// stop cancels ctx, which aborts the request to the browser and waits
-	// for done. The browser then breaks the action off and lets go of any
-	// key or button it held, which can still take it some tens of
-	// milliseconds after the person has the browser.
+	// Until this returns: a handoff, the live view's Take control, a stop
+	// or the token's revocation cancels ctx, which aborts the request to
+	// the browser; all but the revocation then wait for done. The browser
+	// then breaks the action off and lets go of any key or button it held,
+	// which can still take it some tens of milliseconds after the person
+	// has the browser.
 	defer done()
+	// The token was checked when the request came in, but its body is read
+	// since: a revocation meanwhile found no input to break off. Checked
+	// again now that the input is registered, so a revocation either shows
+	// here or breaks it off (the UI revokes, then disconnects).
+	if _, err := a.web.Tokens().Get(r.Context(), tok.ID); err != nil {
+		switch {
+		case errors.Is(err, auth.ErrTokenNotFound):
+			writeError(w, http.StatusUnauthorized, sessions.ErrRevoked.Error())
+		case r.Context().Err() != nil: // the client went away
+		default:
+			a.internal(w, "checking the token", err) // fails closed
+		}
+		return false
+	}
 	if first != nil {
 		first(ctx)
 	}
-	tok, _ := auth.TokenFromContext(r.Context())
 	resp, err := a.control(ctx, s.Profile, http.MethodPost, path, body)
 	if err != nil {
 		if ctx.Err() != nil && r.Context().Err() == nil {
@@ -638,8 +728,8 @@ func (a *API) actAfter(w http.ResponseWriter, r *http.Request, s sessions.Sessio
 			if path == "/input/type" {
 				what = "Typing interrupted"
 			}
-			a.m.Note(s.ID, tok.Name, what)
-			writeError(w, http.StatusConflict, "input broke off: "+context.Cause(ctx).Error())
+			a.m.NoteFor(r.Context(), s.ID, tok.Name, what)
+			writeError(w, cutStatus(ctx), "input broke off: "+context.Cause(ctx).Error())
 			return false
 		}
 		writeError(w, http.StatusBadGateway, "input failed: "+err.Error())
@@ -651,8 +741,18 @@ func (a *API) actAfter(w http.ResponseWriter, r *http.Request, s sessions.Sessio
 		writeError(w, resp.StatusCode, strings.TrimSpace(string(msg)))
 		return false
 	}
-	a.m.Note(s.ID, tok.Name, describeInput(path, body))
+	a.m.NoteFor(r.Context(), s.ID, tok.Name, describeInput(path, body))
 	return true
+}
+
+// cutStatus is the status of an input action cut short: 401 when its
+// token was revoked, as the page tools answer, since trying again can't
+// help; else 409 (a person took the browser, or it is stopping).
+func cutStatus(ctx context.Context) int {
+	if errors.Is(context.Cause(ctx), sessions.ErrRevoked) {
+		return http.StatusUnauthorized
+	}
+	return http.StatusConflict
 }
 
 // describeInput puts an input action in words for the activity log.
@@ -749,13 +849,27 @@ func relay(w http.ResponseWriter, resp *http.Response, headers ...string) {
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
+	if err := decodeOne(http.MaxBytesReader(w, r.Body, 64<<10), v); err != nil {
 		writeError(w, http.StatusBadRequest, "bad JSON: "+err.Error())
 		return false
 	}
 	return true
+}
+
+// decodeOne reads exactly one JSON value into v, refusing unknown fields
+// and anything after the value but white space: a valid action followed
+// by a stray "}" is refused, not run (PROJ-156: running it would take its
+// call id, and the corrected retry would then be another call).
+func decodeOne(r io.Reader, v any) error {
+	dec := json.NewDecoder(r)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return err
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("more after the JSON value")
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

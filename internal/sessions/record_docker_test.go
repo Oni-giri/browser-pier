@@ -291,7 +291,7 @@ func TestRecordingStopsForAPerson(t *testing.T) {
 	personTypes := func(text string) {
 		t.Helper()
 		// What the live view sends for a person's paste (viewer.message).
-		done, err := r.m.HumanInput(s.ID)
+		done, err := r.m.HumanInput(s.ID, "person")
 		if err != nil {
 			t.Fatalf("the person has no control: %v", err)
 		}
@@ -325,10 +325,10 @@ func TestRecordingStopsForAPerson(t *testing.T) {
 				t.Fatal(err)
 			}
 			// The handoff's person drives as Take control's does.
-			if err := r.m.TakeControl(s.ID); err != nil {
+			if err := r.m.TakeControl(s.ID, "person"); err != nil {
 				t.Fatal(err)
 			}
-		} else if err := r.m.TakeControl(s.ID); err != nil {
+		} else if err := r.m.TakeControl(s.ID, "person"); err != nil {
 			t.Fatal(err)
 		}
 		personTypes("hunter2-person")

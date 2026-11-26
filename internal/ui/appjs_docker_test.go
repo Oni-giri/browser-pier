@@ -117,6 +117,7 @@ func TestAppJS(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.Handle("POST /settings/appearance", g)
 	mux.Handle("POST /profiles/{name}/delete", g)
+	mux.Handle("POST /proxy/test", g)
 	mux.Handle("/", app)
 	base := serveToBrowser(t, mux)
 
@@ -345,6 +346,81 @@ func TestAppJS(t *testing.T) {
 		}
 		h.answer(failWith500) // keeps the profile for the next test
 		until(t, b, "the error page didn't load", `document.readyState === "complete" && location.pathname === "/profiles/mail/delete"`)
+	})
+
+	t.Run("New exit IP asks first, then gives the profile a new exit", func(t *testing.T) {
+		tok := f.stickyProfile("bank")
+		b.Navigate(base + "/profiles")
+		b.Eval(`document.querySelector("[data-dialog=exit-dialog][data-name=bank]").click()`)
+		is(t, b, `document.querySelector("#exit-dialog").open`, true)
+		is(t, b, `document.querySelector("#exit-title").textContent`, "Give bank a new exit IP?")
+		is(t, b, `document.querySelector("#exit-dialog p").textContent.includes("sign in or verify again, and the country may change")`, true)
+		is(t, b, `new URL(document.querySelector("#exit-dialog form").action).pathname`, "/profiles/bank/new-exit")
+		b.Eval(`document.querySelector("#exit-dialog form").requestSubmit()`)
+		until(t, b, "the page didn't come back", `document.readyState === "complete" && location.pathname === "/profiles" && !document.querySelector("#exit-dialog").open`)
+		if got := f.token("bank"); got == tok || got == "" {
+			t.Fatalf("the token is %q, was %q", got, tok)
+		}
+		if err := f.m.Profiles().Delete(ctx, "bank"); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("Test proxy answers under the field and saves nothing", func(t *testing.T) {
+		t.Cleanup(g.settle)
+		f.m.SetGeoURL("https://geo.example/json")
+		before, _ := f.m.Profiles().List(ctx)
+		// In the New profile dialog, which the button mustn't submit.
+		b.Navigate(base + "/profiles")
+		b.Eval(`document.querySelector("[data-key=n]").click()`)
+		until(t, b, "the New profile dialog didn't open", `!!document.querySelector("dialog[open] [data-proxy-test]")`)
+		btn := `document.querySelector("dialog[open] [data-proxy-test]")`
+		out := `document.querySelector("dialog[open] [data-proxy-result]")`
+		typeProxy := func(v string) {
+			b.Eval(fmt.Sprintf(`(() => { const el = document.querySelector("dialog[open] input[name=proxy]"); el.value = %q; el.dispatchEvent(new Event("input", {bubbles: true})); })()`, v))
+		}
+		is(t, b, btn+`.disabled`, true)
+		typeProxy("http://u:p@proxy.example:8080")
+		is(t, b, btn+`.disabled`, false)
+		b.Eval(btn + `.click()`)
+		h := g.next(t)
+		if h.form.Get("proxy") != "http://u:p@proxy.example:8080" || h.form.Get("form") != "new" {
+			t.Fatalf("sent %v", h.form)
+		}
+		is(t, b, btn+`.disabled + " " + `+btn+`.textContent`, "true Testing…")
+		h.answer(app.ServeHTTP)
+		until(t, b, "no result under the field", out+`.textContent.includes("Works.") && !`+out+`.hidden`)
+		is(t, b, out+`.textContent.includes("198.51.100.23")`, true)
+		is(t, b, btn+`.disabled + " " + `+btn+`.textContent`, "false Test")
+		is(t, b, `!!document.querySelector("dialog[open] form[hx-post='/profiles']")`, true)
+		if after, _ := f.m.Profiles().List(ctx); len(after) != len(before) {
+			t.Fatal("testing the proxy created a profile")
+		}
+		// An edit clears the result: it was about another value.
+		typeProxy("http://u:p@proxy.example:8081")
+		is(t, b, out+`.hidden && `+out+`.textContent === ""`, true)
+		// An answer about a value edited since never shows.
+		b.Eval(btn + `.click()`)
+		h = g.next(t)
+		typeProxy("http://u:p@proxy.example:8082")
+		h.answer(app.ServeHTTP)
+		until(t, b, "the button didn't come back", btn+`.textContent === "Test"`)
+		is(t, b, out+`.hidden`, true)
+		typeProxy("")
+		is(t, b, btn+`.disabled`, true)
+
+		// Settings: BrowserPier gone says so.
+		b.Navigate(base + "/settings")
+		sbtn := `document.querySelector("[data-proxy-test=settings]")`
+		is(t, b, sbtn+`.disabled`, true)
+		b.Eval(`(() => { const el = document.querySelector("#proxy"); el.value = "socks5://u:p@proxy.example:1080"; el.dispatchEvent(new Event("input", {bubbles: true})); })()`)
+		b.Eval(sbtn + `.click()`)
+		h = g.next(t)
+		if h.form.Get("form") != "settings" {
+			t.Fatalf("sent %v", h.form)
+		}
+		g.unreachable(h)
+		until(t, b, "no word that BrowserPier is gone", `document.querySelector("[data-proxy] [data-proxy-result]").textContent.includes("Can't reach BrowserPier.")`)
 	})
 
 	t.Run("the page light follows the needs-you chip", func(t *testing.T) {

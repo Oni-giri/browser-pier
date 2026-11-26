@@ -129,7 +129,8 @@ func (u *UI) revokeToken(w http.ResponseWriter, r *http.Request) {
 		done(w, r, "/agents", "Couldn't revoke "+tok.Name, true)
 		return
 	}
-	// Its open CDP connections end within seconds (api.WatchRevocations).
+	// Its open CDP connections close, and its page calls and input
+	// actions under way break off, at once.
 	u.m.DisconnectToken(id)
 	u.log.Info("agent token revoked from the UI", "name", tok.Name)
 	done(w, r, "/agents", tok.Name+" revoked", false)

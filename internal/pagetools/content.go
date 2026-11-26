@@ -142,6 +142,7 @@ func (t *Tools) Text(ctx context.Context, s sessions.Session, who Caller, in Tex
 		if in.Offset > total || in.Offset > 0 && in.Offset == total {
 			return "", &Error{Status: 400, Msg: fmt.Sprintf("offset: the text has %s characters", thousands(total))}
 		}
+		c.noteTitle(c.title)
 		c.note(what)
 		part, end := window(body, in.Offset, limit)
 		if in.Format == "markdown" && part != "" {
@@ -245,6 +246,7 @@ func (c *call) readTree(ctx context.Context) (*pagetext.Node, bool, *url.URL, st
 		}
 		header := "URL: " + capText(pageURL, maxHeader) + "\nTitle: " + capText(strings.Join(strings.Fields(d.str(doc.Title)), " "), maxHeader)
 		tree, cut, err := contentTree(ctx, d)
+		c.title = d.str(doc.Title)
 		return tree, cut, base, header, err
 	}
 }

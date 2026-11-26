@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BrowserPier · Activity log</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#070C18}
+a{color:#E8EDF5}a:hover{color:#FFFFFF}
+@keyframes lv-pulse{0%{box-shadow:0 0 0 0 rgba(255,106,61,0.5)}70%{box-shadow:0 0 0 6px rgba(255,106,61,0.0)}100%{box-shadow:0 0 0 0 rgba(255,106,61,0.0)}}
+.lv-pulse{animation:lv-pulse 1.8s ease-out infinite}
+@keyframes pp-pulse{0%{box-shadow:0 0 0 0 rgba(255,106,61,0.55)}70%{box-shadow:0 0 0 7px rgba(255,106,61,0.0)}100%{box-shadow:0 0 0 0 rgba(255,106,61,0.0)}}.pp-pulse{animation:pp-pulse 1.8s ease-out infinite}@media (prefers-reduced-motion: reduce){.pp-pulse{animation:none}}
+</style>
+</helmet>
+<div style="min-height: 100vh; background: radial-gradient(760px 420px at 24% -150px, rgba(255,106,61,0.2), rgba(255,106,61,0.0) 70%), radial-gradient(900px 460px at 88% -150px, rgba(47,107,255,0.22), rgba(47,107,255,0.0) 70%), url('data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20width%3D%27180%27%20height%3D%27180%27%3E%3Cfilter%20id%3D%27n%27%3E%3CfeTurbulence%20type%3D%27fractalNoise%27%20baseFrequency%3D%27.85%27%20numOctaves%3D%272%27%20stitchTiles%3D%27stitch%27%2F%3E%3CfeColorMatrix%20values%3D%270%200%200%200%200.12%200%200%200%200%200.18%200%200%200%200%200.45%200%200%200%200.06%200%27%2F%3E%3C%2Ffilter%3E%3Crect%20width%3D%27100%25%27%20height%3D%27100%25%27%20filter%3D%27url%28%23n%29%27%2F%3E%3C%2Fsvg%3E') 0 0 / 180px 180px, linear-gradient(to bottom, rgba(7,12,24,0.0) 0, rgba(7,12,24,0.6) 260px, rgb(7,12,24) 560px), linear-gradient(rgba(47,107,255,0.07) 1px, transparent 1px) 0 0 / 48px 48px, linear-gradient(90deg, rgba(47,107,255,0.07) 1px, transparent 1px) 0 0 / 48px 48px, #070C18; color: #E8EDF5; font-family: 'Geist', system-ui, sans-serif; display: flex; flex-direction: column">
+
+  <header style="position: sticky; top: 0; z-index: 10; background: rgba(17,26,46,0.72); backdrop-filter: blur(14px) saturate(160%); -webkit-backdrop-filter: blur(14px) saturate(160%); box-shadow: 0 1px 0 rgba(0,0,0,0.208)">
+    <div style="max-width: 1320px; margin: 0 auto; padding: 0 28px; min-height: 56px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 24px">
+      <a href="overview.html" style="display: flex; align-items: center; gap: 9px; font-size: 15px; font-weight: 600; letter-spacing: -0.3px; text-decoration: none">
+        <svg width="22" height="22" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7" fill="#E8EDF5"></rect><path d="M5 12h18M8 12v9M14 12v9M20 12v9" stroke="#111A2E" stroke-width="2" stroke-linecap="round"></path><circle cx="20" cy="6.5" r="2.2" fill="#2F6BFF"></circle></svg>
+        BrowserPier
+      </a>
+      <nav aria-label="Main" style="display: flex; gap: 2px; font-size: 14px">
+        <a href="overview.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; color: #A7B3C6; text-decoration: none">Overview</a>
+        <a href="profiles.html" aria-current="true" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; background: #0A1222; font-weight: 500; text-decoration: none">Profiles</a>
+        <a href="agents.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; color: #A7B3C6; text-decoration: none">Agents</a>
+        <a href="settings.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; color: #A7B3C6; text-decoration: none">Settings</a>
+      </nav>
+      <a href="live-view.html" style="min-height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 10px; border-radius: 999px; background: rgba(255,106,61,0.12); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); box-shadow: inset 0 0 0 1px rgba(255,106,61,0.35), 0 6px 16px -6px rgba(255,106,61,0.55); color: #FDA387; font-size: 13px; font-weight: 500; text-decoration: none"><span aria-hidden="true" class="pp-pulse" style="width: 6px; height: 6px; border-radius: 50%; background: #FF6A3D"></span>1 needs you</a>
+      <div style="flex: 1 1 40px"></div>
+      <span style="min-width: 200px; height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-radius: 8px; box-shadow: 0 0 0 1px #283449; font-size: 13px; color: #8A99B0">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+        <span style="flex: 1">Search…</span>
+        <span style="font-family: 'Geist Mono', monospace; font-size: 11px; padding: 0 5px; border-radius: 4px; background: #0A1222; color: #A7B3C6">⌘K</span>
+      </span>
+      <a href="login.html" aria-label="Account and sign out" style="width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, #2F6BFF, #8AA8FF); display: flex; align-items: center; justify-content: center; color: #FFFFFF; font-size: 12px; font-weight: 600; text-decoration: none">Y</a>
+    </div>
+  </header>
+
+  <div style="max-width: 1376px; width: 100%; box-sizing: border-box; margin: 0 auto; padding: 22px 28px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px">
+    <div style="display: flex; flex-direction: column; gap: 6px">
+      <nav aria-label="Breadcrumb" style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 14px">
+        <a href="profiles.html" style="color: #A7B3C6; text-decoration: none">Profiles</a>
+        <span aria-hidden="true" style="color: #3B4863">/</span>
+        <a href="live-view.html" style="color: #A7B3C6; text-decoration: none">google</a>
+        <span aria-hidden="true" style="color: #3B4863">/</span>
+        <h1 style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.6px; color: #E8EDF5">Activity log</h1>
+      </nav>
+      <p style="margin: 0; font-size: 13px; color: #8A99B0">Kept in memory for 24 hours, the last 5 runs. A BrowserPier restart or update clears it.</p>
+    </div>
+    <div style="flex: 1 1 40px"></div>
+    <a href="live-view.html" style="min-height: 36px; padding: 0 14px; display: flex; align-items: center; background: #111A2E; border-radius: 8px; box-shadow: 0 0 0 1px #283449, 0 1px 2px rgba(15,23,42,0.05); color: #E8EDF5; font-size: 14px; font-weight: 500; text-decoration: none">Back to google</a>
+  </div>
+
+  <div style="flex: 1; max-width: 1376px; width: 100%; box-sizing: border-box; margin: 0 auto; padding: 16px 28px 32px">
+    <div style="max-width: 880px; display: flex; flex-direction: column; gap: 14px">
+      <section style="padding: 18px 20px; background: #111A2E; border-radius: 16px; box-shadow: 0 0 0 1px rgba(148,163,184,0.14), 0 1px 2px rgba(0,0,0,0.156), 0 10px 28px -12px rgba(0,0,0,0.52)">
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px">
+          <h2 style="margin: 0; font-size: 16px; font-weight: 600; color: #E8EDF5">Current run</h2>
+          <span style="display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; background: #1A3728; color: #77D68E; font-size: 12px; font-weight: 500"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #16A34A"></span>Running</span>
+        </div>
+        <p style="margin: 0 0 14px; font-size: 12px; color: #8A99B0">Started 14:10 · Visual mode · 4 entries</p>
+        <ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column">
+          <sc-for list="{{log0}}" as="e" hint-placeholder-count="5">
+            <li style="position: relative; padding: 0 0 12px 18px; display: flex; flex-direction: column; gap: 1px">
+              <span aria-hidden="true" style="position: absolute; left: 3px; top: 6px; width: 7px; height: 7px; border-radius: 50%; background: {{e.dot}}"></span>
+              <span aria-hidden="true" style="position: absolute; left: 6px; top: 16px; bottom: 0; width: 1px; background: #1C273B"></span>
+              <span style="font-size: 13px; color: {{e.c}}"><b style="font-weight: 500">{{e.who}}</b>{{e.a}}<span style="color: #E8EDF5">{{e.title}}</span></span>
+              <span style="font-size: 12px; color: #8A99B0; font-variant-numeric: tabular-nums">{{e.t}}</span>
+            </li>
+          </sc-for>
+        </ol>
+      </section>
+
+      <section style="padding: 18px 20px; background: #111A2E; border-radius: 16px; box-shadow: 0 0 0 1px rgba(148,163,184,0.14), 0 1px 2px rgba(0,0,0,0.156), 0 10px 28px -12px rgba(0,0,0,0.52)">
+        <h2 style="margin: 0 0 4px; font-size: 16px; font-weight: 600; color: #E8EDF5">Previous runs</h2>
+        <div style="border-top: 0">
+          <button type="button" onClick="{{toggle1}}" aria-expanded="{{open1}}" style="width: 100%; padding: 12px 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 16px; background: transparent; border: 0; color: inherit; font-family: inherit; text-align: left; cursor: pointer">
+            <span style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 14px; font-weight: 500">Today 13:31–14:02</span><span style="font-size: 12px; color: #8A99B0">Started by research-bot · Visual mode · 9 entries</span></span>
+            <span style="flex: 1; text-align: right; font-size: 13px; color: #A7B3C6">Stopped: idle for 15 min</span>
+            <span aria-hidden="true" style="font-size: 12px; color: #A7B3C6">{{chev1}}</span>
+          </button>
+          <sc-if value="{{open1}}" hint-placeholder-val="{{true}}">
+          <ol style="margin: 0; padding: 4px 0 6px; list-style: none; display: flex; flex-direction: column">
+          <sc-for list="{{log1}}" as="e" hint-placeholder-count="5">
+            <li style="position: relative; padding: 0 0 12px 18px; display: flex; flex-direction: column; gap: 1px">
+              <span aria-hidden="true" style="position: absolute; left: 3px; top: 6px; width: 7px; height: 7px; border-radius: 50%; background: {{e.dot}}"></span>
+              <span aria-hidden="true" style="position: absolute; left: 6px; top: 16px; bottom: 0; width: 1px; background: #1C273B"></span>
+              <span style="font-size: 13px; color: {{e.c}}"><b style="font-weight: 500">{{e.who}}</b>{{e.a}}<span style="color: #E8EDF5">{{e.title}}</span></span>
+              <span style="font-size: 12px; color: #8A99B0; font-variant-numeric: tabular-nums">{{e.t}}</span>
+            </li>
+          </sc-for>
+          </ol>
+          </sc-if>
+        </div>
+        <div style="border-top: 1px solid #1C273B">
+          <button type="button" onClick="{{toggle2}}" aria-expanded="{{open2}}" style="width: 100%; padding: 12px 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 16px; background: transparent; border: 0; color: inherit; font-family: inherit; text-align: left; cursor: pointer">
+            <span style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 14px; font-weight: 500">Today 09:12–09:40</span><span style="font-size: 12px; color: #8A99B0">Started from the app · API mode · 3 entries</span></span>
+            <span style="flex: 1; text-align: right; font-size: 13px; color: #FFA195">The browser exited unexpectedly</span>
+            <span aria-hidden="true" style="font-size: 12px; color: #A7B3C6">{{chev2}}</span>
+          </button>
+          <sc-if value="{{open2}}" hint-placeholder-val="{{true}}">
+          <ol style="margin: 0; padding: 4px 0 6px; list-style: none; display: flex; flex-direction: column">
+          <sc-for list="{{log2}}" as="e" hint-placeholder-count="5">
+            <li style="position: relative; padding: 0 0 12px 18px; display: flex; flex-direction: column; gap: 1px">
+              <span aria-hidden="true" style="position: absolute; left: 3px; top: 6px; width: 7px; height: 7px; border-radius: 50%; background: {{e.dot}}"></span>
+              <span aria-hidden="true" style="position: absolute; left: 6px; top: 16px; bottom: 0; width: 1px; background: #1C273B"></span>
+              <span style="font-size: 13px; color: {{e.c}}"><b style="font-weight: 500">{{e.who}}</b>{{e.a}}<span style="color: #E8EDF5">{{e.title}}</span></span>
+              <span style="font-size: 12px; color: #8A99B0; font-variant-numeric: tabular-nums">{{e.t}}</span>
+            </li>
+          </sc-for>
+          </ol>
+          </sc-if>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1100}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { open1: true, open2: false };
+  }
+  renderVals() {
+    const o1 = this.state.open1, o2 = this.state.open2;
+    return {
+      open1: o1, open2: o2,
+      chev1: o1 ? '▲' : '▼', chev2: o2 ? '▲' : '▼',
+      toggle1: () => this.setState({ open1: !o1 }),
+      toggle2: () => this.setState({ open2: !o2 }),
+      log0: [
+        { t: '14:12:03', who: 'claude: ', a: 'Read the page', title: '', c: '#E8EDF5', dot: '#3B4863' },
+        { t: '14:12:03', who: '', a: 'Page title: ', title: '“Orders – Example Shop”', c: '#A7B3C6', dot: '#3B4863' },
+        { t: '14:10:40', who: 'claude: ', a: 'Attached', title: '', c: '#E8EDF5', dot: '#3B4863' },
+        { t: '14:10:21', who: '', a: 'Started from the app', title: '', c: '#E8EDF5', dot: '#8A99B0' }
+      ],
+      log1: [
+        { t: '14:02:00', who: '', a: 'Stopped: idle for 15 min', title: '', c: '#E8EDF5', dot: '#8A99B0' },
+        { t: '13:47:12', who: '', a: 'Nobody is watching', title: '', c: '#A7B3C6', dot: '#3B4863' },
+        { t: '13:46:55', who: '', a: 'Control handed back', title: '', c: '#E8EDF5', dot: '#2F6BFF' },
+        { t: '13:45:30', who: '', a: 'Handed back: done', title: '', c: '#E8EDF5', dot: '#3B4863' },
+        { t: '13:44:02', who: '', a: 'The person took control through the handoff link', title: '', c: '#E8EDF5', dot: '#2F6BFF' },
+        { t: '13:43:58', who: '', a: 'The handoff link was opened', title: '', c: '#E8EDF5', dot: '#3B4863' },
+        { t: '13:43:10', who: 'research-bot: ', a: 'Paused, waiting for you: Sign-in or payment', title: '', c: '#FDA387', dot: '#FF6A3D' },
+        { t: '13:42:51', who: '', a: 'Page title: ', title: '“Sign in – Google Accounts”', c: '#A7B3C6', dot: '#3B4863' },
+        { t: '13:31:05', who: 'research-bot: ', a: 'Started the browser', title: '', c: '#E8EDF5', dot: '#3B4863' }
+      ],
+      log2: [
+        { t: '09:40:16', who: '', a: 'The browser exited unexpectedly', title: '', c: '#FFA195', dot: '#8A99B0' },
+        { t: '09:13:02', who: 'claude: ', a: 'Read the page as Markdown', title: '', c: '#E8EDF5', dot: '#3B4863' },
+        { t: '09:12:30', who: '', a: 'Started from the app', title: '', c: '#E8EDF5', dot: '#8A99B0' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>
