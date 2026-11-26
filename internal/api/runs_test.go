@@ -25,7 +25,7 @@ func TestRecentCallsHoldNoneOfBrowserPiersEntries(t *testing.T) {
 	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.m.TakeControlByLink(s.ID); err != nil {
+	if err := f.m.TakeControlByLink(s.ID, sessions.HandoffHolder("h1")); err != nil {
 		t.Fatal(err)
 	}
 	f.m.ReleaseControl(s.ID)

@@ -104,11 +104,15 @@ func (h *Handler) ICE(w http.ResponseWriter, _ *http.Request, until time.Time, v
 }
 
 func (h *Handler) offer(w http.ResponseWriter, r *http.Request) {
-	h.Offer(w, r, r.PathValue("profile"), OfferOptions{})
+	h.Offer(w, r, r.PathValue("profile"), OfferOptions{Holder: sessions.AdminHolder})
 }
 
 // OfferOptions shape a live view.
 type OfferOptions struct {
+	// Holder names who this viewer is when it takes control (see
+	// sessions.Manager.TakeControl): the signed-in admin's browser or the
+	// handoff link. The file chooser routes answer only them (PROJ-184).
+	Holder string
 	// Control gives the viewer the mouse and keyboard from the start (a
 	// handoff link, once unlocked).
 	Control bool
@@ -139,23 +143,29 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 		http.Error(w, "the browser isn't running", http.StatusConflict)
 		return
 	}
-	vw := &viewer{h: h, session: s.ID, sock: h.m.Layout().ControlSocket(profile), allowed: o.Allowed}
+	vw := &viewer{h: h, session: s.ID, holder: o.Holder, sock: h.m.Layout().ControlSocket(profile), allowed: o.Allowed}
 	// A viewer promised control gets it or isn't connected: a page that
 	// thinks it drives while it only watches would send input into nothing.
 	if o.Control {
-		if err := h.m.TakeControlByLink(s.ID); err != nil {
+		turn, err := h.m.TakeControlTurnByLink(s.ID, vw.holder)
+		if err != nil {
 			unwatch()
-			msg := "The browser isn't running."
+			msg, code := "The browser isn't running.", http.StatusConflict
 			switch {
 			case errors.Is(err, sessions.ErrHumanDriving):
 				msg = "Someone else has control."
 			case errors.Is(err, sessions.ErrAgentDriving):
 				msg = "The agent is driving."
+			case errors.Is(err, sessions.ErrControlEnded):
+				msg = "Control was handed back meanwhile. Try again."
+			case errors.Is(err, sessions.ErrNoHolder):
+				h.log.Error("a live view offered control with no holder", "profile", profile)
+				msg, code = "Couldn't take control: this live view says nobody's taking it.", http.StatusInternalServerError
 			}
-			http.Error(w, msg, http.StatusConflict)
+			http.Error(w, msg, code)
 			return
 		}
-		vw.control = true
+		vw.control, vw.turn = true, turn
 	}
 	control := vw.control // read before the data channel can change it
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
@@ -163,7 +173,7 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 	v, answer, err := h.relay.Connect(ctx, profile, in.SDP, vw.message)
 	if err != nil {
 		if control {
-			h.m.ReleaseControl(s.ID) // nothing was pressed yet: no need to lift keys
+			h.m.ReleaseTurn(s.ID, vw.turn) // nothing was pressed yet: no need to lift keys
 		}
 		unwatch()
 		http.Error(w, "couldn't connect: "+err.Error(), http.StatusBadRequest)
@@ -188,14 +198,29 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 type viewer struct {
 	h       *Handler
 	session string
+	holder  string // who takes control through this viewer
 	sock    string
 
 	allowed func() bool // nil: always
 	conn    *Viewer
 
-	mu        sync.Mutex
-	control   bool
+	mu      sync.Mutex
+	control bool
+	// turn is this viewer's Take control (sessions.TakeControlTurn): its
+	// control can end behind its back (a handoff finished, Hand back from
+	// another page), and then it releases or lifts nothing of the next
+	// person's (PROJ-184).
+	turn      uint64
 	checkedAt time.Time // when allowed last said yes
+}
+
+// holdsLocked reports whether this viewer still has control, and forgets
+// control it lost behind its back.
+func (v *viewer) holdsLocked() bool {
+	if v.control && !v.h.m.HoldsTurn(v.session, v.turn) {
+		v.control = false
+	}
+	return v.control
 }
 
 // stillAllowed re-checks, at most once a second, that this viewer may act.
@@ -254,19 +279,24 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 	}
 	switch m.Type {
 	case "take":
-		if v.control {
+		if v.holdsLocked() {
 			say(map[string]any{"type": "control", "on": true})
 			return
 		}
-		err := v.h.m.TakeControl(v.session)
+		turn, err := v.h.m.TakeControlTurn(v.session, v.holder)
 		switch {
 		case errors.Is(err, sessions.ErrHumanDriving):
 			say(map[string]any{"type": "error", "msg": "Someone else has control."})
 		case err == nil:
-			v.control = true
+			v.control, v.turn = true, turn
 			say(map[string]any{"type": "control", "on": true})
 		case errors.Is(err, sessions.ErrAgentDriving):
 			say(map[string]any{"type": "error", "msg": "The agent is driving. Try again in a few seconds, or when it asks for help."})
+		case errors.Is(err, sessions.ErrControlEnded):
+			say(map[string]any{"type": "error", "msg": "Control was handed back meanwhile. Try again."})
+		case errors.Is(err, sessions.ErrNoHolder):
+			v.h.log.Error("a live view took control with no holder", "session", v.session)
+			say(map[string]any{"type": "error", "msg": "Couldn't take control: this live view says nobody's taking it."})
 		default:
 			say(map[string]any{"type": "error", "msg": "The browser isn't running."})
 		}
@@ -274,16 +304,22 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 		v.releaseLocked()
 		say(map[string]any{"type": "control", "on": false})
 	case "lift":
-		if v.control {
-			_ = v.post("/input/release", nil)
+		// As input of this turn's: never lifts the next person's keys.
+		if v.holdsLocked() {
+			if done, err := v.h.m.HumanInputTurn(v.session, v.holder, v.turn); err == nil {
+				_ = v.post("/input/release", nil)
+				done()
+			}
 		}
 	case "input", "text", "clipboard", "clipboard-set":
 		var done func()
 		var err error
-		if v.control {
+		if v.holdsLocked() {
 			// Held until the input has reached the browser: a hand-back
-			// empties the clipboard only after it.
-			done, err = v.h.m.HumanInput(v.session)
+			// empties the clipboard only after it. Only this view's turn:
+			// another admin view may hold control now under the same
+			// holder.
+			done, err = v.h.m.HumanInputTurn(v.session, v.holder, v.turn)
 		}
 		if !v.control || err != nil {
 			v.control = false
@@ -357,13 +393,15 @@ func (v *viewer) handBack() {
 	v.releaseLocked()
 }
 
+// releaseLocked lets go of this viewer's control, if it still has it:
+// one that lost it behind its back releases nothing of the next person's.
+// The hand-back itself lets go of held keys and buttons (ReleaseTurn).
 func (v *viewer) releaseLocked() {
-	if !v.control {
+	if !v.holdsLocked() {
 		return
 	}
 	v.control = false
-	_ = v.post("/input/release", nil)
-	v.h.m.ReleaseControl(v.session)
+	v.h.m.ReleaseTurn(v.session, v.turn)
 }
 
 func (v *viewer) post(path string, body []byte) error {

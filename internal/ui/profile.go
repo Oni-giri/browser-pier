@@ -208,3 +208,17 @@ func (u *UI) handBack(w http.ResponseWriter, r *http.Request) {
 	u.m.ReleaseControl(s.ID)
 	done(w, r, back, "Handed back", false)
 }
+
+// chooser serves the live view's file chooser routes (PROJ-181) for the
+// profile's running browser; the picker checks that the admin's live
+// view has control of it, not a handoff link (PROJ-184).
+func (u *UI) chooser(serve func(http.ResponseWriter, *http.Request, sessions.Session, string)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s, ok := u.m.Live(r.PathValue("name"))
+		if !ok || (s.State != sessions.Running && s.State != sessions.NeedsHelp) {
+			http.Error(w, "The browser isn't running.", http.StatusConflict)
+			return
+		}
+		serve(w, r, s, sessions.AdminHolder)
+	}
+}

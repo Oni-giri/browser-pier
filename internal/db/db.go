@@ -141,6 +141,10 @@ var migrations = []string{
 	// PROJ-23: the profile's Record sessions setting, off until the admin
 	// turns it on.
 	`ALTER TABLE profiles ADD COLUMN record_sessions INTEGER NOT NULL DEFAULT 0;`,
+
+	// What {sticky} becomes in a profile's proxy (PROJ-153): empty for
+	// the profiles that exist, which get one the first time they need it.
+	`ALTER TABLE profiles ADD COLUMN sticky_token TEXT NOT NULL DEFAULT '';`,
 }
 
 // Open opens (creating if needed) the database at path and migrates it.

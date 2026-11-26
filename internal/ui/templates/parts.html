@@ -43,6 +43,7 @@
     {{- end}}
     {{if or (not .Page) .Live}}<a href="/profiles/{{.Name}}/edit">Edit settings</a>{{end}}
     {{if .Live}}<button type="button" disabled title="Stop the browser first">Export profile…</button>{{else}}<button type="button" data-dialog="export-dialog" data-name="{{.Name}}">Export profile…</button>{{end}}
+    {{if .StickyProxy}}{{if .Live}}<button type="button" disabled title="Stop the browser first">New exit IP…</button>{{else}}<button type="button" data-dialog="exit-dialog" data-name="{{.Name}}">New exit IP…</button>{{end}}{{end}}
     <hr>
     <button type="button" class="danger" data-dialog="delete-dialog" data-name="{{.Name}}">Delete profile…</button>
   </div>
@@ -108,6 +109,16 @@
     <div class="dlg-foot"><button class="btn" type="button" data-close>Cancel</button><button class="btn primary" type="submit">Import</button></div>
   </form>
 </dialog>
+<dialog id="exit-dialog" class="alert" aria-labelledby="exit-title">
+  <form method="post" data-action="/profiles/{name}/new-exit" data-busy="Changing…">
+    <input type="hidden" name="back" value="{{.}}">
+    <div class="dlg-body">
+      <h2 id="exit-title" data-text="Give {name} a new exit IP?"></h2>
+      <p data-text="At its next start, {name} asks its proxy for a new exit. Sites may then ask its accounts to sign in or verify again, and the country may change, bringing a new time zone and language."></p>
+    </div>
+    <div class="dlg-foot"><button class="btn" type="button" data-close>Cancel</button><button class="btn primary" type="submit">New exit IP</button></div>
+  </form>
+</dialog>
 <dialog id="delete-dialog" class="alert" aria-labelledby="delete-title">
   <form method="post" data-action="/profiles/{name}/delete" data-busy="Deleting…">
     <div class="dlg-body">
@@ -126,3 +137,12 @@
 {{/* One activity log entry (PROJ-158). Everything in it is text: a tab
      title is page text, escaped like the rest. */}}
 {{define "log-entry"}}<li class="{{.Kind}}{{if .Attention}} attention{{end}}">{{if .Agent}}<b class="log-agent">{{.Agent}}</b>: {{end}}{{.What}}{{with .Title}}: <q class="log-title">{{.}}</q>{{end}}{{with .Link}}<a class="at" href="{{.}}" title="Play the recording from here">{{end}}<time datetime="{{.At.Format "2006-01-02T15:04:05Z07:00"}}">{{clock .At}}</time>{{if .Link}}</a>{{end}}</li>{{end}}
+
+{{define "proxy-result"}}
+{{- if .OK}}<p class="proxy-ok">Works. It exits at <span class="mono">{{.IP}}</span>, in {{.Country}}.</p>
+<span class="hint">{{.Subject}} runs in {{.TimeZone}}, in {{.Locale}} ({{.Accept}}). One lookup through the proxy took {{.MS}} ms.</span>
+{{- with .Warn}}<p class="notice" style="margin:8px 0 0">{{.}}</p>{{end}}
+{{- range .Notes}}<span class="hint">{{.}}</span>{{end}}
+<span class="hint">The proxy and this result weren’t saved.</span>
+{{- else}}<p class="errors" style="margin:0">{{.Problem}}</p>{{end}}
+{{end}}

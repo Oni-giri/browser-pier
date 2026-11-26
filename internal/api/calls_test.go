@@ -346,7 +346,7 @@ func TestARefusedCallGivesItsIDBack(t *testing.T) {
 	}
 	// A person has the browser.
 	for _, id := range []string{v.ID, a.ID} {
-		if err := f.m.TakeControl(id); err != nil {
+		if err := f.m.TakeControl(id, "person"); err != nil {
 			t.Fatal(err)
 		}
 	}

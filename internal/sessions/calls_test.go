@@ -139,7 +139,7 @@ func TestAReceiptRefusedBeforeItsLeaseIsGivenBack(t *testing.T) {
 
 	// Refused: a person drives.
 	advance(time.Minute)
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatal(err)
 	}
 	c := take(t, f.m, s.ID, "tok", "x", fp)
@@ -250,7 +250,7 @@ func TestACutLeaseEndsItsCallInterrupted(t *testing.T) {
 		},
 		"take control": func(f *fixture, s Session, _ context.CancelFunc, advance func(time.Duration)) {
 			advance(takeOverAfter + time.Second)
-			if err := f.m.TakeControl(s.ID); err != nil {
+			if err := f.m.TakeControl(s.ID, "person"); err != nil {
 				f.t.Fatal(err)
 			}
 		},

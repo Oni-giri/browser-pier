@@ -187,6 +187,10 @@ type state struct {
 	// active is the target the last call found in front.
 	active string
 	listed bool // tabs have been listed once: new ones are news
+	// tabsSaid is how many tabs were open at the last result that went
+	// through run, so the many-tabs line (manyTabsLine) comes only when
+	// the count has grown.
+	tabsSaid int
 	// mot paces act like a hand: one source per session, never shared.
 	// pointer is where act's pointer last stopped, in the viewport's
 	// CSS pixels; nil before its first move, or once a person has had
@@ -265,6 +269,9 @@ type call struct {
 	// the fence, not in it: the Cloudflare note, whose only part from the
 	// page is a clamped point.
 	notes []string
+	// tabsTool: the call is the tabs tool's, whose every result gives
+	// the many-tabs line when it's due.
+	tabsTool bool
 	// instant: the step under way is at instant pace, not a hand's.
 	// keyAt is when act last pressed a key at human pace, and keyDue how
 	// long after it the next key goes down.
@@ -539,9 +546,22 @@ func (c *call) result(source, body, trailer string) string {
 	return out
 }
 
-// run runs one tool call from start to end.
+// run runs one tool call from start to end. Its result ends with the
+// many-tabs line when it is due.
 func (t *Tools) run(ctx context.Context, s sessions.Session, who Caller, f func(c *call) (string, error)) (string, error) {
-	return runWith(ctx, t, s, who, toolsAllowList, f)
+	return runWith(ctx, t, s, who, toolsAllowList, func(c *call) (string, error) {
+		out, err := f(c)
+		if err != nil {
+			return out, err
+		}
+		if l := c.manyTabsLine(); l != "" {
+			if out != "" {
+				out += "\n"
+			}
+			out += l
+		}
+		return out, nil
+	})
 }
 
 // runWith runs one call from start to end with a caller's own allow-list

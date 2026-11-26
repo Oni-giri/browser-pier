@@ -440,15 +440,15 @@ func TestControlEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 	done()
-	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrAgentDriving) {
+	if err := f.m.TakeControl(s.ID, AdminHolder); !errors.Is(err, ErrAgentDriving) {
 		t.Fatalf("take while the agent drives: %v", err)
 	}
 	advance(agentQuiet)
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, AdminHolder); err != nil {
 		t.Fatal(err)
 	}
 	// Someone else already has it: refused, nothing written.
-	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrHumanDriving) {
+	if err := f.m.TakeControl(s.ID, AdminHolder); !errors.Is(err, ErrHumanDriving) {
 		t.Fatalf("second take: %v", err)
 	}
 	f.m.ReleaseControl(s.ID)
@@ -457,7 +457,7 @@ func TestControlEntries(t *testing.T) {
 	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.m.TakeControlByLink(s.ID); err != nil {
+	if err := f.m.TakeControlByLink(s.ID, HandoffHolder("h1")); err != nil {
 		t.Fatal(err)
 	}
 	f.m.ReleaseControl(s.ID)
@@ -570,7 +570,7 @@ func TestTitleEntries(t *testing.T) {
 	f.m.Note(s.ID, "claude", "Clicked at 7, 8")
 	n := len(titles())
 	// Never while a person has control, nor during a handoff.
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, AdminHolder); err != nil {
 		t.Fatal(err)
 	}
 	f.m.NoteTitle(s.ID, "What the person typed")
@@ -706,7 +706,7 @@ func TestRecentCallsHoldActionsOnly(t *testing.T) {
 	f.m.NoteTitle(s.ID, "Secret page title")
 	w, _ := f.m.Watch(s.ID)
 	w()
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, AdminHolder); err != nil {
 		t.Fatal(err)
 	}
 	f.m.ReleaseControl(s.ID)
