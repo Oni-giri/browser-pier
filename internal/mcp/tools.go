@@ -18,6 +18,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/api"
 	"github.com/Oni-giri/browser-pier/internal/fence"
 	"github.com/Oni-giri/browser-pier/internal/files"
+	"github.com/Oni-giri/browser-pier/internal/keyplan"
 	"github.com/Oni-giri/browser-pier/internal/screenshot"
 )
 
@@ -30,7 +31,7 @@ func (s *Server) addTools(srv *sdk.Server) {
 	sdk.AddTool(srv, &sdk.Tool{Name: "stop_browser", Description: "Stop a browser to free its memory. Cookies and logins are kept for next time."}, s.stopBrowser)
 	sdk.AddTool(srv, &sdk.Tool{Name: "screenshot", Description: "See the browser's screen (Visual mode); the strip along the bottom is the desktop's taskbar, not the page. Other tools take coordinates in this screenshot's pixels."}, s.screenshot)
 	sdk.AddTool(srv, &sdk.Tool{Name: "click", Description: "Click at a point of the last screenshot (Visual mode; in API mode too, at a point a page tool gives, such as a Cloudflare checkbox's). At human pace (the default) the pointer glides there, as a hand would, and lands within about 3 screen pixels of the point, so aim at the target's middle. If the click started a download, the answer says so: downloaded name (size), or download in progress when it isn't finished within download_wait_ms (3 s by default). If a file chooser is open after it, the answer ends with a line saying so: answer it with choose_files (it may open a moment late, and be told with the next action)."}, s.click)
-	sdk.AddTool(srv, &sdk.Tool{Name: "type_text", Description: "Type text into whatever has focus, as a keyboard would (Visual mode). At human pace (the default) that takes about 0.25 s a character, so at most 150 characters per call; split longer text, or use pace instant. Any character works, accents and emoji too: different non-ASCII characters are typed in stretches of 13, about 0.55 s each, and a call that would take over about 45 s (some 800 different CJK characters) is refused before anything is typed, so split long text. Refused too: control characters other than newline, carriage return (both Return) and tab, and U+FFFD (it stands for invalid input): text with one is refused before anything is typed. A failure says whether anything may have been typed: if it may, look at the field before typing again."}, s.typeText)
+	sdk.AddTool(srv, &sdk.Tool{Name: "type_text", Description: "Type text into whatever has focus, as a keyboard would (Visual mode). At human pace (the default) that takes about 0.25 s a character, so at most 150 characters per call; split longer text, or use pace instant. Any character works, accents and emoji too: non-ASCII characters are typed in stretches of up to 13 different ones, about 0.55 s each (a character that comes back after 13 others is bound again), and a call that would take over about 45 s (some 800 CJK characters, or 1,300 of Russian prose) is refused before anything is typed, so split long text. Refused too: control characters other than newline, carriage return (both Return) and tab, and U+FFFD (it stands for invalid input): text with one is refused before anything is typed. A failure says whether anything may have been typed: if it may, look at the field before typing again."}, s.typeText)
 	sdk.AddTool(srv, &sdk.Tool{Name: "press_keys", Description: "Press keys or combinations, such as Return, Tab, ctrl+a or ctrl+shift+t (Visual mode). If they started a download, the answer says so, as click's does."}, s.pressKeys)
 	sdk.AddTool(srv, &sdk.Tool{Name: "scroll", Description: "Scroll at a point by whole notches: positive down or right, negative up or left (Visual mode)."}, s.scroll)
 	sdk.AddTool(srv, &sdk.Tool{Name: "drag", Description: "Drag from one point to another with the mouse button held (Visual mode)."}, s.drag)
@@ -357,46 +358,28 @@ func tooLongToType(what string, n int, fill bool) error {
 	return toolError(fmt.Sprintf("%s: %d characters at human pace, at most %d per call (about 0.25 s a character, so the call ends before your client's timeout); %s", what, n, maxHumanType, alt))
 }
 
-// Text with characters the keyboard map lacks (anything but ASCII) is
-// typed in stretches (PROJ-195): each binds as many of them as the map
-// has spare keys, 13 with the browser image's layout data, and takes
-// about 0.55 s on top of its keys. typeTime estimates a call from that,
-// and a call estimated over maxTypeTime is refused before anything is
-// typed (PROJ-207), so it ends before an MCP client's 60 s timeout, after
-// which the client would retry and the text be typed twice.
-const (
-	spareKeys   = 13
-	stretchTime = 550 * time.Millisecond
-	maxTypeTime = 45 * time.Second
-)
-
-// typeTime estimates how long a type call takes: 0.25 s a character at
-// human pace, 12 ms at instant, and stretchTime for each stretch of
-// spareKeys distinct characters the keyboard map lacks.
-func typeTime(text string, human bool) (time.Duration, int, int) {
-	per := 12 * time.Millisecond
-	if human {
-		per = 250 * time.Millisecond
-	}
-	distinct := map[rune]bool{}
-	for _, r := range text {
-		if r >= utf8.RuneSelf {
-			distinct[r] = true
-		}
-	}
-	stretches := (len(distinct) + spareKeys - 1) / spareKeys
-	return time.Duration(utf8.RuneCountInString(text))*per + time.Duration(stretches)*stretchTime, len(distinct), stretches
-}
+// maxTypeTime is the longest a type_text call may be estimated to take
+// (keyplan.Estimate: its keys, and the stretches of characters the
+// keyboard map lacks, as the browser plans them, PROJ-195). A longer one
+// is refused before anything is typed (PROJ-207), so the call ends before
+// an MCP client's 60 s timeout, after which the client would retry and
+// the text be typed twice.
+const maxTypeTime = 45 * time.Second
 
 func (s *Server) typeText(ctx context.Context, req *sdk.CallToolRequest, in typeArgs) (*sdk.CallToolResult, any, error) {
+	// Refused before the call's turn, as the browser would refuse it, so
+	// a call_id isn't spent on it.
+	if err := keyplan.Check(in.Text); err != nil {
+		return nil, nil, toolError(err.Error())
+	}
 	if humanPace(in.Pace) {
 		if err := tooLongToType("text", utf8.RuneCountInString(in.Text), false); err != nil {
 			return nil, nil, err
 		}
 	}
-	if d, distinct, stretches := typeTime(in.Text, humanPace(in.Pace)); d > maxTypeTime {
-		return nil, nil, toolError(fmt.Sprintf("text: would take about %d s to type (%d characters, %d different ones the keyboard lacks, typed in %d stretches of about 0.55 s), past what ends before your client's timeout; split it across calls, or use fill",
-			int(d.Seconds()+0.5), utf8.RuneCountInString(in.Text), distinct, stretches))
+	if d, stretches := keyplan.Estimate(in.Text, humanPace(in.Pace)); d > maxTypeTime {
+		return nil, nil, toolError(fmt.Sprintf("text: would take about %d s to type (%d characters, typed in %d stretches of characters the keyboard lacks, about 0.55 s each), past what ends before your client's timeout; split it across calls",
+			int(d.Seconds()+0.5), utf8.RuneCountInString(in.Text), stretches))
 	}
 	var sc screen
 	if in.Screenshot { // the size only matters for the screenshot after
