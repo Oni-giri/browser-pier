@@ -95,9 +95,10 @@ func TestActStepsMatchREST(t *testing.T) {
 		t.Errorf("MCP step fields %v, REST step fields %v", m, r)
 	}
 	// So do act's and snapshot's own options (PROJ-114), and wait_for's
-	// (PROJ-122), but session_id.
+	// (PROJ-122), but session_id and call_id (the API's Idempotency-Key
+	// header, PROJ-156).
 	without := func(v any) []string {
-		return slices.DeleteFunc(names(v), func(n string) bool { return n == "session_id" })
+		return slices.DeleteFunc(names(v), func(n string) bool { return n == "session_id" || n == "call_id" })
 	}
 	if m, r := without(actArgs{}), names(pagetools.ActIn{}); !slices.Equal(m, r) {
 		t.Errorf("MCP act fields %v, REST act fields %v", m, r)

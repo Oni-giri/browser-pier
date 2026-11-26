@@ -45,7 +45,7 @@ func newRealFixture(t *testing.T) *realFixture {
 	}
 	// Each test is its own BrowserPier: tests running in parallel must not
 	// take each other's containers for strays.
-	rt, err := docker.New(docker.Options{Image: image, UsernsMode: os.Getenv("BROWSERPIER_USERNS_MODE"), Instance: fmt.Sprintf("test%d", time.Now().UnixNano())})
+	rt, err := docker.New(docker.Options{Image: image, UsernsMode: os.Getenv("BROWSERPIER_USERNS_MODE"), User: docker.User(os.Getuid(), os.Getgid()), Instance: fmt.Sprintf("test%d", time.Now().UnixNano())})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +365,19 @@ func TestWrongHostPathFailsLoudly(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
+	// The runtime knows the data dir at another host path than the
+	// sessions' layout: the create guard refuses the mounts before Docker
+	// sees them (PROJ-159).
 	s, _, err := m.Start(ctx, name, "")
+	if !errors.Is(err, ErrStartFailed) || s.State != Failed || !strings.Contains(s.Error, "refused to create the browser container: HostConfig.Mounts[0].Source") {
+		t.Fatalf("Start = %+v, %v; want the guard's refusal", s, err)
+	}
+	// Both wrong alike, as a wrong BROWSERPIER_HOST_DATA_DIR makes them:
+	// the guard can't tell, and the entrypoint's mount check does.
+	if err := f.rt.UseDataDir(ctx, elsewhere, elsewhere); err != nil {
+		t.Fatal(err)
+	}
+	s, _, err = m.Start(ctx, name, "")
 	if !errors.Is(err, ErrStartFailed) || s.State != Failed {
 		t.Fatalf("Start = %+v, %v; want a failure", s, err)
 	}

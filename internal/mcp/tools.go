@@ -29,17 +29,19 @@ func (s *Server) addTools(srv *sdk.Server) {
 	sdk.AddTool(srv, &sdk.Tool{Name: "start_browser", Description: "Start a profile's browser, or attach to it if it's already running. Returns the session_id the other tools take."}, s.startBrowser)
 	sdk.AddTool(srv, &sdk.Tool{Name: "stop_browser", Description: "Stop a browser to free its memory. Cookies and logins are kept for next time."}, s.stopBrowser)
 	sdk.AddTool(srv, &sdk.Tool{Name: "screenshot", Description: "See the browser's screen (Visual mode); the strip along the bottom is the desktop's taskbar, not the page. Other tools take coordinates in this screenshot's pixels."}, s.screenshot)
-	sdk.AddTool(srv, &sdk.Tool{Name: "click", Description: "Click at a point of the last screenshot (Visual mode; in API mode too, at a point a page tool gives, such as a Cloudflare checkbox's). At human pace (the default) the pointer glides there, as a hand would, and lands within about 3 screen pixels of the point, so aim at the target's middle. If the click started a download, the answer says so: downloaded name (size), or download in progress when it isn't finished within download_wait_ms (3 s by default)."}, s.click)
+	sdk.AddTool(srv, &sdk.Tool{Name: "click", Description: "Click at a point of the last screenshot (Visual mode; in API mode too, at a point a page tool gives, such as a Cloudflare checkbox's). At human pace (the default) the pointer glides there, as a hand would, and lands within about 3 screen pixels of the point, so aim at the target's middle. If the click started a download, the answer says so: downloaded name (size), or download in progress when it isn't finished within download_wait_ms (3 s by default). If a file chooser is open after it, the answer ends with a line saying so: answer it with choose_files (it may open a moment late, and be told with the next action)."}, s.click)
 	sdk.AddTool(srv, &sdk.Tool{Name: "type_text", Description: "Type text into whatever has focus, as a keyboard would (Visual mode). At human pace (the default) that takes about 0.25 s a character, so at most 150 characters per call; split longer text, or use pace instant. Any character works, accents and emoji too: different non-ASCII characters are typed in stretches of 13, about 0.55 s each, and a call that would take over about 45 s (some 800 different CJK characters) is refused before anything is typed, so split long text. Refused too: control characters other than newline, carriage return (both Return) and tab, and U+FFFD (it stands for invalid input): text with one is refused before anything is typed. A failure says whether anything may have been typed: if it may, look at the field before typing again."}, s.typeText)
 	sdk.AddTool(srv, &sdk.Tool{Name: "press_keys", Description: "Press keys or combinations, such as Return, Tab, ctrl+a or ctrl+shift+t (Visual mode). If they started a download, the answer says so, as click's does."}, s.pressKeys)
 	sdk.AddTool(srv, &sdk.Tool{Name: "scroll", Description: "Scroll at a point by whole notches: positive down or right, negative up or left (Visual mode)."}, s.scroll)
 	sdk.AddTool(srv, &sdk.Tool{Name: "drag", Description: "Drag from one point to another with the mouse button held (Visual mode)."}, s.drag)
 	sdk.AddTool(srv, &sdk.Tool{Name: "wait", Description: "Wait for the page, up to 10 seconds."}, s.wait)
 	sdk.AddTool(srv, &sdk.Tool{Name: "zoom", Description: "See a region of the last screenshot at the screen's full resolution, to read small text."}, s.zoom)
-	sdk.AddTool(srv, &sdk.Tool{Name: "list_files", Description: "List the files the profile's browser downloaded, newest first; a download still under way isn't listed until it has finished. act, click and press_keys already say what they downloaded."}, s.listFiles)
+	sdk.AddTool(srv, &sdk.Tool{Name: "list_files", Description: "List the files the profile's browser downloaded, newest first; a download still under way isn't listed until it has finished. act, click and press_keys already say what they downloaded. Also lists the page's open file choosers, for choose_files."}, s.listFiles)
 	s.addUploadTools(srv)
+	s.addChooserTools(srv)
 	s.addPageTools(srv)
 	s.addHandoffTools(srv)
+	s.addCallTools(srv)
 }
 
 // text is a result of one text block.
@@ -229,7 +231,7 @@ func (s *Server) screenshot(ctx context.Context, req *sdk.CallToolRequest, in se
 
 // act runs a Visual-mode action through the API's /computer, in screen
 // pixels, returning a screenshot after it if asked.
-func (s *Server) act(ctx context.Context, extra *sdk.RequestExtra, id string, sc screen, action map[string]any, shot bool, done string) (*sdk.CallToolResult, any, error) {
+func (s *Server) act(ctx context.Context, extra *sdk.RequestExtra, id string, callID *string, sc screen, action map[string]any, shot bool, done string) (*sdk.CallToolResult, any, error) {
 	if p, _ := action["pace"].(string); p == "" {
 		delete(action, "pace")
 	}
@@ -241,9 +243,12 @@ func (s *Server) act(ctx context.Context, extra *sdk.RequestExtra, id string, sc
 		action["screenshot"] = true
 		action["width"] = sw
 	}
-	r, err := s.call(ctx, extra, "POST", "/api/sessions/"+url.PathEscape(id)+"/computer", action)
+	r, err := s.callWithID(ctx, extra, "POST", "/api/sessions/"+url.PathEscape(id)+"/computer", action, callID)
 	if err != nil {
 		return nil, nil, err
+	}
+	if res, ok := r.replayed(); ok {
+		return res, nil, nil
 	}
 	if !r.ok() {
 		s.forgetGone(id, r)
@@ -254,12 +259,18 @@ func (s *Server) act(ctx context.Context, extra *sdk.RequestExtra, id string, sc
 		if n := downloadsText(r.header); n != "" {
 			res.Content = append(res.Content, &sdk.TextContent{Text: n})
 		}
+		if n := chooserText(r.header); n != "" {
+			res.Content = append(res.Content, &sdk.TextContent{Text: n})
+		}
 		return res, nil, nil
 	}
 	if e := r.header.Get("X-Screenshot-Error"); shot && e != "" {
 		done = fmt.Sprintf("%s The screenshot after it failed (%s); take one with screenshot.", done, e)
 	}
 	if n := downloadsText(r.header); n != "" {
+		done += "\n" + n
+	}
+	if n := chooserText(r.header); n != "" {
 		done += "\n" + n
 	}
 	return text("%s", done), nil, nil
@@ -301,6 +312,8 @@ type clickArgs struct {
 	Double bool   `json:"double,omitempty" jsonschema:"double-click"`
 	// DownloadWaitMS is a pointer, so 0 (don't wait) differs from unset.
 	DownloadWaitMS *int `json:"download_wait_ms,omitempty" jsonschema:"how long to wait for a download the click started to finish, in ms; default 3000, 0 not to wait, at most 30000; when set, also how long to look for one to start, so a slow server's download is told now rather than with the next action"`
+	// CallID is passed on as the API's Idempotency-Key (PROJ-156).
+	CallID *string `json:"call_id,omitempty" jsonschema:"optional: a new id of yours (1 to 64 letters, digits, - or _) for an action that must not happen twice; if its answer is lost, send the same call again with the same call_id and it won't run twice, or ask call_status how it went"`
 }
 
 func (s *Server) click(ctx context.Context, req *sdk.CallToolRequest, in clickArgs) (*sdk.CallToolResult, any, error) {
@@ -309,7 +322,7 @@ func (s *Server) click(ctx context.Context, req *sdk.CallToolRequest, in clickAr
 		return nil, nil, err
 	}
 	x, y := sc.ToScreen(in.X, in.Y)
-	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "click", "x": x, "y": y, "button": in.Button, "double": in.Double, "pace": in.Pace, "download_wait_ms": in.DownloadWaitMS}, in.Screenshot, "Clicked.")
+	return s.act(ctx, req.Extra, in.SessionID, in.CallID, sc, map[string]any{"action": "click", "x": x, "y": y, "button": in.Button, "double": in.Double, "pace": in.Pace, "download_wait_ms": in.DownloadWaitMS}, in.Screenshot, "Clicked.")
 }
 
 type typeArgs struct {
@@ -317,6 +330,8 @@ type typeArgs struct {
 	Text       string `json:"text" jsonschema:"what to type; use press_keys for Return, Tab and shortcuts. At most 150 characters at human pace (about 0.25 s a character), 2000 at instant; text with many different non-ASCII characters (CJK, say) takes longer, and a call that would take over about 45 s is refused: split it"`
 	Screenshot bool   `json:"screenshot,omitempty" jsonschema:"return a screenshot after"`
 	Pace       string `json:"pace,omitempty" jsonschema:"human (default): moves, aims and types like a hand, so it takes longer; instant: at once"`
+	// CallID is passed on as the API's Idempotency-Key (PROJ-156).
+	CallID *string `json:"call_id,omitempty" jsonschema:"optional: a new id of yours (1 to 64 letters, digits, - or _) for an action that must not happen twice; if its answer is lost, send the same call again with the same call_id and it won't run twice, or ask call_status how it went"`
 }
 
 // maxHumanType caps what one MCP call types at human pace. At about a
@@ -390,7 +405,7 @@ func (s *Server) typeText(ctx context.Context, req *sdk.CallToolRequest, in type
 			return nil, nil, err
 		}
 	}
-	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "type", "text": in.Text, "pace": in.Pace}, in.Screenshot, "Typed.")
+	return s.act(ctx, req.Extra, in.SessionID, in.CallID, sc, map[string]any{"action": "type", "text": in.Text, "pace": in.Pace}, in.Screenshot, "Typed.")
 }
 
 type keysArgs struct {
@@ -400,6 +415,8 @@ type keysArgs struct {
 	Pace       string `json:"pace,omitempty" jsonschema:"human (default): moves, aims and types like a hand, so it takes longer; instant: at once"`
 	// DownloadWaitMS is a pointer, so 0 (don't wait) differs from unset.
 	DownloadWaitMS *int `json:"download_wait_ms,omitempty" jsonschema:"how long to wait for a download the keys started to finish, in ms; default 3000, 0 not to wait, at most 30000; when set, also how long to look for one to start, so a slow server's download is told now rather than with the next action"`
+	// CallID is passed on as the API's Idempotency-Key (PROJ-156).
+	CallID *string `json:"call_id,omitempty" jsonschema:"optional: a new id of yours (1 to 64 letters, digits, - or _) for an action that must not happen twice; if its answer is lost, send the same call again with the same call_id and it won't run twice, or ask call_status how it went"`
 }
 
 func (s *Server) pressKeys(ctx context.Context, req *sdk.CallToolRequest, in keysArgs) (*sdk.CallToolResult, any, error) {
@@ -410,13 +427,15 @@ func (s *Server) pressKeys(ctx context.Context, req *sdk.CallToolRequest, in key
 			return nil, nil, err
 		}
 	}
-	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "key", "keys": strings.Fields(in.Keys), "pace": in.Pace, "download_wait_ms": in.DownloadWaitMS}, in.Screenshot, "Pressed "+in.Keys+".")
+	return s.act(ctx, req.Extra, in.SessionID, in.CallID, sc, map[string]any{"action": "key", "keys": strings.Fields(in.Keys), "pace": in.Pace, "download_wait_ms": in.DownloadWaitMS}, in.Screenshot, "Pressed "+in.Keys+".")
 }
 
 type scrollArgs struct {
 	pointArgs
 	Down  int `json:"down,omitempty" jsonschema:"notches to scroll down; negative scrolls up"`
 	Right int `json:"right,omitempty" jsonschema:"notches to scroll right; negative scrolls left"`
+	// CallID is passed on as the API's Idempotency-Key (PROJ-156).
+	CallID *string `json:"call_id,omitempty" jsonschema:"optional: a new id of yours (1 to 64 letters, digits, - or _) for an action that must not happen twice; if its answer is lost, send the same call again with the same call_id and it won't run twice, or ask call_status how it went"`
 }
 
 func (s *Server) scroll(ctx context.Context, req *sdk.CallToolRequest, in scrollArgs) (*sdk.CallToolResult, any, error) {
@@ -425,7 +444,7 @@ func (s *Server) scroll(ctx context.Context, req *sdk.CallToolRequest, in scroll
 		return nil, nil, err
 	}
 	x, y := sc.ToScreen(in.X, in.Y)
-	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "scroll", "x": x, "y": y, "dx": in.Right, "dy": in.Down, "pace": in.Pace}, in.Screenshot, "Scrolled.")
+	return s.act(ctx, req.Extra, in.SessionID, in.CallID, sc, map[string]any{"action": "scroll", "x": x, "y": y, "dx": in.Right, "dy": in.Down, "pace": in.Pace}, in.Screenshot, "Scrolled.")
 }
 
 type dragArgs struct {
@@ -436,6 +455,8 @@ type dragArgs struct {
 	ToY        int    `json:"to_y"`
 	Screenshot bool   `json:"screenshot,omitempty" jsonschema:"return a screenshot after"`
 	Pace       string `json:"pace,omitempty" jsonschema:"human (default): moves, aims and types like a hand, so it takes longer; instant: at once"`
+	// CallID is passed on as the API's Idempotency-Key (PROJ-156).
+	CallID *string `json:"call_id,omitempty" jsonschema:"optional: a new id of yours (1 to 64 letters, digits, - or _) for an action that must not happen twice; if its answer is lost, send the same call again with the same call_id and it won't run twice, or ask call_status how it went"`
 }
 
 func (s *Server) drag(ctx context.Context, req *sdk.CallToolRequest, in dragArgs) (*sdk.CallToolResult, any, error) {
@@ -445,7 +466,7 @@ func (s *Server) drag(ctx context.Context, req *sdk.CallToolRequest, in dragArgs
 	}
 	fx, fy := sc.ToScreen(in.FromX, in.FromY)
 	tx, ty := sc.ToScreen(in.ToX, in.ToY)
-	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "drag",
+	return s.act(ctx, req.Extra, in.SessionID, in.CallID, sc, map[string]any{"action": "drag",
 		"from": map[string]int{"x": fx, "y": fy}, "to": map[string]int{"x": tx, "y": ty}, "pace": in.Pace}, in.Screenshot, "Dragged.")
 }
 
@@ -464,7 +485,7 @@ func (s *Server) wait(ctx context.Context, req *sdk.CallToolRequest, in waitArgs
 		}
 	}
 	ms := int(min(max(in.Seconds, 0), 10) * 1000)
-	return s.act(ctx, req.Extra, in.SessionID, sc, map[string]any{"action": "wait", "ms": ms}, in.Screenshot,
+	return s.act(ctx, req.Extra, in.SessionID, nil, sc, map[string]any{"action": "wait", "ms": ms}, in.Screenshot,
 		fmt.Sprintf("Waited %s.", time.Duration(ms)*time.Millisecond))
 }
 
@@ -519,13 +540,17 @@ func (s *Server) listFiles(ctx context.Context, req *sdk.CallToolRequest, in pro
 	if err := s.callJSON(ctx, req.Extra, "GET", "/api/profiles/"+url.PathEscape(in.Profile)+"/files", nil, &out); err != nil {
 		return nil, nil, err
 	}
+	choosers := s.choosersText(ctx, req.Extra, in.Profile)
+	if choosers != "" {
+		choosers = "\n\n" + choosers
+	}
 	if len(out.Files) == 0 {
-		return text("No files."), nil, nil
+		return text("No files.%s", choosers), nil, nil
 	}
 	// File names come from the pages that offered the downloads.
 	var b strings.Builder
 	for _, f := range out.Files {
 		fmt.Fprintf(&b, "%s (%d bytes, %s)\n", f.Name, f.Size, f.Modified.UTC().Format(time.RFC3339))
 	}
-	return text("%s\nFetch one with GET /api/profiles/%s/files/{name} and your token.", fence.Wrap("downloaded file names", b.String()), in.Profile), nil, nil
+	return text("%s\nFetch one with GET /api/profiles/%s/files/{name} and your token.%s", fence.Wrap("downloaded file names", b.String()), in.Profile, choosers), nil, nil
 }

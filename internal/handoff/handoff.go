@@ -233,7 +233,7 @@ func (s *Service) Open(ctx context.Context, r Request) (Handoff, string, error) 
 		_, _ = s.db.ExecContext(ctx, `DELETE FROM handoffs WHERE id = ?`, h.ID)
 		return Handoff{}, "", err
 	}
-	s.m.NoteAttention(sessionID, agent, "Paused, waiting for you: "+reason.Label())
+	s.m.NoteAttention(ctx, sessionID, agent, "Paused, waiting for you: "+reason.Label())
 	s.log.Info("handoff opened", "handoff", h.ID, "profile", h.Profile, "agent", agent, "reason", reason, "policy", h.Policy, "until_url", h.UntilURL != "")
 	s.watch(h)
 	return h, token, nil

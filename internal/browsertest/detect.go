@@ -51,6 +51,9 @@ type Signals struct {
 	AvailHeight   int    `json:"availHeight"`
 	WebGLVendor   string `json:"webglVendor"`
 	WebGLRenderer string `json:"webglRenderer"`
+	// WebGL2Renderer is the same read from a webgl2 context, empty if
+	// there's none.
+	WebGL2Renderer string `json:"webgl2Renderer"`
 	// NotificationPermission and PermissionQuery disagree (denied and
 	// prompt) in headless Chrome.
 	NotificationPermission string `json:"notificationPermission"`
@@ -149,6 +152,11 @@ const detectPage = `<!doctype html><title>Detector</title><pre id="out">checking
     s.webglVendor = gl.getParameter(ext.UNMASKED_VENDOR_WEBGL);
     s.webglRenderer = gl.getParameter(ext.UNMASKED_RENDERER_WEBGL);
   } catch (err) { s.webglVendor = 'none: ' + err; }
+  try {
+    const gl2 = document.createElement('canvas').getContext('webgl2');
+    const ext2 = gl2.getExtension('WEBGL_debug_renderer_info');
+    s.webgl2Renderer = gl2.getParameter(ext2.UNMASKED_RENDERER_WEBGL);
+  } catch (err) { s.webgl2Renderer = ''; }
   s.notificationPermission = Notification.permission;
   s.permissionQuery = (await navigator.permissions.query({ name: 'notifications' })).state;
   s.hardwareConcurrency = navigator.hardwareConcurrency || 0;

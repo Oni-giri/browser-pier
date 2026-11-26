@@ -1,5 +1,5 @@
 {{define "content"}}{{with .Data}}
-<div class="page" data-profile="{{.Name}}" data-state="{{.Session.State}}">
+<div class="page" data-profile="{{.Name}}" data-state="{{.Session.State}}"{{if .Preview}} data-chooser="/profiles/{{.Name}}/chooser"{{end}}>
   <div class="page-head" style="align-items:center">
     <div class="crumbs">
       <a href="/profiles">Profiles</a><span class="sep">/</span>{{template "icon" .}}<h1>{{.Name}}</h1>
@@ -55,7 +55,8 @@
   </div>
 </div>
 {{template "confirm-dialogs" (printf "/profiles/%s" .Name)}}
-{{if .Preview}}<script src="/static/live.js" defer></script>{{end}}
+{{if .Preview}}<dialog id="chooser" aria-labelledby="chooser-title" data-keep></dialog>
+<script src="/static/live.js" defer></script>{{end}}
 {{end}}{{end}}
 
 {{define "side"}}

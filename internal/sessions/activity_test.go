@@ -18,7 +18,7 @@ func TestActivityLog(t *testing.T) {
 		f.m.Note(s.ID, "claude", fmt.Sprintf("step %d", i))
 		advance(time.Second)
 	}
-	f.m.NoteAttention(s.ID, "claude", "Paused, waiting for you: CAPTCHA")
+	f.m.NoteAttention(context.Background(), s.ID, "claude", "Paused, waiting for you: CAPTCHA")
 	got := f.m.Activity(s.ID)
 	if len(got) != maxActivity {
 		t.Fatalf("%d entries, want the last %d", len(got), maxActivity)

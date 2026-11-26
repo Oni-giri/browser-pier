@@ -43,6 +43,13 @@ type browser struct {
 	pageURL string
 	// methods are the CDP methods sent on the browser's WebSocket.
 	methods []string
+	// choosers is what GET /chooser answers (JSON), "" for none open;
+	// noPortal makes it 503. chosen records each POST /chooser/{id}.
+	choosers string
+	noPortal bool
+	chosen   []string
+	// chooserStatus, if set, is what POST /chooser/{id} answers.
+	chooserStatus int
 }
 
 func (b *browser) handler() http.Handler {
@@ -84,6 +91,13 @@ func (b *browser) handler() http.Handler {
 					_ = conn.Write(r.Context(), typ, out)
 					continue
 				}
+				if call.Method == "Target.attachToTarget" {
+					// The page tools get no further: they answer at once
+					// that the tab can't be reached.
+					out, _ := json.Marshal(map[string]any{"id": call.ID, "error": map[string]any{"code": -32000, "message": "No target with given id found"}})
+					_ = conn.Write(r.Context(), typ, out)
+					continue
+				}
 			}
 			_ = conn.Write(r.Context(), typ, append([]byte("echo:"), msg...))
 		}
@@ -115,6 +129,10 @@ func (b *browser) handler() http.Handler {
 		if onInput != nil {
 			onInput(r.URL.Path)
 		}
+		if strings.Contains(string(body), "boom") {
+			http.Error(w, "xdotool failed", http.StatusInternalServerError)
+			return
+		}
 		if strings.Contains(string(body), "99999") {
 			http.Error(w, "(99999, 1) is outside the 1440x900 screen", http.StatusBadRequest)
 			return
@@ -134,6 +152,35 @@ func (b *browser) handler() http.Handler {
 	for _, p := range []string{"click", "type", "scroll", "key", "drag"} {
 		mux.HandleFunc("POST /input/"+p, input)
 	}
+	mux.HandleFunc("GET /chooser", func(w http.ResponseWriter, _ *http.Request) {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if b.noPortal {
+			http.Error(w, "the file chooser portal isn't running in this browser", http.StatusServiceUnavailable)
+			return
+		}
+		list := b.choosers
+		if list == "" {
+			list = "[]"
+		}
+		_, _ = io.WriteString(w, `{"choosers":`+list+`}`)
+	})
+	// Control changing hands restarts the choosers' time limit (PROJ-181).
+	mux.HandleFunc("POST /chooser/restart", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	mux.HandleFunc("POST /chooser/{id}", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		b.chosen = append(b.chosen, r.PathValue("id")+" "+string(body))
+		switch {
+		case b.noPortal:
+			http.Error(w, "the file chooser portal isn't running in this browser", http.StatusServiceUnavailable)
+		case b.chooserStatus != 0:
+			http.Error(w, "refused", b.chooserStatus)
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
 	return mux
 }
 
@@ -171,6 +218,13 @@ type fixture struct {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
+	return newFixtureLogging(t, slog.New(slog.DiscardHandler))
+}
+
+// newFixtureLogging is newFixture, with the manager and the API logging
+// to log.
+func newFixtureLogging(t *testing.T, log *slog.Logger) *fixture {
+	t.Helper()
 	ctx := context.Background()
 	dir, err := os.MkdirTemp("", "bp")
 	if err != nil {
@@ -182,7 +236,6 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
-	log := slog.New(slog.DiscardHandler)
 	f := &fixture{t: t, b: &browser{}, rt: sessionstest.New(dir), tokens: auth.NewTokens(d), profiles: profiles.NewStore(d), db: d}
 	f.rt.Control = f.b.handler()
 	f.m, err = sessions.NewManager(d, f.rt, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)

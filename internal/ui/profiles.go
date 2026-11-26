@@ -55,6 +55,10 @@ type profileView struct {
 
 func (p profileView) Live() bool { return p.Session.State.Live() }
 
+// StickyProxy reports whether the profile's proxy holds {sticky}, which
+// is when "New exit IP" means something.
+func (p profileView) StickyProxy() bool { return profiles.HasSticky(p.Proxy) }
+
 // ModeLabel is the profile's mode as shown.
 func (p profileView) ModeLabel() string { return modeLabel(p.DefaultMode) }
 
@@ -329,6 +333,42 @@ func (u *UI) stopProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	u.log.Info("browser stopped from the UI", "profile", name)
 	done(w, r, back, name+" stopped", false)
+}
+
+// newExit gives a stopped profile a new sticky token, so its proxy
+// provider gives it a new exit at the next start. Only from here: an
+// agent can't ask for one, nor read the token.
+func (u *UI) newExit(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	back := backTo(r, "/profiles")
+	p, err := u.m.Profiles().Get(r.Context(), name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !profiles.HasSticky(p.Proxy) {
+		done(w, r, back, name+"'s proxy has no {sticky}, so its exit can't be changed here.", true)
+		return
+	}
+	// Held, so the browser can't start with the old token meanwhile; the
+	// forwarder keeps its credentials for the whole run.
+	release, err := u.m.Hold(name)
+	switch {
+	case errors.Is(err, sessions.ErrProfileBusy):
+		done(w, r, back, "Stop "+name+"'s browser before giving it a new exit IP.", true)
+		return
+	case err != nil:
+		done(w, r, back, "Couldn't give "+name+" a new exit IP: "+err.Error(), true)
+		return
+	}
+	defer release()
+	if err := u.m.Profiles().NewExit(r.Context(), name); err != nil {
+		u.log.Error("giving a profile a new exit", "profile", name, "err", err)
+		done(w, r, back, "Couldn't give "+name+" a new exit IP.", true)
+		return
+	}
+	u.log.Info("profile given a new exit from the UI", "profile", name)
+	done(w, r, back, name+" gets a new exit IP when it next starts", false)
 }
 
 func (u *UI) deleteProfile(w http.ResponseWriter, r *http.Request) {

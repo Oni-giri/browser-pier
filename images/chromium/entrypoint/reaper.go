@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 )
 
@@ -20,6 +21,8 @@ var procs = newReaper()
 type reaper struct {
 	mu      sync.Mutex
 	waiters map[int]waiter
+	// starts counts the processes started, for tests that must start none.
+	starts atomic.Int64
 }
 
 type waiter struct {
@@ -43,21 +46,30 @@ func newReaper() *reaper {
 // cmd's Stdout and Stderr must be nil or *os.File, since nothing calls Wait
 // to finish copying from a pipe.
 func (r *reaper) start(cmd *exec.Cmd) (<-chan syscall.WaitStatus, error) {
-	// Holding the lock across Start means reap can't collect the child
-	// before it is registered, even if it exits at once.
+	ch, _, err := r.startPid(cmd)
+	return ch, err
+}
+
+// startPid is start, also returning the child's pid: read here, under the
+// lock, since reap releases the process (and its Pid) once it exits.
+func (r *reaper) startPid(cmd *exec.Cmd) (<-chan syscall.WaitStatus, int, error) {
 	for _, out := range []io.Writer{cmd.Stdout, cmd.Stderr} {
 		if _, ok := out.(*os.File); out != nil && !ok {
-			return nil, errors.New("reaper: a command's stdout and stderr must be nil or *os.File")
+			return nil, 0, errors.New("reaper: a command's stdout and stderr must be nil or *os.File")
 		}
 	}
+	// Holding the lock across Start means reap can't collect the child
+	// before it is registered, even if it exits at once.
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.starts.Add(1)
 	if err := cmd.Start(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	ch := make(chan syscall.WaitStatus, 1)
-	r.waiters[cmd.Process.Pid] = waiter{proc: cmd.Process, ch: ch}
-	return ch, nil
+	pid := cmd.Process.Pid
+	r.waiters[pid] = waiter{proc: cmd.Process, ch: ch}
+	return ch, pid, nil
 }
 
 func (r *reaper) reap() {

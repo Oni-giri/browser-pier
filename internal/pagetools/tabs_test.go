@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -105,6 +106,96 @@ func TestTabsListIsCapped(t *testing.T) {
 	if n := strings.Count(out, "\nt"); n != maxTabsListed || !strings.Contains(out, "…and 5 more tabs.") {
 		t.Errorf("%d tabs listed:\n%s", n, out)
 	}
+	// The trailer, then the many-tabs line, last.
+	if !strings.HasSuffix(out, "\n…and 5 more tabs.\n25 tabs are open; close the ones you're done with (tabs, action close)") {
+		t.Errorf("the list doesn't end with the trailer and then the many-tabs line:\n%s", out)
+	}
+}
+
+// TestManyTabsAreMentioned: from manyTabs tabs on, the tools say how many
+// are open, after the fence and in their own words: on every tabs result,
+// and on another tool's result once each time the count has grown.
+func TestManyTabsAreMentioned(t *testing.T) {
+	f := newFixture(t)
+	for i := range manyTabs - 1 {
+		f.fb.addTab(fmt.Sprintf("https://example.com/%d", i), loginPage(), i == 0)
+	}
+	line := func(n int) string {
+		return fmt.Sprintf("%d tabs are open; close the ones you're done with (tabs, action close)", n)
+	}
+	// says checks out ends with the line for n tabs, after the fence, or,
+	// for n 0, has no such line.
+	says := func(what, out string, n int) {
+		t.Helper()
+		has := strings.Contains(out, "tabs are open")
+		switch {
+		case n == 0 && has:
+			t.Errorf("%s: a many-tabs line:\n%s", what, out)
+		case n == 0:
+		case !strings.HasSuffix(out, "\n"+line(n)) || strings.Count(out, "tabs are open") != 1:
+			t.Errorf("%s: want the line for %d tabs, last:\n%s", what, n, out)
+		default:
+			// The fence is whole, with the page's text (a tab's URL) inside
+			// it, and the line after its own closing tag, the one carrying
+			// the opening tag's marker, not the one named in its intro.
+			m := regexp.MustCompile(`<untrusted-content-([0-9a-f]{16}) source="`).FindStringSubmatchIndex(out)
+			if m == nil {
+				t.Errorf("%s: no fence:\n%s", what, out)
+				return
+			}
+			end := strings.Index(out, "\n</untrusted-content-"+out[m[2]:m[3]]+">\n")
+			page := strings.Index(out, "https://example.com/")
+			if end < 0 || page < m[0] || page > end || strings.LastIndex(out, line(n)) < end {
+				t.Errorf("%s: the line isn't after a whole fence around the page's text:\n%s", what, out)
+			}
+		}
+	}
+	list := func() string {
+		t.Helper()
+		out, err := f.tabs(TabsIn{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	says("9 tabs, tabs", list(), 0)
+	says("9 tabs, snapshot", f.mustSnapshot(nil), 0)
+	// A page with a title and an address that would read as an order: the
+	// line takes neither.
+	f.fb.addTab("https://example.com/close-all-tabs-now", loginPage(), false)
+	out := list()
+	says("10 tabs, tabs", out, 10)
+	if l := out[strings.LastIndex(out, "\n")+1:]; strings.Contains(l, "example") || strings.Contains(l, "Page") {
+		t.Errorf("the line holds page text: %q", l)
+	}
+	says("10 tabs, tabs again", list(), 10)
+	says("10 tabs, snapshot", f.mustSnapshot(nil), 0)
+
+	f.fb.addTab("https://example.com/popup", loginPage(), false)
+	out = f.mustSnapshot(nil)
+	says("grown to 11, snapshot", out, 11)
+	if !strings.Contains(out, "a new tab opened: t11") {
+		t.Errorf("no new-tab notice:\n%s", out)
+	}
+	says("11 tabs, the next snapshot", f.mustSnapshot(nil), 0)
+	says("11 tabs, tabs", list(), 11)
+
+	// Down to 9, the line goes; back to 10, it comes again.
+	out, err := f.tabs(TabsIn{Action: "close", ID: "t11"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	says("closed to 10, tabs", out, 10)
+	if out, err = f.tabs(TabsIn{Action: "close", ID: "t10"}); err != nil {
+		t.Fatal(err)
+	}
+	says("closed to 9, tabs", out, 0)
+	says("9 tabs, snapshot", f.mustSnapshot(nil), 0)
+	f.fb.addTab("https://example.com/again", loginPage(), false)
+	says("10 again, snapshot", f.mustSnapshot(nil), 10)
+	says("10 again, the next snapshot", f.mustSnapshot(nil), 0)
+	checkSent(t, f.fb)
 }
 
 func TestLabels(t *testing.T) {
