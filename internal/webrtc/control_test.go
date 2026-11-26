@@ -123,6 +123,7 @@ func TestStaleViewerLeavesTheNextTakeoverAlone(t *testing.T) {
 			if r := b.send(`{"type":"release"}`); len(r) != 1 || r[0]["on"] != false {
 				t.Errorf("B's release: %v", r)
 			}
+			awaitHuman(t, m, false, 5*time.Second) // the hand-back goes on by itself
 			if got := strings.Join(c.took(), " "); got != "events release empty" {
 				t.Errorf("B's input and hand-back: the browser got %q", got)
 			}
@@ -159,6 +160,7 @@ func TestInputRefusedWhileStoppingEndsControl(t *testing.T) {
 	if _, err := m.Stop(context.Background(), s.ID); err == nil {
 		t.Fatal("the stop didn't fail")
 	}
+	awaitHuman(t, m, false, 5*time.Second) // the hand-back goes on by itself
 	if snap, _ := m.Live("google"); snap.State != sessions.Running || snap.HumanControl {
 		t.Fatalf("after the failed stop: %s, person in control %v", snap.State, snap.HumanControl)
 	}

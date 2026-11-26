@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Oni-giri/browser-pier/internal/sessions/sessionstest"
 )
 
 func TestTakeAndReleaseControl(t *testing.T) {
@@ -479,11 +482,11 @@ func TestControlBelongsToItsTakeover(t *testing.T) {
 	var mu sync.Mutex
 	var calls []string
 	note := func(what string) http.HandlerFunc {
-		return func(w http.ResponseWriter, _ *http.Request) {
+		return func(w http.ResponseWriter, r *http.Request) {
 			mu.Lock()
 			calls = append(calls, what)
 			mu.Unlock()
-			w.WriteHeader(http.StatusNoContent)
+			sessionstest.AnswerLift(w, r)
 		}
 	}
 	mux := http.NewServeMux()
@@ -519,7 +522,7 @@ func TestControlBelongsToItsTakeover(t *testing.T) {
 	if f.m.InControl(s.ID, first) || !f.m.InControl(s.ID, second) {
 		t.Error("InControl names the wrong takeover")
 	}
-	if f.m.ReleaseControlGen(s.ID, first) {
+	if done, _ := f.m.ReleaseControlGen(s.ID, first); done != nil {
 		t.Error("the first person's hand-back ended the second's control")
 	}
 	if got, _ := f.m.Live("google"); !got.HumanControl {
@@ -533,8 +536,10 @@ func TestControlBelongsToItsTakeover(t *testing.T) {
 	} else {
 		done()
 	}
-	if !f.m.ReleaseControlGen(s.ID, second) {
+	if done, started := f.m.ReleaseControlGen(s.ID, second); done == nil || !started {
 		t.Error("the second person's hand-back did nothing")
+	} else {
+		<-done
 	}
 	if got := took(); got != "lift empty" {
 		t.Errorf("the second person's hand-back: the browser got %q, want lift, then empty", got)
@@ -542,7 +547,7 @@ func TestControlBelongsToItsTakeover(t *testing.T) {
 	if got, _ := f.m.Live("google"); got.HumanControl {
 		t.Error("still under a person's control")
 	}
-	if f.m.ReleaseControlGen(s.ID, second) || took() != "" {
+	if done, _ := f.m.ReleaseControlGen(s.ID, second); done != nil || took() != "" {
 		t.Error("handed back twice")
 	}
 }
@@ -599,7 +604,7 @@ func TestHandBackNeverReachesTheNextSession(t *testing.T) {
 				reachedNext = append(reachedNext, what)
 			}
 			mu.Unlock()
-			w.WriteHeader(http.StatusNoContent)
+			sessionstest.AnswerLift(w, r)
 		}
 	}
 	mux := http.NewServeMux()
@@ -655,36 +660,42 @@ func TestHandBackNeverReachesTheNextSession(t *testing.T) {
 
 // A hand-back waiting on another that is ending the same takeover returns
 // once that one has ended, even if someone takes control the moment it
-// does: it doesn't wait out the next person's takeover (PROJ-196).
+// does: it waits for that takeover's hand-back, not for the next
+// person's to end (PROJ-196).
 func TestConcurrentHandBackWaitsForItsOwnTakeover(t *testing.T) {
 	f := newFixture(t)
+	gate := make(chan struct{})
+	var lifts atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, r *http.Request) {
+		if lifts.Add(1) == 1 {
+			<-gate // the first hand-back is held up here
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"fence":` + r.Header.Get(FenceHeader) + `}`))
+	})
+	f.rt.Control = mux
 	s := f.start(f.m)
-	first, err := f.m.TakeControlGen(s.ID)
-	if err != nil {
+	if err := f.m.TakeControl(s.ID); err != nil {
 		t.Fatal(err)
 	}
-	// Another hand-back is ending it (let go of m.mu to empty the
-	// clipboard).
-	f.m.mu.Lock()
-	l := f.m.findLocked(s.ID)
-	l.releasing = true
-	f.m.mu.Unlock()
-	waited := make(chan bool, 1)
-	go func() { waited <- f.m.ReleaseControlGen(s.ID, first) }()
-	time.Sleep(50 * time.Millisecond) // it waits on the other
-	// That one ends, and in the same step someone else takes control,
-	// before the waiter gets m.mu back.
-	f.m.mu.Lock()
-	l.releasing = false
-	l.generation++
-	l.humanGen = l.generation
-	f.m.inputsDone.Broadcast()
-	f.m.mu.Unlock()
+	first := make(chan struct{})
+	go func() { f.m.ReleaseControl(s.ID); close(first) }() // a handoff ends, say
+	for lifts.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	second := make(chan struct{})
+	go func() { f.m.ReleaseControl(s.ID); close(second) }() // and the live view goes
+	time.Sleep(20 * time.Millisecond)
+	close(gate)
+	<-first
+	// The moment the first ends, someone takes control.
+	if err := f.m.TakeControl(s.ID); err != nil {
+		t.Fatal(err)
+	}
 	select {
-	case ended := <-waited:
-		if ended {
-			t.Error("the waiting hand-back says it ended the takeover")
-		}
+	case <-second:
 	case <-time.After(2 * time.Second):
 		t.Fatal("the waiting hand-back is waiting out the next person's takeover")
 	}
@@ -816,7 +827,7 @@ func TestHandBackTriesTheLiftAgain(t *testing.T) {
 	lifts := 0
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
-	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
 		lifts++
@@ -825,7 +836,7 @@ func TestHandBackTriesTheLiftAgain(t *testing.T) {
 			http.Error(w, "xdotool isn't taking input", http.StatusInternalServerError)
 			return
 		}
-		w.WriteHeader(http.StatusNoContent)
+		sessionstest.AnswerLift(w, r)
 	})
 	mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) {
 		mu.Lock()
@@ -876,7 +887,7 @@ func TestHandBackWarningsKeepTheBrowsersWordsOut(t *testing.T) {
 			refuse(w, r)
 			return
 		}
-		w.WriteHeader(http.StatusNoContent)
+		sessionstest.AnswerLift(w, r)
 	})
 	mux.HandleFunc("DELETE /input/clipboard", refuse)
 	f.rt.Control = mux
@@ -904,11 +915,11 @@ func TestAdmittedInputCantOutliveTheHandBack(t *testing.T) {
 	var mu sync.Mutex
 	var calls []string
 	note := func(what string) http.HandlerFunc {
-		return func(w http.ResponseWriter, _ *http.Request) {
+		return func(w http.ResponseWriter, r *http.Request) {
 			mu.Lock()
 			calls = append(calls, what)
 			mu.Unlock()
-			w.WriteHeader(http.StatusNoContent)
+			sessionstest.AnswerLift(w, r)
 		}
 	}
 	mux := http.NewServeMux()
@@ -1052,7 +1063,7 @@ func TestHandBackWaitsForTheFence(t *testing.T) {
 		}
 		select {
 		case <-answer:
-			w.WriteHeader(http.StatusNoContent)
+			sessionstest.AnswerLift(w, r)
 		default:
 			http.Error(w, "busy", http.StatusServiceUnavailable)
 		}
@@ -1126,11 +1137,11 @@ func TestHandBackGoesOnOnceFenced(t *testing.T) {
 	}
 }
 
-// After BrowserPier restarts, a browser waiting for help gets a help
-// epoch of its own, never 0, so its handoff's view can only take it
-// while that help lasts; and BrowserPier numbers its takeovers above the
-// fence the browser answers to its lift, so the browser takes their
-// input (PROJ-196).
+// After BrowserPier restarts, a browser waiting for help keeps its help
+// epoch, never 0, so its handoff's view can only take it while that help
+// lasts; the browser is fenced up to the highest takeover saved before
+// the restart, not "whatever it has seen", and the takeovers after it
+// number above that (PROJ-196).
 func TestReconcileFencesAndNumbersAbove(t *testing.T) {
 	f := newFixture(t)
 	var fences []string
@@ -1141,28 +1152,33 @@ func TestReconcileFencesAndNumbersAbove(t *testing.T) {
 		mu.Lock()
 		fences = append(fences, r.Header.Get(FenceHeader))
 		mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"fence":41}`))
+		sessionstest.AnswerLift(w, r)
 	})
 	f.rt.Control = mux
 	s := f.start(f.m)
-	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
+	epoch, err := f.m.OpenHelp(s.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	f.m.Close()
+	openHandoffRow(t, f.m, s, epoch)
+	last, err := f.m.TakeControlInHandoff(s.ID, epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.m.Close() // with the person's control under way
 
 	m := f.manager()
 	if err := m.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	mu.Lock()
-	if len(fences) == 0 || fences[len(fences)-1] != "all" {
-		t.Errorf("the restart's lift fenced %v, want all", fences)
+	if want := strconv.FormatUint(last, 10); len(fences) == 0 || fences[len(fences)-1] != want {
+		t.Errorf("the restart's lift fenced %v, want %s", fences, want)
 	}
 	mu.Unlock()
-	epoch, ok := m.HelpEpoch(s.ID)
-	if !ok || epoch == 0 {
-		t.Fatalf("HelpEpoch after the restart = %d, %v", epoch, ok)
+	got, ok := m.HelpEpoch(s.ID)
+	if !ok || got != epoch {
+		t.Fatalf("HelpEpoch after the restart = %d, %v, want %d", got, ok, epoch)
 	}
 	if _, err := m.TakeControlInHandoff(s.ID, 0); !errors.Is(err, ErrHandoffEnded) {
 		t.Errorf("a handoff's take with no epoch = %v, want ErrHandoffEnded", err)
@@ -1171,8 +1187,44 @@ func TestReconcileFencesAndNumbersAbove(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gen <= 41 {
-		t.Errorf("the first takeover after the restart is %d, at or below the browser's fence 41", gen)
+	if gen <= last {
+		t.Errorf("the first takeover after the restart is %d, at or below the last one before it, %d", gen, last)
+	}
+}
+
+// openHandoffRow records an open handoff for s, as internal/handoff does,
+// which opened Needs help as epoch.
+func openHandoffRow(t *testing.T, m *Manager, s Session, epoch uint64) {
+	t.Helper()
+	now := time.Now().UnixMilli()
+	if _, err := m.db.Exec(`INSERT INTO handoffs (id, session_id, profile, agent, reason, detail, origin, policy, status, token_hash, created_at, expires_at, help_epoch)
+		VALUES (?, ?, ?, 'bot', 'login', '', '', 'link', 'pending', ?, ?, ?, ?)`, "h_"+s.ID, s.ID, s.Profile, "t_"+s.ID, now, now+900000, epoch); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A browser left waiting for help whose handoff had ended as BrowserPier
+// went (between the two) is the agents' again after the restart, once it
+// is fenced (PROJ-196).
+func TestReconcileEndsHelpNoHandoffAsksFor(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	if _, err := f.m.OpenHelp(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.m.Close() // and the handoff's row says it ended, or never was
+
+	m := f.manager()
+	if err := m.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := m.Live("google"); got.State != Running {
+		t.Fatalf("after the restart: %s", got.State)
+	}
+	if _, done, err := m.AgentInput(context.Background(), s.ID); err != nil {
+		t.Fatalf("agent input = %v", err)
+	} else {
+		done()
 	}
 }
 
@@ -1183,15 +1235,21 @@ func TestReconcileFencesAndNumbersAbove(t *testing.T) {
 func TestEndHandoffEndsOnlyTheHelpersControl(t *testing.T) {
 	f := newFixture(t)
 	s := f.start(f.m)
-	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
+	epoch, err := f.m.OpenHelp(s.ID)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err := f.m.OpenHelp(s.ID); !errors.Is(err, ErrHelpOpen) {
+		t.Errorf("a second handoff's help = %v, want ErrHelpOpen", err)
 	}
 	if err := f.m.TakeControl(s.ID); err != nil { // the person helping
 		t.Fatal(err)
 	}
-	if err := f.m.EndHandoff(s.ID); err != nil {
-		t.Fatal(err)
+	done, err := f.m.EndHandoff(s.ID, epoch)
+	if err != nil || done == nil {
+		t.Fatalf("EndHandoff = %v, %v", done, err)
 	}
+	<-done
 	if got, _ := f.m.Live("google"); got.State != Running || got.HumanControl {
 		t.Fatalf("after the handoff: %s, person in control %v", got.State, got.HumanControl)
 	}
@@ -1200,11 +1258,26 @@ func TestEndHandoffEndsOnlyTheHelpersControl(t *testing.T) {
 	if err := f.m.TakeControl(s.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.m.EndHandoff(s.ID); err != nil {
-		t.Fatal(err)
+	if done, err := f.m.EndHandoff(s.ID, epoch); done != nil || !errors.Is(err, ErrHandoffEnded) {
+		t.Errorf("the late end = %v, %v, want ErrHandoffEnded", done, err)
 	}
 	if got, _ := f.m.Live("google"); !got.HumanControl {
 		t.Error("a takeover begun after the handoff was ended by it")
+	}
+	// Nor does another handoff's end touch this one's help.
+	f.m.ReleaseControl(s.ID)
+	next, err := f.m.OpenHelp(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.m.EndHandoff(s.ID, epoch); !errors.Is(err, ErrHandoffEnded) {
+		t.Errorf("the old handoff's end in a new one = %v, want ErrHandoffEnded", err)
+	}
+	if got, _ := f.m.Live("google"); got.State != NeedsHelp {
+		t.Errorf("the new handoff's help ended by the old one's: %s", got.State)
+	}
+	if _, err := f.m.EndHandoff(s.ID, next); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -1219,12 +1292,12 @@ func TestReconcileStopsABrowserItCantFence(t *testing.T) {
 	var refuse atomic.Bool
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
-	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, r *http.Request) {
 		if refuse.Load() {
 			http.Error(w, "busy", http.StatusServiceUnavailable)
 			return
 		}
-		w.WriteHeader(http.StatusNoContent)
+		sessionstest.AnswerLift(w, r)
 	})
 	f.rt.Control = mux
 	s := f.start(f.m)
@@ -1240,5 +1313,163 @@ func TestReconcileStopsABrowserItCantFence(t *testing.T) {
 	}
 	if got := f.stored(s.ID); got.State != Stopped {
 		t.Errorf("saved as %s", got.State)
+	}
+}
+
+// Only a real fence counts: a browser that answers a fenced lift with
+// 204, an empty answer or a lower fence (an entrypoint from before the
+// fence) hasn't fenced the takeover, so agents stay out, and the
+// hand-back goes on trying; a restart stops such a browser (PROJ-196).
+func TestFenceNeedsARealAnswer(t *testing.T) {
+	for _, answer := range []string{"204", "{}", `{"fence":0}`} {
+		t.Run(answer, func(t *testing.T) {
+			f := newFixture(t)
+			var real atomic.Bool
+			var lifts atomic.Int32
+			mux := http.NewServeMux()
+			mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+			mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, r *http.Request) {
+				lifts.Add(1)
+				switch {
+				case real.Load():
+					sessionstest.AnswerLift(w, r)
+				case answer == "204":
+					w.WriteHeader(http.StatusNoContent)
+				default:
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(answer))
+				}
+			})
+			f.rt.Control = mux
+			s := f.start(f.m)
+			if err := f.m.TakeControl(s.ID); err != nil {
+				t.Fatal(err)
+			}
+			released := make(chan struct{})
+			go func() { f.m.ReleaseControl(s.ID); close(released) }()
+			for deadline := time.Now().Add(5 * time.Second); lifts.Load() < 3 && time.Now().Before(deadline); {
+				time.Sleep(10 * time.Millisecond)
+			}
+			select {
+			case <-released:
+				t.Fatalf("handed back on a lift answered %s", answer)
+			default:
+			}
+			if _, done, err := f.m.AgentInput(context.Background(), s.ID); !errors.Is(err, ErrHumanDriving) {
+				if err == nil {
+					done()
+				}
+				t.Fatalf("agent input with the takeover unfenced = %v", err)
+			}
+			real.Store(true)
+			select {
+			case <-released:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the hand-back never finished")
+			}
+
+			// A restart with the browser answering the same way stops it.
+			real.Store(false)
+			f.m.Close()
+			was := reconcileFenceWait
+			reconcileFenceWait = 300 * time.Millisecond
+			t.Cleanup(func() { reconcileFenceWait = was })
+			m := f.manager()
+			if err := m.Reconcile(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got, ok := m.Live("google"); ok {
+				t.Errorf("a browser that doesn't fence runs on after the restart: %s", got.State)
+			}
+		})
+	}
+}
+
+// Every cleanup names the takeover it is for: the lift and the
+// clipboard's emptying alike, so the browser can leave a later takeover
+// alone (PROJ-196); and the takeover's number is saved before it is
+// handed out.
+func TestCleanupNamesItsTakeover(t *testing.T) {
+	f := newFixture(t)
+	var mu sync.Mutex
+	got := map[string]string{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		got["lift"] = r.Header.Get(FenceHeader)
+		mu.Unlock()
+		sessionstest.AnswerLift(w, r)
+	})
+	mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		got["empty"] = r.Header.Get(FenceHeader)
+		mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
+	f.rt.Control = mux
+	s := f.start(f.m)
+	gen, err := f.m.TakeControlGen(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := getSession(context.Background(), f.m.db, s.ID)
+	if err != nil || stored.takeoverGen != gen {
+		t.Fatalf("saved takeover %d, %v; handed out %d", stored.takeoverGen, err, gen)
+	}
+	f.m.ReleaseControl(s.ID)
+	want := strconv.FormatUint(gen, 10)
+	mu.Lock()
+	defer mu.Unlock()
+	if got["lift"] != want || got["empty"] != want {
+		t.Errorf("the lift named %q and the emptying %q, want %s", got["lift"], got["empty"], want)
+	}
+}
+
+// A hand-back the browser never answers doesn't keep the browser from
+// being stopped: by the admin, or as idle, whoever watches it; stopping
+// it ends the hand-back (PROJ-196).
+func TestStuckHandBackCanBeStopped(t *testing.T) {
+	for _, how := range []string{"admin", "idle"} {
+		t.Run(how, func(t *testing.T) {
+			f := newFixture(t)
+			advance := f.clock()
+			f.profile("wedged", 5*time.Minute)
+			mux := http.NewServeMux()
+			mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+			mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, "wedged", http.StatusServiceUnavailable)
+			})
+			f.rt.Control = mux
+			s := f.startProfile("wedged")
+			if _, err := f.m.Watch(s.ID); err != nil { // someone watches
+				t.Fatal(err)
+			}
+			if err := f.m.TakeControl(s.ID); err != nil {
+				t.Fatal(err)
+			}
+			released := make(chan struct{})
+			go func() { f.m.ReleaseControl(s.ID); close(released) }()
+			time.Sleep(100 * time.Millisecond)
+			switch how {
+			case "admin":
+				if _, err := f.m.Stop(context.Background(), s.ID); err != nil {
+					t.Fatal(err)
+				}
+			case "idle":
+				f.m.mu.Lock() // the hand-back reads the clock meanwhile
+				advance(6 * time.Minute)
+				f.m.mu.Unlock()
+				f.m.stopIdle(context.Background())
+			}
+			select {
+			case <-released:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the hand-back outlived the stop")
+			}
+			if got, ok := f.m.Live("wedged"); ok {
+				t.Errorf("still running: %s", got.State)
+			}
+		})
 	}
 }

@@ -68,6 +68,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	type pickedUp struct {
 		l           *live
 		id, profile string
+		gen         uint64
 		ctx         context.Context
 	}
 	var running []pickedUp
@@ -78,10 +79,13 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			delete(byID, c.ID)
 		}
 		l := newLive(m.ctx, s)
-		if s.State == NeedsHelp {
-			// Waiting for help as BrowserPier went: an epoch of its own,
-			// never 0, for the open handoff's take (HelpEpoch).
-			l.helpEpoch = 1
+		// Takeovers go on from the highest one handed out, saved before
+		// it was (PROJ-196): the browser may have seen any of them.
+		l.generation = s.takeoverGen
+		if s.State == NeedsHelp && l.sess.helpEpoch == 0 {
+			// Waiting for help since before help epochs were saved: one
+			// of its own, never 0 (HelpEpoch).
+			l.sess.helpEpoch = 1
 		}
 		if p, err := m.profiles.Get(ctx, s.Profile); err == nil {
 			// Recorded again by the same rules: a Needs help session
@@ -112,7 +116,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			// Admitted for this browser alone (sockOpLocked): if it
 			// ended meanwhile, the call can't reach the next one.
 			if ctx, ok := m.sockOpLocked(l); ok {
-				running = append(running, pickedUp{l, s.ID, s.Profile, ctx})
+				running = append(running, pickedUp{l, s.ID, s.Profile, l.generation, ctx})
 			}
 		}
 		l.lastActivity = m.now() // idle time restarts with the orchestrator
@@ -152,14 +156,15 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 				m.sockOpDoneLocked(p.l)
 				m.mu.Unlock()
 			}()
-			// Every takeover the browser has seen is fenced, whatever the
-			// BrowserPier before this one left under way in it, and its
-			// held keys let go. This BrowserPier numbers its takeovers
-			// from the fence on, so the browser takes theirs. A browser
-			// that doesn't answer within reconcileFenceWait is stopped
+			// Every takeover the BrowserPier before this one handed out is
+			// fenced, up to the highest it saved (before handing it out),
+			// whatever it left under way in the browser, still in its
+			// control socket or queued in xdotool; held keys are let go.
+			// This BrowserPier numbers its takeovers above it. A browser
+			// that doesn't fence it within reconcileFenceWait is stopped
 			// below rather than handed to agents unfenced.
 			fctx, cancel := context.WithTimeout(p.ctx, reconcileFenceWait)
-			fence, ok := m.fenceTakeover(fctx, p.id, p.profile, "all")
+			_, ok := m.fenceTakeover(fctx, p.id, p.profile, p.gen)
 			cancel()
 			if !ok {
 				unfencedMu.Lock()
@@ -167,13 +172,26 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 				unfencedMu.Unlock()
 				return
 			}
-			m.mu.Lock()
-			p.l.generation = max(p.l.generation, fence)
-			m.mu.Unlock()
 			// As ReleaseControl does: a copy pressed just before the
 			// restart lands first, and is emptied too.
 			if settle(p.ctx) {
-				m.emptyClipboard(p.ctx, p.id, p.profile)
+				m.emptyClipboard(p.ctx, p.id, p.profile, p.gen)
+			}
+			// A browser left waiting for help whose handoff has ended (the
+			// restart came between the two) is the agents' again, now
+			// that it is fenced.
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			if p.l.sess.State != NeedsHelp {
+				return
+			}
+			if open, err := pendingHandoff(context.Background(), m.db, p.id); err == nil && !open {
+				p.l.sess.State = Running
+				p.l.sess.UpdatedAt = m.now()
+				if err := updateSession(context.Background(), m.db, p.l.sess); err != nil {
+					m.log.Error("saving session state", "session", p.id, "err", err)
+				}
+				m.log.Info("a browser left waiting for a handoff that had ended is the agents' again", "session", p.id)
 			}
 		})
 	}

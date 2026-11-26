@@ -3,6 +3,7 @@ package sessions
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"strconv"
@@ -108,7 +109,7 @@ func (m *Manager) HelpEpoch(id string) (uint64, bool) {
 	if l == nil || l.sess.State != NeedsHelp {
 		return 0, false
 	}
-	return l.helpEpoch, true
+	return l.sess.helpEpoch, true
 }
 
 // TakeControlInHandoff is TakeControlGen for a handoff's live view: only
@@ -132,7 +133,7 @@ func (m *Manager) takeControl(id string, handoff bool, epoch uint64) (gen uint64
 		return 0, ErrNotRunning
 	}
 	handoffOver := func() bool {
-		return handoff && (epoch == 0 || l.sess.State != NeedsHelp || l.helpEpoch != epoch)
+		return handoff && (epoch == 0 || l.sess.State != NeedsHelp || l.sess.helpEpoch != epoch)
 	}
 	if handoffOver() {
 		return 0, ErrHandoffEnded
@@ -162,13 +163,19 @@ func (m *Manager) takeControl(id string, handoff bool, epoch uint64) (gen uint64
 	if l.human {
 		return 0, ErrHumanDriving // one person at a time
 	}
+	// The takeover's generation is saved before it is handed out, so a
+	// restart always knows the highest one the browser may have seen:
+	// it fences that, and numbers the next ones above it (PROJ-196).
+	if err := saveTakeoverGen(context.Background(), m.db, l.sess.ID, l.generation+1); err != nil {
+		return 0, fmt.Errorf("saving the takeover: %w", err)
+	}
+	l.generation++
 	l.human = true
 	// Recording stops here, under m.mu and before anything else: no
 	// fragment the browser sends from now on is kept, and HumanInput,
 	// which the live view needs before it forwards any input, can't see
 	// human until it has.
 	m.personTookLocked(l)
-	l.generation++
 	l.humanGen = l.generation
 	gen = l.generation
 	l.takeCtx, l.takeCancel = context.WithCancel(l.opCtx)
@@ -299,83 +306,115 @@ func (m *Manager) InControl(id string, gen uint64) bool {
 
 // ReleaseControl hands the browser back to agents, whatever ends the
 // person's control: they hand back, a handoff ends, the live view goes.
-// First it lets go of any key or mouse button the person still holds
-// (a drag when a handoff expires), then empties the browser's clipboard
-// and PRIMARY selection (PROJ-194), so no agent can paste what the
-// person put there, copied or selected in the page: it waits for their
-// input under way and a moment more (clipboardSettle), refuses more, and
-// only then lets agents in. If the clipboard can't be emptied, that is
-// logged and the browser handed back all the same. A browser that is
-// stopping keeps its clipboard: the container takes it along, or, if the
-// stop fails, runStop empties it before agents get the browser back.
-// Recording (PROJ-23) stays off throughout, and the gate is asked again
-// only as agents get the browser back. It returns once agents have the
-// browser.
+// The browser fences the takeover first (fenceTakeover), refusing from
+// then on whatever of it is still on its way, and lets go of any key or
+// mouse button the person still holds (a drag when a handoff expires);
+// then, a moment later (clipboardSettle), its clipboard and PRIMARY
+// selection are emptied (PROJ-194), so no agent can paste what the
+// person put there, copied or selected in the page; only then are agents
+// let in. If the clipboard can't be emptied, that is logged and the
+// browser handed back all the same. A browser that is stopping keeps its
+// clipboard: the container takes it along, or, if the stop fails,
+// runStop empties it before agents get the browser back. Recording
+// (PROJ-23) stays off throughout, and the gate is asked again only as
+// agents get the browser back.
+//
+// The hand-back runs on its own (beginReleaseLocked), tied to the
+// session: ReleaseControl waits for it, until agents have the browser or
+// the session has ended (a stop ends a hand-back the browser never
+// answers). Callers that mustn't wait on a browser use HandBack, with
+// their context, or EndHandoff.
 //
 // It ends whoever's control it is: it is for what ends a takeover from
 // outside it (a handoff, the profile page's Hand back). The person's own
 // live view hands back with ReleaseControlGen.
 func (m *Manager) ReleaseControl(id string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	l := m.findLocked(id)
-	if l == nil || !l.human {
-		return
-	}
-	m.releaseLocked(l, id)
+	_ = m.HandBack(context.Background(), id)
 }
 
-// ReleaseControlGen is ReleaseControl for the takeover of generation gen
+// HandBack is ReleaseControl, waiting no longer than ctx: the hand-back
+// goes on without the caller if ctx ends first, and ctx's error is
+// returned.
+func (m *Manager) HandBack(ctx context.Context, id string) error {
+	m.mu.Lock()
+	l := m.findLocked(id)
+	if l == nil || !l.human {
+		m.mu.Unlock()
+		return nil
+	}
+	done := m.beginReleaseLocked(l, id)
+	m.mu.Unlock()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// ReleaseControlGen starts handing back the takeover of generation gen
 // (TakeControlGen) alone: if that control has ended already, however, it
-// does nothing and returns false, so a live view that missed the end of
-// its control never ends, or lifts the keys or empties the clipboard of,
-// the takeover of whoever took the browser since (PROJ-196). The check
-// and the release are one step under m.mu, and no one else can take
-// control until the release is over.
-func (m *Manager) ReleaseControlGen(id string, gen uint64) bool {
+// does nothing and returns nil, so a live view that missed the end of its
+// control never ends, or lifts the keys or empties the clipboard of, the
+// takeover of whoever took the browser since (PROJ-196). The check and
+// the start of the hand-back are one step under m.mu, and no one else can
+// take control until it is over. It doesn't wait: done is closed once
+// agents have the browser. started is false if the hand-back had begun
+// already (its control was ended for it meanwhile).
+func (m *Manager) ReleaseControlGen(id string, gen uint64) (done <-chan struct{}, started bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.findLocked(id)
 	if l == nil || !l.human || l.humanGen != gen {
-		return false
+		return nil, false
 	}
-	ended := !l.releasing // otherwise ended for them meanwhile: that hand-back finishes it
-	m.releaseLocked(l, id)
-	return ended
+	started = !l.releasing
+	return m.beginReleaseLocked(l, id), started
 }
 
-// releaseLocked ends l's person's control (see ReleaseControl); m.mu is
-// held, and let go of meanwhile. Throughout, human stays set, so no one
-// else can take control before the end.
-func (m *Manager) releaseLocked(l *live, id string) {
+// beginReleaseLocked starts ending l's person's control, unless that has
+// started already, and returns a channel closed once it has ended. From
+// here on human stays set, so no one else can take control, and agents
+// stay out, until runRelease is done. m.mu must be held.
+func (m *Manager) beginReleaseLocked(l *live, id string) <-chan struct{} {
 	if l.releasing {
-		// Another hand-back is ending this takeover: done when it has,
-		// not when some later one has too (someone may take control the
-		// moment it ends).
-		gen := l.humanGen
-		for m.findLocked(id) == l && l.human && l.humanGen == gen {
-			m.inputsDone.Wait()
-		}
-		return
+		return l.released
 	}
 	l.releasing = true
+	l.releaseStarted = m.now()
+	l.released = make(chan struct{})
 	// What the person's live view still has under way breaks off now, on
 	// this side: it returns at once, and can't reach the browser any
 	// more.
 	l.takeCancel()
-	gen, profile := l.humanGen, l.sess.Profile
-	// And on the browser's: it fences this takeover, so whatever of it
-	// is still on its way there, or held up in there, is refused from
-	// now on; an action already under way there finishes first. Then it
-	// lets go of whatever key or button the person still holds, so
-	// whoever drives next doesn't inherit a pressed one. Tried until the
-	// browser answers or the session ends: agents wait meanwhile. While
-	// the browser runs, waits for help or is stopping (a stop may fail);
-	// not once the session is over.
+	done, gen := l.released, l.humanGen
+	if !m.spawn(func() { m.runRelease(l, id, gen) }) {
+		// Closing: the next BrowserPier fences this takeover as it picks
+		// the browser up (Reconcile).
+		m.endReleaseLocked(l, id)
+	}
+	return done
+}
+
+// runRelease is the hand-back beginReleaseLocked started, for takeover
+// gen.
+func (m *Manager) runRelease(l *live, id string, gen uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	profile := l.sess.Profile
+	// The browser fences the takeover, so whatever of it is still on its
+	// way there, queued there (in xdotool) or held up in there is
+	// refused or has run, and lets go of whatever key or button the
+	// person still holds, so whoever drives next doesn't inherit a
+	// pressed one. Tried until the browser answers or the session ends:
+	// agents wait meanwhile, and a session whose browser doesn't answer
+	// can still be stopped, idle or not (idleLocked), which ends this.
+	// While the browser runs, waits for help or is stopping (a stop may
+	// fail); not once the session is over.
 	fenced := false
 	if l.sess.State == Running || l.sess.State == NeedsHelp || l.sess.State == Stopping {
 		m.unlockedOpLocked(l, func(ctx context.Context) {
-			_, fenced = m.fenceTakeover(ctx, id, profile, strconv.FormatUint(gen, 10))
+			_, fenced = m.fenceTakeover(ctx, id, profile, gen)
 		})
 	}
 	// The person's operations under way return, cancelled or refused.
@@ -383,30 +422,38 @@ func (m *Manager) releaseLocked(l *live, id string) {
 	// fenced the takeover, so the hand-back goes on after inputWait; it
 	// only waits for it if the browser didn't fence it, which happens
 	// only as the session ends.
-	if !m.waitBoundedLocked(inputWait, func() bool { return l.humanInputs > 0 && m.findLocked(id) == l }) {
+	busy := func() bool { return l.humanInputs > 0 && m.findLocked(id) == l && m.ctx.Err() == nil }
+	if !m.waitBoundedLocked(inputWait, busy) {
 		if fenced {
 			m.log.Warn("a person's input was still under way "+inputWait.String()+" after their control began to end; the browser refuses it, so the hand-back goes on", "session", id)
 		} else {
-			for l.humanInputs > 0 && m.findLocked(id) == l {
+			for busy() {
 				m.inputsDone.Wait()
 			}
 		}
 	}
 	switch l.sess.State {
 	case Running, NeedsHelp:
-		m.unlockedOpLocked(l, func(ctx context.Context) {
-			// The person's last keys have reached the browser, but
-			// Chromium takes the selection a moment after a Ctrl+C: let
-			// it land, so it is emptied too.
-			if settle(ctx) {
-				m.emptyClipboard(ctx, id, profile)
-			}
-		})
+		if fenced {
+			m.unlockedOpLocked(l, func(ctx context.Context) {
+				// The person's last keys have reached the browser, but
+				// Chromium takes the selection a moment after a Ctrl+C:
+				// let it land, so it is emptied too.
+				if settle(ctx) {
+					m.emptyClipboard(ctx, id, profile, gen)
+				}
+			})
+		}
 	case Stopping:
 		// The container takes the clipboard along; if the stop fails
 		// instead, runStop empties it before agents are let back in.
-		l.clipboardLeft = true
+		l.clipboardLeft, l.clipboardLeftGen = true, gen
 	}
+	m.endReleaseLocked(l, id)
+}
+
+// endReleaseLocked lets agents back in as a hand-back ends.
+func (m *Manager) endReleaseLocked(l *live, id string) {
 	l.human, l.releasing = false, false
 	l.lastActivity = m.now()
 	// Only now, the clipboard emptied and agents let back in, may the
@@ -415,6 +462,7 @@ func (m *Manager) releaseLocked(l *live, id string) {
 	if m.findLocked(id) == l {
 		m.regateLocked(l)
 	}
+	close(l.released)
 	m.inputsDone.Broadcast()
 }
 
@@ -440,42 +488,53 @@ func settle(ctx context.Context) bool {
 // Tests shorten it.
 var inputWait = 30 * time.Second
 
-// emptyClipboard empties a running browser's clipboard, a person's
-// control ending (PROJ-194). A failure is logged without what the
-// clipboard held, which BrowserPier never sees here; not when the session
-// ended meanwhile (ctx), its container taking the clipboard along.
-func (m *Manager) emptyClipboard(ctx context.Context, sessionID, profile string) {
-	if err := m.control(ctx, profile, http.MethodDelete, "/input/clipboard", nil, nil); err != nil && ctx.Err() == nil {
+// emptyClipboard empties a running browser's clipboard as takeover gen
+// ends (PROJ-194): the browser does nothing if a later takeover has begun
+// meanwhile, whose clipboard it would be (a call held up past its time,
+// PROJ-196). A failure is logged without what the clipboard held, which
+// BrowserPier never sees here; not when the session ended meanwhile
+// (ctx), its container taking the clipboard along.
+func (m *Manager) emptyClipboard(ctx context.Context, sessionID, profile string, gen uint64) {
+	hdr := map[string]string{FenceHeader: strconv.FormatUint(gen, 10)}
+	if err := m.controlWith(ctx, profile, http.MethodDelete, "/input/clipboard", hdr, nil, nil); err != nil && ctx.Err() == nil {
 		m.log.Warn("couldn't empty the browser's clipboard as a person's control ended", "session", sessionID, "failure", controlFailure(err))
 	}
 }
 
 // TakeoverHeader names, on each operation a person's live view sends the
 // browser, the takeover it is for (its generation); FenceHeader, on the
-// lift as a takeover ends, the takeover to fence, or "all": the browser
-// refuses, from then on, anything from it or an earlier one, however
-// long it was held up on its way (images/chromium/entrypoint/fence.go,
-// PROJ-196).
+// lift as a takeover ends, the takeover to fence: the browser refuses,
+// from then on, anything from it or an earlier one, however long it was
+// held up on its way, and has run what it queued of it. On the
+// clipboard's emptying it names the takeover it is for, which the
+// browser skips if a later one has begun (images/chromium/entrypoint/
+// fence.go, PROJ-196).
 const (
 	TakeoverHeader = "X-BrowserPier-Takeover"
 	FenceHeader    = "X-BrowserPier-Fence"
 )
 
-// fenceTakeover has the browser fence takeover (a generation, or "all")
-// and let go of every key and button the person still holds (a key left
-// down would be the next driver's: a modifier, a drag). It tries until
-// the browser answers or ctx ends, waiting a little longer each time,
-// and returns the fence the browser answered (0 if it didn't say). A
+// fenceTakeover has the browser fence takeover want and let go of every
+// key and button it, or an earlier one, still holds (a key left down
+// would be the next driver's: a modifier, a drag). Only a 200 answer
+// giving a fence at or above want counts: a browser that answers anything
+// else (204, an empty or lower fence: an entrypoint from before the
+// fence) hasn't fenced it. It tries until the browser does or ctx ends,
+// waiting a little longer each time, and returns the fence answered. A
 // failure is logged by its kind alone (controlFailure).
-func (m *Manager) fenceTakeover(ctx context.Context, sessionID, profile, takeover string) (fence uint64, ok bool) {
+func (m *Manager) fenceTakeover(ctx context.Context, sessionID, profile string, want uint64) (fence uint64, ok bool) {
 	wait := liftRetry
+	hdr := map[string]string{FenceHeader: strconv.FormatUint(want, 10)}
 	for try := 1; ; try++ {
 		var out struct {
-			Fence uint64 `json:"fence"`
+			Fence *uint64 `json:"fence"`
 		}
-		err := m.controlWith(ctx, profile, http.MethodPost, "/input/release", map[string]string{FenceHeader: takeover}, nil, &out)
+		err := m.controlWith(ctx, profile, http.MethodPost, "/input/release", hdr, nil, &out)
 		if err == nil {
-			return out.Fence, true
+			if out.Fence != nil && *out.Fence >= want {
+				return *out.Fence, true
+			}
+			err = errNotFenced
 		}
 		if ctx.Err() != nil {
 			return 0, false
@@ -494,6 +553,9 @@ func (m *Manager) fenceTakeover(ctx context.Context, sessionID, profile, takeove
 	}
 }
 
+// errNotFenced: the browser answered a fenced lift without the fence.
+var errNotFenced = errors.New("the browser answered without fencing the takeover")
+
 // liftRetry is how long fenceTakeover first waits before trying again;
 // it doubles each time, up to maxLiftRetry.
 const (
@@ -508,6 +570,8 @@ const (
 func controlFailure(err error) string {
 	var ce *controlError
 	switch {
+	case errors.Is(err, errNotFenced):
+		return "no fence in its answer"
 	case errors.As(err, &ce):
 		return "status " + strconv.Itoa(ce.status)
 	case errors.Is(err, context.DeadlineExceeded):

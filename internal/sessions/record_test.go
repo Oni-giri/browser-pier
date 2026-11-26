@@ -15,6 +15,8 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/recording"
+
+	"github.com/Oni-giri/browser-pier/internal/sessions/sessionstest"
 )
 
 // fakeRecorder notes what the manager tells it, in order.
@@ -565,9 +567,11 @@ func TestReconcileAndRecordings(t *testing.T) {
 		}
 	}
 	running, helped := f.start(f.m), f.startProfile("github")
-	if _, err := f.m.SetNeedsHelp(helped.ID, true); err != nil {
+	epoch, err := f.m.OpenHelp(helped.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
+	openHandoffRow(t, f.m, helped, epoch)
 	f.m.Close()
 	gone := writeRecording(t, f.dir, "deleted", "aaaaaaaaaaaaaaaaaaaaaaaa")
 
@@ -738,12 +742,12 @@ func TestReconcileEmptiesTheClipboardBeforeAnyRecording(t *testing.T) {
 	// Whatever key or button a person held as BrowserPier went is let go
 	// first, as at any hand-back.
 	var lifted atomic.Int64
-	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, r *http.Request) {
 		if rec := recP.Load(); rec != nil {
 			lifted.Store(time.Now().UnixNano())
 			rec.note("lifted")
 		}
-		w.WriteHeader(http.StatusNoContent)
+		sessionstest.AnswerLift(w, r)
 	})
 	mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) {
 		if rec := recP.Load(); rec != nil {

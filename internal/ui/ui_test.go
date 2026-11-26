@@ -510,6 +510,15 @@ func TestHandBackFormEmptiesTheClipboard(t *testing.T) {
 	if r := f.post("/profiles/google/handback", url.Values{"status": {"done"}}); r.code != http.StatusSeeOther {
 		t.Fatalf("hand back: %d", r.code)
 	}
+	// Ending the handoff hands back by itself: wait for it.
+	for deadline := time.Now().Add(5 * time.Second); f.emptied.Load() < 2 && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if s, _ := f.m.Live("google"); !s.HumanControl {
+			break
+		}
+	}
 	if n := f.emptied.Load(); n != 2 {
 		t.Fatalf("emptied %d times", n)
 	}

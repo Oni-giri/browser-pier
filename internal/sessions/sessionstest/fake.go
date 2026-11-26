@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"sync"
 
 	"github.com/Oni-giri/browser-pier/internal/docker"
@@ -104,7 +105,7 @@ func (f *FakeRuntime) Start(_ context.Context, id string) error {
 			// A person's control ending empties the clipboard (PROJ-194).
 			mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 			// And lets go of what the person held.
-			mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+			mux.HandleFunc("POST /input/release", AnswerLift)
 			h = mux
 		}
 		c.srv = &http.Server{Handler: withLift(h)} //nolint:gosec // test server
@@ -265,10 +266,28 @@ func withLift(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && r.URL.Path == "/input/release" {
 			if _, pattern := mux.Handler(r); pattern == "" {
-				w.WriteHeader(http.StatusNoContent)
+				AnswerLift(w, r)
 				return
 			}
 		}
 		h.ServeHTTP(w, r)
 	})
+}
+
+// AnswerLift answers a lift as a browser does (images/chromium/entrypoint
+// fence.go): one that fences a takeover (X-BrowserPier-Fence) with 200
+// and the fence, which is all the orchestrator takes as fenced; the
+// person's own with 204.
+func AnswerLift(w http.ResponseWriter, r *http.Request) {
+	if f := r.Header.Get("X-BrowserPier-Fence"); f != "" {
+		n, err := strconv.ParseUint(f, 10, 64)
+		if err != nil {
+			http.Error(w, "bad fence", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"fence":%d}`, n)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

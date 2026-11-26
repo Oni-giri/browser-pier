@@ -93,11 +93,11 @@ func newFixture(t *testing.T, policy profiles.HandoffPolicy, opts auth.WebOption
 		w.WriteHeader(http.StatusNoContent)
 	})
 	onLift := &atomic.Pointer[func()]{}
-	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, r *http.Request) {
 		if f := onLift.Load(); f != nil {
 			(*f)()
 		}
-		w.WriteHeader(http.StatusNoContent)
+		sessionstest.AnswerLift(w, r)
 	})
 	// No CDP: what the handoff reads of the browser, it reads over HTTP.
 	b := cdptest.New(func(m cdptest.Message) (any, error) {
@@ -933,6 +933,12 @@ func TestHandoffEndEmptiesTheClipboard(t *testing.T) {
 				t.Fatal(err)
 			}
 			end(f, h)
+			// The hand-back goes on by itself: wait for it.
+			for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+				if s, _ := f.m.Live("google"); !s.HumanControl {
+					break
+				}
+			}
 			if got := f.emptied.took(); len(got) != 1 || !got[0] {
 				t.Fatalf("emptied %d times, with control %v; want once, while the person had it", len(got), got)
 			}
@@ -1114,5 +1120,56 @@ func TestHandoffEndLeavesALaterTakeoverAlone(t *testing.T) {
 			}
 			f.m.ReleaseControl(s.ID)
 		}
+	}
+}
+
+// A browser that never answers its hand-back holds up no one else: the
+// sweep that expires its handoff goes on to the next profile's at once,
+// and that one's agent has its browser back (PROJ-196).
+func TestWedgedBrowserDoesntHoldTheSweep(t *testing.T) {
+	f := newFixture(t, profiles.PolicyLink, auth.WebOptions{})
+	ctx := context.Background()
+	wedged, _ := f.open("")
+	if err := f.m.TakeControl(wedged.SessionID); err != nil { // a person helps
+		t.Fatal(err)
+	}
+	if _, err := f.m.Profiles().Create(ctx, profiles.New("github")); err != nil {
+		t.Fatal(err)
+	}
+	other, _, err := f.m.Start(ctx, "github", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiting, _, err := f.svc.Create(ctx, other.ID, "research-bot", SensitiveInput, "Enter the 2FA code", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The first browser never answers its lift.
+	stuck := make(chan struct{})
+	defer close(stuck)
+	hold := func() { <-stuck }
+	f.onLift.Store(&hold)
+
+	later := time.Now().Add(Lifetime + time.Second)
+	f.svc.now = func() time.Time { return later }
+	swept := make(chan struct{})
+	go func() { f.svc.sweep(ctx); close(swept) }()
+	select {
+	case <-swept:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the sweep is held by a browser that doesn't answer")
+	}
+	for _, h := range []Handoff{wedged, waiting} {
+		if got, err := f.svc.Get(ctx, h.ID); err != nil || got.Status != Expired {
+			t.Errorf("handoff %s after the sweep: %+v, %v", h.ID, got.Status, err)
+		}
+	}
+	if s, _ := f.m.Live("github"); s.State != sessions.Running {
+		t.Errorf("the other profile's browser: %s", s.State)
+	}
+	if _, done, err := f.m.AgentInput(ctx, other.ID); err != nil {
+		t.Errorf("the other profile's agent = %v", err)
+	} else {
+		done()
 	}
 }

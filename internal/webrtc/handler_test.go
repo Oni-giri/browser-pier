@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/db"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
@@ -84,9 +85,7 @@ func TestOfferWithControlThatFailsToConnectGivesControlBack(t *testing.T) {
 	if rec := offer(h, OfferOptions{Control: true}, `{"sdp": "not an offer"}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad SDP: %d %s", rec.Code, rec.Body)
 	}
-	if s, _ := m.Live("google"); s.HumanControl {
-		t.Fatal("a viewer that never connected kept control")
-	}
+	awaitHuman(t, m, false, 5*time.Second) // a viewer that never connected keeps no control
 }
 
 func TestOfferWithControlIsRefusedWhileSomeoneElseHasIt(t *testing.T) {

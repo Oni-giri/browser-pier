@@ -11,8 +11,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/sessions"
+	"github.com/Oni-giri/browser-pier/internal/sessions/sessionstest"
 )
 
 // fakeClipboard is a browser container's clipboard endpoints, recording
@@ -47,7 +49,12 @@ func (c *fakeClipboard) routes(mux *http.ServeMux) {
 		c.held = t.Text
 		c.mu.Unlock()
 	}
-	mux.HandleFunc("POST /input/release", record("release", func(_ []byte, w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) }))
+	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, r *http.Request) {
+		c.mu.Lock()
+		c.calls = append(c.calls, "release")
+		c.mu.Unlock()
+		sessionstest.AnswerLift(w, r)
+	})
 	mux.HandleFunc("POST /input/events", record("events", func(_ []byte, w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) }))
 	mux.HandleFunc("POST /input/type", record("type", func(b []byte, w http.ResponseWriter) {
 		c.mu.Lock()
@@ -276,6 +283,7 @@ func TestClipboardEmptiedWhenControlEnds(t *testing.T) {
 				t.Fatalf("set: %v", r)
 			}
 			end.end(k)
+			awaitHuman(t, m, false, 5*time.Second) // the hand-back goes on by itself
 			if got := strings.Join(c.took(), " "); got != end.want {
 				t.Errorf("the browser got %q, want %q", got, end.want)
 			}

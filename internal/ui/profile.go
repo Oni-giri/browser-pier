@@ -181,7 +181,9 @@ func (u *UI) handBack(w http.ResponseWriter, r *http.Request) {
 		done(w, r, back, "Handed back to "+h.Agent, false)
 		return
 	}
-	// No request open: just let go of the controls.
-	u.m.ReleaseControl(s.ID)
+	// No request open: just let go of the controls. The hand-back goes on
+	// by itself if the browser is slow to answer; this request waits for
+	// it no longer than it lasts.
+	_ = u.m.HandBack(r.Context(), s.ID)
 	done(w, r, back, "Handed back", false)
 }

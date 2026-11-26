@@ -181,10 +181,6 @@ type live struct {
 	// stops counts the stops begun, failed ones included: a Take control
 	// that waited across one gives up (TakeControlGen).
 	stops uint64
-	// helpEpoch counts the times the session went to Needs help: a
-	// handoff's Take control names the one it was opened in
-	// (TakeControlInHandoff).
-	helpEpoch uint64
 	// takeCtx is for the person's operations admitted under the takeover
 	// in progress (HumanInput): a child of opCtx, cancelled the moment
 	// its hand-back begins, so nothing admitted for it can reach the
@@ -221,9 +217,14 @@ type live struct {
 	humanInputs int
 	// clipboardLeft is set when a hand-back came while the browser was
 	// stopping and left its clipboard as it was: the container takes it
-	// along, but if the stop fails, runStop empties it before agents get
-	// the browser back.
-	clipboardLeft bool
+	// along, but if the stop fails, runStop empties it, for the takeover
+	// clipboardLeftGen, before agents get the browser back.
+	clipboardLeft    bool
+	clipboardLeftGen uint64
+	// released is closed once the hand-back in progress (releasing) is
+	// over; releaseStarted is when it began.
+	released       chan struct{}
+	releaseStarted time.Time
 	// viewers counts open live views.
 	viewers int
 	// exemptFull is set once the browser refused an exemption from the ad
@@ -1241,12 +1242,12 @@ func (m *Manager) runStop(l *live, attempt *stopAttempt, cid string) {
 				// gate or any agent can have the browser (PROJ-194,
 				// PROJ-23).
 				l.clipboardLeft = false
-				id, profile := l.sess.ID, l.sess.Profile
+				id, profile, gen := l.sess.ID, l.sess.Profile, l.clipboardLeftGen
 				m.unlockedOpLocked(l, func(ctx context.Context) {
 					// As ReleaseControl does: a copy pressed just before
 					// the stop lands first, and is emptied too.
 					if settle(ctx) {
-						m.emptyClipboard(ctx, id, profile)
+						m.emptyClipboard(ctx, id, profile, gen)
 					}
 				})
 			}
@@ -1266,8 +1267,34 @@ func (m *Manager) runStop(l *live, attempt *stopAttempt, cid string) {
 	close(attempt.done)
 }
 
+// ErrHelpOpen: the browser already waits for help (another handoff).
+var ErrHelpOpen = errors.New("the browser already waits for help")
+
+// OpenHelp moves a running session to Needs help for a handoff, and
+// returns which time it went there (its help epoch), which the handoff
+// keeps to end only its own help (EndHandoff). A session that already
+// waits for help refuses, with ErrHelpOpen: two handoffs never share one.
+func (m *Manager) OpenHelp(id string) (epoch uint64, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l := m.findLocked(id)
+	switch {
+	case l == nil:
+		return 0, ErrNotRunning
+	case l.sess.State == NeedsHelp:
+		return 0, ErrHelpOpen
+	case l.sess.State != Running:
+		return 0, ErrNotRunning
+	}
+	if _, err := m.setNeedsHelpLocked(l, true); err != nil {
+		return 0, err
+	}
+	return l.sess.helpEpoch, nil
+}
+
 // SetNeedsHelp moves a running session to Needs help and back. A handoff
-// ends with EndHandoff, which also ends its person's control.
+// opens with OpenHelp and ends with EndHandoff, which also ends its
+// person's control.
 func (m *Manager) SetNeedsHelp(id string, needsHelp bool) (Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1278,27 +1305,47 @@ func (m *Manager) SetNeedsHelp(id string, needsHelp bool) (Session, error) {
 	return m.setNeedsHelpLocked(l, needsHelp)
 }
 
-// EndHandoff ends a handoff's hold on the browser, in one step under
-// m.mu: the browser stops waiting for help (SetNeedsHelp(false)), and
-// the control of whoever has it then, the person helping, begins to end
-// (ReleaseControl). It returns once agents have the browser. Whoever
-// takes control after it is someone else, whose control this never ends:
-// there is no moment, between the two, for a take to fall into (PROJ-196).
-func (m *Manager) EndHandoff(id string) error {
+// EndHandoff ends the handoff that opened Needs help as epoch (OpenHelp),
+// in one step under m.mu: the browser stops waiting for that help, and
+// the control of whoever has it then, the person helping, begins to end.
+// It doesn't wait for that: done is closed once agents have the browser
+// (nil if no one had control). Whoever takes control after it is someone
+// else, whose control this never ends; nor does an end for another
+// handoff's epoch, which changes nothing and returns ErrHandoffEnded
+// (PROJ-196).
+//
+// The browser stops waiting for help even if that can't be saved (it is
+// logged, and a restart finds no open handoff and puts it back Running):
+// a handoff that has ended never leaves its agent paused.
+func (m *Manager) EndHandoff(id string, epoch uint64) (done <-chan struct{}, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.findLocked(id)
 	if l == nil {
-		return ErrNotRunning
+		return nil, ErrNotRunning
 	}
-	// Only a browser that still waits for this help: a takeover after
-	// the help ended (or with none asked for) is someone else's.
-	helping := l.sess.State == NeedsHelp || (l.sess.State == Stopping && l.stop != nil && l.stopPrev == NeedsHelp)
-	_, err := m.setNeedsHelpLocked(l, false)
-	if helping && l.human {
-		m.releaseLocked(l, id)
+	if epoch == 0 || l.sess.helpEpoch != epoch {
+		return nil, ErrHandoffEnded
 	}
-	return err
+	switch {
+	case l.sess.State == NeedsHelp:
+		l.sess.State = Running
+		l.sess.UpdatedAt = m.now()
+		if err := updateSession(context.Background(), m.db, l.sess); err != nil {
+			m.log.Error("saving session state", "session", id, "err", err)
+		}
+		m.personTookLocked(l)
+	case l.sess.State == Stopping && l.stop != nil && l.stopPrev == NeedsHelp:
+		// Should the stop fail, it is put back Running.
+		l.stopPrev = Running
+	default:
+		return nil, ErrHandoffEnded
+	}
+	l.lastActivity = m.now() // idle time starts at hand-back
+	if l.human {
+		done = m.beginReleaseLocked(l, id)
+	}
+	return done, nil
 }
 
 // setNeedsHelpLocked is SetNeedsHelp, with m.mu held.
@@ -1321,6 +1368,9 @@ func (m *Manager) setNeedsHelpLocked(l *live, needsHelp bool) (Session, error) {
 	case from:
 		before := l.sess
 		l.sess.State = to
+		if to == NeedsHelp {
+			l.sess.helpEpoch++ // saved with the state
+		}
 		l.sess.UpdatedAt = m.now()
 		if err := updateSession(context.Background(), m.db, l.sess); err != nil {
 			l.sess = before
@@ -1334,7 +1384,6 @@ func (m *Manager) setNeedsHelpLocked(l *live, needsHelp bool) (Session, error) {
 			// connections close, and new ones are refused until hand-back.
 			l.disconnectLocked()
 			l.generation++
-			l.helpEpoch++
 			// Page calls and agent input under way are cancelled (a long
 			// human-paced type breaks off at once); they finish before
 			// the person gets the browser. New ones are refused from now

@@ -74,9 +74,13 @@ type Session struct {
 	// HadFills is set once BrowserPier has typed a secret into the page
 	// (RegisterSecret), and never cleared. Stored on its own (markHadFills),
 	// never by updateSession, so an older copy can't clear it.
-	HadFills  bool
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	HadFills bool
+	// takeoverGen is the highest takeover generation handed out, saved
+	// before it is (saveTakeoverGen); helpEpoch counts the times the
+	// session went to Needs help (HelpEpoch). Both outlive a restart.
+	takeoverGen, helpEpoch uint64
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
 	// InUseBy names the agents connected to the browser right now, by
 	// token name. Only live sessions have any; it isn't stored.
 	InUseBy []string
@@ -100,7 +104,7 @@ func newID() string {
 const sessionColumns = `id, profile, state, mode, container_id, last_log, error, created_at, updated_at, block_ads`
 
 // selectColumns are sessionColumns and what is stored on its own.
-const selectColumns = sessionColumns + `, had_fills`
+const selectColumns = sessionColumns + `, had_fills, takeover_gen, help_epoch`
 
 func insertSession(ctx context.Context, db *sql.DB, s Session) error {
 	_, err := db.ExecContext(ctx, `INSERT INTO sessions (`+sessionColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -109,9 +113,24 @@ func insertSession(ctx context.Context, db *sql.DB, s Session) error {
 }
 
 func updateSession(ctx context.Context, db *sql.DB, s Session) error {
-	_, err := db.ExecContext(ctx, `UPDATE sessions SET state = ?, container_id = ?, last_log = ?, error = ?, updated_at = ?, block_ads = ? WHERE id = ?`,
-		s.State, s.ContainerID, s.LastLog, s.Error, s.UpdatedAt.UnixMilli(), s.BlockAds, s.ID)
+	_, err := db.ExecContext(ctx, `UPDATE sessions SET state = ?, container_id = ?, last_log = ?, error = ?, updated_at = ?, block_ads = ?, help_epoch = ? WHERE id = ?`,
+		s.State, s.ContainerID, s.LastLog, s.Error, s.UpdatedAt.UnixMilli(), s.BlockAds, s.helpEpoch, s.ID)
 	return err
+}
+
+// saveTakeoverGen records that session id hands out takeover gen, before
+// it does (PROJ-196).
+func saveTakeoverGen(ctx context.Context, db *sql.DB, id string, gen uint64) error {
+	_, err := db.ExecContext(ctx, `UPDATE sessions SET takeover_gen = max(takeover_gen, ?) WHERE id = ?`, gen, id)
+	return err
+}
+
+// pendingHandoff reports whether session id has a handoff open (the
+// handoffs table, internal/handoff).
+func pendingHandoff(ctx context.Context, db *sql.DB, id string) (bool, error) {
+	var n int
+	err := db.QueryRowContext(ctx, `SELECT count(*) FROM handoffs WHERE session_id = ? AND status = 'pending'`, id).Scan(&n)
+	return n > 0, err
 }
 
 // markHadFills records that a secret was typed into session id's page.
@@ -149,7 +168,7 @@ func liveSessions(ctx context.Context, db *sql.DB) ([]Session, error) {
 func scanSession(row interface{ Scan(...any) error }) (Session, error) {
 	var s Session
 	var created, updated int64
-	err := row.Scan(&s.ID, &s.Profile, &s.State, &s.Mode, &s.ContainerID, &s.LastLog, &s.Error, &created, &updated, &s.BlockAds, &s.HadFills)
+	err := row.Scan(&s.ID, &s.Profile, &s.State, &s.Mode, &s.ContainerID, &s.LastLog, &s.Error, &created, &updated, &s.BlockAds, &s.HadFills, &s.takeoverGen, &s.helpEpoch)
 	s.CreatedAt, s.UpdatedAt = time.UnixMilli(created), time.UnixMilli(updated)
 	return s, err
 }

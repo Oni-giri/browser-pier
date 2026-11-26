@@ -141,6 +141,14 @@ var migrations = []string{
 	// PROJ-23: the profile's Record sessions setting, off until the admin
 	// turns it on.
 	`ALTER TABLE profiles ADD COLUMN record_sessions INTEGER NOT NULL DEFAULT 0;`,
+	// PROJ-196: the highest takeover a session handed out, saved before it
+	// is handed out, so a browser picked up after a restart can fence it
+	// and the takeovers after it number above it; and which time a session
+	// went to Needs help, and the time each handoff opened, so a
+	// handoff's end ends only its own help.
+	`ALTER TABLE sessions ADD COLUMN takeover_gen INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE sessions ADD COLUMN help_epoch INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE handoffs ADD COLUMN help_epoch INTEGER NOT NULL DEFAULT 0;`,
 }
 
 // Open opens (creating if needed) the database at path and migrates it.

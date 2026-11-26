@@ -97,6 +97,9 @@ type Handoff struct {
 	CreatedAt   time.Time
 	ExpiresAt   time.Time
 	unlocked    bool // a browser has passed the policy check
+	// helpEpoch is which time the browser went to Needs help for this
+	// handoff (sessions.Manager.OpenHelp): its end ends only that help.
+	helpEpoch uint64
 }
 
 // Service creates and tracks handoffs.
@@ -229,10 +232,24 @@ func (s *Service) Open(ctx context.Context, r Request) (Handoff, string, error) 
 		}
 		return Handoff{}, "", err
 	}
-	if _, err := s.m.SetNeedsHelp(sessionID, true); err != nil {
-		_, _ = s.db.ExecContext(ctx, `DELETE FROM handoffs WHERE id = ?`, h.ID)
+	// The browser goes to Needs help for this handoff alone: it refuses
+	// if another handoff has it there already (one that got in between
+	// the Running check and the insert), and the epoch it answers is
+	// kept, so this handoff's end ends this help and no other.
+	epoch, err := s.m.OpenHelp(sessionID)
+	if err != nil {
+		_, _ = s.db.ExecContext(context.WithoutCancel(ctx), `DELETE FROM handoffs WHERE id = ?`, h.ID)
+		if errors.Is(err, sessions.ErrHelpOpen) {
+			return Handoff{}, "", ErrOpen
+		}
 		return Handoff{}, "", err
 	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE handoffs SET help_epoch = ? WHERE id = ?`, epoch, h.ID); err != nil {
+		_, _ = s.m.EndHandoff(sessionID, epoch)
+		_, _ = s.db.ExecContext(context.WithoutCancel(ctx), `DELETE FROM handoffs WHERE id = ?`, h.ID)
+		return Handoff{}, "", err
+	}
+	h.helpEpoch = epoch
 	s.m.NoteAttention(sessionID, agent, "Paused, waiting for you: "+reason.Label())
 	s.log.Info("handoff opened", "handoff", h.ID, "profile", h.Profile, "agent", agent, "reason", reason, "policy", h.Policy, "until_url", h.UntilURL != "")
 	s.watch(h)
@@ -275,14 +292,14 @@ func Origin(raw string) string {
 	return u.Scheme + "://" + u.Host
 }
 
-const columns = `id, session_id, profile, agent, reason, detail, origin, policy, status, note, pin_failures, created_at, expires_at, browser_hash, until_url, auto_done`
+const columns = `id, session_id, profile, agent, reason, detail, origin, policy, status, note, pin_failures, created_at, expires_at, browser_hash, until_url, auto_done, help_epoch`
 
 func scan(row interface{ Scan(...any) error }) (Handoff, error) {
 	var h Handoff
 	var created, expires int64
 	var browser string
 	err := row.Scan(&h.ID, &h.SessionID, &h.Profile, &h.Agent, &h.Reason, &h.Detail, &h.Origin, &h.Policy, &h.Status, &h.Note,
-		&h.PINFailures, &created, &expires, &browser, &h.UntilURL, &h.Auto)
+		&h.PINFailures, &created, &expires, &browser, &h.UntilURL, &h.Auto, &h.helpEpoch)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Handoff{}, ErrNotFound
 	}
@@ -545,11 +562,14 @@ func (s *Service) end(ctx context.Context, h Handoff, status Status, note string
 		return cur, err
 	}
 	h.Status, h.Note, h.Auto = status, note, how == endAuto
-	// One step: the browser stops waiting for help, so no live view of
-	// this handoff can take control any more (TakeControlInHandoff), and
-	// the control of the person helping, if any, begins to end; agents
-	// wait for that. A take after this is someone else's, left alone.
-	if err := s.m.EndHandoff(h.SessionID); err != nil && !errors.Is(err, sessions.ErrNotRunning) {
+	// One step: the browser stops waiting for this handoff's help, so no
+	// live view of it can take control any more (TakeControlInHandoff),
+	// and the control of the person helping, if any, begins to end;
+	// agents wait for that. A take after this is someone else's, left
+	// alone, as is help another handoff asked for. Nothing here waits on
+	// the browser: the hand-back goes on by itself (finished).
+	done, err := s.m.EndHandoff(h.SessionID, h.helpEpoch)
+	if err != nil && !errors.Is(err, sessions.ErrNotRunning) && !errors.Is(err, sessions.ErrHandoffEnded) {
 		s.log.Warn("handing the browser back", "handoff", h.ID, "err", err)
 	}
 	logNote := finishedNotes[status]
@@ -558,8 +578,33 @@ func (s *Service) end(ctx context.Context, h Handoff, status Status, note string
 	}
 	s.m.Note(h.SessionID, "", logNote)
 	s.log.Info("handoff finished", "handoff", h.ID, "profile", h.Profile, "status", status, "until_url_reached", h.Auto)
-	s.wake(h.ID)
+	s.finished(h.ID, done)
 	return h, nil
+}
+
+// handBackWait bounds how long an agent waiting on a handoff waits, once
+// it has ended, for the browser to be handed back before it is told.
+const handBackWait = 10 * time.Second
+
+// finished closes the live views of a handoff that has ended, now, and
+// wakes the agents waiting on it once the browser is handed back (done
+// closed, or handBackWait passed), so they find it theirs. It never
+// waits itself: a browser that doesn't answer holds up no one else.
+func (s *Service) finished(id string, done <-chan struct{}) {
+	s.closeViewers(id)
+	if done == nil {
+		s.wake(id)
+		return
+	}
+	go func() {
+		t := time.NewTimer(handBackWait)
+		defer t.Stop()
+		select {
+		case <-done:
+		case <-t.C:
+		}
+		s.wake(id)
+	}()
 }
 
 // AutoNote is the note of a handoff its until_url ended. It is fixed, so
@@ -578,19 +623,25 @@ var finishedNotes = map[Status]string{
 }
 
 func (s *Service) wake(id string) {
+	s.closeViewers(id)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, ch := range s.waiters[id] {
 		close(ch)
 	}
 	delete(s.waiters, id)
-	// The link is dead: so are the live views it opened.
+}
+
+// closeViewers ends what a handoff that has ended still has going: the
+// link is dead, so are the live views it opened, and its address watch.
+func (s *Service) closeViewers(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, v := range s.viewers[id] {
 		v.Close()
 	}
 	delete(s.viewers, id)
 	delete(s.checking, id)
-	// And so is its address watch, if it has one.
 	if w := s.watching[id]; w != nil {
 		w.cancel()
 	}
