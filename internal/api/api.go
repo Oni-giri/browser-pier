@@ -619,6 +619,20 @@ func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, pa
 	// which can still take it some tens of milliseconds after the person
 	// has the browser.
 	defer done()
+	// The token was checked when the request came in, but its body is read
+	// since: a revocation meanwhile found no input to break off. Checked
+	// again now that the input is registered, so a revocation either shows
+	// here or breaks it off (the UI revokes, then disconnects).
+	if _, err := a.web.Tokens().Get(r.Context(), tok.ID); err != nil {
+		switch {
+		case errors.Is(err, auth.ErrTokenNotFound):
+			writeError(w, http.StatusUnauthorized, sessions.ErrRevoked.Error())
+		case r.Context().Err() != nil: // the client went away
+		default:
+			a.internal(w, "checking the token", err) // fails closed
+		}
+		return false
+	}
 	resp, err := a.control(ctx, s.Profile, http.MethodPost, path, body)
 	if err != nil {
 		if ctx.Err() != nil && r.Context().Err() == nil {
