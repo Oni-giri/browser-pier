@@ -370,8 +370,9 @@ func TestTypeMappedFailsLoudly(t *testing.T) {
 	// No spare key: nothing typed.
 	v, calls, _ := keymapVisual(t)
 	rec := serveVisual(v, http.MethodPost, "/input/type", string(text))
-	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "before anything was typed") || !strings.Contains(rec.Body.String(), "no spare key") || ran(*calls) {
-		t.Fatalf("no spare key: %d %s %v", rec.Code, rec.Body, *calls)
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "before anything was typed") || !strings.Contains(rec.Body.String(), "no spare key") || ran(*calls) ||
+		rec.Header().Get(nothingTypedHeader) != "1" {
+		t.Fatalf("no spare key: %d %s %v %v", rec.Code, rec.Body, rec.Header(), *calls)
 	}
 	// No keyboard map.
 	v, calls, f := keymapVisual(t, 8)
@@ -399,7 +400,7 @@ func TestTypeMappedFailsLoudly(t *testing.T) {
 	}
 	rec = serveVisual(v, http.MethodPost, "/input/type", string(text))
 	got := events(*calls)
-	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "may have been typed") ||
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "may have been typed") || rec.Header().Get(nothingTypedHeader) != "" ||
 		!slices.Equal(got[len(got)-4:], []string{"xdotool key", "xdotool keyup", "keymap open", "keymap change 8 1 0"}) || f.key(8)[0] != 0 {
 		t.Fatalf("xdotool failing: %d %s %q", rec.Code, rec.Body, got)
 	}

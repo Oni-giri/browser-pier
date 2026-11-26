@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Oni-giri/browser-pier/internal/keyplan"
 	"github.com/Oni-giri/browser-pier/internal/motion"
 )
 
@@ -472,15 +473,9 @@ func (v *visual) typeText(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	text := []rune(t.Text)
-	if i := slices.Index(text, utf8.RuneError); i >= 0 {
-		// It stands for what didn't decode (an unpaired surrogate in the
-		// JSON, say), not for a character anyone meant.
-		http.Error(w, fmt.Sprintf("text: character %d is U+FFFD, which stands for invalid input; it isn't typed", i+1), http.StatusBadRequest)
-		return
-	}
-	if i := untypeable(text); i > 0 {
-		// xdotool would leave it out without a word.
-		http.Error(w, fmt.Sprintf("text: character %d is a control character, which no key types; only \\n and \\r (Return) and \\t (Tab) are typed", i), http.StatusBadRequest)
+	// The orchestrator checks the same before the call's turn.
+	if err := keyplan.Check(t.Text); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	switch {
@@ -519,7 +514,7 @@ func (v *visual) typeMapped(w http.ResponseWriter, r *http.Request, text []rune,
 	}
 	ctx := r.Context()
 	before := func(err error) {
-		http.Error(w, "typing failed before anything was typed, so it can be retried: "+err.Error(), http.StatusInternalServerError)
+		nothingTyped(w, err)
 	}
 	if v.live != nil {
 		if err := v.live.drain(); err != nil {
@@ -564,6 +559,17 @@ func (v *visual) typeMapped(w http.ResponseWriter, r *http.Request, text []rune,
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// nothingTypedHeader marks a type that failed before any key was
+// pressed: the orchestrator then gives the call's id back (PROJ-156), so
+// the same call can be sent again.
+const nothingTypedHeader = "X-Nothing-Typed"
+
+// nothingTyped answers a type that failed before any key was pressed.
+func nothingTyped(w http.ResponseWriter, err error) {
+	w.Header().Set(nothingTypedHeader, "1")
+	http.Error(w, "typing failed before anything was typed, so it can be retried, with the same call id if it had one: "+err.Error(), http.StatusInternalServerError)
+}
+
 // keepLeftover remembers keys a binding couldn't put back, with v.mu
 // held, for the next type to put back first.
 func (v *visual) keepLeftover(b *binding) {
@@ -604,7 +610,7 @@ func (v *visual) typeKeys(w http.ResponseWriter, r *http.Request, build func() [
 			return v.restoreLeftover(r.Context())
 		}()
 		if err != nil {
-			http.Error(w, "typing failed before anything was typed, so it can be retried: "+err.Error(), http.StatusInternalServerError)
+			nothingTyped(w, err)
 			return
 		}
 	}

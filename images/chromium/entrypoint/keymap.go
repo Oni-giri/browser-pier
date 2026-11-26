@@ -10,6 +10,8 @@ import (
 	"slices"
 	"time"
 	"unicode"
+
+	"github.com/Oni-giri/browser-pier/internal/keyplan"
 )
 
 // Typing characters the keyboard map lacks (PROJ-195).
@@ -209,36 +211,32 @@ type keyBatch struct {
 	bind []uint32
 }
 
-var errNoSpareKeys = errors.New("the keyboard map has no spare key to bind a character to")
+var errNoSpareKeys = keyplan.ErrNoSpareKeys
 
 // planKeys splits text into stretches that each need at most spare keys
-// bound (one, unless the text has more distinct characters the map lacks
-// than there are spare keys), and lists those keysyms for each.
+// bound, and lists those keysyms for each: keyplan.Plan, which the
+// orchestrator's estimate of a call's time uses too.
 func planKeys(text []rune, has func(uint32) bool, spare int) ([]keyBatch, error) {
-	var out []keyBatch
-	var cur keyBatch
-	bound := map[uint32]bool{}
-	for i, r := range text {
-		if _, ok := keysym(r); !ok {
-			sym, ok := runeKeysym(r)
-			if !ok {
-				return nil, fmt.Errorf("character %d is a control character, which no key types", i+1)
-			}
-			if !has(sym) && !bound[sym] {
-				if spare < 1 {
-					return nil, errNoSpareKeys
-				}
-				if len(cur.bind) == spare {
-					out, cur, bound = append(out, cur), keyBatch{}, map[uint32]bool{}
-				}
-				cur.bind = append(cur.bind, sym)
-				bound[sym] = true
-			}
-		}
-		cur.text = append(cur.text, r)
+	if i := untypeable(text); i > 0 {
+		return nil, fmt.Errorf("character %d is a control character, which no key types", i)
 	}
-	if len(cur.text) > 0 {
-		out = append(out, cur)
+	plan, err := keyplan.Plan(text, func(r rune) bool {
+		if _, ok := keysym(r); ok {
+			return false
+		}
+		sym, _ := runeKeysym(r)
+		return !has(sym)
+	}, spare)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]keyBatch, len(plan))
+	for i, b := range plan {
+		out[i].text = b.Text
+		for _, r := range b.Bind {
+			sym, _ := runeKeysym(r)
+			out[i].bind = append(out[i].bind, sym)
+		}
 	}
 	return out, nil
 }

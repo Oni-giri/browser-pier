@@ -8,6 +8,7 @@ WORKDIR /src
 COPY go.mod go.sum* ./
 RUN go mod download
 COPY internal/motion ./internal/motion
+COPY internal/keyplan ./internal/keyplan
 COPY internal/domainset ./internal/domainset
 COPY images/chromium/entrypoint ./images/chromium/entrypoint
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
