@@ -84,3 +84,42 @@ func TestTwoFACommand(t *testing.T) {
 		}
 	}
 }
+
+// A part of the state left without the rest (here the secret's row gone,
+// the recovery codes still there) reads as broken, not off, and reset
+// clears it.
+func TestTwoFACommandPartialState(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BROWSERPIER_DATA_DIR", dir)
+	ctx := context.Background()
+	d, err := db.Open(ctx, filepath.Join(dir, "browserpier.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	admin, err := auth.NewAdmin(ctx, d, "the-admin-password", slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := auth.NewTOTPSecret()
+	if _, err := admin.EnableTwoStep(ctx, secret, auth.TOTPCode(secret, time.Now()), ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`DELETE FROM settings WHERE key = 'totp_secret'`); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := twoFACommand([]string{"status"}, &out); err != nil || !strings.Contains(out.String(), "partial") || !strings.Contains(out.String(), "2fa reset") {
+		t.Fatalf("status with a partial state = %v, %q", err, out.String())
+	}
+	if _, _, err := admin.SignIn(ctx, "the-admin-password", false, "", ""); !errors.Is(err, auth.ErrTwoStepUnreadable) {
+		t.Fatalf("the password alone with a partial state: %v", err)
+	}
+	out.Reset()
+	if err := twoFACommand([]string{"reset"}, &out); err != nil || !strings.Contains(out.String(), "Two-step sign-in is off") {
+		t.Fatalf("reset of a partial state = %v, %q", err, out.String())
+	}
+	if _, _, err := admin.SignIn(ctx, "the-admin-password", false, "", ""); err != nil {
+		t.Fatalf("the password alone after reset: %v", err)
+	}
+}

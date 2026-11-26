@@ -241,6 +241,11 @@ func (w *Web) loginCode(rw http.ResponseWriter, r *http.Request) {
 		w.clearStepCookie(rw, r)
 		http.Redirect(rw, r, "/login?next="+url.QueryEscape(p.next), http.StatusSeeOther)
 		return
+	case errors.Is(err, ErrTwoStepUnreadable):
+		cancelAll()
+		w.clearStepCookie(rw, r)
+		w.signInFailed(rw, r, pageData{Title: "Sign in", Next: p.next, EnvManaged: w.admin.EnvManaged()}, err)
+		return
 	case err != nil:
 		cancelAll()
 		w.steps.put(p)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -991,27 +992,86 @@ func TestFailedCodeWriteMakesNoSession(t *testing.T) {
 	}
 }
 
+// A two-step state that is partial or can't be read refuses every
+// sign-in, from a new browser or a known one, and says how to reset it:
+// never a session or a device cookie on the password alone.
 func TestUnreadableTwoStepRefusesSignIn(t *testing.T) {
-	for key, value := range map[string]string{keyTOTPSecret: "not base32!", keyTOTPLast: "soon"} {
-		f := newTwoStepFixture(t, WebOptions{})
-		if _, err := f.admin.db.Exec(`UPDATE settings SET value = ? WHERE key = ?`, value, key); err != nil {
-			t.Fatal(err)
+	del := func(keys ...string) []string {
+		var qs []string
+		for _, k := range keys {
+			qs = append(qs, `DELETE FROM settings WHERE key = '`+k+`'`)
 		}
-		b := f.browser()
-		resp, body := f.send(b, "", "/login", url.Values{"password": {"the-admin-password"}})
-		if resp.StatusCode != http.StatusInternalServerError || cookieNamed(resp.Cookies(), CookieName) != nil || cookieNamed(resp.Cookies(), StepCookie) != nil || f.sessions() != 0 {
-			t.Fatalf("broken %s: %d, %d sessions: %s", key, resp.StatusCode, f.sessions(), body)
-		}
+		return qs
 	}
-	// Also a step begun before the state broke.
-	f := newTwoStepFixture(t, WebOptions{})
-	b := f.browser()
-	f.password(b, "", nil)
-	if _, err := f.admin.db.Exec(`UPDATE settings SET value = 'x' WHERE key = ?`, keyTOTPSecret); err != nil {
-		t.Fatal(err)
+	set := func(key, value string) []string {
+		return []string{`UPDATE settings SET value = '` + value + `' WHERE key = '` + key + `'`}
 	}
-	if resp, _ := f.enter(b, "", f.code()); resp.StatusCode != http.StatusInternalServerError || f.sessions() != 0 {
-		t.Fatalf("code with a broken state: %d", resp.StatusCode)
+	noCodes := `DELETE FROM admin_recovery_codes`
+	for name, qs := range map[string][]string{
+		"secret missing":                del(keyTOTPSecret),
+		"secret missing, no codes":      append(del(keyTOTPSecret), noCodes),
+		"last step missing":             del(keyTOTPLast),
+		"turned-on time missing":        del(keyTOTPEnabled),
+		"only the recovery codes":       del(keyTOTPSecret, keyTOTPLast, keyTOTPEnabled),
+		"only the last step":            append(del(keyTOTPSecret, keyTOTPEnabled), noCodes),
+		"only the turned-on time":       append(del(keyTOTPSecret, keyTOTPLast), noCodes),
+		"only the secret":               append(del(keyTOTPLast, keyTOTPEnabled), noCodes),
+		"secret not base32":             set(keyTOTPSecret, "not base32!"),
+		"secret too short":              set(keyTOTPSecret, EncodeTOTPSecret([]byte("short"))),
+		"last step not a number":        set(keyTOTPLast, "soon"),
+		"turned-on time not a number":   set(keyTOTPEnabled, "yesterday"),
+		"turned-on time zero, no codes": append(set(keyTOTPEnabled, "0"), noCodes),
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newTwoStepFixture(t, WebOptions{})
+			// A browser that signed in before, so it holds a trusted device cookie.
+			known := f.browser()
+			f.password(known, "", nil)
+			if resp, _ := f.enter(known, "", f.code()); resp.StatusCode != http.StatusSeeOther {
+				t.Fatalf("sign-in before breaking the state: %d", resp.StatusCode)
+			}
+			f.post(known, "/logout", nil)
+			f.clock.add(30 * time.Second)
+			// And one begun before the state broke, waiting for its code.
+			waiting := f.browser()
+			f.password(waiting, "", nil)
+			for _, q := range qs {
+				if _, err := f.admin.db.Exec(q); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := f.sessions()
+			check := func(who string, resp reply, body string) {
+				t.Helper()
+				for _, c := range []string{CookieName, DeviceCookie, StepCookie} {
+					if cookieNamed(resp.Cookies(), c) != nil {
+						t.Errorf("%s: got a %s cookie", who, c)
+					}
+				}
+				if resp.StatusCode != http.StatusInternalServerError || !strings.Contains(body, "browserpier 2fa reset") || f.sessions() != before {
+					t.Errorf("%s: %d, %d sessions (was %d): %s", who, resp.StatusCode, f.sessions(), before, body)
+				}
+			}
+			resp, body := f.send(f.browser(), "", "/login", url.Values{"password": {"the-admin-password"}})
+			check("a new browser", resp, body)
+			resp, body = f.send(known, "", "/login", url.Values{"password": {"the-admin-password"}})
+			check("a known browser", resp, body)
+			resp, body = f.enter(waiting, "", f.code())
+			check("a code after the password", resp, body)
+			if _, _, err := f.admin.SignIn(context.Background(), "the-admin-password", false, "", ""); !errors.Is(err, ErrTwoStepUnreadable) {
+				t.Errorf("SignIn = %v", err)
+			}
+			if _, err := f.admin.TwoStep(context.Background()); !errors.Is(err, ErrTwoStepUnreadable) {
+				t.Errorf("TwoStep = %v", err)
+			}
+			// A reset clears whatever is left, and the password alone signs in.
+			if _, _, err := ResetTwoStep(context.Background(), f.admin.db); err != nil {
+				t.Fatal(err)
+			}
+			if resp, _ := f.send(f.browser(), "", "/login", url.Values{"password": {"the-admin-password"}}); resp.StatusCode != http.StatusSeeOther || cookieNamed(resp.Cookies(), CookieName) == nil {
+				t.Errorf("the password alone after a reset: %d", resp.StatusCode)
+			}
+		})
 	}
 }
 

@@ -455,9 +455,7 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 		if device != nil {
 			device.Cancel()
 		}
-		w.log.Error("signing in", "err", err)
-		d.Error = "Something went wrong. Try again."
-		w.render(rw, r, http.StatusInternalServerError, "login", d)
+		w.signInFailed(rw, r, d, err)
 		return
 	}
 	mine.Succeed()
@@ -573,6 +571,22 @@ func plural(n int, one, many string) string {
 		return one
 	}
 	return many
+}
+
+// brokenTwoStep is what a right password is told while the two-step
+// state is partial or can't be read: no step of the sign-in can pass.
+const brokenTwoStep = "Two-step sign-in is in a broken state, so signing in is refused. On the server, run browserpier 2fa reset, then sign in with your password."
+
+// signInFailed answers a sign-in that couldn't be checked.
+func (w *Web) signInFailed(rw http.ResponseWriter, r *http.Request, d pageData, err error) {
+	if errors.Is(err, ErrTwoStepUnreadable) {
+		w.log.Error("sign-in refused: the two-step state is partial or can't be read; run `browserpier 2fa reset`")
+		d.Error = brokenTwoStep
+	} else {
+		w.log.Error("signing in", "err", err)
+		d.Error = "Something went wrong. Try again."
+	}
+	w.render(rw, r, http.StatusInternalServerError, "login", d)
 }
 
 func (w *Web) locked(rw http.ResponseWriter, r *http.Request, d pageData, wait time.Duration) {

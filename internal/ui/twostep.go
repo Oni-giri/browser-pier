@@ -19,6 +19,10 @@ import (
 // reachable with an agent token, and nothing secret goes in a URL, a
 // redirect or a flash message.
 
+// brokenTwoStep is shown while the two-step state is partial or can't be
+// read: nothing can change it here, only a reset from the server.
+const brokenTwoStep = "Two-step sign-in is in a broken state, so sign-ins are refused. On the server, run browserpier 2fa reset."
+
 // draftTTL is how long a new secret waits for its first code.
 const draftTTL = 10 * time.Minute
 
@@ -130,7 +134,7 @@ func (u *UI) twoStepOn(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err != nil:
 		u.log.Error("reading two-step sign-in", "err", err)
-		u.twoStepDialog(w, http.StatusInternalServerError, twoStepForm{Stage: "password", Error: "Two-step sign-in can't be read. Reset it from the server."})
+		u.twoStepDialog(w, http.StatusInternalServerError, twoStepForm{Stage: "password", Error: brokenTwoStep})
 		return
 	case st.On:
 		u.twoStepDialog(w, http.StatusUnprocessableEntity, twoStepForm{Stage: "manage", Error: "Two-step sign-in is already on."})
@@ -174,6 +178,10 @@ func (u *UI) twoStepConfirm(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, auth.ErrTwoStepOn), errors.Is(err, auth.ErrTwoStepOff), errors.Is(err, auth.ErrSignInAgain):
 		u.dropDraft(r)
 		done(w, r, "/settings", "Two-step sign-in changed in the meantime. Look again", true)
+		return
+	case errors.Is(err, auth.ErrTwoStepUnreadable):
+		u.dropDraft(r)
+		u.twoStepDialog(w, http.StatusInternalServerError, twoStepForm{Stage: "password", Error: brokenTwoStep})
 		return
 	case err != nil:
 		u.log.Error("storing two-step sign-in", "err", err)
@@ -239,6 +247,10 @@ func (u *UI) twoStepManage(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, auth.ErrTwoStepOff):
 		try.Cancel()
 		done(w, r, "/settings", "Two-step sign-in is already off", false)
+		return
+	case errors.Is(err, auth.ErrTwoStepUnreadable):
+		try.Cancel()
+		u.twoStepDialog(w, http.StatusInternalServerError, twoStepForm{Stage: "manage", Error: brokenTwoStep})
 		return
 	case err != nil:
 		try.Cancel()

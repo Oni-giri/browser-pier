@@ -199,7 +199,7 @@ func classifyCode(s string) (string, codeKind) {
 // holds the secret.
 type TwoStepStatus struct {
 	On        bool
-	Since     time.Time // zero if unknown
+	Since     time.Time // when it was turned on
 	CodesLeft int
 }
 
@@ -209,6 +209,7 @@ type twoStepState struct {
 	stored string // the secret's row as stored, to check it didn't change
 	last   int64
 	since  time.Time
+	codes  int // recovery codes left
 }
 
 type querier interface {
@@ -216,10 +217,21 @@ type querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// readTwoStep reads the state. Anything it can't make sense of is an
-// error, never "off".
+// recoveryCount names the recovery code count among readTwoStep's rows;
+// no settings key has a space.
+const recoveryCount = "recovery codes"
+
+// readTwoStep reads the state. It is off only when none of its rows and
+// no recovery code exist, and on only when all three rows are there and
+// make sense. Anything in between (a secret missing next to a last step
+// or recovery codes, say) is ErrTwoStepUnreadable, never "off": the
+// password alone signs nothing in until `browserpier 2fa reset` clears it.
 func readTwoStep(ctx context.Context, q querier) (twoStepState, error) {
-	rows, err := q.QueryContext(ctx, `SELECT key, value FROM settings WHERE key IN (?, ?, ?)`, keyTOTPSecret, keyTOTPLast, keyTOTPEnabled)
+	// One query, so a single connection isn't asked for a second while
+	// the rows hold it.
+	rows, err := q.QueryContext(ctx, `SELECT key, value FROM settings WHERE key IN (?, ?, ?)
+		UNION ALL SELECT ?, CAST(count(*) AS TEXT) FROM admin_recovery_codes`,
+		keyTOTPSecret, keyTOTPLast, keyTOTPEnabled, recoveryCount)
 	if err != nil {
 		return twoStepState{}, err
 	}
@@ -235,20 +247,31 @@ func readTwoStep(ctx context.Context, q querier) (twoStepState, error) {
 	if err := rows.Err(); err != nil {
 		return twoStepState{}, err
 	}
-	stored, on := kv[keyTOTPSecret]
-	if !on {
-		return twoStepState{}, nil
+	codes, err := strconv.Atoi(kv[recoveryCount])
+	if err != nil {
+		return twoStepState{}, err
 	}
-	st := twoStepState{on: true, stored: stored}
+	stored, hasSecret := kv[keyTOTPSecret]
+	last, hasLast := kv[keyTOTPLast]
+	enabled, hasEnabled := kv[keyTOTPEnabled]
+	switch {
+	case !hasSecret && !hasLast && !hasEnabled && codes == 0:
+		return twoStepState{}, nil
+	case !hasSecret || !hasLast || !hasEnabled:
+		return twoStepState{}, ErrTwoStepUnreadable
+	}
+	st := twoStepState{on: true, stored: stored, codes: codes}
 	if st.secret, err = b32.DecodeString(stored); err != nil || len(st.secret) != totpSecretLen {
 		return twoStepState{}, ErrTwoStepUnreadable
 	}
-	if st.last, err = strconv.ParseInt(kv[keyTOTPLast], 10, 64); err != nil {
+	if st.last, err = strconv.ParseInt(last, 10, 64); err != nil {
 		return twoStepState{}, ErrTwoStepUnreadable
 	}
-	if ms, err := strconv.ParseInt(kv[keyTOTPEnabled], 10, 64); err == nil {
-		st.since = time.UnixMilli(ms)
+	ms, err := strconv.ParseInt(enabled, 10, 64)
+	if err != nil || ms <= 0 {
+		return twoStepState{}, ErrTwoStepUnreadable
 	}
+	st.since = time.UnixMilli(ms)
 	return st, nil
 }
 
@@ -258,14 +281,13 @@ func ReadTwoStep(ctx context.Context, d *sql.DB) (TwoStepStatus, error) {
 	if err != nil || !st.on {
 		return TwoStepStatus{}, err
 	}
-	s := TwoStepStatus{On: true, Since: st.since}
-	err = d.QueryRowContext(ctx, `SELECT count(*) FROM admin_recovery_codes`).Scan(&s.CodesLeft)
-	return s, err
+	return TwoStepStatus{On: true, Since: st.since, CodesLeft: st.codes}, nil
 }
 
 // ResetTwoStep turns two-step sign-in off: it removes the secret, the
 // last step and every recovery code, whatever state they are in.
-// Sessions and the password stay. It reports whether it was on.
+// Sessions and the password stay. It reports whether any of it was there
+// (on, or a part left of it).
 func ResetTwoStep(ctx context.Context, d *sql.DB) (wasOn bool, codes int, err error) {
 	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
@@ -273,7 +295,7 @@ func ResetTwoStep(ctx context.Context, d *sql.DB) (wasOn bool, codes int, err er
 	}
 	defer func() { _ = tx.Rollback() }()
 	var n int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM settings WHERE key = ?`, keyTOTPSecret).Scan(&n); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM settings WHERE key IN (?, ?, ?)`, keyTOTPSecret, keyTOTPLast, keyTOTPEnabled).Scan(&n); err != nil {
 		return false, 0, err
 	}
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM admin_recovery_codes`).Scan(&codes); err != nil {

@@ -48,7 +48,7 @@ func twoFACommand(args []string, out io.Writer) error {
 	st, err := auth.ReadTwoStep(ctx, d)
 	if err != nil {
 		if errors.Is(err, auth.ErrTwoStepUnreadable) {
-			_, err = fmt.Fprintln(out, "Two-step sign-in: on, but its state can't be read, so sign-ins are refused. Run `browserpier 2fa reset`.")
+			_, err = fmt.Fprintln(out, "Two-step sign-in: its state is partial or can't be read, so sign-ins are refused. Run `browserpier 2fa reset`.")
 		}
 		return err
 	}
