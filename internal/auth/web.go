@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -79,6 +80,8 @@ func NewWeb(admin *Admin, tokens *Tokens, log *slog.Logger, opts WebOptions) *We
 		// wrong ones a day from browsers that never signed in, app codes
 		// from those wait for the next day (recovery codes still work).
 		// Someone who knows the password then has about a 1% chance a year.
+		// The account's count and lockout are kept in the database too, so a
+		// restart doesn't hand out ten more guesses (codeLockoutKey).
 		codeIP:      NewLockout(5, 5*time.Minute, 5*time.Minute),
 		codeAccount: NewLockout(10, 24*time.Hour, 24*time.Hour),
 		steps:       newPendingSteps(),
@@ -89,6 +92,8 @@ func NewWeb(admin *Admin, tokens *Tokens, log *slog.Logger, opts WebOptions) *We
 		slow:        make(chan struct{}, 1),
 		pages:       map[string]*template.Template{},
 	}
+	w.codeAccount.save = w.saveCodeLockout
+	w.loadCodeLockout(context.Background())
 	base := template.Must(template.New("").Parse(pagesHTML))
 	for _, name := range []string{"login", "code", "setup"} {
 		t := template.Must(base.Clone())
@@ -96,6 +101,72 @@ func NewWeb(admin *Admin, tokens *Tokens, log *slog.Logger, opts WebOptions) *We
 		w.pages[name] = t
 	}
 	return w
+}
+
+// codeLockoutKey is the settings row that keeps the account-wide count
+// of wrong app codes (codeAccount) across restarts: the times of the
+// recent failures and the end of a lockout, as JSON, Unix milliseconds.
+const codeLockoutKey = "two_step_code_lockout"
+
+type savedLockout struct {
+	Failures    []int64 `json:"failures,omitempty"`
+	LockedUntil int64   `json:"locked_until,omitempty"`
+}
+
+// saveCodeLockout writes codeAccount's state for key ("account"), or
+// removes the row once nothing is left to remember.
+func (w *Web) saveCodeLockout(_ string, failures []time.Time, lockedUntil time.Time) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var v savedLockout
+	for _, t := range failures {
+		v.Failures = append(v.Failures, t.UnixMilli())
+	}
+	if !lockedUntil.IsZero() {
+		v.LockedUntil = lockedUntil.UnixMilli()
+	}
+	var err error
+	if len(v.Failures) == 0 && v.LockedUntil == 0 {
+		_, err = w.admin.db.ExecContext(ctx, `DELETE FROM settings WHERE key = ?`, codeLockoutKey)
+	} else {
+		b, _ := json.Marshal(v)
+		_, err = w.admin.db.ExecContext(ctx, `INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`, codeLockoutKey, string(b))
+	}
+	if err != nil {
+		w.log.Error("saving the count of wrong sign-in codes; a restart would forget it", "err", err)
+	}
+}
+
+// loadCodeLockout reads back what saveCodeLockout kept. A row that can't
+// be read locks app codes from unknown browsers for a full lockout, as a
+// tenth wrong code would, rather than forget the count: known browsers
+// and recovery codes still sign in.
+func (w *Web) loadCodeLockout(ctx context.Context) {
+	raw, err := w.admin.setting(ctx, codeLockoutKey)
+	if err == nil && raw == "" {
+		return
+	}
+	var v savedLockout
+	if err == nil {
+		err = json.Unmarshal([]byte(raw), &v)
+	}
+	if err != nil {
+		w.log.Error("the saved count of wrong sign-in codes can't be read; app codes from unknown browsers are refused for 24 hours", "err", err)
+		until := w.admin.now().Add(w.codeAccount.lockFor)
+		w.codeAccount.restore("account", nil, until)
+		w.saveCodeLockout("account", nil, until) // so the next start doesn't lock again from scratch
+		return
+	}
+	slices.Sort(v.Failures) // oldest first, as Lockout keeps them
+	failures := make([]time.Time, 0, len(v.Failures))
+	for _, ms := range v.Failures {
+		failures = append(failures, time.UnixMilli(ms))
+	}
+	var until time.Time
+	if v.LockedUntil != 0 {
+		until = time.UnixMilli(v.LockedUntil)
+	}
+	w.codeAccount.restore("account", failures, until)
 }
 
 // SignedIn reports whether the request comes from a signed-in browser.

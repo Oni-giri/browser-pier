@@ -28,6 +28,8 @@ type webFixture struct {
 	web    *Web
 	srv    *httptest.Server
 	logs   *bytes.Buffer
+	log    *slog.Logger
+	opts   WebOptions
 }
 
 func newWebFixture(t *testing.T, env string, opts WebOptions) *webFixture {
@@ -42,8 +44,16 @@ func newWebFixture(t *testing.T, env string, opts WebOptions) *webFixture {
 	if opts.CookieSecure == "" {
 		opts.CookieSecure = "auto"
 	}
-	f := &webFixture{t: t, admin: admin, tokens: NewTokens(d), logs: &logs}
-	f.web = NewWeb(admin, f.tokens, log, opts)
+	f := &webFixture{t: t, admin: admin, tokens: NewTokens(d), logs: &logs, log: log, opts: opts}
+	f.serve()
+	return f
+}
+
+// serve starts a server with a new Web on the fixture's database, as a
+// restart of BrowserPier would.
+func (f *webFixture) serve() {
+	t := f.t
+	f.web = NewWeb(f.admin, f.tokens, f.log, f.opts)
 	mux := http.NewServeMux()
 	f.web.Register(mux)
 	mux.Handle("GET /{$}", f.web.RequireAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -55,7 +65,6 @@ func newWebFixture(t *testing.T, env string, opts WebOptions) *webFixture {
 	})))
 	f.srv = httptest.NewServer(new(http.CrossOriginProtection).Handler(mux))
 	t.Cleanup(f.srv.Close)
-	return f
 }
 
 // browser is an HTTP client with cookies that doesn't follow redirects.
@@ -555,12 +564,7 @@ func newTwoStepFixture(t *testing.T, opts WebOptions) *twoStepFixture {
 	t.Helper()
 	f := &twoStepFixture{webFixture: newWebFixture(t, "the-admin-password", opts), clock: &fakeClock{t: time.Unix(1_800_000_000, 0)}}
 	f.admin.now = f.clock.now
-	w := f.web
-	for _, l := range []*Lockout{w.loginIP, w.deviceFails, w.codeIP, w.codeAccount, w.setup, w.badToken} {
-		l.now = f.clock.now
-	}
-	w.backstop.now = f.clock.now
-	w.steps.now = f.clock.now
+	f.useClock()
 	f.enable()
 	t.Cleanup(func() {
 		logs := f.logs.String()
@@ -571,6 +575,21 @@ func newTwoStepFixture(t *testing.T, opts WebOptions) *twoStepFixture {
 		}
 	})
 	return f
+}
+
+func (f *twoStepFixture) useClock() {
+	w := f.web
+	for _, l := range []*Lockout{w.loginIP, w.deviceFails, w.codeIP, w.codeAccount, w.setup, w.badToken} {
+		l.now = f.clock.now
+	}
+	w.backstop.now = f.clock.now
+	w.steps.now = f.clock.now
+}
+
+// restart serves a new Web on the same database: what memory held is gone.
+func (f *twoStepFixture) restart() {
+	f.serve()
+	f.useClock()
 }
 
 func (f *twoStepFixture) enable() {
@@ -1254,4 +1273,114 @@ func TestDeviceCookieFromBeforeAKeyRotationIsntTrusted(t *testing.T) {
 			return resp
 		})
 	})
+}
+
+// The account-wide cap on wrong app codes outlives a restart: the count
+// so far, and a lockout until it ends. A saved count that can't be read
+// locks app codes from unknown browsers rather than forget it.
+func TestAccountCodeLockoutSurvivesARestart(t *testing.T) {
+	f := newTwoStepFixture(t, trustLoopback())
+	owner := f.browser()
+	f.password(owner, "203.0.113.1", nil)
+	if resp, _ := f.enter(owner, "203.0.113.1", f.code()); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("owner's sign-in: %d", resp.StatusCode)
+	}
+	f.post(owner, "/logout", nil)
+	ip := 0
+	wrong := func(n int) {
+		t.Helper()
+		for range n {
+			ip++
+			addr := fmt.Sprintf("198.51.100.%d", ip)
+			b := f.browser()
+			f.password(b, addr, nil)
+			if resp, _ := f.enter(b, addr, "000000"); resp.StatusCode != http.StatusUnauthorized {
+				t.Fatalf("wrong code from %s: %d", addr, resp.StatusCode)
+			}
+		}
+	}
+	refused := func(when string) {
+		t.Helper()
+		ip++
+		addr := fmt.Sprintf("198.51.100.%d", ip)
+		b := f.browser()
+		f.password(b, addr, nil)
+		if resp, body := f.enter(b, addr, f.code()); resp.StatusCode != http.StatusTooManyRequests || !strings.Contains(body, "for this account today") {
+			t.Fatalf("%s: a right app code from a new browser: %d", when, resp.StatusCode)
+		}
+	}
+
+	// Seven wrong codes, a restart, three more: the cap is reached.
+	wrong(7)
+	f.restart()
+	wrong(3)
+	f.clock.add(30 * time.Second)
+	refused("after 7 + restart + 3 wrong codes")
+
+	// Locked; a restart an hour later keeps it locked.
+	f.clock.add(time.Hour)
+	f.restart()
+	refused("after a restart while locked")
+	// The owner's known browser and a recovery code still sign in.
+	f.password(owner, "203.0.113.1", nil)
+	if resp, _ := f.enter(owner, "203.0.113.1", f.code()); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("a known browser after a restart while locked: %d", resp.StatusCode)
+	}
+	r := f.browser()
+	f.password(r, "192.0.2.1", nil)
+	if resp, _ := f.enter(r, "192.0.2.1", f.codes[0]); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("a recovery code after a restart while locked: %d", resp.StatusCode)
+	}
+
+	// When the lockout ends, app codes work again, restart or not.
+	f.clock.add(23 * time.Hour)
+	f.restart()
+	n := f.browser()
+	f.password(n, "192.0.2.2", nil)
+	if resp, _ := f.enter(n, "192.0.2.2", f.code()); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("a right app code once the lockout ended: %d", resp.StatusCode)
+	}
+
+	// A saved count that can't be read: locked for a day.
+	if _, err := f.admin.db.Exec(`INSERT INTO settings (key, value) VALUES (?, 'not json') ON CONFLICT (key) DO UPDATE SET value = excluded.value`, codeLockoutKey); err != nil {
+		t.Fatal(err)
+	}
+	f.clock.add(30 * time.Second)
+	f.restart()
+	refused("with a saved count that can't be read")
+	if !strings.Contains(f.logs.String(), "can't be read") {
+		t.Fatal("an unreadable saved count wasn't logged")
+	}
+	// The lockout it made is saved, so it ends a day later, restarts or not.
+	f.clock.add(24 * time.Hour)
+	f.restart()
+	m := f.browser()
+	f.password(m, "192.0.2.3", nil)
+	if resp, _ := f.enter(m, "192.0.2.3", f.code()); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("a right app code a day after an unreadable count: %d", resp.StatusCode)
+	}
+}
+
+// Saves reach the database newest last, whatever order their calls end in.
+func TestLockoutSavesInOrder(t *testing.T) {
+	l := NewLockout(100, time.Hour, time.Hour)
+	var mu sync.Mutex
+	var last []time.Time
+	l.save = func(_ string, failures []time.Time, _ time.Time) {
+		mu.Lock()
+		defer mu.Unlock()
+		if len(failures) < len(last) {
+			t.Errorf("a save of %d failures after one of %d", len(failures), len(last))
+		}
+		last = failures
+	}
+	var wg sync.WaitGroup
+	for range 50 {
+		a, _ := l.Begin("k")
+		wg.Go(func() { a.Fail() })
+	}
+	wg.Wait()
+	if len(last) != 50 {
+		t.Fatalf("last save holds %d failures", len(last))
+	}
 }
