@@ -24,6 +24,8 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/cdp/cdptest"
 	"github.com/Oni-giri/browser-pier/internal/db"
+	"github.com/Oni-giri/browser-pier/internal/files"
+	"github.com/Oni-giri/browser-pier/internal/picker"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/sessions/sessionstest"
@@ -44,6 +46,10 @@ type fixture struct {
 	// emptied counts the browser's clipboard emptyings, with whether a
 	// person still had control as each happened (PROJ-194).
 	emptied *clipRecord
+	// choosers is the browsers' file choosers (chooser_test.go), files
+	// the profiles' files, with a 1 MiB cap.
+	choosers *fakeChoosers
+	files    *files.Store
 }
 
 type clipRecord struct {
@@ -88,6 +94,8 @@ func newFixture(t *testing.T, policy profiles.HandoffPolicy, opts auth.WebOption
 		emptied.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	})
+	choosers := &fakeChoosers{}
+	choosers.register(mux)
 	// No CDP: what the handoff reads of the browser, it reads over HTTP.
 	b := cdptest.New(func(m cdptest.Message) (any, error) {
 		return nil, cdptest.Error{Message: "not in the fake: " + m.Method}
@@ -123,12 +131,15 @@ func newFixture(t *testing.T, policy profiles.HandoffPolicy, opts auth.WebOption
 	t.Cleanup(func() { _ = relay.Close() })
 	hmux := http.NewServeMux()
 	web.Register(hmux)
-	NewWeb(svc, web, webrtc.NewHandler(relay, m, web, log), m, log).Register(hmux)
+	fs := files.New(m.Layout().FilesDir, 1<<20, os.Getuid(), os.Getgid())
+	hw := NewWeb(svc, web, webrtc.NewHandler(relay, m, web, log), m, log)
+	hw.SetPicker(picker.New(m, fs, log))
+	hw.Register(hmux)
 	// As in production, form posts from other origins are refused.
 	srv := httptest.NewServer(new(http.CrossOriginProtection).Handler(hmux))
 	t.Cleanup(srv.Close)
 	t.Cleanup(svc.Close)
-	return &fixture{t: t, m: m, svc: svc, admin: admin, srv: srv, cdp: b, tabs: tabs, emptied: emptied}
+	return &fixture{t: t, m: m, svc: svc, admin: admin, srv: srv, cdp: b, tabs: tabs, emptied: emptied, choosers: choosers, files: fs}
 }
 
 func (f *fixture) running() sessions.Session {
@@ -362,6 +373,34 @@ func TestLinkOnlyAndSignIn(t *testing.T) {
 	_, token = g.open("")
 	if p := g.do(browser(), "GET", "/h/"+token, nil, nil); p.code != http.StatusSeeOther || p.location != "/login?next=%2Fh%2F"+token {
 		t.Fatalf("full sign-in without a session: %d to %q", p.code, p.location)
+	}
+
+	// With two-step sign-in on (PROJ-162), the password alone doesn't
+	// open a Full sign-in link; the code does, and the browser lands on it.
+	secret := auth.NewTOTPSecret()
+	if _, _, err := g.admin.EnableTwoStep(context.Background(), secret, auth.TOTPCode(secret, time.Now()), ""); err != nil {
+		t.Fatal(err)
+	}
+	phone = browser()
+	if p := g.do(phone, "GET", "/h/"+token, nil, nil); p.code != http.StatusSeeOther || p.location != "/login?next=%2Fh%2F"+token {
+		t.Fatalf("full sign-in, two-step on, fresh browser: %d to %q", p.code, p.location)
+	}
+	if p := g.do(phone, "POST", "/login", url.Values{"password": {"the-admin-password"}, "next": {"/h/" + token}}, nil); p.code != http.StatusSeeOther || p.location != "/login/code" {
+		t.Fatalf("password step: %d to %q", p.code, p.location)
+	}
+	if p := g.do(phone, "GET", "/h/"+token, nil, nil); p.code != http.StatusSeeOther || p.location != "/login?next=%2Fh%2F"+token {
+		t.Fatalf("the password alone opened a Full sign-in link: %d to %q", p.code, p.location)
+	}
+	code := auth.TOTPCode(secret, time.Now().Add(30*time.Second)) // the confirming code's step is used
+	if p := g.do(phone, "POST", "/login/code", url.Values{"code": {code}}, nil); p.code != http.StatusSeeOther || p.location != "/h/"+token {
+		t.Fatalf("code step: %d to %q", p.code, p.location)
+	}
+	p := g.do(phone, "GET", "/h/"+token, nil, nil)
+	for i := 0; p.code == http.StatusSeeOther && p.location == "/h/"+token && i < 3; i++ {
+		p = g.do(phone, "GET", "/h/"+token, nil, nil)
+	}
+	if p.code != http.StatusOK || !strings.Contains(p.body, "Done, hand back") {
+		t.Fatalf("after the code, the link: %d to %q", p.code, p.location)
 	}
 }
 
@@ -918,7 +957,7 @@ func TestHandoffEndEmptiesTheClipboard(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t, profiles.PolicyLink, auth.WebOptions{})
 			h, _ := f.open("")
-			if err := f.m.TakeControl(h.SessionID); err != nil {
+			if err := f.m.TakeControl(h.SessionID, sessions.HandoffHolder(h.ID)); err != nil {
 				t.Fatal(err)
 			}
 			end(f, h)

@@ -31,9 +31,9 @@ type fakeObj struct {
 	noAttrs bool
 }
 
-// fakeBus answers the AT-SPI read methods for a tree of fakeObjs, and
+// fakeA11yBus answers the AT-SPI read methods for a tree of fakeObjs, and
 // fails the test on any other method: the reader must send nothing else.
-type fakeBus struct {
+type fakeA11yBus struct {
 	t     *testing.T
 	app   string
 	mu    sync.Mutex
@@ -59,7 +59,7 @@ func show(bits ...int) uint64 {
 	return s
 }
 
-func (f *fakeBus) add(path string, o *fakeObj) *fakeObj {
+func (f *fakeA11yBus) add(path string, o *fakeObj) *fakeObj {
 	if f.objs == nil {
 		f.objs = map[string]*fakeObj{}
 	}
@@ -71,9 +71,9 @@ func (f *fakeBus) add(path string, o *fakeObj) *fakeObj {
 	return o
 }
 
-func (f *fakeBus) close() {}
+func (f *fakeA11yBus) close() {}
 
-func (f *fakeBus) call(ctx context.Context, dest string, path dbus.ObjectPath, method string, args ...any) ([]any, error) {
+func (f *fakeA11yBus) call(ctx context.Context, dest string, path dbus.ObjectPath, method string, args ...any) ([]any, error) {
 	if f.onCall != nil {
 		f.onCall(ctx)
 	}
@@ -174,8 +174,8 @@ const p = "/org/a11y/atspi/accessible/"
 
 // browserBus is a browser window with the page's document, another tab's
 // (hidden), and the omnibox's suggestions in a popup window of their own.
-func browserBus(t *testing.T) *fakeBus {
-	f := &fakeBus{t: t, app: ":1.0"}
+func browserBus(t *testing.T) *fakeA11yBus {
+	f := &fakeA11yBus{t: t, app: ":1.0"}
 	f.add(string(appRoot), &fakeObj{role: 75, name: "Chromium", states: show()})
 	f.add(p+"1", &fakeObj{role: roleFrame, name: "Sign in - Chromium", states: show(), ext: extents{0, 0, 1440, 868}, parent: string(appRoot)})
 	f.add(p+"2", &fakeObj{role: roleFrame, states: show(), ext: extents{99, 25, 1278, 88}, parent: string(appRoot)})
@@ -201,7 +201,7 @@ func browserBus(t *testing.T) *fakeBus {
 	return f
 }
 
-func newTestReader(f *fakeBus) *treeReader {
+func newTestReader(f *fakeA11yBus) *treeReader {
 	r := newTreeReader("unix:path=/nowhere", 1440, 900)
 	r.dial = func(string) (busConn, error) { return f, nil }
 	r.hitPause = time.Millisecond
@@ -268,7 +268,7 @@ func TestTreeReadsTheShowingDocumentOfTheBrowserWindow(t *testing.T) {
 
 func TestTreeNeverSendsAMethodOutsideTheReadList(t *testing.T) {
 	r := newTestReader(browserBus(t))
-	r.conn = &fakeBus{t: t}
+	r.conn = &fakeA11yBus{t: t}
 	for _, m := range []string{"org.a11y.atspi.Action.DoAction", "org.a11y.atspi.EditableText.SetTextContents",
 		"org.a11y.atspi.Component.GrabFocus", "org.a11y.atspi.Component.ScrollTo", "org.a11y.atspi.Selection.SelectChild",
 		"org.a11y.atspi.Value.SetCurrentValue", "org.freedesktop.DBus.Properties.Set"} {
@@ -289,7 +289,7 @@ func TestTreeNeverSendsAMethodOutsideTheReadList(t *testing.T) {
 }
 
 func TestTreeStopsAtItsLimits(t *testing.T) {
-	big := func() *fakeBus {
+	big := func() *fakeA11yBus {
 		f := browserBus(t)
 		// A list of 500 items below the main landmark, 3 deep each.
 		f.add(p+"500", &fakeObj{role: 31, states: show(), ext: extents{8, 200, 100, 22}, parent: p + "31"})
@@ -364,7 +364,7 @@ func TestTreeRefusesBadLimits(t *testing.T) {
 }
 
 func TestTreeWithNoPage(t *testing.T) {
-	f := &fakeBus{t: t, app: ":1.0"}
+	f := &fakeA11yBus{t: t, app: ":1.0"}
 	f.add(string(appRoot), &fakeObj{role: 75, name: "Chromium"})
 	if _, code := getTree(t, newTestReader(f), ""); code != http.StatusNotFound {
 		t.Fatalf("GET /tree: %d, want 404", code)

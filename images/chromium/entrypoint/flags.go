@@ -1,10 +1,31 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // panelHeight is the taskbar's height in pixels, which the window manager
 // reserves at the bottom of the screen. It must match the tray in jwmrc.
 const panelHeight = 32
+
+// disabledFeatures are the Chromium features the image turns off, all in
+// chromiumArgs' one --disable-features: Chromium reads only the last
+// --disable-features it is given (ANTI-BOT.md, PROJ-160). Each must be in
+// the Dockerfile's feature check, which fails the build if the name is no
+// longer a string in Chromium's binary: an unknown feature name is ignored
+// without a word. That a feature still takes effect, the Docker tests show
+// (TestBrowserEnvironment/back for the back/forward cache).
+var disabledFeatures = []string{
+	// The back/forward cache kept a page the tab had left whole in memory,
+	// to show it at once on Back: a 200 MB page was still counted against
+	// the RAM limit four minutes later (Chromium keeps it ten), and nothing
+	// in the container tells Chromium memory is short. Off, the memory goes
+	// within 5 s when the tab leaves for another site, and within 25 s on
+	// the same site (the renderer frees the page at its next garbage
+	// collection); Back loads the page again (ANTI-BOT.md, PROJ-160).
+	"BackForwardCache",
+}
 
 // chromiumArgs is Chromium's command line. It never includes
 // --enable-automation, --headless or --no-sandbox, and spoofs nothing.
@@ -17,9 +38,26 @@ func chromiumArgs(c config, smallShm bool) []string {
 		// A fixed key, so cookies decrypt in every container and survive image updates.
 		"--password-store=basic",
 		"--disable-blink-features=AutomationControlled",
-		// No GPU in the container: WebGL runs on SwiftShader.
-		"--use-angle=swiftshader",
-		"--enable-unsafe-swiftshader",
+		"--disable-features=" + strings.Join(disabledFeatures, ","),
+		// No GPU in the container: WebGL runs on Mesa's llvmpipe, through
+		// ANGLE's default OpenGL backend over GLX, as on a Linux desktop
+		// without a GPU driver. One renderer, no fallback: if llvmpipe can't
+		// start, pages get no WebGL. Chromium blocks software GL, which
+		// leaves no WebGL at all, unless told to ignore its blocklist.
+		"--ignore-gpu-blocklist",
+		// Pages are composited in software, as Chromium does on a desktop
+		// whose GPU it blocks: cheaper than compositing every page through
+		// llvmpipe, and WebGL still renders on it (ANTI-BOT.md, PROJ-148).
+		"--disable-gpu-compositing",
+		// Chromium starts the GPU process's own seccomp sandbox after GL
+		// has started, and only if the process is still single-threaded
+		// then; otherwise it runs on without it, under the container's
+		// filter alone (PROJ-165). chromiumEnv keeps Mesa from starting
+		// threads that early; this makes a GPU process that still has
+		// them exit instead, so it never runs unsandboxed. If that kept
+		// happening, Chromium would fall back to a GPU process without GL,
+		// sandboxed, and pages would get no WebGL.
+		"--gpu-sandbox-failures-fatal=yes",
 		// Every connection goes through the forwarder, which refuses the
 		// local network unless the profile allows it (egress.go). With a
 		// single proxy and no DIRECT fallback, if it's down nothing goes out.
@@ -59,14 +97,17 @@ func chromiumArgs(c config, smallShm bool) []string {
 	return args
 }
 
-// chromiumEnv is what Chromium's environment adds to the entrypoint's:
-// the display, the location's (geo.env), and in Visual mode the
-// accessibility bus's (a11yEnv). API mode's is what it was before
-// PROJ-150.
-func chromiumEnv(c config, where geo, bus string) []string {
-	env := append([]string{"DISPLAY=" + display}, where.env()...)
-	if c.Visual {
-		env = append(env, a11yEnv(bus)...)
-	}
-	return env
+// mesaEnv is what Chromium's environment (chromiumEnv) adds for Mesa.
+// Mesa reads both settings in the GPU process, as GL starts (PROJ-165):
+// llvmpipe would start one rasteriser thread per CPU, and Mesa's shader
+// disk cache a writer thread, and Chromium's GPU sandbox can only start
+// in a single-threaded process. With no rasteriser threads llvmpipe draws
+// on the GL thread itself: WebGL gets one core instead of all of them.
+// That halves a light WebGL page's frame rate and CPU, and makes a scene
+// that kept every core busy up to the host's core count slower
+// (ANTI-BOT.md).
+// The disk cache is lost with the container anyway, and the sandbox
+// would keep it from opening its files.
+func mesaEnv() []string {
+	return []string{"LP_NUM_THREADS=0", "MESA_SHADER_CACHE_DISABLE=true"}
 }

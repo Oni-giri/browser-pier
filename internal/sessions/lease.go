@@ -29,8 +29,10 @@ var (
 	ErrSessionHeld = errors.New("BrowserPier is busy with this browser; try again shortly")
 )
 
-// lease is one call of BrowserPier's page tools into a session's browser.
+// lease is one call of BrowserPier's page tools into a session's browser,
+// or an agent's input action (AgentInput).
 type lease struct {
+	// tokenID is the agent token the call came with.
 	tokenID string
 	cancel  context.CancelCauseFunc
 	// started is when an agent input action (AgentInput) or a page call
@@ -42,6 +44,8 @@ type lease struct {
 	// yields: a read (ReadLease) that the person in the live view breaks
 	// off at once, and that doesn't count as the agent driving.
 	yields bool
+	// call is the agent call holding the lease (CallFrom), if known.
+	call *Call
 }
 
 // Lease is a call into a session's page, held from PageLease until
@@ -148,6 +152,17 @@ func (m *Manager) pageLease(ctx context.Context, id, tokenID string, read bool) 
 	}
 	now := m.now()
 	ls := &lease{tokenID: tokenID, cancel: cancel, started: now, yields: read}
+	if !read {
+		ls.call = CallFrom(ctx)
+	}
+	if ls.call != nil {
+		// Granted: the call is admitted (its receipt stays, PROJ-156).
+		// A read never admits one: a click by ref reads the element
+		// first, and its call is admitted only by its input
+		// (AgentInputAt), so a click refused after the read gives its
+		// receipt back.
+		ls.call.admitLocked()
+	}
 	if l.leases == nil {
 		l.leases = map[*lease]struct{}{}
 	}
@@ -164,8 +179,16 @@ func (m *Manager) pageLease(ctx context.Context, id, tokenID string, read bool) 
 		m.mu.Unlock()
 	}, release: func() {
 		once.Do(func() {
+			// Ended before it let go: a handoff, a hold, a stop, the
+			// token's revocation or the caller going away cut it short.
+			// (A cut that comes after the browser answered, just before this,
+			// still counts: the receipt then errs on the safe side.)
+			cut := cctx.Err() != nil
 			cancel(context.Canceled)
 			m.mu.Lock()
+			if cut && ls.call != nil {
+				ls.call.cut = true
+			}
 			delete(l.leases, ls)
 			now := m.now()
 			l.lastActivity = now

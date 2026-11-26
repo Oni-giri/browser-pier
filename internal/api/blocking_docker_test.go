@@ -79,13 +79,13 @@ func TestAdBlocking(t *testing.T) {
 	a := newRealAPI(t)
 	site := newAdSite(t)
 	up := browsertest.NewSOCKS5Proxy(t, "pier", "pw")
-	for _, name := range []string{"news.example.test", "ads.blocked.test", "listed.blocked.test"} {
+	for _, name := range []string{"news.example.test", "ads.blocked.test", "listed.blocked.test", "typed.blocked.test"} {
 		up.Alias(name, "127.0.0.1")
 	}
 	// The list comes from a local server, as the orchestrator downloads
 	// it, never from the internet.
 	listSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("# test list\n0.0.0.0 ads.blocked.test\n||listed.blocked.test^\n"))
+		_, _ = w.Write([]byte("# test list\n0.0.0.0 ads.blocked.test\n||listed.blocked.test^\n||typed.blocked.test^\n"))
 	}))
 	t.Cleanup(listSrv.Close)
 	lists, err := blocklist.New(t.TempDir(), []string{listSrv.URL}, slog.New(slog.DiscardHandler))
@@ -96,7 +96,7 @@ func TestAdBlocking(t *testing.T) {
 		t.Fatal(err)
 	}
 	lists.Refresh(context.Background(), false)
-	if lists.Set().Len() != 2 {
+	if lists.Set().Len() != 3 {
 		t.Fatalf("the list compiled to %v", lists.Set().Names())
 	}
 	a.m.SetBlocklist(lists.File)
@@ -175,6 +175,17 @@ func TestAdBlocking(t *testing.T) {
 	}
 	if n := site.hitsOf("ads.blocked.test"); n != 0 {
 		t.Errorf("on the listed page, the other listed host got %d requests", n)
+	}
+	// So does one the agent opens through the address bar (PROJ-164).
+	a.computer(s.ID, `{"action": "open", "url": "http://typed.blocked.test:`+site.port+`/", "pace": "instant"}`)
+	for deadline := time.Now().Add(10 * time.Second); site.hitsOf("typed.blocked.test") == 0 && time.Now().Before(deadline); {
+		time.Sleep(200 * time.Millisecond)
+	}
+	if site.hitsOf("typed.blocked.test") == 0 {
+		t.Error("the listed page opened through the address bar never reached the site")
+	}
+	if n := site.hitsOf("ads.blocked.test"); n != 0 {
+		t.Errorf("on the page opened through the address bar, the other listed host got %d requests", n)
 	}
 	pg.Close()
 	if _, err := a.m.Stop(context.Background(), s.ID); err != nil {

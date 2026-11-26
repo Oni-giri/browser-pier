@@ -50,10 +50,14 @@ type Profile struct {
 	Width           int    `json:"width"`
 	Height          int    `json:"height"`
 	Proxy           string `json:"proxy,omitempty"`
-	HandoffPolicy   string `json:"handoff_policy"`
-	TimeZone        string `json:"time_zone,omitempty"`
-	Locale          string `json:"locale,omitempty"`
-	LocalNetwork    bool   `json:"local_network,omitempty"`
+	// StickyToken is what {sticky} becomes in the proxy (PROJ-153), so
+	// the profile keeps its exit on another BrowserPier. Archives made
+	// before it have none: the profile gets a new one when it needs it.
+	StickyToken   string `json:"sticky_token,omitempty"`
+	HandoffPolicy string `json:"handoff_policy"`
+	TimeZone      string `json:"time_zone,omitempty"`
+	Locale        string `json:"locale,omitempty"`
+	LocalNetwork  bool   `json:"local_network,omitempty"`
 	// BlockAds is absent from archives made before PROJ-119, whose
 	// profiles didn't block: they import with it off.
 	BlockAds     bool   `json:"block_ads,omitempty"`

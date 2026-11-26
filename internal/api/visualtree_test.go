@@ -87,12 +87,6 @@ func (f *fixture) clickBody(id, body string) (int, string) {
 	return code, out["error"]
 }
 
-func (f *fixture) inputCount() int {
-	f.b.mu.Lock()
-	defer f.b.mu.Unlock()
-	return len(f.b.inputs)
-}
-
 func TestVisualSnapshot(t *testing.T) {
 	f := newFixture(t)
 	s := f.start(f.all, "google", "visual")
@@ -175,7 +169,7 @@ func TestVisualSnapshotRefusals(t *testing.T) {
 func takeControlSoon(m *sessions.Manager, id string) error {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		err := m.TakeControl(id)
+		err := m.TakeControl(id, "person")
 		if err == nil || time.Now().After(deadline) {
 			return err
 		}
@@ -364,7 +358,7 @@ func TestVisualReadsDontKeepAPersonOut(t *testing.T) {
 		go func() { defer wg.Done(); f.vsnapshot(f.all, s.ID, "") }()
 	}
 	wg.Wait()
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatalf("Take control right after reads: %v", err)
 	}
 	f.m.ReleaseControl(s.ID)
@@ -372,7 +366,7 @@ func TestVisualReadsDontKeepAPersonOut(t *testing.T) {
 	if code, msg := f.clickBody(s.ID, `{"ref": "`+refNamed(t, snap, "Sign in")+`"}`); code != http.StatusOK {
 		t.Fatalf("click: %d %s", code, msg)
 	}
-	if err := f.m.TakeControl(s.ID); err == nil {
+	if err := f.m.TakeControl(s.ID, "person"); err == nil {
 		t.Fatal("Take control right after a click by ref: want it refused for a few seconds")
 	}
 }

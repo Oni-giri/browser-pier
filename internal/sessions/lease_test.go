@@ -18,17 +18,17 @@ func TestPageLeasesAreNotConnections(t *testing.T) {
 	if got, _ := f.m.Live("google"); len(got.InUseBy) != 0 {
 		t.Errorf("a page call shows as a connection: %v", got.InUseBy)
 	}
-	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrAgentDriving) {
+	if err := f.m.TakeControl(s.ID, "person"); !errors.Is(err, ErrAgentDriving) {
 		t.Fatalf("take control during a page call = %v", err)
 	}
 	ls.Release()
 	ls.Release() // twice is fine
-	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrAgentDriving) {
+	if err := f.m.TakeControl(s.ID, "person"); !errors.Is(err, ErrAgentDriving) {
 		t.Fatalf("take control just after a page call = %v", err)
 	}
 	advance(agentQuiet + time.Second)
 	gen := ls.Generation
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.m.PageLease(context.Background(), s.ID, "tok"); !errors.Is(err, ErrHumanDriving) {
@@ -293,7 +293,7 @@ func TestTakeControlBreaksOffABreakablePageCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	advance(time.Minute)
-	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrAgentDriving) {
+	if err := f.m.TakeControl(s.ID, "person"); !errors.Is(err, ErrAgentDriving) {
 		t.Fatalf("take control during a long read = %v", err)
 	}
 	read.Release()
@@ -304,12 +304,12 @@ func TestTakeControlBreaksOffABreakablePageCall(t *testing.T) {
 	}
 	act.Breakable()
 	advance(takeOverAfter - time.Millisecond)
-	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrAgentDriving) {
+	if err := f.m.TakeControl(s.ID, "person"); !errors.Is(err, ErrAgentDriving) {
 		t.Fatalf("take control in act's first %s = %v", takeOverAfter, err)
 	}
 	advance(time.Millisecond)
 	took := make(chan error, 1)
-	go func() { took <- f.m.TakeControl(s.ID) }()
+	go func() { took <- f.m.TakeControl(s.ID, "person") }()
 	if err := leaseEnds(t, act); !errors.Is(err, ErrTookControl) {
 		t.Fatalf("act's lease ended for %v", err)
 	}
@@ -352,7 +352,7 @@ func TestReadLeasesDontKeepAPersonOut(t *testing.T) {
 	}
 	cancel()
 	took := make(chan error, 1)
-	go func() { took <- f.m.TakeControl(s.ID) }()
+	go func() { took <- f.m.TakeControl(s.ID, "person") }()
 	if err := leaseEnds(t, read); !errors.Is(err, ErrTookControl) {
 		t.Fatalf("the read ended for %v", err)
 	}
@@ -366,7 +366,7 @@ func TestReadLeasesDontKeepAPersonOut(t *testing.T) {
 	f.m.ReleaseControl(s.ID)
 
 	// Reads after an agent's last input don't extend its quiet time.
-	_, done, err := f.m.AgentInput(context.Background(), s.ID)
+	_, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -379,14 +379,14 @@ func TestReadLeasesDontKeepAPersonOut(t *testing.T) {
 		}
 		r.Release()
 	}
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatalf("take control %s after the last input, with reads since = %v", 6*time.Second, err)
 	}
 	f.m.ReleaseControl(s.ID)
 
 	// A read under way doesn't cut the quiet time short either: right
 	// after an input, Take control is refused, and the read goes on.
-	_, done, err = f.m.AgentInput(context.Background(), s.ID)
+	_, done, err = f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +397,7 @@ func TestReadLeasesDontKeepAPersonOut(t *testing.T) {
 		t.Fatal(err)
 	}
 	took = make(chan error, 1)
-	go func() { took <- f.m.TakeControl(s.ID) }()
+	go func() { took <- f.m.TakeControl(s.ID, "person") }()
 	select {
 	case err := <-took:
 		if !errors.Is(err, ErrAgentDriving) {
@@ -483,20 +483,20 @@ func TestAgentInputAtRefusesAfterAPerson(t *testing.T) {
 	}
 	gen := ls.Generation
 	ls.Release()
-	_, done, err := f.m.AgentInputAt(context.Background(), s.ID, gen)
+	_, done, err := f.m.AgentInputAt(context.Background(), s.ID, "tok", gen)
 	if err != nil {
 		t.Fatalf("same generation: %v", err)
 	}
 	done()
 	advance(agentQuiet + time.Second)
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatal(err)
 	}
 	f.m.ReleaseControl(s.ID)
-	if _, _, err := f.m.AgentInputAt(context.Background(), s.ID, gen); !errors.Is(err, ErrPersonHadIt) {
+	if _, _, err := f.m.AgentInputAt(context.Background(), s.ID, "tok", gen); !errors.Is(err, ErrPersonHadIt) {
 		t.Fatalf("after a hand-back: %v, want ErrPersonHadIt", err)
 	}
-	if _, done, err := f.m.AgentInput(context.Background(), s.ID); err != nil {
+	if _, done, err := f.m.AgentInput(context.Background(), s.ID, "tok"); err != nil {
 		t.Fatalf("a click by point after a hand-back: %v", err)
 	} else {
 		done()

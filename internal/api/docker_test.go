@@ -7,6 +7,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"image/png"
@@ -30,6 +31,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/domainset"
 	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/handoff"
+	"github.com/Oni-giri/browser-pier/internal/picker"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/recording"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
@@ -45,6 +47,8 @@ type agent struct {
 	token string
 	m     *sessions.Manager
 	ho    *handoff.Service
+	web   *auth.Web
+	db    *sql.DB
 }
 
 func (a agent) do(method, path, body string, out any) int {
@@ -69,12 +73,30 @@ func (a agent) header() http.Header { return http.Header{"Authorization": {"Bear
 
 func newRealAPI(t *testing.T) agent {
 	t.Helper()
+	return newRealAPIEnv(t)
+}
+
+// envRuntime gives every browser container it creates more environment.
+type envRuntime struct {
+	*docker.Client
+	env []string
+}
+
+func (r envRuntime) Create(ctx context.Context, spec docker.BrowserSpec) (string, error) {
+	spec.Env = append(append([]string{}, spec.Env...), r.env...)
+	return r.Client.Create(ctx, spec)
+}
+
+// newRealAPIEnv is newRealAPI with env added to each browser's
+// environment (a shorter time limit, say).
+func newRealAPIEnv(t *testing.T, env ...string) agent {
+	t.Helper()
 	image := os.Getenv("BROWSERPIER_TEST_IMAGE")
 	if image == "" {
 		t.Skip("BROWSERPIER_TEST_IMAGE not set; run `make test-docker`")
 	}
 	ctx := context.Background()
-	rt, err := docker.New(docker.Options{Image: image, UsernsMode: os.Getenv("BROWSERPIER_USERNS_MODE"), Instance: fmt.Sprintf("test%d", time.Now().UnixNano())})
+	rt, err := docker.New(docker.Options{Image: image, UsernsMode: os.Getenv("BROWSERPIER_USERNS_MODE"), User: docker.User(os.Getuid(), os.Getgid()), Instance: fmt.Sprintf("test%d", time.Now().UnixNano())})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +115,11 @@ func newRealAPI(t *testing.T) agent {
 	}
 	t.Cleanup(func() { _ = d.Close() })
 	log := slog.New(slog.DiscardHandler)
-	m, err := sessions.NewManager(d, rt, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)
+	var runtime sessions.Runtime = rt
+	if len(env) > 0 {
+		runtime = envRuntime{rt, env}
+	}
+	m, err := sessions.NewManager(d, runtime, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,14 +159,20 @@ func newRealAPI(t *testing.T) agent {
 	}
 	web := auth.NewWeb(admin, tokens, log, auth.WebOptions{CookieSecure: "auto"})
 	mux := http.NewServeMux()
-	a := New(m, web, files.New(m.Layout().FilesDir, 0, os.Getuid(), os.Getgid()), log, "")
+	fs := files.New(m.Layout().FilesDir, 0, os.Getuid(), os.Getgid())
+	a := New(m, web, fs, log, "")
 	handoffs := handoff.New(d, m, log)
 	t.Cleanup(handoffs.Close)
 	a.SetHandoffs(handoffs)
 	a.Register(mux)
+	// The handoff page's routes, for the person's side of a file chooser
+	// (PROJ-181); its live view isn't needed here.
+	hw := handoff.NewWeb(handoffs, web, nil, m, log)
+	hw.SetPicker(picker.New(m, fs, log))
+	hw.Register(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return agent{t: t, base: srv.URL, token: secret, m: m, ho: handoffs}
+	return agent{t: t, base: srv.URL, token: secret, m: m, ho: handoffs, web: web, db: d}
 }
 
 // allowLocalNetwork lets the profile's pages reach the test sites, on the

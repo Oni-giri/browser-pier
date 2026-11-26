@@ -52,6 +52,7 @@ func (t *Tools) Snapshot(ctx context.Context, s sessions.Session, who Caller, in
 			if err != nil {
 				return "", err
 			}
+			c.noteTitle(p.title)
 			c.note("Read the page")
 			c.noteChallenge(p.cf)
 			if r.kind == diffDone {
@@ -91,6 +92,7 @@ func (t *Tools) Snapshot(ctx context.Context, s sessions.Session, who Caller, in
 			}
 		}
 		body, marker := c.render(p, budget)
+		c.noteTitle(p.title)
 		c.note("Read the page")
 		c.noteChallenge(p.cf)
 		return c.result("page snapshot", body, marker), nil

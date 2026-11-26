@@ -29,13 +29,13 @@
     </section>
 
     <section class="cell span-4" aria-labelledby="links-title">
-      <div class="cell-head"><h2 class="cell-title big" id="links-title">Handoff links</h2>{{if .PINSet}}<span class="pill running">PIN set</span>{{else}}<span class="pill help">No PIN</span>{{end}}</div>
+      <div class="cell-head"><h2 class="cell-title big" id="links-title">Handoff links</h2>{{if .PINSet}}<span class="pill running">PIN set</span>{{else}}<span class="pill">No PIN</span>{{end}}</div>
       <ul class="checks">
         <li>Expire after 15 minutes, work once</li>
         <li>Open one browser only</li>
         <li>Five wrong PINs cancel the link</li>
       </ul>
-      {{if not .PINSet}}<p class="notice warn">Set a handoff PIN, or links that ask for one can't be opened.</p>{{end}}
+      {{if not .PINSet}}<p class="notice">Set a handoff PIN, or links that ask for one can't be opened.</p>{{end}}
       <a class="btn" href="/settings">PIN and policies in Settings →</a>
     </section>
 

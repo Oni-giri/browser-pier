@@ -108,6 +108,14 @@ func TestBlockListHandover(t *testing.T) {
 	if err := f.m.ExemptHost(ctx, s.ID, "ads.example.com"); err != nil {
 		t.Fatal(err)
 	}
+	// An address's host, in its ASCII form; one with no host is passed over.
+	if err := f.m.ExemptURL(ctx, s.ID, "https://Bücher.example:8443/x?q=1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.ExemptURL(ctx, s.ID, "about:blank"); err != nil || !slices.Equal(fb.exempt, []string{"ads.example.com", "xn--bcher-kva.example"}) {
+		t.Fatalf("exempt: %v, %v", fb.exempt, err)
+	}
+	fb.exempt = fb.exempt[:1]
 
 	// An agent turns it off for the running session: the browser is told,
 	// the session says so, the profile doesn't change.

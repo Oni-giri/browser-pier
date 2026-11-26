@@ -39,9 +39,9 @@ func (a agent) startVisualBrowser(t *testing.T, prefix string) sessionJSON {
 	return s
 }
 
-// computer runs a Visual-mode action, returning the status and the text
+// computerTool runs a Visual-mode action, returning the status and the text
 // or error.
-func (a agent) computer(id string, body any) (int, string) {
+func (a agent) computerTool(id string, body any) (int, string) {
 	a.t.Helper()
 	return a.tool(id, "computer", body)
 }
@@ -57,7 +57,7 @@ func (a agent) openVisually(t *testing.T, id, url string) string {
 		{"action": "key", "keys": "Delete"},
 		{"action": "key", "keys": "Return"},
 	} {
-		if code, msg := a.computer(id, body); code != http.StatusNoContent && code != http.StatusOK {
+		if code, msg := a.computerTool(id, body); code != http.StatusNoContent && code != http.StatusOK {
 			t.Fatalf("%v: %d %s", body, code, msg)
 		}
 	}
@@ -137,7 +137,7 @@ func TestVisualSnapshotReadsALoginForm(t *testing.T) {
 		if code, msg := a.tool(s.ID, "click", map[string]any{"ref": c.ref}); code != http.StatusOK || !strings.Contains(msg, "Clicked "+c.ref) {
 			t.Fatalf("click %s: %d %s", c.ref, code, msg)
 		}
-		if code, msg := a.computer(s.ID, map[string]any{"action": "type", "text": c.text}); code != http.StatusNoContent {
+		if code, msg := a.computerTool(s.ID, map[string]any{"action": "type", "text": c.text}); code != http.StatusNoContent {
 			t.Fatalf("type: %d %s", code, msg)
 		}
 	}
@@ -221,11 +221,11 @@ func TestClickByRef(t *testing.T) {
 		if code, msg := a.tool(s.ID, "click", map[string]any{"ref": vref(t, snap, c.what)}); code != http.StatusOK {
 			t.Fatalf("click %s: %d %s", c.what, code, msg)
 		}
-		if code, msg := a.computer(s.ID, map[string]any{"action": "type", "text": c.text, "pace": "instant"}); code != http.StatusNoContent {
+		if code, msg := a.computerTool(s.ID, map[string]any{"action": "type", "text": c.text, "pace": "instant"}); code != http.StatusNoContent {
 			t.Fatalf("type: %d %s", code, msg)
 		}
 	}
-	if code, msg := a.computer(s.ID, map[string]any{"action": "click", "ref": vref(t, snap, `button "Sign in"`)}); code != http.StatusOK {
+	if code, msg := a.computerTool(s.ID, map[string]any{"action": "click", "ref": vref(t, snap, `button "Sign in"`)}); code != http.StatusOK {
 		t.Fatalf("click Sign in through /computer: %d %s", code, msg)
 	}
 	deadline := time.Now().Add(10 * time.Second)
@@ -261,7 +261,7 @@ func TestClickByRefRefusesWhatIsOffScreen(t *testing.T) {
 		t.Fatalf("after the refusal:\n%s", snap)
 	}
 	for range 3 {
-		if code, msg := a.computer(s.ID, map[string]any{"action": "scroll", "x": 700, "y": 500, "dy": 10}); code != http.StatusNoContent {
+		if code, msg := a.computerTool(s.ID, map[string]any{"action": "scroll", "x": 700, "y": 500, "dy": 10}); code != http.StatusNoContent {
 			t.Fatalf("scroll: %d %s", code, msg)
 		}
 	}
@@ -359,14 +359,14 @@ func TestVisualSnapshotAttachesNothing(t *testing.T) {
 	// focus moves the same way in both batches.
 	fx, fy := pointOf(t, lineOf(snap, vref(t, snap, `textbox "Field"`)))
 	round := func(byRef bool) {
-		if code, msg := a.computer(s.ID, map[string]any{"action": "click", "x": fx, "y": fy, "pace": "instant"}); code != http.StatusNoContent {
+		if code, msg := a.computerTool(s.ID, map[string]any{"action": "click", "x": fx, "y": fy, "pace": "instant"}); code != http.StatusNoContent {
 			t.Fatalf("click: %d %s", code, msg)
 		}
 		if byRef {
 			if code, msg := a.tool(s.ID, "click", map[string]any{"ref": btn, "pace": "instant"}); code != http.StatusOK {
 				t.Fatalf("click by ref: %d %s", code, msg)
 			}
-		} else if code, msg := a.computer(s.ID, map[string]any{"action": "click", "x": x, "y": y, "pace": "instant"}); code != http.StatusNoContent {
+		} else if code, msg := a.computerTool(s.ID, map[string]any{"action": "click", "x": x, "y": y, "pace": "instant"}); code != http.StatusNoContent {
 			t.Fatalf("click: %d %s", code, msg)
 		}
 	}
@@ -411,7 +411,7 @@ func TestVisualSnapshotStaysQuiet(t *testing.T) {
 	// The control: 20 clicks at the button's point, as Visual mode always
 	// clicked. What those show, clicks by ref may show too, no more.
 	coordHits, _ := w.Quiet(t, "20 clicks at a point", 20, func() {
-		if code, msg := a.computer(s.ID, map[string]any{"action": "click", "x": x, "y": y, "pace": "instant"}); code != http.StatusNoContent {
+		if code, msg := a.computerTool(s.ID, map[string]any{"action": "click", "x": x, "y": y, "pace": "instant"}); code != http.StatusNoContent {
 			t.Fatalf("click: %d %s", code, msg)
 		}
 	})
@@ -456,7 +456,7 @@ func TestRenderersCantReachTheBus(t *testing.T) {
 		}
 		return strings.TrimSpace(string(out))
 	}
-	dir := in(`ls -d /tmp/browserpier-a11y-*`)
+	dir := in(`ls -d /tmp/browserpier-bus-*`)
 	if st := in(`stat -c '%a %u' ` + dir); st != "700 "+in("id -u") {
 		t.Errorf("the bus's folder %s: %s", dir, st)
 	}
@@ -637,7 +637,7 @@ func TestVisualLoginSurvivesStopAndStart(t *testing.T) {
 		if code, msg := a.tool(s.ID, "click", map[string]any{"ref": fields[i]}); code != http.StatusOK {
 			t.Fatalf("click: %d %s", code, msg)
 		}
-		if code, msg := a.computer(s.ID, map[string]any{"action": "type", "text": text}); code != http.StatusNoContent {
+		if code, msg := a.computerTool(s.ID, map[string]any{"action": "type", "text": text}); code != http.StatusNoContent {
 			t.Fatalf("type: %d %s", code, msg)
 		}
 	}
