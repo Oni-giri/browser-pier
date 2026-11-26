@@ -602,6 +602,14 @@ func takeDownloadWait(body []byte) ([]byte, *int, error) {
 // act runs one input action through the control socket and logs it, or
 // writes why it didn't run.
 func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, path string, body []byte) bool {
+	return a.actAfter(w, r, s, path, body, nil)
+}
+
+// actAfter is act, with first run once the agent has the input and before
+// the action is sent, under the input's context: what the action needs
+// done first (open's ad-list exemption) happens only if the agent may act,
+// not while a person has the browser (PROJ-164).
+func (a *API) actAfter(w http.ResponseWriter, r *http.Request, s sessions.Session, path string, body []byte, first func(ctx context.Context)) bool {
 	ctx, done, err := a.m.AgentInput(r.Context(), s.ID)
 	if errors.Is(err, sessions.ErrInputBusy) {
 		writeError(w, http.StatusConflict, "another input is still running in this browser; wait for it to finish, then send this one")
@@ -617,6 +625,9 @@ func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, pa
 	// key or button it held, which can still take it some tens of
 	// milliseconds after the person has the browser.
 	defer done()
+	if first != nil {
+		first(ctx)
+	}
 	tok, _ := auth.TokenFromContext(r.Context())
 	resp, err := a.control(ctx, s.Profile, http.MethodPost, path, body)
 	if err != nil {

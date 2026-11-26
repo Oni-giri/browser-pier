@@ -200,9 +200,11 @@ func (a *API) computer(w http.ResponseWriter, r *http.Request) {
 		a.internal(w, "encoding an action", err)
 		return
 	}
+	var first func(ctx context.Context)
 	if c.Action == "open" {
 		u, _ := weburl.Check(c.URL) // checked by inputBody
-		a.openingDirectly(r.Context(), s, u)
+		// Once the agent has the input: not while a person has the browser.
+		first = func(ctx context.Context) { a.openingDirectly(ctx, s, u) }
 	}
 	var mark *files.Mark
 	if c.downloads() {
@@ -211,7 +213,7 @@ func (a *API) computer(w http.ResponseWriter, r *http.Request) {
 			mark.Expect(wait) // the caller expects a download: look as long for it to start
 		}
 	}
-	if !a.act(w, r, s, path, raw) {
+	if !a.actAfter(w, r, s, path, raw, first) {
 		return
 	}
 	mark.Ended()

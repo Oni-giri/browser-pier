@@ -9,6 +9,7 @@ import (
 	"image/png"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -151,6 +152,50 @@ func TestComputerOpen(t *testing.T) {
 	got := strings.Join(f.whats(s.ID), "\n")
 	if !strings.Contains(got, "claude: Opened https://example.com in the address bar") || strings.Contains(got, "/a") || strings.Contains(got, "q=1") {
 		t.Fatalf("activity:\n%s", got)
+	}
+}
+
+// An open while a person has the browser is refused before anything
+// reaches it: not even the ad-list exemption for its host, which would
+// change what the person's browser blocks (PROJ-164). Once the agent may
+// act, an open that the browser refuses (the address bar covered) has
+// still exempted its host, as navigate does.
+func TestComputerOpenWhileAPersonDrives(t *testing.T) {
+	f := newFixture(t)
+	f.m.SetBlocklist(func() []byte { return []byte("# browserpier domain set 1\nads.example.com\n") })
+	s := f.start(f.all, "google", "visual")
+	if !s.BlockAds {
+		t.Fatal("the session doesn't block ads")
+	}
+	exempts := func() []string {
+		f.b.mu.Lock()
+		defer f.b.mu.Unlock()
+		return slices.Clone(f.b.exempts)
+	}
+	if err := f.m.TakeControl(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, raw := f.computer(s.ID, `{"action": "open", "url": "https://tracker.example/"}`); code != http.StatusConflict {
+		t.Fatalf("open while a person drives: %d %s", code, raw)
+	}
+	if got := exempts(); len(got) != 0 || f.lastInput() != "" {
+		t.Fatalf("while a person drives: exempted %q, sent %q", got, f.lastInput())
+	}
+	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := f.computer(s.ID, `{"action": "open", "url": "https://tracker.example/"}`); code != http.StatusConflict || len(exempts()) != 0 {
+		t.Fatalf("open during a handoff: %d, exempted %q", code, exempts())
+	}
+	if _, err := f.m.SetNeedsHelp(s.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	f.m.ReleaseControl(s.ID)
+	if code, _, raw := f.computer(s.ID, `{"action": "open", "url": "https://tracker.example/"}`); code != http.StatusNoContent {
+		t.Fatalf("open: %d %s", code, raw)
+	}
+	if got := exempts(); !slices.Equal(got, []string{"tracker.example"}) {
+		t.Fatalf("exempted %q", got)
 	}
 }
 

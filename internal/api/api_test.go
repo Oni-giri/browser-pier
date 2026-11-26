@@ -49,6 +49,9 @@ type browser struct {
 	// nothing and is recorded as "wait cut short".
 	shortcutGap time.Duration
 	shortcutAt  time.Time
+	// exempts are the hosts let past the ad and tracker list
+	// (/proxy/exempt), in order.
+	exempts []string
 }
 
 func (b *browser) handler() http.Handler {
@@ -166,6 +169,14 @@ func (b *browser) handler() http.Handler {
 	for _, p := range []string{"click", "type", "scroll", "key", "drag", "open"} {
 		mux.HandleFunc("POST /input/"+p, input)
 	}
+	mux.HandleFunc("POST /proxy/exempt", func(w http.ResponseWriter, r *http.Request) {
+		var e struct{ Host string }
+		_ = json.NewDecoder(r.Body).Decode(&e)
+		b.mu.Lock()
+		b.exempts = append(b.exempts, e.Host)
+		b.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
 	return mux
 }
 
