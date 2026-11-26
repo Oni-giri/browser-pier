@@ -121,6 +121,17 @@ func TestUploadOver100MiB(t *testing.T) {
 	if code := send(4096); code != http.StatusNoContent || answered.Load() != 1 {
 		t.Fatalf("at the cap: %d, %d answers", code, answered.Load())
 	}
+	// The log says the person answered, as one of their control entries,
+	// not an agent's action (PROJ-158).
+	var noted bool
+	for _, a := range m.Activity(s.ID) {
+		if a.What == "A person chose 1 file" {
+			noted = a.Kind == sessions.KindControl && a.Agent == ""
+		}
+	}
+	if !noted {
+		t.Errorf("no control entry for the answer: %+v", m.Activity(s.ID))
+	}
 }
 
 // TestShowOnABrowserWithoutThePortal: a browser kept running through an
