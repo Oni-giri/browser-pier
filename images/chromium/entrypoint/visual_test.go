@@ -863,3 +863,44 @@ func TestInstantKeysReleaseWhenCutShort(t *testing.T) {
 		t.Fatalf("calls %v", *calls)
 	}
 }
+
+// A key list with a browser-bound combination before its last had its gap
+// inside, but only if it ran to the end: cut short, or failing, after the
+// shortcut may have reached the browser, it arms the gap for the next call.
+func TestACutShortListWithAShortcutArmsTheGap(t *testing.T) {
+	for _, pace := range []string{"instant", "human"} {
+		c := newClockedVisual()
+		run := c.run
+		c.run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			out, err := run(ctx, name, args...)
+			if name == "xdotool" && len(args) > 0 && args[0] != "keyup" && strings.Contains(strings.Join(args, " "), "ctrl+l") {
+				return nil, context.Canceled // the request ended while the list ran
+			}
+			return out, err
+		}
+		if rec := serveVisual(c.visual, http.MethodPost, "/input/key", `{"keys": ["ctrl+l", "a"], "pace": "`+pace+`"}`); rec.Code != http.StatusInternalServerError {
+			t.Fatalf("%s: key: %d %s", pace, rec.Code, rec.Body)
+		}
+		if last := c.calls[len(c.calls)-1].args; last[0] != "keyup" {
+			t.Fatalf("%s: the keys weren't let go of: %v", pace, c.calls)
+		}
+		c.run = run
+		c.do(t, http.MethodPost, "/input/type", `{"text": "example.com", "pace": "instant"}`)
+		if len(c.slept) != 1 || c.slept[0] != shortcutGap {
+			t.Errorf("%s: the retry after a cut-short list slept %v, want one %v", pace, c.slept, shortcutGap)
+		}
+	}
+	// A list with no browser-bound combination doesn't arm it, cut short or not.
+	c := newClockedVisual()
+	run := c.run
+	c.run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		_, _ = run(ctx, name, args...)
+		return nil, context.Canceled
+	}
+	serveVisual(c.visual, http.MethodPost, "/input/key", `{"keys": ["a", "Return"], "pace": "instant"}`)
+	c.run = run
+	c.do(t, http.MethodPost, "/input/type", `{"text": "x", "pace": "instant"}`)
+	if len(c.slept) != 0 {
+		t.Errorf("a cut-short list of plain keys made the next call wait %v", c.slept)
+	}
+}

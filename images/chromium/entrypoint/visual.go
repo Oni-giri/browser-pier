@@ -306,6 +306,10 @@ const (
 	pointerAction  keyboard = iota // neither waits for the gap nor arms it: pointer actions, and the person's paste
 	keysAction                     // waits for the gap
 	shortcutAction                 // waits for the gap, and arms it again as it ends
+	// shortcutInside waits for the gap and, if the run is cut short or
+	// fails, arms it: a key list with a browser-bound combination before
+	// its last, whose own pause after it may not have run out (PROJ-151).
+	shortcutInside
 )
 
 // perform runs an action's xdotool commands one after another, with v.mu
@@ -324,10 +328,14 @@ func (v *visual) perform(w http.ResponseWriter, r *http.Request, kb keyboard, bu
 			return
 		}
 	}
-	if kb == shortcutAction {
-		// Armed once the keys have gone, even if a command failed part way.
-		defer func() { v.shortcutAt = v.now() }()
-	}
+	// Armed once the keys have gone, even if a command failed part way:
+	// a shortcut may have reached the browser.
+	ok := false
+	defer func() {
+		if kb == shortcutAction || (kb == shortcutInside && !ok) {
+			v.shortcutAt = v.now()
+		}
+	}()
 	for _, c := range build(func() hand { return v.pointer(ctx) }) {
 		err := ctx.Err()
 		if err == nil {
@@ -342,6 +350,7 @@ func (v *visual) perform(w http.ResponseWriter, r *http.Request, kb keyboard, bu
 			return
 		}
 	}
+	ok = true
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -781,10 +790,12 @@ func (v *visual) key(w http.ResponseWriter, r *http.Request) {
 	}
 	combos := args[len(keyArgsPrefix):]
 	// A call that ends on a browser-bound combination arms the gap; one
-	// with keys after it has had its gap inside.
+	// with keys after it has had its gap inside, unless it was cut short.
 	kb := keysAction
 	if browserBound(combos[len(combos)-1]) {
 		kb = shortcutAction
+	} else if slices.ContainsFunc(combos, browserBound) {
+		kb = shortcutInside
 	}
 	// Cut short (a handoff, a stop), a run lets go of its keys, at either
 	// pace: a list's pauses make an instant run longer than it was.
