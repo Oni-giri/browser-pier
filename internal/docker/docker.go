@@ -60,8 +60,11 @@ const (
 // container (PROJ-183); 8 adds the entrypoint's /input/live-type, which
 // the live view's Type button calls, so a person's typing doesn't wait
 // for an agent's shortcut gap (PROJ-151), and /input/open, which the open
-// action calls (PROJ-164): a browser from before either answers them 404.
-const Spec = "8"
+// action calls (PROJ-164): a browser from before either answers them 404;
+// 9 turns address-bar search suggestions off by managed policy
+// (PROJ-191): a browser from an older image would keep sending what is
+// typed into the address bar to the search engine.
+const Spec = "9"
 
 const (
 	// StopTimeout is how long a browser container gets to stop before Docker

@@ -311,9 +311,34 @@ PROJ-151 left a residual: behind a page whose key handler takes more than about 
 
 **Residuals, accepted:**
 - **Delete before Return.** It drops an inline completion the address bar may have added after the typed text (the cause of the two autocomplete losses in PROJ-151's table). A person seldom presses it, but the key goes to the address bar, which no page sees.
-- **The address goes in at 12 ms a key**, faster than anyone types, at both paces. No page sees those keys, only the address bar; the search engine's suggest service may see what is typed (PROJ-191).
+- **The address goes in at 12 ms a key**, faster than anyone types, at both paces. No page sees those keys, only the address bar; nor does the search engine's suggest service, since the image turns suggestions off (PROJ-191, below): without that, an `open` of an `http://` address sent its path to it, token included.
 - **The layout is Chromium 156's.** The address bar's place is computed (y = 63, the middle of x = 121 to width − 85), not found on the screen. On another Chromium `open` refuses (409) rather than click blind, and `TestOpenAtEveryScreenSize` fails until it is measured again.
 - **A window that opens between a look and the run after it.** Each look at the screen and the xdotool run it allows are separate: a pop-up opening in those few milliseconds would still take the press (the click, Delete or Return) or up to 64 characters of the address; the next look stops the rest. The pauses all come before a look, never between a look and its press, so this window stays a few milliseconds.
+
+## No address-bar search suggestions (PROJ-191)
+
+With suggestions on (Chromium's default), the address bar sent the default search engine what was being typed, a request per pause: a word in full, an `http://` address or one without a scheme up to its query, path and token included, and an `https://` address's host only; a query (`?token=…`) never went, and focusing the address bar sent nothing. Measured with `TestMeasureSuggest` (`go test -tags 'docker measure' -run TestMeasureSuggest -v ./images/chromium/`, 2026-11-18, Chromium 156), which makes the search engine a local one by a test policy and sends everything else to an isolated proxy:
+
+| Typed with `key ctrl+l` and `type` (instant pace / human pace) | Suggest requests | The secret in them |
+|---|---|---|
+| `pierword` | 2 / 8 | (a word) |
+| `http://site.test/reset?token=SECRET` | 2 / 23 | none: they stop at the `?` |
+| `http://site.test/reset/SECRET` | 4 / 35 | all of it |
+| `https://site.test/reset?token=SECRET`, `https://site.test/reset/SECRET` | 2 / 17 | none: the host only |
+| `site.test/login/SECRET` | 3 / 27–28 | all of it |
+| With the image's own engine, `http://site.test/reset/SECRET` | 4–5 / 35–38 attempts to connect to `duckduckgo.com` (counted at the proxy), over three runs | (TLS: not readable) |
+
+The image now sets `SearchSuggestEnabled: false`. In the same runs, typing sent the suggestion service no request before Return, and the browser asked for no `duckduckgo.com` while an address was typed (`TestTypedAddressReachesNoSuggestService` checks both, and that the address then opens exactly as typed). The test also opens the two `http://` addresses with PROJ-164's `open` action, which types into the same address bar: without the policy it sent 3–4 suggest requests at either pace, the path's token included, and with it none (2026-11-26). A word still goes to the engine as a search once Return is pressed; the test checks that too, which also shows its search engine is in effect.
+
+What can see it:
+- **A person**, in the live view or a handoff: the address bar's drop-down no longer offers the engine's completions. History and bookmarks still do. The setting shows on `chrome://policy`, next to the image's other policies, and Chromium already says it's managed.
+- **Not pages.** No web API reports it, and a page can't read `chrome://policy` (a `fetch` of it fails with a TypeError, as in any Chromium, with or without the policy; the test records it). Nothing about the browser's fingerprint changes.
+- **The search engine** sees searches that come without the suggest requests that usually precede them, as from anyone who turned suggestions off (a common privacy setting) or pasted the words. That's DuckDuckGo, not the sites an agent works on.
+
+Considered and left as they are:
+- **`NetworkPredictionOptions`** (preloading): no HTTP request reached the typed address's host before Return in any of the runs (connections weren't timed, so a bare preconnect wouldn't show), and turning prediction off would change what pages' speculation rules get, which a page can notice. Kept at Chromium's default.
+- **`UrlKeyedAnonymizedDataCollectionEnabled`**: off by default in Chromium, and it reports to Google only for a signed-in, synced profile. Nothing to change.
+- **The start page:** a new profile's first tab still opens `start.duckduckgo.com` (PROJ-127, separate). The runs also saw Chromium ask for `accounts.google.com`, `update.googleapis.com` and `connectivitycheck.gstatic.com` on its own (refused by the test's proxy, so not measured further; PROJ-192).
 
 ## Fixed along the way
 

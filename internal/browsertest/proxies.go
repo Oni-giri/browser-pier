@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -20,9 +21,12 @@ type Proxy struct {
 	Addr    string // host:port it listens on, on every interface
 	ln      net.Listener
 	aliases map[string]string
+	routes  map[string]string
+	only    bool
 	conns   map[net.Conn]struct{}
 	mu      sync.Mutex
 	targets []string
+	refused []string
 	logins  []Login
 	denied  int
 }
@@ -51,17 +55,49 @@ func (p *Proxy) Alias(name, addr string) {
 	p.aliases[name] = addr
 }
 
+// Route makes the proxy reach target (host:port, as the client asks for
+// it) at addr (ip:port), so a test can serve a name on its usual port
+// from a server on any port.
+func (p *Proxy) Route(target, addr string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.routes == nil {
+		p.routes = map[string]string{}
+	}
+	p.routes[target] = addr
+}
+
+// Isolate makes the proxy refuse every target that isn't aliased or
+// routed, so nothing a test's browser asks for reaches the internet.
+// Refused lists what it refused.
+func (p *Proxy) Isolate() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.only = true
+}
+
 func (p *Proxy) dial(target string) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(target)
 	if err != nil {
 		return nil, err
 	}
 	p.mu.Lock()
-	if a, ok := p.aliases[host]; ok {
-		host = a
+	addr, routed := p.routes[target]
+	a, aliased := p.aliases[host]
+	if !routed && !aliased && p.only {
+		p.refused = append(p.refused, target)
+		p.mu.Unlock()
+		return nil, errors.New("isolated: " + target + " is neither aliased nor routed")
 	}
 	p.mu.Unlock()
-	return net.Dial("tcp", net.JoinHostPort(host, port))
+	switch {
+	case routed:
+	case aliased:
+		addr = net.JoinHostPort(a, port)
+	default:
+		addr = target
+	}
+	return net.Dial("tcp", addr)
 }
 
 // Close takes the proxy down: no new connections, and every open tunnel cut.
@@ -99,6 +135,13 @@ func (p *Proxy) Targets() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]string(nil), p.targets...)
+}
+
+// Refused lists the targets an isolated proxy refused, in order.
+func (p *Proxy) Refused() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.refused...)
 }
 
 // Denied counts attempts with wrong credentials.

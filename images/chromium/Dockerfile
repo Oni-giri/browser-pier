@@ -122,8 +122,10 @@ COPY --from=build /out/entrypoint /usr/local/bin/browserpier-entrypoint
 COPY LICENSE NOTICE /usr/share/doc/browserpier/
 # Managed policy: hides the "unsupported command-line flag" bar that
 # --disable-blink-features would put over every page, and sends downloads
-# to /files/downloads without asking, in both modes and without CDP, and
-# turns off DNS-over-HTTPS, which would go around a profile's proxy.
+# to /files/downloads without asking, in both modes and without CDP,
+# turns off DNS-over-HTTPS, which would go around a profile's proxy, and
+# turns off search suggestions, which send what is typed into the address
+# bar, an address's path and token included, to the search engine (PROJ-191).
 COPY images/chromium/policies.json /etc/chromium/policies/managed/browserpier.json
 COPY images/chromium/jwmrc /etc/browserpier/jwmrc
 # Fail the build if JWM can't read it: jwm -p exits 0 whatever it finds,
