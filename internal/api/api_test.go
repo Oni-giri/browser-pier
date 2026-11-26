@@ -43,6 +43,12 @@ type browser struct {
 	pageURL string
 	// methods are the CDP methods sent on the browser's WebSocket.
 	methods []string
+	// shortcutGap, if set, makes a type or key that comes within it of a
+	// key with ctrl in it wait out the rest under its request's context,
+	// as the image's entrypoint does (PROJ-151); a wait cut short sends
+	// nothing and is recorded as "wait cut short".
+	shortcutGap time.Duration
+	shortcutAt  time.Time
 	// choosers is what GET /chooser answers (JSON), "" for none open;
 	// noPortal makes it 503. chosen records each POST /chooser/{id}.
 	choosers string
@@ -128,6 +134,32 @@ func (b *browser) handler() http.Handler {
 		b.mu.Unlock()
 		if onInput != nil {
 			onInput(r.URL.Path)
+		}
+		b.mu.Lock()
+		gap, at := b.shortcutGap, b.shortcutAt
+		b.mu.Unlock()
+		if gap > 0 && (r.URL.Path == "/input/type" || r.URL.Path == "/input/key") {
+			if d := time.Until(at.Add(gap)); d > 0 {
+				b.mu.Lock()
+				b.inputs = append(b.inputs, "waiting")
+				b.mu.Unlock()
+				select {
+				case <-r.Context().Done():
+					b.mu.Lock()
+					b.inputs = append(b.inputs, "wait cut short")
+					b.mu.Unlock()
+					http.Error(w, "input failed: "+r.Context().Err().Error(), http.StatusInternalServerError)
+					return
+				case <-time.After(d):
+				}
+			}
+			if r.URL.Path == "/input/key" && strings.Contains(string(body), "ctrl+") {
+				defer func() {
+					b.mu.Lock()
+					b.shortcutAt = time.Now()
+					b.mu.Unlock()
+				}()
+			}
 		}
 		if strings.Contains(string(body), "boom") {
 			http.Error(w, "xdotool failed", http.StatusInternalServerError)

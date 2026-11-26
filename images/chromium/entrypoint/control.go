@@ -22,6 +22,7 @@ import (
 //	GET /record    the display as a fragmented MP4 made to be kept, one reader at a time
 //	GET /screenshot, POST /input/{click,type,scroll,key,drag}   Visual mode (see visual.go)
 //	POST /input/events, POST /input/release   the live view's mouse and keyboard (live.go)
+//	POST /input/live-type          {"text"}: the live view's Type button, at once (visual.go)
 //	GET /input/clipboard           the clipboard's text, for the live view's clipboard box (clipboard.go)
 //	POST /input/clipboard          {"text"}: hold the text on the clipboard until replaced or emptied
 //	POST /input/paste              {"text"}: the same, then Ctrl+V

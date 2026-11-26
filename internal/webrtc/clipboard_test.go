@@ -49,7 +49,7 @@ func (c *fakeClipboard) routes(mux *http.ServeMux) {
 	}
 	mux.HandleFunc("POST /input/release", record("release", func(_ []byte, w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) }))
 	mux.HandleFunc("POST /input/events", record("events", func(_ []byte, w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) }))
-	mux.HandleFunc("POST /input/type", record("type", func(b []byte, w http.ResponseWriter) {
+	mux.HandleFunc("POST /input/live-type", record("type", func(b []byte, w http.ResponseWriter) {
 		c.mu.Lock()
 		c.sent = append(c.sent, string(b))
 		c.mu.Unlock()
@@ -230,7 +230,7 @@ func TestViewerTypesText(t *testing.T) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if strings.Join(c.calls, " ") != "type" || len(c.sent) != 1 || c.sent[0] != `{"pace":"instant","text":"héllo"}` {
+	if strings.Join(c.calls, " ") != "type" || len(c.sent) != 1 || c.sent[0] != `{"text":"héllo"}` {
 		t.Errorf("the browser got %v %v", c.calls, c.sent)
 	}
 }

@@ -57,8 +57,10 @@ const (
 // (PROJ-23); 7 answers pages' file choosers through the container's
 // portal, with no GTK dialog left (PROJ-152, PROJ-181): a browser from
 // before it would keep the dialog, which can hand a page any file in the
-// container (PROJ-183).
-const Spec = "7"
+// container (PROJ-183); 8 adds the entrypoint's /input/live-type, which
+// the live view's Type button calls, so a person's typing doesn't wait
+// for an agent's shortcut gap (PROJ-151).
+const Spec = "8"
 
 const (
 	// StopTimeout is how long a browser container gets to stop before Docker
