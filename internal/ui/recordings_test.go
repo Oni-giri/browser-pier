@@ -192,7 +192,7 @@ func TestTheSideSaysWhetherItRecords(t *testing.T) {
 		`<div id="hint" data-rec-note="Nothing is recorded while you have control." data-rec>`)
 	rec := &uiRecorder{}
 	f.m.SetRecorder(rec, f.recordings)
-	_, done, err := f.m.AgentInput(context.Background(), s.ID)
+	_, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}

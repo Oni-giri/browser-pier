@@ -20,6 +20,7 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/browsertest"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
+	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
 // TestRealBrowserClipboardBox is PROJ-194 on a real browser in Visual
@@ -38,7 +39,7 @@ func TestRealBrowserClipboardBox(t *testing.T) {
 	}
 	page := newFieldPage(t)
 	sock := m.Layout().ControlSocket(name)
-	v := &viewer{h: NewHandler(nil, m, nil, slog.New(slog.DiscardHandler)), session: s.ID, sock: sock}
+	v := &viewer{h: NewHandler(nil, m, nil, slog.New(slog.DiscardHandler)), session: s.ID, holder: sessions.AdminHolder, sock: sock}
 	replies := make(chan map[string]any, 10)
 	send := func(msg any) {
 		t.Helper()

@@ -39,30 +39,33 @@ func TestVisualModeLooksLikeAPerson(t *testing.T) {
 	if code := a.do(http.MethodPost, "/api/sessions", fmt.Sprintf(`{"profile": %q}`, name), &s); code != http.StatusCreated || s.Mode != "visual" || !s.BlockAds {
 		t.Fatalf("start: %d %+v", code, s)
 	}
-	// Open the page as a person would: the address bar, the URL, Enter.
-	for _, body := range []string{
-		`{"action": "key", "keys": "ctrl+l"}`,
-		fmt.Sprintf(`{"action": "type", "text": %q}`, det.URL),
-		`{"action": "key", "keys": "Return"}`,
+	// Open the page as a person would, at human pace: a click in the
+	// address bar, the URL, Enter (the open action, PROJ-164); then the
+	// same with ctrl+l, the URL and Return, as agents did before it.
+	for _, way := range [][]string{
+		{fmt.Sprintf(`{"action": "open", "url": %q}`, det.URL)},
+		{`{"action": "key", "keys": "ctrl+l"}`, fmt.Sprintf(`{"action": "type", "text": %q}`, det.URL), `{"action": "key", "keys": "Return"}`},
 	} {
-		if code := a.do(http.MethodPost, "/api/sessions/"+s.ID+"/computer", body, nil); code != http.StatusNoContent && code != http.StatusOK {
-			t.Fatalf("%s: %d", body, code)
+		for _, body := range way {
+			if code := a.do(http.MethodPost, "/api/sessions/"+s.ID+"/computer", body, nil); code != http.StatusNoContent && code != http.StatusOK {
+				t.Fatalf("%s: %d", body, code)
+			}
 		}
+		vis := det.Report(t)
+		t.Logf("Visual mode, %.30s: %+v", way[0], vis)
+		if vis.Webdriver || vis.CDPRuntime || len(vis.AutomationGlobals) > 0 {
+			t.Errorf("Visual mode looks automated: webdriver %t, CDP Runtime %t, globals %v", vis.Webdriver, vis.CDPRuntime, vis.AutomationGlobals)
+		}
+		// Enter in the address bar hands the focus to the page, as for a person.
+		if !vis.HasFocus {
+			t.Errorf("in Visual mode, opened with %.30s, the page isn't focused", way[0])
+		}
+		// Known and not asserted: often, in both modes, the page's first script
+		// sees a 0x0 window. A window manager didn't change that (PROJ-29); its
+		// cause is being checked in PROJ-65. See images/chromium/ANTI-BOT.md.
+		t.Logf("Visual mode: window %dx%d as the page's first script ran", vis.OuterWidth, vis.OuterHeight)
+		looksLikeChrome(t, vis)
 	}
-	vis := det.Report(t)
-	t.Logf("Visual mode: %+v", vis)
-	if vis.Webdriver || vis.CDPRuntime || len(vis.AutomationGlobals) > 0 {
-		t.Errorf("Visual mode looks automated: webdriver %t, CDP Runtime %t, globals %v", vis.Webdriver, vis.CDPRuntime, vis.AutomationGlobals)
-	}
-	// Enter in the address bar hands the focus to the page, as for a person.
-	if !vis.HasFocus {
-		t.Error("in Visual mode the page isn't focused")
-	}
-	// Known and not asserted: often, in both modes, the page's first script
-	// sees a 0x0 window. A window manager didn't change that (PROJ-29); its
-	// cause is being checked in PROJ-65. See images/chromium/ANTI-BOT.md.
-	t.Logf("Visual mode: window %dx%d as the page's first script ran", vis.OuterWidth, vis.OuterHeight)
-	looksLikeChrome(t, vis)
 	// And from the browser's side: no client is attached to the page.
 	for _, tg := range targets(t, a.m.Layout().ControlSocket(name)) {
 		if tg.Type == "page" && tg.Attached {
@@ -125,8 +128,19 @@ func looksLikeChrome(t *testing.T, s browsertest.Signals) {
 	if s.NotificationPermission == "denied" && s.PermissionQuery == "prompt" {
 		t.Error("notification permissions disagree, as in headless Chrome")
 	}
+	// WebGL renders on llvmpipe, a renderer GPU-less Linux desktops have,
+	// not SwiftShader, which pages count as a headless sign (PROJ-148).
 	if s.WebGLRenderer == "" {
 		t.Errorf("no WebGL: %s", s.WebGLVendor)
+	}
+	if s.WebGL2Renderer == "" {
+		t.Error("no WebGL2")
+	}
+	for _, r := range []string{s.WebGLVendor, s.WebGLRenderer, s.WebGL2Renderer} {
+		if strings.Contains(strings.ToLower(r), "swiftshader") {
+			t.Errorf("WebGL says SwiftShader: %s / %s", s.WebGLVendor, s.WebGLRenderer)
+			break
+		}
 	}
 	// Intl takes Chromium's interface language, which is just "de".
 	if len(s.Languages) == 0 || s.Languages[0] != "de-DE" || !strings.HasPrefix(s.IntlLocale, "de") || s.TimeZone != "Europe/Berlin" {

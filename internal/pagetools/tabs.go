@@ -14,6 +14,11 @@ import (
 // maxTabsListed caps tabs' list.
 const maxTabsListed = 20
 
+// manyTabs is how many open tabs make the tools tell the agent to close
+// some (PROJ-160). Each tab holds its page's memory; BrowserPier closes
+// none by itself.
+const manyTabs = 10
+
 // TabsIn is tabs' input.
 type TabsIn struct {
 	// Action is list (the default), switch, close or new.
@@ -52,6 +57,7 @@ func (t *Tools) Tabs(ctx context.Context, s sessions.Session, who Caller, in Tab
 	}
 	return t.run(ctx, s, who, func(c *call) (string, error) {
 		ctx := c.lease.Ctx
+		c.tabsTool = true
 		switch in.Action {
 		case "switch":
 			tb, err := c.tabByID(in.ID)
@@ -128,6 +134,22 @@ func (t *Tools) Tabs(ctx context.Context, s sessions.Session, who Caller, in Tab
 	})
 }
 
+// manyTabsLine is BrowserPier's line telling the agent how many tabs are
+// open, once there are manyTabs or more: on every tabs result, and on
+// another tool's result when the count has grown since the last one. It
+// is built from the count alone, never from a page's title or address,
+// so it goes after the fence. The count is that of the tabs the call's
+// Target.getTargets listed, less any it closed: no CDP call of its own.
+func (c *call) manyTabsLine() string {
+	n := len(c.st.tabs)
+	grown := n > c.st.tabsSaid
+	c.st.tabsSaid = n
+	if n < manyTabs || !grown && !c.tabsTool {
+		return ""
+	}
+	return fmt.Sprintf("%d tabs are open; close the ones you're done with (tabs, action close)", n)
+}
+
 // tabByID finds a tab by the ID the tools gave it.
 func (c *call) tabByID(id string) (*tabState, error) {
 	for _, tb := range c.st.tabs {
@@ -177,6 +199,7 @@ func (c *call) tabResult(ctx context.Context, done string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	c.noteTitle(pi.Title) // the active tab's only, never the list's
 	return c.result("tabs", done+"; the active tab is now "+c.tab.id+"\n"+header(&page{url: pi.URL, title: pi.Title}), ""), nil
 }
 

@@ -77,6 +77,7 @@ Browser containers publish no ports. They're reached only through BrowserPier, b
 
 BrowserPier starts browsers through `/var/run/docker.sock`, and **anything that can use the Docker socket controls the host**. A flaw in BrowserPier could therefore become a way into the server. What limits that:
 - BrowserPier starts containers only from its own browser image. Browsers run without capabilities beyond what Chromium's sandbox needs, with no-new-privileges, seccomp, and no published ports.
+- Right before each container is created, BrowserPier checks its whole definition against a fixed list of what its containers may get, and refuses anything else (a device, another folder, a host namespace, a published port). That catches mistakes in BrowserPier itself; it doesn't contain a BrowserPier that has been taken over, which holds the socket anyway. A refusal fails the browser's start with an error naming the setting: please report it.
 - The orchestrator image is distroless and runs as your user, not root.
 
 Still:
@@ -182,6 +183,26 @@ The TURN server must reach this server on 7438 UDP, where it relays to. Anyone B
 
 Add `?ice=relay` to a live view's address (`https://pier.example.com/profiles/google?ice=relay`), or to a handoff link's once it's open (after the PIN), and reload. That page connects only through TURN: if the video plays, TURN works. Without it, a viewer connects directly where it can and through TURN only where it must.
 
+## Upstream proxies
+
+Pages can leave through an upstream proxy, such as a residential one: set it per profile under Advanced, or as the default for new profiles in Settings. It's a URL with the scheme, credentials, host and port, and nothing else:
+
+```
+http://user:password@proxy.example.net:8080      # also https:// and socks5://
+```
+
+Percent-encode a reserved character in the user name or password (`@` is `%40`, `:` is `%3A`). For `socks5://` each may be at most 255 bytes, and an `http`/`https` user name can't hold a colon. Time zone and language follow where the proxy exits.
+
+**One exit per profile: `{sticky}`.** Many providers keep a client on one exit IP while it sends the same session code, in the user name or the password. Write `{sticky}` where the code goes and each profile fills in a code of its own (8 lowercase letters and digits), kept until you choose **New exit IP** in its ⋯ menu. So one default proxy in Settings gives every profile its own exit, instead of all sharing one. For example, with IPRoyal, whose session code goes in the password and must be 8 characters:
+
+```
+http://USERNAME:PASSWORD_country-de_session-{sticky}_lifetime-30m@geo.iproyal.com:12321
+```
+
+Oxylabs takes it in the user name: `http://customer-USERNAME-cc-DE-sessid-{sticky}-sesstime-1440:PASSWORD@pr.oxylabs.io:7777`. Check your provider's current documentation for its syntax.
+
+How long an exit is kept is the provider's choice, not BrowserPier's: often minutes unless the URL asks for longer (by default Oxylabs ends a session after 10 minutes, or after 60 seconds without a request; `sesstime` asks for up to 24 hours), and a session moves to another IP when its exit goes offline. So `{sticky}` asks for a stable exit; it can't guarantee one. While the country stays the same, a profile keeps its time zone anyway.
+
 ## Settings
 
 Set in `.env` and passed through by `docker-compose.yml`. Add any other variable from this list to its `environment:`. An empty value means unset.
@@ -204,15 +225,121 @@ Leave `BROWSERPIER_LISTEN` and `BROWSERPIER_WEBRTC_PORT` alone with this compose
 | `BROWSERPIER_NET` | `10.247.74` | The compose network's first three numbers (compose only). |
 | `BROWSERPIER_VERSION` | the release the files came from | The image tag (compose only): a release such as `0.1.0` stays put, `latest` follows each release, `edge` follows the main branch. |
 | `BROWSERPIER_COOKIE_SECURE` | auto | `always` or `never` to override. |
-| `BROWSERPIER_GEOIP_URL` | `https://ifconfig.co/json` | How browsers find their exit location, to match time zone and language. `off` disables it. |
+| `BROWSERPIER_GEOIP_URL` | `https://ifconfig.co/json` | How browsers find their exit location, to match time zone and language. `off` disables it, and with it the Test button next to proxy fields, which looks the exit up the same way, from a short-lived browser-image container. |
 | `BROWSERPIER_BLOCKLIST_URLS` | Peter Lowe's ad servers and EasyPrivacy | The ad and tracker domain lists that profiles with Block ads and trackers on block, separated by commas or spaces; `none` for none. Hosts-format lists and Adblock Plus `||name^` rules are read; other rules are skipped. Downloaded into `<data dir>/blocklists/` and checked again every 4 days. |
 | `BROWSERPIER_LISTEN` | `:7437` | The app's address inside the container. |
 | `BROWSERPIER_BROWSER_IMAGE` | this release's | The browser image. Only BrowserPier's own. |
 | `BROWSERPIER_DATA_DIR` | `/data` | The database and one folder per profile, inside the container. Keep the `./data:/data` mount. |
 | `BROWSERPIER_HOST_DATA_DIR` | detected | The data folder's path on the host, if detection fails. |
-| `BROWSERPIER_USERNS_MODE` | unset | `keep-id` under rootless Podman. |
+| `BROWSERPIER_USERNS_MODE` | unset | `keep-id` under rootless Podman (or `keep-id:uid=…,gid=…`; keep-id's options are `uid`, `gid` and `size`, each at most once, as numbers). Nothing else is accepted: BrowserPier refuses to start with any other value, `host` included. |
 | `BROWSERPIER_BROWSER_APPARMOR` | unset | The browser containers' AppArmor profile. Unset, BrowserPier picks one: see [AppArmor](#apparmor). Set, that profile is used as it is, unchecked: `browserpier`, `unconfined`, or one of your own. A named profile that isn't loaded makes every browser fail to start, with an error saying so. |
 | `BROWSERPIER_STOP_BROWSERS_ON_EXIT` | `false` | `true` stops every browser when BrowserPier stops. Otherwise they keep running through an update. |
+
+## Notifications
+
+BrowserPier can tell one webhook when a person is needed, so a handoff asked by a headless or scheduled agent (one with no chat to pass the link through) still reaches you. Set it in **Settings → Notifications**, signed in as the admin. No agent can read or change it, and no environment variable sets it.
+
+- **URL:** `https://`, or plain `http://` only when every address its host resolves to is on this machine or its local network (loopback, `10/8`, `172.16/12`, `192.168/16`, `fc00::/7`, `100.64/10`), for a LAN endpoint such as Home Assistant. No user name or password in it, at most 2,048 bytes. Never a link-local address (`169.254.0.0/16`, `fe80::/10`: a VPS's metadata endpoint), multicast, broadcast or unspecified, over either scheme. The address is checked again on every connection, on the address actually dialled, so a name that starts resolving elsewhere is refused then. BrowserPier connects directly: never through `HTTP_PROXY`, a profile's proxy or a browser.
+- **Secret:** made by BrowserPier when the URL is first saved, 64 hex characters, shown once. Changing the URL keeps it; **Regenerate secret** makes a new one and shows it once. Saved, the URL is shown as its scheme and host only: a Slack or Discord webhook URL is itself a password.
+- **Address for links:** links in the messages are built on `BROWSERPIER_PUBLIC_URL`, or, when it isn't set (on Umbrel, say), on this field. Never on the address an agent used. With neither, messages carry no link and say to open BrowserPier.
+- The URL and the secret are stored in the database as they are (an HMAC key can't be hashed), like a proxy's password, and never logged. They aren't in profile exports; they are in a backup of `./data`.
+
+### Events
+
+| Event | When | On by default |
+|---|---|---|
+| `handoff.requested` | an agent asked for a handoff | yes |
+| `handoff.expired` | nobody handed back within 15 minutes | yes |
+| `handoff.cancelled` | five wrong PINs cancelled it (`cause: "wrong_pins"`) | yes |
+| `browser.failed` | a browser failed to start, crashed, didn't close cleanly or was lost (`category`: `start_failed`, `crashed`, `unclean_close`, `lost`) | no |
+| `test` | **Send test** in Settings | |
+
+Nothing is sent when a person hands back (done or can't), when a handoff ends by its `until_url`, when the agent withdraws it, or when its browser stops. At most 6 `handoff.requested` per profile are sent in 15 minutes; past that they are dropped and logged.
+
+### The body
+
+A JSON POST of a few hundred bytes, made only of BrowserPier's own words and typed fields:
+
+```json
+{
+  "id": "5b0e9c1f0d6a4e2b9f3c7a8d1e2f3a4b",
+  "event": "handoff.requested",
+  "time": "2026-11-16T09:30:00Z",
+  "profile": "google",
+  "handoff_id": "h_4kq2…",
+  "reason": "sensitive_input",
+  "policy": "pin",
+  "agent": "research-bot",
+  "origin": "https://accounts.google.com",
+  "expires_at": "2026-11-16T09:45:00Z",
+  "url": "https://pier.example.com/h/…",
+  "text": "BrowserPier · google: an agent needs you (Sign-in or payment). https://pier.example.com/h/…",
+  "content": "BrowserPier · google: an agent needs you (Sign-in or payment). https://pier.example.com/h/…"
+}
+```
+
+- `id` is the same on every try of one event, so a receiver can drop repeats.
+- `text` and `content` are the same sentence: Slack's incoming webhooks show `text`, Discord's show `content`. It holds only fixed words, the profile's name, the reason and the link.
+- `origin` is the page's scheme and host. The page chose it, so it is never part of the sentence, where a chat would make it a link.
+- Never in it: the agent's `detail` (it reads untrusted pages and could be talked into writing "go to … and enter your password"; read it on the handoff page instead), the person's note, the agent's withdrawal note, `until_url`, page text, titles, paths or queries, or a browser's error or log.
+- `handoff.expired` and `handoff.cancelled` carry the same fields with the profile's page as `url`, and `cause` for cancelled. `browser.failed` carries `profile`, `category` and the profile's page as `url`.
+
+**The link.** For a handoff whose policy is **Link + PIN** or **Full sign-in**, `url` is the handoff's single-use link: opening it asks for the PIN or the admin password and unlocks nothing until then, so a chat app fetching it for a preview does no harm. For **One tap**, the first open would take the link, and a preview could do it, so `url` is the profile's page instead, which needs you signed in and shows the request with Done and Can't do this. Raise the profile's policy to get the link itself in the chat.
+
+### Delivery
+
+Each POST has 10 seconds, looking up the host and connecting included. 2xx is delivered. A network error, a timeout or a 5xx is tried again after 2 s and after 10 s. Before every try, the first included, the event is dropped if the webhook was changed or removed meanwhile, or, for `handoff.requested`, if the handoff has ended, its 15 minutes are up or its browser stopped. Anything else is final: 3xx (redirects aren't followed) and 4xx, 429 included. The answer's body isn't read. At most 4 POSTs are under way, **Send test** included, and 64 events wait; past that, events are dropped and logged. The queue is in memory: what waits when BrowserPier restarts is lost. **Send test** sends once, with no retry, and shows the status; with 4 POSTs already under way it doesn't wait and says the webhook is busy.
+
+The log names the event, its `id`, the profile, the webhook's host and the status: never the URL's path, the secret, the signature or the body.
+
+### Checking the signature
+
+Every POST has `Content-Type: application/json`, `User-Agent: BrowserPier/<version>` and
+
+```
+BrowserPier-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<body>">
+```
+
+The key is the secret's 64 hex characters as text (not decoded), `<body>` the bytes received, and `t` is taken again for each try. Check it before trusting the body, with a constant-time compare and a 5-minute tolerance:
+
+```go
+func verify(secret, header string, body []byte, now time.Time) bool {
+	var ts, sig string
+	for _, part := range strings.Split(header, ",") {
+		k, v, _ := strings.Cut(part, "=")
+		switch k {
+		case "t":
+			ts = v
+		case "v1":
+			sig = v
+		}
+	}
+	t, err := strconv.ParseInt(ts, 10, 64)
+	if err != nil || now.Sub(time.Unix(t, 0)).Abs() > 5*time.Minute {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(ts + "."))
+	mac.Write(body)
+	want := hex.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(sig), []byte(want))
+}
+```
+
+To test a receiver: with the secret `0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef`, `t` = `1700000000` and the body `{"event":"test"}`, the header is `t=1700000000,v1=22751b8ccca2474a38721b544790f9a62e2ae990c0526953c05926e5d74c4899`. By hand:
+
+```sh
+printf '%s.%s' 1700000000 '{"event":"test"}' | openssl dgst -sha256 -hmac 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+```
+
+### Slack and Discord
+
+Their incoming webhooks don't check signatures; they show `text` (Slack) or `content` (Discord) and ignore the other fields.
+
+- **Slack:** create an app with *Incoming Webhooks* on (api.slack.com/apps), add a webhook to a channel, and paste its `https://hooks.slack.com/services/…` URL.
+- **Discord:** in the channel's *Integrations → Webhooks*, create one and paste its `https://discord.com/api/webhooks/…` URL.
+
+Then **Send test**. Keep the channel private: anyone in it gets the links, and a **Link + PIN** link is only as safe as your PIN.
 
 ## Updating and backups
 
