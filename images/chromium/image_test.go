@@ -587,6 +587,11 @@ func TestBrowserEnvironment(t *testing.T) {
 		if again.Type != "back_forward" {
 			t.Errorf("Back's navigation type is %q, want back_forward", again.Type)
 		}
+		// What a page can read of it (ANTI-BOT.md, Signals that remain):
+		// Chromium gives no reasons at all, rather than none to give.
+		if again.Reasons != "null" {
+			t.Errorf("Back's notRestoredReasons: %s, want null", again.Reasons)
+		}
 	})
 	t.Run("window fills the screen above the taskbar", func(t *testing.T) {
 		// Visual-mode coordinates are screen coordinates, so the window must

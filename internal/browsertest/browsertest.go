@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -212,7 +213,8 @@ type Site struct {
 
 // Shown is what a page saw in a pageshow event (PROJ-160): whether it came
 // from the back/forward cache, its navigation's type, and Chromium's
-// notRestoredReasons for it as JSON ("null" when there are none). Load
+// notRestoredReasons for it as JSON ("null" when Chromium gives none, and
+// "absent" when the navigation entry has no such property at all). Load
 // is random to each document: a page loaded again, rather than restored,
 // reports a new one, even when its HTML came from the HTTP cache.
 type Shown struct {
@@ -268,15 +270,19 @@ const load = Math.random().toString(36).slice(2);
 addEventListener('pageshow', e => {
   const n = performance.getEntriesByType('navigation')[0] || {};
   fetch('/shown?' + new URLSearchParams({page: PAGE, persisted: e.persisted, type: n.type || '',
-    reasons: JSON.stringify(n.notRestoredReasons || null), load}));
+    reasons: 'notRestoredReasons' in n ? JSON.stringify(n.notRestoredReasons) : 'absent', load}));
 });
 </script>`
+
+// MaxHeavyMB is the most /heavy holds, whatever its ?mb= asks: a mistyped
+// measurement setting can't take the shared host's memory.
+const MaxHeavyMB = 1024
 
 // heavyPage holds mb MB in typed arrays, filled so the memory is
 // committed, and a 20,000-paragraph DOM: a page heavy enough that keeping
 // it in the back/forward cache shows in the container's memory.
-const heavyPage = `<title>Heavy</title><h1>Heavy</h1><div id="d"></div><script>
-const mb = Number(new URLSearchParams(location.search).get('mb')) || 200;
+var heavyPage = `<title>Heavy</title><h1>Heavy</h1><div id="d"></div><script>
+const mb = Math.min(Number(new URLSearchParams(location.search).get('mb')) || 200, ` + strconv.Itoa(MaxHeavyMB) + `);
 window.held = [];
 for (let i = 0; i < mb; i++) { const a = new Float64Array(131072); a.fill(i + Math.random()); held.push(a); }
 const f = document.createDocumentFragment();
@@ -440,8 +446,9 @@ setInterval(async () => { if ((await fetch('/later/go')).status === 200) locatio
 	})
 	// Pages that report each pageshow to /shown (PROJ-160): two light
 	// ones for Back, a plain one to leave to, and a heavy one (?mb=N).
-	// /back/unload and /back/no-store are ones the back/forward cache
-	// won't keep: an unload handler, and Cache-Control: no-store.
+	// /back/unload has an unload handler, which keeps the back/forward
+	// cache from restoring it; /back/no-store is served with
+	// Cache-Control: no-store, which Chromium 156 restores all the same.
 	for path, body := range map[string]string{
 		"/hello":         "<title>Hello</title><h1>Hello</h1>",
 		"/back/a":        "<title>A</title><h1>Page A</h1>",

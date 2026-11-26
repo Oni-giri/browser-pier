@@ -47,9 +47,10 @@ import (
 // "spare" reads the memory of a browser idle on /hello for 60 s, with and
 // without SpareRendererForSitePerProcess, MEASURE_RUNS (3) times each, the
 // back/forward cache off in both, as in the image.
-// "reasons" records what Back tells a page with the cache on and off: one
-// the cache can keep (/back/a), and two it can't (/back/unload,
-// /back/no-store), in Visual mode.
+// "reasons" records what Back tells a page with the cache on and off, in
+// Visual mode: a page the cache can keep (/back/a), one with an unload
+// handler, which it doesn't restore (/back/unload), and one served with
+// no-store (/back/no-store; Chromium 156 restores it all the same).
 // "lastwins" checks what Chromium does with two --disable-features
 // switches. MEASURE_PARTS picks the parts (all by default), and
 // MEASURE_CASES, a regular expression, bfcache's runs by their name in the
@@ -69,6 +70,9 @@ func TestMeasureMemoryFlags(t *testing.T) {
 	}
 	window := time.Duration(envInt("MEASURE_SECONDS", 240)) * time.Second
 	mb := envInt("MEASURE_MB", 200)
+	if mb < 1 || mb > browsertest.MaxHeavyMB {
+		t.Fatalf("MEASURE_MB %d: want 1 to %d", mb, browsertest.MaxHeavyMB)
+	}
 
 	version := docker(t, "run", "--rm", "--entrypoint", "sh", image, "-c", "/usr/lib/chromium/chromium --version; uname -m")
 	t.Logf("image %s: %s", image, strings.ReplaceAll(version, "\n", ", "))
@@ -84,7 +88,7 @@ func TestMeasureMemoryFlags(t *testing.T) {
 	}
 	renderers := func(b *browser) string {
 		return docker(t, "exec", b.name, "sh", "-c", `n=0; rss=0; for d in /proc/[0-9]*; do
-			case $(tr '\0' ' ' < $d/cmdline 2>/dev/null) in *--type=renderer*)
+			case $(tr '\0' ' ' < $d/cmdline 2>/dev/null) in /usr/lib/chromium/*--type=renderer*)
 				n=$((n+1)); rss=$((rss + $(sed -n 's/^VmRSS:[^0-9]*\([0-9]*\).*/\1/p' $d/status)));; esac; done
 			echo "$n renderers, $((rss/1024)) MiB RSS"`)
 	}
@@ -123,7 +127,13 @@ func TestMeasureMemoryFlags(t *testing.T) {
 	var summary []string
 
 	if strings.Contains(parts, "bfcache") {
-		marks := []time.Duration{0, 15 * time.Second, 30 * time.Second, 60 * time.Second, 120 * time.Second, window}
+		// The marks the 5-second readings below reach, each once, in order.
+		var marks []time.Duration
+		for _, m := range []time.Duration{0, 15 * time.Second, 30 * time.Second, 60 * time.Second, 120 * time.Second, window / (5 * time.Second) * (5 * time.Second)} {
+			if m <= window && (len(marks) == 0 || m > marks[len(marks)-1]) {
+				marks = append(marks, m)
+			}
+		}
 		header := "| mode | leaves to | flags | before | on /heavy |"
 		for _, m := range marks {
 			header += fmt.Sprintf(" +%v |", m)
@@ -242,9 +252,14 @@ func back(t *testing.T, s *browsertest.Site, goBack func(), page string) shownBa
 }
 
 func describeShown(b shownBack) string {
+	r := b.Reasons // "absent" when the page had no such property
 	var reasons any
-	_ = json.Unmarshal([]byte(b.Reasons), &reasons)
-	r, _ := json.Marshal(reasons)
+	if err := json.Unmarshal([]byte(b.Reasons), &reasons); err == nil {
+		m, _ := json.Marshal(reasons)
+		r = string(m)
+	} else if b.Reasons != "absent" {
+		r = fmt.Sprintf("unreadable %q", b.Reasons)
+	}
 	return fmt.Sprintf("persisted %t, type %s, new document %t, served again %t, notRestoredReasons %s",
 		b.Persisted, b.Type, b.newDocument, b.servedAgain, r)
 }
