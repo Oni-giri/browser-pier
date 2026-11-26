@@ -63,6 +63,7 @@ HTTP over the Unix socket:
 | `GET /screenshot` | The display as PNG; `?width=` scales it down. `X-Screen-Width` and `X-Screen-Height` give the screen size. |
 | `POST /input/click` | `{"x", "y", "button", "double"}` in screen pixels, through xdotool. |
 | `POST /input/type` | `{"text"}`, up to 2000 characters, through xdotool; `\n` presses Enter. |
+| `POST /input/live-type` | `{"text"}`, as `/input/type` at instant pace, for the live view's Type button: the person's input, so it doesn't wait for an agent's shortcut gap. |
 | `POST /input/events` | The live view's mouse and keyboard: a JSON array of `{"t": "move", "x", "y"}`, `{"t": "down"/"up", "b": 1-3}`, `{"t": "wheel", "dx", "dy"}`, `{"t": "keydown"/"keyup", "k": "<X keysym>"}`, fed to one long-running `xdotool`. |
 | `POST /input/release` | Lets go of any key or button the live view still holds. |
 | `GET /geo` | The location the browser runs with: country, time zone, locale, Accept-Language list, and where they came from. |

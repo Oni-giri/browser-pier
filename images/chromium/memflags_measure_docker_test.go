@@ -122,7 +122,7 @@ func TestMeasureMemoryFlags(t *testing.T) {
 		return s.WaitShown(t, page, n+1, 60*time.Second)
 	}
 	start := func(flags string) *browser {
-		return startBrowserWith(t, image, newVolume(t), wrap, "MEASURE_CHROMIUM_FLAGS="+flags)
+		return startBrowserWith(t, image, newVolume(t), browserOptions{args: wrap, env: []string{"MEASURE_CHROMIUM_FLAGS=" + flags}})
 	}
 	var summary []string
 

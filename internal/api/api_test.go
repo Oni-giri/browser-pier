@@ -43,6 +43,15 @@ type browser struct {
 	pageURL string
 	// methods are the CDP methods sent on the browser's WebSocket.
 	methods []string
+	// shortcutGap, if set, makes a type or key that comes within it of a
+	// key with ctrl in it wait out the rest under its request's context,
+	// as the image's entrypoint does (PROJ-151); a wait cut short sends
+	// nothing and is recorded as "wait cut short".
+	shortcutGap time.Duration
+	shortcutAt  time.Time
+	// exempts are the hosts let past the ad and tracker list
+	// (/proxy/exempt), in order.
+	exempts []string
 	// choosers is what GET /chooser answers (JSON), "" for none open;
 	// noPortal makes it 503. chosen records each POST /chooser/{id}.
 	choosers string
@@ -129,6 +138,32 @@ func (b *browser) handler() http.Handler {
 		if onInput != nil {
 			onInput(r.URL.Path)
 		}
+		b.mu.Lock()
+		gap, at := b.shortcutGap, b.shortcutAt
+		b.mu.Unlock()
+		if gap > 0 && (r.URL.Path == "/input/type" || r.URL.Path == "/input/key") {
+			if d := time.Until(at.Add(gap)); d > 0 {
+				b.mu.Lock()
+				b.inputs = append(b.inputs, "waiting")
+				b.mu.Unlock()
+				select {
+				case <-r.Context().Done():
+					b.mu.Lock()
+					b.inputs = append(b.inputs, "wait cut short")
+					b.mu.Unlock()
+					http.Error(w, "input failed: "+r.Context().Err().Error(), http.StatusInternalServerError)
+					return
+				case <-time.After(d):
+				}
+			}
+			if r.URL.Path == "/input/key" && strings.Contains(string(body), "ctrl+") {
+				defer func() {
+					b.mu.Lock()
+					b.shortcutAt = time.Now()
+					b.mu.Unlock()
+				}()
+			}
+		}
 		if strings.Contains(string(body), "boom") {
 			http.Error(w, "xdotool failed", http.StatusInternalServerError)
 			return
@@ -155,9 +190,17 @@ func (b *browser) handler() http.Handler {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
-	for _, p := range []string{"click", "type", "scroll", "key", "drag"} {
+	for _, p := range []string{"click", "type", "scroll", "key", "drag", "open"} {
 		mux.HandleFunc("POST /input/"+p, input)
 	}
+	mux.HandleFunc("POST /proxy/exempt", func(w http.ResponseWriter, r *http.Request) {
+		var e struct{ Host string }
+		_ = json.NewDecoder(r.Body).Decode(&e)
+		b.mu.Lock()
+		b.exempts = append(b.exempts, e.Host)
+		b.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("GET /chooser", func(w http.ResponseWriter, _ *http.Request) {
 		b.mu.Lock()
 		defer b.mu.Unlock()
@@ -175,6 +218,15 @@ func (b *browser) handler() http.Handler {
 	mux.HandleFunc("POST /chooser/restart", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc("POST /chooser/{id}", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), "slowly") {
+			// An answer the browser is slow to take: it lasts until it's
+			// cut short.
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(30 * time.Second):
+			}
+		}
 		b.mu.Lock()
 		defer b.mu.Unlock()
 		b.chosen = append(b.chosen, r.PathValue("id")+" "+string(body))

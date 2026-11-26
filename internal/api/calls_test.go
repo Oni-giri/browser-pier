@@ -14,6 +14,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Oni-giri/browser-pier/internal/pagetools"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
@@ -184,6 +185,7 @@ var visualCalls = [][2]string{
 	{"computer", `{"action": "key", "keys": "Return"}`},
 	{"computer", `{"action": "scroll", "x": 1, "y": 2, "dy": 3}`},
 	{"computer", `{"action": "drag", "from": {"x": 1, "y": 2}, "to": {"x": 3, "y": 4}}`},
+	{"computer", `{"action": "open", "url": "https://example.com/"}`},
 	{"computer", `{"action": "click", "x": 10, "y": 20, "screenshot": true}`},
 }
 
@@ -769,7 +771,7 @@ func TestEveryRouteGivesARefusedIDBack(t *testing.T) {
 		{"type", `{"text": "hi"}`, []string{`{"text": 42}`, `{"text": ""}`, `{}`, `{"text": "hi", "pace": "slow"}`,
 			`{"text": "hi\u001b"}`, `{"text": "hi\ud800"}`, `{"text": "hi\ufffd"}`, `{"text": "hi\u007f"}`}},
 		{"computer", `{"action": "click", "x": 1, "y": 2}`, []string{`{"action": "click", "x": "1", "y": 2}`, `{"action": "type", "text": ""}`, `{"action": "click", "x": 1, "y": 2, "button": "side"}`,
-			`{"action": "type", "text": "hi\u001b"}`, `{"action": "type", "text": "hi\ud800"}`}},
+			`{"action": "type", "text": "hi\u001b"}`, `{"action": "type", "text": "hi\ud800"}`, `{"action": "open", "url": "ftp://example.com/"}`}},
 	}
 	page := []route{
 		{"act", `{"steps": [{"action": "press", "keys": "Enter"}]}`, []string{`{"steps": "press"}`}},
@@ -849,5 +851,69 @@ func TestEveryRouteGivesARefusedIDBack(t *testing.T) {
 			waitFor(t, func() bool { return f.lastInput() == "cut short" })
 		}
 		runs(sid, rt, id)
+	}
+}
+
+// recent_calls gives an entry as the web UI shows it: scrubbed with the
+// secrets as they are now, then cut to 400 characters. One too long to
+// store whole is a fixed summary, so a secret registered later can't be
+// left cut across its end, where no scrub would match it.
+func TestRecentCallsAreScrubbedThenCut(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.all, "google", "visual")
+	tok, err := f.tokens.Authenticate(context.Background(), f.all)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := sessions.WithCall(context.Background(), f.m.NewCall(tok.ID, tok.Name, "click"))
+	// Under 2 KiB, the secret within the first 400 characters.
+	f.m.NoteFor(ctx, s.ID, tok.Name, "Uploaded "+filledSecret+" "+strings.Repeat("x", 1500))
+	// Over 2 KiB, the secret across byte 2048.
+	f.m.NoteFor(ctx, s.ID, tok.Name, "Uploaded "+strings.Repeat("b", 2025)+filledSecret)
+	if err := f.m.RegisterSecret(s.ID, filledSecret); err != nil {
+		t.Fatal(err)
+	}
+	var st sessionStatusJSON
+	f.call(f.all, http.MethodGet, "/api/sessions/"+s.ID, "", &st)
+	if len(st.RecentCalls) != 3 || st.RecentCalls[2].What != "Started the browser" {
+		t.Fatalf("recent_calls: %+v", st.RecentCalls)
+	}
+	for _, c := range st.RecentCalls {
+		if strings.Contains(c.What, filledSecret[:7]) {
+			t.Errorf("a secret's start in %q", c.What)
+		}
+	}
+	if long := st.RecentCalls[0].What; !strings.HasPrefix(long, "An entry too long to keep") {
+		t.Errorf("over 2 KiB: %q", long)
+	}
+	short := st.RecentCalls[1].What
+	if n := utf8.RuneCountInString(short); n != 400 || !strings.HasPrefix(short, "Uploaded <hidden> xxx") || !strings.HasSuffix(short, "…") {
+		t.Errorf("under 2 KiB: %d characters, %q", n, short)
+	}
+}
+
+// A slow /type with a call id, cut by its token's revocation, answers
+// 401 and its receipt ends interrupted (PROJ-166, with PROJ-156).
+func TestRevokedTypeWithACallIDEndsInterrupted(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	v := f.start(f.all, "google", "visual")
+	tok, secret, err := f.tokens.Create(ctx, "doomed", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slow := make(chan reply, 1)
+	go func() { slow <- f.send(f.srv, secret, v.ID, "type", "r1", `{"text": "typed slowly"}`) }()
+	waitFor(t, func() bool { return strings.HasPrefix(f.lastInput(), "/input/type") })
+	if err := f.tokens.Revoke(ctx, tok.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.api.checkRevocations(ctx)
+	if r := <-slow; r.code != http.StatusUnauthorized || !strings.Contains(r.body.Error, "input broke off: the agent token was revoked") {
+		t.Fatalf("the cut type: %d %s", r.code, r.raw)
+	}
+	rc, ok := f.m.CallReceipt(v.ID, tok.ID, "r1")
+	if !ok || rc.State != sessions.CallInterrupted {
+		t.Fatalf("receipt = %+v, %v", rc, ok)
 	}
 }

@@ -147,7 +147,7 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 	// A viewer promised control gets it or isn't connected: a page that
 	// thinks it drives while it only watches would send input into nothing.
 	if o.Control {
-		turn, err := h.m.TakeControlTurn(s.ID, vw.holder)
+		turn, err := h.m.TakeControlTurnByLink(s.ID, vw.holder)
 		if err != nil {
 			unwatch()
 			msg, code := "The browser isn't running.", http.StatusConflict
@@ -343,9 +343,11 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 		default:
 			path, body, wait := "/input/events", []byte(m.Events), controlWait
 			if m.Type == "text" {
-				path, wait = "/input/type", typeWait(m.Text)
-				// A person typing: at once, not at an agent's human pace.
-				body, _ = json.Marshal(map[string]string{"text": m.Text, "pace": "instant"})
+				// A person typing: at once, not at an agent's human pace,
+				// and not held back by an agent's shortcut gap (PROJ-151);
+				// with time for characters the keyboard map lacks (PROJ-195).
+				path, wait = "/input/live-type", typeWait(m.Text)
+				body, _ = json.Marshal(map[string]string{"text": m.Text})
 			}
 			if _, err := v.do(http.MethodPost, path, body, http.StatusNoContent, wait); err != nil {
 				say(map[string]any{"type": "error", "msg": err.Error()})
@@ -381,7 +383,7 @@ func (v *viewer) setClipboard(id int, text string, paste bool, say func(any)) {
 		fail("Couldn't send it to the browser: " + err.Error())
 		return
 	}
-	v.h.m.Note(v.session, "", what)
+	v.h.m.NoteControl(v.session, what)
 	say(map[string]any{"type": "clipboard-set", "id": id})
 }
 

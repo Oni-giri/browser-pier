@@ -137,10 +137,10 @@ func (a *API) cdp(w http.ResponseWriter, r *http.Request) {
 	proxy.ServeHTTP(w, r.WithContext(ctx))
 }
 
-// WatchRevocations closes CDP connections whose token has been revoked,
-// checking every interval until ctx ends. Revoking in the UI disconnects
-// at once too; this also catches the token CLI, which runs in another
-// process.
+// WatchRevocations closes the CDP connections, and breaks off the page
+// calls and input actions under way, of tokens that have been revoked,
+// checking every interval until ctx ends. Revoking in the UI does so at
+// once; this also catches the token CLI, which runs in another process.
 func (a *API) WatchRevocations(ctx context.Context, every time.Duration) {
 	t := time.NewTicker(every)
 	defer t.Stop()

@@ -262,6 +262,9 @@ type call struct {
 	unreachable string
 	world       int64
 	notices     []string
+	// title is the tab title page_content's read found (readTree), for
+	// noteTitle once the read is answered.
+	title string
 	// notes are BrowserPier's own lines for the result, which go after
 	// the fence, not in it: the Cloudflare note, whose only part from the
 	// page is a clamped point.
@@ -287,7 +290,7 @@ type call struct {
 func (t *Tools) begin(ctx context.Context, s sessions.Session, who Caller, allow *cdp.AllowList) (*call, error) {
 	switch {
 	case s.Mode != profiles.ModeAPI:
-		return nil, &Error{Status: http.StatusConflict, Msg: "the page tools are for API-mode sessions; this one is in Visual mode, where nothing may attach to the page over CDP. Use screenshot, click and type_text, or restart the browser with mode api"}
+		return nil, &Error{Status: http.StatusConflict, Msg: "the page tools are for API-mode sessions; this one is in Visual mode, where nothing may attach to the page over CDP. Use screenshot, click and type_text (open_url to open a URL), or restart the browser with mode api"}
 	case s.State == sessions.NeedsHelp:
 		return nil, &Error{Status: http.StatusConflict, Msg: sessions.ErrHandedOver.Error()}
 	case s.State != sessions.Running:
@@ -507,6 +510,12 @@ func (c *call) eval(ctx context.Context, expr string, out any) error {
 // note adds to the session's activity log: the action and refs only,
 // never page text or typed text.
 func (c *call) note(what string) { c.t.m.NoteFor(c.ctx, c.sess.ID, c.who.Agent, what) }
+
+// noteTitle records the active tab's title, which the call read for its
+// answer, in an entry of its own for the admin (sessions.NoteTitle,
+// PROJ-158): never in note's words, never for an agent. It reads nothing
+// more from the page.
+func (c *call) noteTitle(title string) { c.t.m.NoteTitle(c.sess.ID, title) }
 
 // result fences what a tool says from the page, with any new-tab notices,
 // and adds trailer (BrowserPier's own words) after the fence.

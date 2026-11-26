@@ -10,6 +10,7 @@ RUN go mod download
 COPY internal/motion ./internal/motion
 COPY internal/keyplan ./internal/keyplan
 COPY internal/domainset ./internal/domainset
+COPY internal/weburl ./internal/weburl
 COPY images/chromium/entrypoint ./images/chromium/entrypoint
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w" -o /out/entrypoint ./images/chromium/entrypoint
@@ -82,6 +83,13 @@ RUN for el in ximagesrc videoconvert videoscale x264enc mp4mux fdsink; do gst-in
       LC_ALL=C grep -qaxF -- "$feature" /tmp/strings || { echo "chromium binary lacks the feature $feature"; exit 1; }; done \
  && rm /tmp/strings
 
+# The installed Chromium's version, for the open action: the address bar's
+# place is measured for one major version (entrypoint/open.go), and open
+# refuses on any other.
+RUN mkdir -p /etc/browserpier \
+ && dpkg-query -W -f '${Version}\n' chromium > /etc/browserpier/chromium-version \
+ && grep -Eq '^([0-9]+:)?[0-9]+\.' /etc/browserpier/chromium-version
+
 # WebGL renders on Mesa's llvmpipe (PROJ-148): ANGLE loads libGL.so.1, the
 # Mesa GLX vendor library, and the gallium driver that holds llvmpipe and
 # links LLVM. Fail the build if one is missing, lacks llvmpipe or can't
@@ -116,8 +124,10 @@ COPY --from=build /out/entrypoint /usr/local/bin/browserpier-entrypoint
 COPY LICENSE NOTICE /usr/share/doc/browserpier/
 # Managed policy: hides the "unsupported command-line flag" bar that
 # --disable-blink-features would put over every page, and sends downloads
-# to /files/downloads without asking, in both modes and without CDP, and
-# turns off DNS-over-HTTPS, which would go around a profile's proxy.
+# to /files/downloads without asking, in both modes and without CDP,
+# turns off DNS-over-HTTPS, which would go around a profile's proxy, and
+# turns off search suggestions, which send what is typed into the address
+# bar, an address's path and token included, to the search engine (PROJ-191).
 COPY images/chromium/policies.json /etc/chromium/policies/managed/browserpier.json
 COPY images/chromium/jwmrc /etc/browserpier/jwmrc
 # Fail the build if JWM can't read it: jwm -p exits 0 whatever it finds,

@@ -61,6 +61,26 @@ The code keeps a stranger who reaches a fresh server first from claiming it.
 Next:
 - **Settings:** set a **handoff PIN**. Handoff links ask for it by default, and agents can't open one while it's unset.
 - **Agents:** create a token per agent. Tokens can also be managed from the command line: `docker compose exec browserpier browserpier token create NAME`.
+- **On a public server:** turn on [two-step sign-in](#two-step-sign-in).
+
+## Two-step sign-in
+
+Optional, off until you turn it on: after the password, BrowserPier asks for a 6-digit code from an authenticator app on your phone (Google Authenticator, Aegis, 1Password, Bitwarden or any other app for time-based codes).
+
+- **Turning it on:** Settings → Admin account → Two-step sign-in → Turn on. Enter your password, scan the QR code (or type the key shown under it), and enter the app's code. Every other signed-in browser is signed out. You then see **ten recovery codes, once**: save them apart from your password. Each signs in once in place of a code.
+- **What it protects:** signing in to BrowserPier, and handoff links whose policy is **Full sign-in**, which ask for the admin sign-in. A browser already signed in isn't asked again.
+- **What it doesn't:** agent tokens (the API, CDP and MCP), and handoff links with the **Link + PIN** or **Link only** policy. Those never ask for a code.
+- **Limits:** five wrong codes end a sign-in attempt; five from one address in five minutes lock code entry there for five minutes; and at most ten wrong app codes a day from browsers that have never signed in, from everywhere together, after which only recovery codes and your usual browsers get in, for 24 hours from the tenth. This account-wide count is kept in the database, so restarting BrowserPier doesn't clear it. A wrong code after a right password is logged as a warning: somebody knows your password, so change it.
+- **Turning it off, a new phone, new recovery codes:** Settings → Two-step sign-in → Manage, with your password and a code (or a recovery code).
+- **Lost the phone and the recovery codes:** reset it from the server, which needs no password, since whoever can run commands there already controls BrowserPier:
+
+  ```sh
+  docker compose exec browserpier browserpier 2fa reset
+  ```
+
+  The password alone signs in again at once; signed-in browsers stay signed in. `browserpier 2fa status` says whether it's on and how many recovery codes are left.
+
+Changing `BROWSERPIER_ADMIN_PASSWORD` resets the password but **not** two-step sign-in: use the command above for that. The app's secret is stored in the database as it is (the server needs it to compute codes), so keep `./data` as private as the rest of it.
 
 ## Firewall
 
@@ -235,6 +255,112 @@ Leave `BROWSERPIER_LISTEN` and `BROWSERPIER_WEBRTC_PORT` alone with this compose
 | `BROWSERPIER_BROWSER_APPARMOR` | unset | The browser containers' AppArmor profile. Unset, BrowserPier picks one: see [AppArmor](#apparmor). Set, that profile is used as it is, unchecked: `browserpier`, `unconfined`, or one of your own. A named profile that isn't loaded makes every browser fail to start, with an error saying so. |
 | `BROWSERPIER_STOP_BROWSERS_ON_EXIT` | `false` | `true` stops every browser when BrowserPier stops. Otherwise they keep running through an update. |
 
+## Notifications
+
+BrowserPier can tell one webhook when a person is needed, so a handoff asked by a headless or scheduled agent (one with no chat to pass the link through) still reaches you. Set it in **Settings → Notifications**, signed in as the admin. No agent can read or change it, and no environment variable sets it.
+
+- **URL:** `https://`, or plain `http://` only when every address its host resolves to is on this machine or its local network (loopback, `10/8`, `172.16/12`, `192.168/16`, `fc00::/7`, `100.64/10`), for a LAN endpoint such as Home Assistant. No user name or password in it, at most 2,048 bytes. Never a link-local address (`169.254.0.0/16`, `fe80::/10`: a VPS's metadata endpoint), multicast, broadcast or unspecified, over either scheme. The address is checked again on every connection, on the address actually dialled, so a name that starts resolving elsewhere is refused then. BrowserPier connects directly: never through `HTTP_PROXY`, a profile's proxy or a browser.
+- **Secret:** made by BrowserPier when the URL is first saved, 64 hex characters, shown once. Changing the URL keeps it; **Regenerate secret** makes a new one and shows it once. Saved, the URL is shown as its scheme and host only: a Slack or Discord webhook URL is itself a password.
+- **Address for links:** links in the messages are built on `BROWSERPIER_PUBLIC_URL`, or, when it isn't set (on Umbrel, say), on this field. Never on the address an agent used. With neither, messages carry no link and say to open BrowserPier.
+- The URL and the secret are stored in the database as they are (an HMAC key can't be hashed), like a proxy's password, and never logged. They aren't in profile exports; they are in a backup of `./data`.
+
+### Events
+
+| Event | When | On by default |
+|---|---|---|
+| `handoff.requested` | an agent asked for a handoff | yes |
+| `handoff.expired` | nobody handed back within 15 minutes | yes |
+| `handoff.cancelled` | five wrong PINs cancelled it (`cause: "wrong_pins"`) | yes |
+| `browser.failed` | a browser failed to start, crashed, didn't close cleanly or was lost (`category`: `start_failed`, `crashed`, `unclean_close`, `lost`) | no |
+| `test` | **Send test** in Settings | |
+
+Nothing is sent when a person hands back (done or can't), when a handoff ends by its `until_url`, when the agent withdraws it, or when its browser stops. At most 6 `handoff.requested` per profile are sent in 15 minutes; past that they are dropped and logged.
+
+### The body
+
+A JSON POST of a few hundred bytes, made only of BrowserPier's own words and typed fields:
+
+```json
+{
+  "id": "5b0e9c1f0d6a4e2b9f3c7a8d1e2f3a4b",
+  "event": "handoff.requested",
+  "time": "2026-11-16T09:30:00Z",
+  "profile": "google",
+  "handoff_id": "h_4kq2…",
+  "reason": "sensitive_input",
+  "policy": "pin",
+  "agent": "research-bot",
+  "origin": "https://accounts.google.com",
+  "expires_at": "2026-11-16T09:45:00Z",
+  "url": "https://pier.example.com/h/…",
+  "text": "BrowserPier · google: an agent needs you (Sign-in or payment). https://pier.example.com/h/…",
+  "content": "BrowserPier · google: an agent needs you (Sign-in or payment). https://pier.example.com/h/…"
+}
+```
+
+- `id` is the same on every try of one event, so a receiver can drop repeats.
+- `text` and `content` are the same sentence: Slack's incoming webhooks show `text`, Discord's show `content`. It holds only fixed words, the profile's name, the reason and the link.
+- `origin` is the page's scheme and host. The page chose it, so it is never part of the sentence, where a chat would make it a link.
+- Never in it: the agent's `detail` (it reads untrusted pages and could be talked into writing "go to … and enter your password"; read it on the handoff page instead), the person's note, the agent's withdrawal note, `until_url`, page text, titles, paths or queries, or a browser's error or log.
+- `handoff.expired` and `handoff.cancelled` carry the same fields with the profile's page as `url`, and `cause` for cancelled. `browser.failed` carries `profile`, `category` and the profile's page as `url`.
+
+**The link.** For a handoff whose policy is **Link + PIN** or **Full sign-in**, `url` is the handoff's single-use link: opening it asks for the PIN or the admin password and unlocks nothing until then, so a chat app fetching it for a preview does no harm. For **One tap**, the first open would take the link, and a preview could do it, so `url` is the profile's page instead, which needs you signed in and shows the request with Done and Can't do this. Raise the profile's policy to get the link itself in the chat.
+
+### Delivery
+
+Each POST has 10 seconds, looking up the host and connecting included. 2xx is delivered. A network error, a timeout or a 5xx is tried again after 2 s and after 10 s. Before every try, the first included, the event is dropped if the webhook was changed or removed meanwhile, or, for `handoff.requested`, if the handoff has ended, its 15 minutes are up or its browser stopped. Anything else is final: 3xx (redirects aren't followed) and 4xx, 429 included. The answer's body isn't read. At most 4 POSTs are under way, **Send test** included, and 64 events wait; past that, events are dropped and logged. The queue is in memory: what waits when BrowserPier restarts is lost. **Send test** sends once, with no retry, and shows the status; with 4 POSTs already under way it doesn't wait and says the webhook is busy.
+
+The log names the event, its `id`, the profile, the webhook's host and the status: never the URL's path, the secret, the signature or the body.
+
+### Checking the signature
+
+Every POST has `Content-Type: application/json`, `User-Agent: BrowserPier/<version>` and
+
+```
+BrowserPier-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<body>">
+```
+
+The key is the secret's 64 hex characters as text (not decoded), `<body>` the bytes received, and `t` is taken again for each try. Check it before trusting the body, with a constant-time compare and a 5-minute tolerance:
+
+```go
+func verify(secret, header string, body []byte, now time.Time) bool {
+	var ts, sig string
+	for _, part := range strings.Split(header, ",") {
+		k, v, _ := strings.Cut(part, "=")
+		switch k {
+		case "t":
+			ts = v
+		case "v1":
+			sig = v
+		}
+	}
+	t, err := strconv.ParseInt(ts, 10, 64)
+	if err != nil || now.Sub(time.Unix(t, 0)).Abs() > 5*time.Minute {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(ts + "."))
+	mac.Write(body)
+	want := hex.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(sig), []byte(want))
+}
+```
+
+To test a receiver: with the secret `0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef`, `t` = `1700000000` and the body `{"event":"test"}`, the header is `t=1700000000,v1=22751b8ccca2474a38721b544790f9a62e2ae990c0526953c05926e5d74c4899`. By hand:
+
+```sh
+printf '%s.%s' 1700000000 '{"event":"test"}' | openssl dgst -sha256 -hmac 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+```
+
+### Slack and Discord
+
+Their incoming webhooks don't check signatures; they show `text` (Slack) or `content` (Discord) and ignore the other fields.
+
+- **Slack:** create an app with *Incoming Webhooks* on (api.slack.com/apps), add a webhook to a channel, and paste its `https://hooks.slack.com/services/…` URL.
+- **Discord:** in the channel's *Integrations → Webhooks*, create one and paste its `https://discord.com/api/webhooks/…` URL.
+
+Then **Send test**. Keep the channel private: anyone in it gets the links, and a **Link + PIN** link is only as safe as your PIN.
+
 ## Updating and backups
 
 Set `BROWSERPIER_VERSION` in `.env` to the new release (see the [releases](https://github.com/Oni-giri/browser-pier/releases) and `CHANGELOG.md`), or to `latest` to follow every release, then:
@@ -268,4 +394,5 @@ To move one profile, use **Export** on its ⋯ menu instead. That gives an encry
 - **The turn service exits at once:** `BROWSERPIER_TURN_SECRET` is unset or shorter than 16 characters (`docker compose logs turn`).
 - **"Pool overlaps with other one on this address space":** `10.247.74.0/24` is taken on this host. In `.env`, set `BROWSERPIER_NET` to other first three numbers (say `10.247.75`) and `BROWSERPIER_TRUSTED_PROXIES` to match (`10.247.75.3`).
 - **"the browser container stopped, but Docker reported an error stopping it"** in the log, under rootless Podman on Ubuntu: AppArmor keeps Podman from stopping `pasta` when the last container stops. Browsers still stop and keep their logins; [CONTRIBUTING.md](../CONTRIBUTING.md#on-rootless-podman) has the one-line fix for the host.
+- **"Two-step sign-in is in a broken state"** after the password, and "the two-step state is partial or can't be read" in the log: part of the two-step state is missing or damaged (a database edited or restored by hand, say), so every sign-in is refused rather than let through on the password alone. Reset it with `docker compose exec browserpier browserpier 2fa reset`, sign in with the password, then turn it on again.
 - **Handoff link says it needs HTTPS:** the phone opened it over plain HTTP from outside your network. Use Caddy, or open it on Tailscale.

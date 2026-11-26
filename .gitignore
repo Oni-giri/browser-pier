@@ -32,3 +32,5 @@ coverage.*
 # A stray go build of images/chromium/entrypoint lands at the root or in its folder.
 /entrypoint
 /images/chromium/entrypoint/entrypoint
+# And one of ./cmd/browserpier at the root.
+/browserpier

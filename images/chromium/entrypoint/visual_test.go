@@ -40,8 +40,9 @@ func newTestVisual(fail bool) (*visual, *[]call) {
 	v.mot = motion.New(1)
 	// Never the real display's keyboard map: a map with no spare keys,
 	// unless a test gives it one (keymapVisual).
-	v.keyboard = newFakeKeyboard(&calls).open
-	v.settle = 0
+	v.keymap = newFakeKeyboard(&calls).open
+	v.bindSettle = 0
+	v.chromium = addressBarChromium
 	return v, &calls
 }
 
@@ -147,11 +148,12 @@ func TestScroll(t *testing.T) {
 func TestKey(t *testing.T) {
 	v, calls := newTestVisual(false)
 	for body, want := range map[string]string{
-		`{"keys": "ctrl+l"}`:                                     "ctrl+l",
-		`{"keys": "Ctrl+Shift+T"}`:                               "ctrl+shift+T",
-		`{"keys": ["Enter", "esc", "PageDown", "cmd+a", "Tab"]}`: "Return Escape Next super+a Tab",
+		`{"keys": "ctrl+l"}`:       "ctrl+l",
+		`{"keys": "Ctrl+Shift+T"}`: "ctrl+shift+T",
+		// After a browser-bound combination, the rest waits shortcutGap.
+		`{"keys": ["Enter", "esc", "PageDown", "cmd+a", "Tab"]}`: "Return Escape Next super+a sleep 0.150 key --clearmodifiers --delay 50 -- Tab",
 		`{"keys": "ctrl + alt + Delete"}`:                        "ctrl+alt+Delete",
-		`{"keys": ["F5", "U00E9", "BackSpace"]}`:                 "F5 U00E9 BackSpace",
+		`{"keys": ["F5", "U00E9", "BackSpace"]}`:                 "F5 sleep 0.150 key --clearmodifiers --delay 50 -- U00E9 BackSpace",
 	} {
 		*calls = nil
 		instant := strings.TrimSuffix(body, "}") + `, "pace": "instant"}`
@@ -594,5 +596,317 @@ func TestPaceIsChecked(t *testing.T) {
 	}
 	if len(*calls) != 0 {
 		t.Fatalf("bad paces ran xdotool: %v", *calls)
+	}
+}
+
+// clockedVisual is a test visual on a fake clock: each xdotool run takes
+// 30 ms, sleeps move the clock, and every call notes when it started.
+type clockedVisual struct {
+	*visual
+	t     time.Time
+	slept []time.Duration
+	calls []timedCall
+}
+
+type timedCall struct {
+	at   time.Duration // since the clock's start
+	args []string
+}
+
+const xdotoolTakes = 30 * time.Millisecond
+
+var clockStart = time.Date(2026, 11, 17, 9, 0, 0, 0, time.UTC)
+
+func newClockedVisual() *clockedVisual {
+	v, _ := newTestVisual(false)
+	c := &clockedVisual{visual: v, t: clockStart}
+	v.now = func() time.Time { return c.t }
+	v.sleep = func(ctx context.Context, d time.Duration) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		c.slept = append(c.slept, d)
+		c.t = c.t.Add(d)
+		return nil
+	}
+	v.run = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "xdotool" {
+			c.calls = append(c.calls, timedCall{c.t.Sub(clockStart), args})
+		}
+		c.t = c.t.Add(xdotoolTakes)
+		return []byte("\x89PNG fake"), nil
+	}
+	return c
+}
+
+// do serves one request and checks it worked; it returns when the
+// request's first xdotool run started, or -1 if none did.
+func (c *clockedVisual) do(t *testing.T, method, path, body string) time.Duration {
+	t.Helper()
+	n := len(c.calls)
+	rec := serveVisual(c.visual, method, path, body)
+	if rec.Code != http.StatusNoContent && rec.Code != http.StatusOK {
+		t.Fatalf("%s %s: %d %s", path, body, rec.Code, rec.Body)
+	}
+	if len(c.calls) == n {
+		return -1
+	}
+	return c.calls[n].at
+}
+
+func TestBrowserBound(t *testing.T) {
+	for _, c := range []string{"ctrl+l", "alt+d", "super+l", "ctrl+shift+t", "F6", "Control+l", "CTRL+L", "cmd+a", "option+d",
+		"Control_L+l", "Alt_R+d", "F1", "F12", "shift+F6", "f6",
+		// A modifier after an ordinary key is pressed with it all the same.
+		"a+Control_L", "l+ctrl", "d+alt", "a+shift+super", "F6+ctrl"} {
+		if !browserBound(c) {
+			t.Errorf("%s doesn't arm the gap", c)
+		}
+	}
+	for _, c := range []string{"a", "shift+a", "Return", "Tab", "Escape", "BackSpace", "Left", "space", "shift+Tab", "F13",
+		"F24", "Delete", "Next", "U00E9", "Shift_L+a", "a+F6", "F6+a", "a+shift"} {
+		if browserBound(c) {
+			t.Errorf("%s arms the gap", c)
+		}
+	}
+}
+
+func TestShortcutGapIsCapped(t *testing.T) {
+	if shortcutGap <= 0 || shortcutGap > 250*time.Millisecond {
+		t.Fatalf("shortcutGap is %v: a wait holds v.mu, and a handoff with it, so it is at most 250 ms", shortcutGap)
+	}
+}
+
+func TestTextRightAfterAShortcutWaitsForTheGap(t *testing.T) {
+	for _, pace := range []string{"instant", "human"} {
+		c := newClockedVisual()
+		key := c.do(t, http.MethodPost, "/input/key", `{"keys": "ctrl+l", "pace": "`+pace+`"}`)
+		ended := key + xdotoolTakes
+		typed := c.do(t, http.MethodPost, "/input/type", `{"text": "example.com", "pace": "`+pace+`"}`)
+		if typed < ended+shortcutGap {
+			t.Errorf("%s: the text started %v after the key call ended, want at least %v", pace, typed-ended, shortcutGap)
+		}
+		if len(c.slept) != 1 || c.slept[0] != shortcutGap {
+			t.Errorf("%s: slept %v, want one %v", pace, c.slept, shortcutGap)
+		}
+		// Return after the text isn't browser-bound's follower: no wait.
+		c.slept = nil
+		c.do(t, http.MethodPost, "/input/key", `{"keys": "Return", "pace": "`+pace+`"}`)
+		if len(c.slept) != 0 {
+			t.Errorf("%s: Return after the text waited %v", pace, c.slept)
+		}
+	}
+}
+
+func TestACallAfterTheGapDoesntWait(t *testing.T) {
+	c := newClockedVisual()
+	c.do(t, http.MethodPost, "/input/key", `{"keys": "ctrl+l", "pace": "instant"}`)
+	c.t = c.t.Add(shortcutGap + time.Millisecond)
+	c.do(t, http.MethodPost, "/input/type", `{"text": "example.com", "pace": "instant"}`)
+	if len(c.slept) != 0 {
+		t.Fatalf("waited %v after more than the gap", c.slept)
+	}
+	// Part of the gap gone: only the rest is waited.
+	c.do(t, http.MethodPost, "/input/key", `{"keys": "alt+d", "pace": "instant"}`)
+	c.t = c.t.Add(100 * time.Millisecond)
+	c.do(t, http.MethodPost, "/input/type", `{"text": "x", "pace": "instant"}`)
+	if len(c.slept) != 1 || c.slept[0] != shortcutGap-100*time.Millisecond {
+		t.Fatalf("slept %v, want the rest of the gap", c.slept)
+	}
+}
+
+func TestPlainKeysAndTypingDontWait(t *testing.T) {
+	c := newClockedVisual()
+	for _, step := range [][2]string{
+		{"/input/key", `{"keys": "a", "pace": "instant"}`},
+		{"/input/type", `{"text": "hello", "pace": "instant"}`},
+		{"/input/type", `{"text": "world", "pace": "instant"}`},
+		{"/input/key", `{"keys": ["shift+a", "Tab", "Return"], "pace": "instant"}`},
+		{"/input/type", `{"text": "pw", "pace": "human"}`},
+		{"/input/key", `{"keys": "BackSpace"}`},
+		{"/input/type", `{"text": "x"}`},
+		// A list whose bound combination isn't the last had its gap inside.
+		{"/input/key", `{"keys": ["ctrl+l", "a"], "pace": "instant"}`},
+		{"/input/type", `{"text": "x", "pace": "instant"}`},
+	} {
+		c.do(t, http.MethodPost, step[0], step[1])
+	}
+	if len(c.slept) != 0 {
+		t.Fatalf("plain keys and typing waited %v", c.slept)
+	}
+}
+
+func TestAShortcutAfterAShortcutWaitsAndArms(t *testing.T) {
+	c := newClockedVisual()
+	c.do(t, http.MethodPost, "/input/key", `{"keys": "ctrl+l", "pace": "instant"}`)
+	second := c.do(t, http.MethodPost, "/input/key", `{"keys": "ctrl+v", "pace": "instant"}`)
+	if second != xdotoolTakes+shortcutGap {
+		t.Fatalf("ctrl+v started at %v, want %v", second, xdotoolTakes+shortcutGap)
+	}
+	third := c.do(t, http.MethodPost, "/input/key", `{"keys": "Return", "pace": "instant"}`)
+	if third != second+xdotoolTakes+shortcutGap {
+		t.Fatalf("Return started at %v, want %v: ctrl+v arms the gap again", third, second+xdotoolTakes+shortcutGap)
+	}
+}
+
+func TestAShortcutListWaitsInside(t *testing.T) {
+	c := newClockedVisual()
+	c.do(t, http.MethodPost, "/input/key", `{"keys": ["ctrl+l", "a", "Return"], "pace": "instant"}`)
+	args := c.calls[0].args
+	want := "key --clearmodifiers --delay 50 -- ctrl+l sleep 0.150 key --clearmodifiers --delay 50 -- a Return"
+	if got := strings.Join(args, " "); got != want {
+		t.Fatalf("args %q\nwant %q", got, want)
+	}
+	// Each key is still a keysym and no command; every sleep is the constant.
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "key":
+			i += 4 // --clearmodifiers --delay 50 --
+		case "sleep":
+			i++
+			if args[i] != secs(shortcutGap) {
+				t.Errorf("sleep %s, want %s", args[i], secs(shortcutGap))
+			}
+		default:
+			for _, k := range strings.Split(args[i], "+") {
+				if !keysymRE.MatchString(k) || xdotoolCommand(k) {
+					t.Errorf("%q in the arguments isn't a key", k)
+				}
+			}
+		}
+	}
+	// The list ended on Return: the next call doesn't wait.
+	c.do(t, http.MethodPost, "/input/type", `{"text": "x", "pace": "instant"}`)
+	if len(c.slept) != 0 {
+		t.Fatalf("a call after a list ending on Return waited %v", c.slept)
+	}
+	// At human pace the pause after a bound combination is the gap at least.
+	c.calls = nil
+	c.do(t, http.MethodPost, "/input/key", `{"keys": ["ctrl+l", "a", "ctrl+c", "b"]}`)
+	pauses := 0
+	h := c.calls[0].args
+	for i := 0; i+1 < len(h); i++ {
+		if h[i] == "keyup" && i+3 < len(h) && h[i+2] == "sleep" {
+			d, err := strconv.ParseFloat(h[i+3], 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bound := browserBound(h[i+1]); bound && time.Duration(d*float64(time.Second)) < shortcutGap {
+				t.Errorf("after %s the pause is %vs", h[i+1], d)
+			}
+			pauses++
+		}
+	}
+	if pauses != 3 {
+		t.Fatalf("%d pauses in %q", pauses, h)
+	}
+}
+
+func TestPointerActionsDontWaitForTheGap(t *testing.T) {
+	for _, step := range [][3]string{
+		{http.MethodPost, "/input/click", `{"x": 10, "y": 10, "pace": "instant"}`},
+		{http.MethodPost, "/input/click", `{"x": 10, "y": 10}`},
+		{http.MethodPost, "/input/scroll", `{"x": 10, "y": 10, "dy": 1, "pace": "instant"}`},
+		{http.MethodPost, "/input/scroll", `{"x": 10, "y": 10, "dy": 1}`},
+		{http.MethodPost, "/input/drag", `{"from": {"x": 1, "y": 1}, "to": {"x": 20, "y": 20}, "pace": "instant"}`},
+		{http.MethodPost, "/input/drag", `{"from": {"x": 1, "y": 1}, "to": {"x": 20, "y": 20}}`},
+		{http.MethodGet, "/screenshot", ""},
+	} {
+		c := newClockedVisual()
+		c.do(t, http.MethodPost, "/input/key", `{"keys": "ctrl+l", "pace": "instant"}`)
+		c.do(t, step[0], step[1], step[2])
+		if len(c.slept) != 0 {
+			t.Errorf("%s %s right after ctrl+l waited %v", step[1], step[2], c.slept)
+		}
+	}
+}
+
+func TestAWaitEndsWithItsRequest(t *testing.T) {
+	c := newClockedVisual()
+	c.do(t, http.MethodPost, "/input/key", `{"keys": "ctrl+l", "pace": "instant"}`)
+	waiting := make(chan struct{})
+	c.sleep = func(ctx context.Context, _ time.Duration) error {
+		close(waiting)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan *httptest.ResponseRecorder)
+	go func() {
+		mux := http.NewServeMux()
+		c.register(mux)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequestWithContext(ctx, http.MethodPost, "/input/type", strings.NewReader(`{"text": "secret", "pace": "instant"}`)))
+		done <- rec
+	}()
+	<-waiting
+	cancel()
+	select {
+	case rec := <-done:
+		if rec.Code == http.StatusNoContent {
+			t.Errorf("a cancelled wait answered %d", rec.Code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the handler didn't return when its request ended")
+	}
+	if len(c.calls) != 1 {
+		t.Fatalf("xdotool ran after the request ended: %v", c.calls[1:])
+	}
+	if !c.mu.TryLock() {
+		t.Fatal("the mutex is still held")
+	}
+	c.mu.Unlock()
+}
+
+// An instant key run cut short lets go of its keys, as a human-paced one
+// does: a list's pauses after shortcuts make it longer than it was.
+func TestInstantKeysReleaseWhenCutShort(t *testing.T) {
+	v, calls := newTestVisual(true)
+	if rec := serveVisual(v, http.MethodPost, "/input/key", `{"keys": ["ctrl+l", "a"], "pace": "instant"}`); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("key: %d %s", rec.Code, rec.Body)
+	}
+	if len(*calls) != 2 || strings.Join((*calls)[1].args, " ") != "keyup ctrl+l a" {
+		t.Fatalf("calls %v", *calls)
+	}
+}
+
+// A key list with a browser-bound combination before its last had its gap
+// inside, but only if it ran to the end: cut short, or failing, after the
+// shortcut may have reached the browser, it arms the gap for the next call.
+func TestACutShortListWithAShortcutArmsTheGap(t *testing.T) {
+	for _, pace := range []string{"instant", "human"} {
+		c := newClockedVisual()
+		run := c.run
+		c.run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			out, err := run(ctx, name, args...)
+			if name == "xdotool" && len(args) > 0 && args[0] != "keyup" && strings.Contains(strings.Join(args, " "), "ctrl+l") {
+				return nil, context.Canceled // the request ended while the list ran
+			}
+			return out, err
+		}
+		if rec := serveVisual(c.visual, http.MethodPost, "/input/key", `{"keys": ["ctrl+l", "a"], "pace": "`+pace+`"}`); rec.Code != http.StatusInternalServerError {
+			t.Fatalf("%s: key: %d %s", pace, rec.Code, rec.Body)
+		}
+		if last := c.calls[len(c.calls)-1].args; last[0] != "keyup" {
+			t.Fatalf("%s: the keys weren't let go of: %v", pace, c.calls)
+		}
+		c.run = run
+		c.do(t, http.MethodPost, "/input/type", `{"text": "example.com", "pace": "instant"}`)
+		if len(c.slept) != 1 || c.slept[0] != shortcutGap {
+			t.Errorf("%s: the retry after a cut-short list slept %v, want one %v", pace, c.slept, shortcutGap)
+		}
+	}
+	// A list with no browser-bound combination doesn't arm it, cut short or not.
+	c := newClockedVisual()
+	run := c.run
+	c.run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		_, _ = run(ctx, name, args...)
+		return nil, context.Canceled
+	}
+	serveVisual(c.visual, http.MethodPost, "/input/key", `{"keys": ["a", "Return"], "pace": "instant"}`)
+	c.run = run
+	c.do(t, http.MethodPost, "/input/type", `{"text": "x", "pace": "instant"}`)
+	if len(c.slept) != 0 {
+		t.Errorf("a cut-short list of plain keys made the next call wait %v", c.slept)
 	}
 }

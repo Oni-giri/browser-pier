@@ -370,7 +370,7 @@ func (a *API) startSession(w http.ResponseWriter, r *http.Request) {
 	}
 	allowAds := in.BlockAds != nil && !*in.BlockAds
 	before, wasLive := a.m.Live(in.Profile)
-	s, attached, err := a.m.StartWith(r.Context(), in.Profile, sessions.StartOptions{Mode: profiles.Mode(in.Mode), AllowAds: allowAds})
+	s, attached, err := a.m.StartWith(r.Context(), in.Profile, sessions.StartOptions{Mode: profiles.Mode(in.Mode), AllowAds: allowAds, By: tok.Name})
 	switch {
 	case errors.Is(err, profiles.ErrNotFound):
 		writeError(w, http.StatusNotFound, "no profile named "+strconv.Quote(in.Profile))
@@ -482,9 +482,10 @@ func (a *API) stopSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tok, _ := auth.TokenFromContext(r.Context())
-	// Noted first: the log goes with the session once it has stopped.
+	// Noted first: the live log ends with the session (its kept run then
+	// says who stopped it).
 	a.m.NoteFor(r.Context(), s.ID, tok.Name, "Stopping the browser")
-	stopped, err := a.m.Stop(r.Context(), s.ID)
+	stopped, err := a.m.StopFor(r.Context(), s.ID, sessions.StopByAgent(tok.Name))
 	if err != nil {
 		a.m.NoteFor(r.Context(), s.ID, tok.Name, "Couldn't stop the browser") // still live, so still logged
 		if errors.Is(err, sessions.ErrClosed) {
@@ -686,7 +687,16 @@ func takeDownloadWait(body []byte) ([]byte, *int, error) {
 // act runs one input action through the control socket and logs it, or
 // writes why it didn't run.
 func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, path string, body []byte) bool {
-	ctx, done, err := a.m.AgentInput(r.Context(), s.ID)
+	return a.actAfter(w, r, s, path, body, nil)
+}
+
+// actAfter is act, with first run once the agent has the input and before
+// the action is sent, under the input's context: what the action needs
+// done first (open's ad-list exemption) happens only if the agent may act,
+// not while a person has the browser (PROJ-164).
+func (a *API) actAfter(w http.ResponseWriter, r *http.Request, s sessions.Session, path string, body []byte, first func(ctx context.Context)) bool {
+	tok, _ := auth.TokenFromContext(r.Context())
+	ctx, done, err := a.m.AgentInput(r.Context(), s.ID, tok.ID)
 	if errors.Is(err, sessions.ErrInputBusy) {
 		writeError(w, http.StatusConflict, "another input is still running in this browser; wait for it to finish, then send this one")
 		return false
@@ -695,13 +705,30 @@ func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, pa
 		writeError(w, http.StatusConflict, "a person has this browser (live view or a handoff); wait until they hand it back")
 		return false
 	}
-	// Until this returns: a handoff, the live view's Take control or a
-	// stop cancels ctx, which aborts the request to the browser and waits
-	// for done. The browser then breaks the action off and lets go of any
-	// key or button it held, which can still take it some tens of
-	// milliseconds after the person has the browser.
+	// Until this returns: a handoff, the live view's Take control, a stop
+	// or the token's revocation cancels ctx, which aborts the request to
+	// the browser; all but the revocation then wait for done. The browser
+	// then breaks the action off and lets go of any key or button it held,
+	// which can still take it some tens of milliseconds after the person
+	// has the browser.
 	defer done()
-	tok, _ := auth.TokenFromContext(r.Context())
+	// The token was checked when the request came in, but its body is read
+	// since: a revocation meanwhile found no input to break off. Checked
+	// again now that the input is registered, so a revocation either shows
+	// here or breaks it off (the UI revokes, then disconnects).
+	if _, err := a.web.Tokens().Get(r.Context(), tok.ID); err != nil {
+		switch {
+		case errors.Is(err, auth.ErrTokenNotFound):
+			writeError(w, http.StatusUnauthorized, sessions.ErrRevoked.Error())
+		case r.Context().Err() != nil: // the client went away
+		default:
+			a.internal(w, "checking the token", err) // fails closed
+		}
+		return false
+	}
+	if first != nil {
+		first(ctx)
+	}
 	resp, err := a.control(ctx, s.Profile, http.MethodPost, path, body)
 	if err != nil {
 		if ctx.Err() != nil && r.Context().Err() == nil {
@@ -712,7 +739,7 @@ func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, pa
 				what = "Typing interrupted"
 			}
 			a.m.NoteFor(r.Context(), s.ID, tok.Name, what)
-			writeError(w, http.StatusConflict, "input broke off: "+context.Cause(ctx).Error())
+			writeError(w, cutStatus(ctx), "input broke off: "+context.Cause(ctx).Error())
 			return false
 		}
 		writeError(w, http.StatusBadGateway, "input failed: "+err.Error())
@@ -733,6 +760,16 @@ func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, pa
 	return true
 }
 
+// cutStatus is the status of an input action cut short: 401 when its
+// token was revoked, as the page tools answer, since trying again can't
+// help; else 409 (a person took the browser, or it is stopping).
+func cutStatus(ctx context.Context) int {
+	if errors.Is(context.Cause(ctx), sessions.ErrRevoked) {
+		return http.StatusUnauthorized
+	}
+	return http.StatusConflict
+}
+
 // describeInput puts an input action in words for the activity log.
 // Typed text is never included, only its length: it may be a password or
 // a one-time code.
@@ -750,6 +787,15 @@ func describeInput(path string, body []byte) string {
 		var d struct{ From, To struct{ X, Y int } }
 		_ = json.Unmarshal(body, &d)
 		return fmt.Sprintf("Dragged from %d, %d to %d, %d", d.From.X, d.From.Y, d.To.X, d.To.Y)
+	case "/input/open":
+		// As navigate logs it: the origin, not the path or query, which
+		// may carry a one-time link's token.
+		var o struct{ URL string }
+		_ = json.Unmarshal(body, &o)
+		if u, err := url.Parse(o.URL); err == nil && u.Host != "" {
+			return "Opened " + u.Scheme + "://" + u.Host + " in the address bar"
+		}
+		return "Opened an address in the address bar"
 	}
 	if path == "/input/type" {
 		var t struct{ Text string }

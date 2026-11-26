@@ -35,6 +35,9 @@ type FakeRuntime struct {
 	StopErr     error   // Stop fails with this, leaving the container running
 	StartErrs   []error // each Start fails with the next of these, while any are left
 	CreateErr   error   // Create fails with this, creating nothing (the create guard's refusal, say)
+	// BeforeCreate, if set, is called (without the lock) as Create
+	// begins; an error it returns fails the Create.
+	BeforeCreate func(ctx context.Context) error
 	// BeforeStop, if set, is called (without the lock) as Stop begins.
 	BeforeStop func(id string)
 	// AfterStop, if set, is called (without the lock) once Stop has made
@@ -63,13 +66,22 @@ type FakeContainer struct {
 	Exited    chan struct{}
 	Status    int
 	srv       *http.Server
+	lost      chan struct{} // closed by Lose
 }
 
 func New(dataDir string) *FakeRuntime {
 	return &FakeRuntime{dataDir: dataDir, Containers: map[string]*FakeContainer{}}
 }
 
-func (f *FakeRuntime) Create(_ context.Context, spec docker.BrowserSpec) (string, error) {
+func (f *FakeRuntime) Create(ctx context.Context, spec docker.BrowserSpec) (string, error) {
+	f.Mu.Lock()
+	before := f.BeforeCreate
+	f.Mu.Unlock()
+	if before != nil {
+		if err := before(ctx); err != nil {
+			return "", err
+		}
+	}
 	f.Mu.Lock()
 	defer f.Mu.Unlock()
 	if f.CreateErr != nil {
@@ -82,7 +94,7 @@ func (f *FakeRuntime) Create(_ context.Context, spec docker.BrowserSpec) (string
 	}
 	f.next++
 	f.Creates++
-	c := &FakeContainer{ID: fmt.Sprintf("c%d", f.next), State: "created", Spec: spec, Version: docker.Spec, Exited: make(chan struct{})}
+	c := &FakeContainer{ID: fmt.Sprintf("c%d", f.next), State: "created", Spec: spec, Version: docker.Spec, Exited: make(chan struct{}), lost: make(chan struct{})}
 	f.Containers[c.ID] = c
 	return c.ID, nil
 }
@@ -179,9 +191,19 @@ func (f *FakeRuntime) Wait(ctx context.Context, id string) (int, error) {
 	select {
 	case <-c.Exited:
 		return c.Status, nil
+	case <-c.lost:
+		return -1, errors.New("lost the container")
 	case <-ctx.Done():
 		return -1, ctx.Err()
 	}
+}
+
+// Lose makes waiting for a container created here fail, as when the
+// runtime loses track of it.
+func (f *FakeRuntime) Lose(id string) {
+	f.Mu.Lock()
+	defer f.Mu.Unlock()
+	close(f.Containers[id].lost)
 }
 
 func (f *FakeRuntime) LastLogLine(context.Context, string) (string, error) {

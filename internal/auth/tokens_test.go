@@ -128,3 +128,31 @@ func TestRandomStringLength(t *testing.T) {
 		}
 	}
 }
+
+// Tokens made in the same millisecond list in the order they were made,
+// not in the order of their random ids (PROJ-171).
+func TestTokensMadeInTheSameMillisecondListInOrder(t *testing.T) {
+	ctx := context.Background()
+	s := NewTokens(openDB(t))
+	at := time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return at }
+	var want []string
+	for i := range 20 {
+		tok, _, err := s.Create(ctx, "agent-"+string(rune('a'+i)), true, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, tok.ID)
+	}
+	list, err := s.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, tok := range list {
+		got = append(got, tok.ID)
+	}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("List order\n got %v\nwant %v", got, want)
+	}
+}

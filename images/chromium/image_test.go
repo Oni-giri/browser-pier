@@ -111,15 +111,28 @@ type browser struct {
 // startBrowser runs the image on volume; env adds KEY=VALUE settings.
 func startBrowser(t *testing.T, image, volume string, env ...string) *browser {
 	t.Helper()
-	return startBrowserWith(t, image, volume, nil, env...)
+	return startBrowserWith(t, image, volume, browserOptions{env: env})
 }
 
-// startBrowserWith is startBrowser with more `docker run` options, such as mounts.
-func startBrowserWith(t *testing.T, image, volume string, runArgs []string, env ...string) *browser {
+// browserOptions are what some tests add to the usual container.
+type browserOptions struct {
+	proxy string   // an upstream proxy URL, left in the control folder as the orchestrator does
+	env   []string // more KEY=VALUE settings
+	args  []string // more `docker run` options, such as mounts, before the image
+}
+
+// startBrowserWith is startBrowser with the options some tests add.
+func startBrowserWith(t *testing.T, image, volume string, opt browserOptions) *browser {
 	t.Helper()
 	sockDir := t.TempDir()
 	if err := os.Chmod(sockDir, 0o777); err != nil { // the container's user creates the socket
 		t.Fatal(err)
+	}
+	if opt.proxy != "" {
+		b, _ := json.Marshal(map[string]string{"url": opt.proxy})
+		if err := os.WriteFile(filepath.Join(sockDir, "proxy.json"), b, 0o644); err != nil { //nolint:gosec // the container's user reads it
+			t.Fatal(err)
+		}
 	}
 	seccomp, err := filepath.Abs("seccomp.json")
 	if err != nil {
@@ -142,10 +155,10 @@ func startBrowserWith(t *testing.T, image, volume string, runArgs []string, env 
 		"-e", "BROWSERPIER_LOCAL_NETWORK=true",
 		"-v", volume+":/profile",
 		"-v", sockDir+":/run/browserpier")
-	for _, e := range env {
+	for _, e := range opt.env {
 		run = append(run, "-e", e)
 	}
-	run = append(run, runArgs...)
+	run = append(run, opt.args...)
 	docker(t, append(run, image)...)
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
 
@@ -182,6 +195,13 @@ func (b *browser) stop() string {
 // input posts a Visual-mode action to the control socket.
 func (b *browser) input(t *testing.T, path, body string) {
 	t.Helper()
+	b.inputWithin(t, path, body, 5*time.Second)
+}
+
+// inputWithin is input for an action that may take up to most, such as
+// typing a long text at human pace.
+func (b *browser) inputWithin(t *testing.T, path, body string, most time.Duration) {
+	t.Helper()
 	start := time.Now()
 	resp, err := b.http.Post("http://control"+path, "application/json", strings.NewReader(body))
 	if err != nil {
@@ -193,7 +213,7 @@ func (b *browser) input(t *testing.T, path, body string) {
 		t.Fatalf("%s %s: %d %s", path, body, resp.StatusCode, msg)
 	}
 	// xdotool's mousemove --sync to where the pointer already was took 15 s.
-	if d := time.Since(start); d > 5*time.Second {
+	if d := time.Since(start); d > most {
 		t.Fatalf("%s %s took %v", path, body, d)
 	}
 }

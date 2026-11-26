@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,6 +30,9 @@ const maxWaiting = 64
 const (
 	CookieName   = "bp_session"
 	DeviceCookie = "bp_device"
+	// StepCookie carries a pending second step, between a right password
+	// and a code. It is no session: it opens nothing but the code page.
+	StepCookie = "bp_login_step"
 )
 
 // WebOptions say how requests reach BrowserPier.
@@ -53,6 +57,9 @@ type Web struct {
 	loginIP     *Lockout  // per client
 	backstop    *backstop // failures from everywhere; past a limit, sign-ins are slowed
 	deviceFails *Lockout  // per device cookie; a locked one is treated as unknown
+	codeIP      *Lockout  // wrong second-step codes per client, apart from wrong passwords
+	codeAccount *Lockout  // wrong app codes from unknown browsers, from everywhere together
+	steps       *pendingSteps
 	waiting     atomic.Int32
 	slow        chan struct{}
 	setup       *Lockout
@@ -69,6 +76,15 @@ func NewWeb(admin *Admin, tokens *Tokens, log *slog.Logger, opts WebOptions) *We
 		admin: admin, tokens: tokens, log: log, opts: opts,
 		loginIP:     NewLockout(5, 5*time.Minute, 5*time.Minute),
 		deviceFails: NewLockout(5, time.Hour, 24*time.Hour),
+		// Three app codes are valid at a time out of a million: past 10
+		// wrong ones a day from browsers that never signed in, app codes
+		// from those wait for the next day (recovery codes still work).
+		// Someone who knows the password then has about a 1% chance a year.
+		// The account's count and lockout are kept in the database too, so a
+		// restart doesn't hand out ten more guesses (codeLockoutKey).
+		codeIP:      NewLockout(5, 5*time.Minute, 5*time.Minute),
+		codeAccount: NewLockout(10, 24*time.Hour, 24*time.Hour),
+		steps:       newPendingSteps(),
 		backstop:    &backstop{window: 15 * time.Minute, free: 20, base: 2 * time.Second, max: 30 * time.Second, now: time.Now},
 		setup:       NewLockout(10, 5*time.Minute, 5*time.Minute),
 		badToken:    NewLockout(20, 5*time.Minute, 5*time.Minute),
@@ -76,13 +92,81 @@ func NewWeb(admin *Admin, tokens *Tokens, log *slog.Logger, opts WebOptions) *We
 		slow:        make(chan struct{}, 1),
 		pages:       map[string]*template.Template{},
 	}
+	w.codeAccount.save = w.saveCodeLockout
+	w.loadCodeLockout(context.Background())
 	base := template.Must(template.New("").Parse(pagesHTML))
-	for _, name := range []string{"login", "setup"} {
+	for _, name := range []string{"login", "code", "setup"} {
 		t := template.Must(base.Clone())
 		template.Must(t.Parse(`{{define "body"}}{{template "` + name + `-body" .}}{{end}}`))
 		w.pages[name] = t
 	}
 	return w
+}
+
+// codeLockoutKey is the settings row that keeps the account-wide count
+// of wrong app codes (codeAccount) across restarts: the times of the
+// recent failures and the end of a lockout, as JSON, Unix milliseconds.
+const codeLockoutKey = "two_step_code_lockout"
+
+type savedLockout struct {
+	Failures    []int64 `json:"failures,omitempty"`
+	LockedUntil int64   `json:"locked_until,omitempty"`
+}
+
+// saveCodeLockout writes codeAccount's state for key ("account"), or
+// removes the row once nothing is left to remember.
+func (w *Web) saveCodeLockout(_ string, failures []time.Time, lockedUntil time.Time) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var v savedLockout
+	for _, t := range failures {
+		v.Failures = append(v.Failures, t.UnixMilli())
+	}
+	if !lockedUntil.IsZero() {
+		v.LockedUntil = lockedUntil.UnixMilli()
+	}
+	var err error
+	if len(v.Failures) == 0 && v.LockedUntil == 0 {
+		_, err = w.admin.db.ExecContext(ctx, `DELETE FROM settings WHERE key = ?`, codeLockoutKey)
+	} else {
+		b, _ := json.Marshal(v)
+		_, err = w.admin.db.ExecContext(ctx, `INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`, codeLockoutKey, string(b))
+	}
+	if err != nil {
+		w.log.Error("saving the count of wrong sign-in codes; a restart would forget it", "err", err)
+	}
+}
+
+// loadCodeLockout reads back what saveCodeLockout kept. A row that can't
+// be read locks app codes from unknown browsers for a full lockout, as a
+// tenth wrong code would, rather than forget the count: known browsers
+// and recovery codes still sign in.
+func (w *Web) loadCodeLockout(ctx context.Context) {
+	raw, err := w.admin.setting(ctx, codeLockoutKey)
+	if err == nil && raw == "" {
+		return
+	}
+	var v savedLockout
+	if err == nil {
+		err = json.Unmarshal([]byte(raw), &v)
+	}
+	if err != nil {
+		w.log.Error("the saved count of wrong sign-in codes can't be read; app codes from unknown browsers are refused for 24 hours", "err", err)
+		until := w.admin.now().Add(w.codeAccount.lockFor)
+		w.codeAccount.restore("account", nil, until)
+		w.saveCodeLockout("account", nil, until) // so the next start doesn't lock again from scratch
+		return
+	}
+	slices.Sort(v.Failures) // oldest first, as Lockout keeps them
+	failures := make([]time.Time, 0, len(v.Failures))
+	for _, ms := range v.Failures {
+		failures = append(failures, time.UnixMilli(ms))
+	}
+	var until time.Time
+	if v.LockedUntil != 0 {
+		until = time.UnixMilli(v.LockedUntil)
+	}
+	w.codeAccount.restore("account", failures, until)
 }
 
 // SignedIn reports whether the request comes from a signed-in browser.
@@ -101,10 +185,12 @@ func (w *Web) Admin() *Admin { return w.admin }
 // Tokens is the agent token store the middleware checks against.
 func (w *Web) Tokens() *Tokens { return w.tokens }
 
-// Register adds /login, /logout and /setup.
+// Register adds /login, /login/code, /logout and /setup.
 func (w *Web) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /login", w.loginPage)
 	mux.HandleFunc("POST /login", w.login)
+	mux.HandleFunc("GET /login/code", w.codePage)
+	mux.HandleFunc("POST /login/code", w.loginCode)
 	mux.HandleFunc("POST /logout", w.logout)
 	mux.HandleFunc("GET /setup", w.setupPage)
 	mux.HandleFunc("POST /setup", w.doSetup)
@@ -398,7 +484,7 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(CookieName); err == nil {
 		oldCookie = c.Value
 	}
-	value, s, err := w.admin.SignIn(r.Context(), r.PostFormValue("password"), d.Remember, r.UserAgent(), oldCookie)
+	g, proof, err := w.admin.signIn(r.Context(), r.PostFormValue("password"), d.Remember, r.UserAgent(), oldCookie)
 	if errors.Is(err, ErrWrongPassword) {
 		left := mine.Fail()
 		if global != nil {
@@ -416,21 +502,41 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 		w.render(rw, r, http.StatusUnauthorized, "login", d)
 		return
 	}
+	if errors.Is(err, ErrNeedsCode) {
+		// The password is right, but nothing is signed in yet: no session
+		// and no device cookie until the code. Password failures clear;
+		// code failures never do. The device's failures stay as they are,
+		// so a stolen device cookie can't clear its own count this way.
+		mine.Succeed()
+		if device != nil {
+			device.Cancel()
+		}
+		token := w.steps.add(&pendingStep{proof: proof, next: d.Next, remember: d.Remember})
+		//nolint:gosec // Secure as the session cookie is
+		http.SetCookie(rw, &http.Cookie{
+			Name: StepCookie, Value: token, Path: "/login", MaxAge: int(stepTTL.Seconds()),
+			HttpOnly: true, Secure: w.SecureCookie(r), SameSite: http.SameSiteStrictMode,
+		})
+		w.log.Info("admin password right; asking for the second step", "ip", ip)
+		http.Redirect(rw, r, "/login/code", http.StatusSeeOther)
+		return
+	}
 	if err != nil {
 		mine.Cancel()
 		if device != nil {
 			device.Cancel()
 		}
-		w.log.Error("signing in", "err", err)
-		d.Error = "Something went wrong. Try again."
-		w.render(rw, r, http.StatusInternalServerError, "login", d)
+		w.signInFailed(rw, r, d, err)
 		return
 	}
 	mine.Succeed()
 	if device != nil {
 		device.Succeed()
 	}
-	w.setCookies(rw, r, value, s)
+	if hook := testHookBeforeCookies.Load(); hook != nil {
+		(*hook)()
+	}
+	w.setCookies(rw, r, g)
 	w.log.Info("admin signed in", "ip", ip, "remember", d.Remember)
 	http.Redirect(rw, r, d.Next, http.StatusSeeOther)
 }
@@ -541,6 +647,22 @@ func plural(n int, one, many string) string {
 	return many
 }
 
+// brokenTwoStep is what a right password is told while the two-step
+// state is partial or can't be read: no step of the sign-in can pass.
+const brokenTwoStep = "Two-step sign-in is in a broken state, so signing in is refused. On the server, run browserpier 2fa reset, then sign in with your password."
+
+// signInFailed answers a sign-in that couldn't be checked.
+func (w *Web) signInFailed(rw http.ResponseWriter, r *http.Request, d pageData, err error) {
+	if errors.Is(err, ErrTwoStepUnreadable) {
+		w.log.Error("sign-in refused: the two-step state is partial or can't be read; run `browserpier 2fa reset`")
+		d.Error = brokenTwoStep
+	} else {
+		w.log.Error("signing in", "err", err)
+		d.Error = "Something went wrong. Try again."
+	}
+	w.render(rw, r, http.StatusInternalServerError, "login", d)
+}
+
 func (w *Web) locked(rw http.ResponseWriter, r *http.Request, d pageData, wait time.Duration) {
 	retryAfter(rw, wait)
 	mins := int(math.Ceil(wait.Minutes()))
@@ -548,29 +670,45 @@ func (w *Web) locked(rw http.ResponseWriter, r *http.Request, d pageData, wait t
 	w.render(rw, r, http.StatusTooManyRequests, "login", d)
 }
 
+// testHookBeforeCookies, set by a test, runs after a sign-in committed
+// and before its cookies are set, where a credential change could slip in.
+var testHookBeforeCookies atomic.Pointer[func()]
+
 // setCookies hands the browser its new session cookie, and a device
-// cookie that marks it as known for future sign-ins.
-func (w *Web) setCookies(rw http.ResponseWriter, r *http.Request, value string, s AdminSession) {
+// cookie that marks it as known for future sign-ins, both made in the
+// sign-in's transaction. It is called only once every step of the
+// sign-in passed.
+func (w *Web) setCookies(rw http.ResponseWriter, r *http.Request, g grant) {
 	//nolint:gosec // Secure is set whenever served over HTTPS; plain-HTTP private setups can't store a Secure cookie
 	c := &http.Cookie{
 		Name:     CookieName,
-		Value:    value,
+		Value:    g.cookie,
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   w.SecureCookie(r),
 		SameSite: http.SameSiteLaxMode,
 	}
-	if s.Remember {
-		c.Expires = s.ExpiresAt
+	if g.session.Remember {
+		c.Expires = g.session.ExpiresAt
 	}
 	http.SetCookie(rw, c)
-	if device, err := w.admin.NewDeviceToken(r.Context()); err == nil {
-		//nolint:gosec // as above
-		http.SetCookie(rw, &http.Cookie{
-			Name: DeviceCookie, Value: device, Path: "/login", HttpOnly: true,
-			Secure: c.Secure, SameSite: http.SameSiteLaxMode, Expires: time.Now().Add(DeviceTTL),
-		})
+	w.SetDeviceCookie(rw, r, g.device)
+}
+
+// SetDeviceCookie hands the browser a device cookie that BrowserPier made
+// together with the change it goes with: a sign-in, or turning on or
+// replacing two-step sign-in, which rotate the device key. It never
+// reads the key itself: a key read later could have rotated since, under
+// a change that signed this browser out.
+func (w *Web) SetDeviceCookie(rw http.ResponseWriter, r *http.Request, device string) {
+	if device == "" {
+		return
 	}
+	//nolint:gosec // as in setCookies
+	http.SetCookie(rw, &http.Cookie{
+		Name: DeviceCookie, Value: device, Path: "/login", HttpOnly: true,
+		Secure: w.SecureCookie(r), SameSite: http.SameSiteLaxMode, Expires: time.Now().Add(DeviceTTL),
+	})
 }
 
 func (w *Web) logout(rw http.ResponseWriter, r *http.Request) {
@@ -636,13 +774,13 @@ func (w *Web) doSetup(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	attempt.Succeed()
-	value, s, err := w.admin.SignIn(r.Context(), password, false, r.UserAgent(), "")
+	g, _, err := w.admin.signIn(r.Context(), password, false, r.UserAgent(), "")
 	if err != nil {
 		// The password is set; only the automatic sign-in failed.
 		w.log.Error("signing in after setup", "err", err)
 		http.Redirect(rw, r, "/login", http.StatusSeeOther)
 		return
 	}
-	w.setCookies(rw, r, value, s)
+	w.setCookies(rw, r, g)
 	http.Redirect(rw, r, "/", http.StatusSeeOther)
 }

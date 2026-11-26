@@ -38,8 +38,9 @@ import (
 // margin for a busy one, a page loading, say.
 const keymapSettle = 150 * time.Millisecond
 
-// keyboard reads and changes the X server's keyboard map.
-type keyboard interface {
+// keymapConn reads and changes the X server's keyboard map: a
+// connection to it.
+type keymapConn interface {
 	// keycodes is the range of keycodes the map has.
 	keycodes() (first byte, count int)
 	// mapping reads count keycodes' keysyms from first, perKey of each.
@@ -59,7 +60,7 @@ type keyboardMap struct {
 	mods   map[byte]bool
 }
 
-func readKeyboardMap(kb keyboard) (keyboardMap, error) {
+func readKeyboardMap(kb keymapConn) (keyboardMap, error) {
 	first, count := kb.keycodes()
 	if first < 8 || count < 1 || int(first)+count > 256 {
 		return keyboardMap{}, fmt.Errorf("the X server has keycodes %d to %d", first, int(first)+count-1)
@@ -250,8 +251,8 @@ type keyRun struct {
 
 // binding is spare keys bound to keysyms; restore puts them back.
 type binding struct {
-	kb     keyboard
-	open   func() (keyboard, error)
+	kb     keymapConn
+	open   func() (keymapConn, error)
 	perKey int
 	runs   []keyRun
 }
@@ -263,7 +264,7 @@ type binding struct {
 // open opens a new connection, which restore uses: after an X error, kb's
 // may be out of step. On an error, a non-nil binding is keys that may
 // still be bound.
-func bind(kb keyboard, open func() (keyboard, error), m keyboardMap, keys []byte, syms []uint32) (*binding, error) {
+func bind(kb keymapConn, open func() (keymapConn, error), m keyboardMap, keys []byte, syms []uint32) (*binding, error) {
 	if len(syms) > len(keys) {
 		return nil, errNoSpareKeys
 	}
@@ -309,7 +310,7 @@ func (b *binding) rollback(err error) (*binding, error) {
 // check reads runs back and compares each key's first two keysyms, which
 // type, with want's. (The server fills in the rest: XKB copies them to
 // the second group, say.)
-func check(kb keyboard, perKey int, runs []keyRun, want func(keyRun) []uint32) error {
+func check(kb keymapConn, perKey int, runs []keyRun, want func(keyRun) []uint32) error {
 	for _, r := range runs {
 		got, err := mappingOf(kb, perKey, r)
 		if err != nil {
@@ -328,7 +329,7 @@ func check(kb keyboard, perKey int, runs []keyRun, want func(keyRun) []uint32) e
 	return nil
 }
 
-func mappingOf(kb keyboard, perKey int, r keyRun) ([]uint32, error) {
+func mappingOf(kb keymapConn, perKey int, r keyRun) ([]uint32, error) {
 	n, got, err := kb.mapping(r.first, len(r.after)/perKey)
 	if err == nil && n != perKey {
 		err = fmt.Errorf("the keyboard map changed shape at keycode %d", r.first)
@@ -342,7 +343,7 @@ func (b *binding) restore() error { return restoreRuns(b.open, b.perKey, b.runs)
 
 // restoreRuns puts runs' keys back as they were before, over a new
 // connection, and reads them back.
-func restoreRuns(open func() (keyboard, error), perKey int, runs []keyRun) error {
+func restoreRuns(open func() (keymapConn, error), perKey int, runs []keyRun) error {
 	kb, err := open()
 	if err != nil {
 		return err
@@ -371,22 +372,29 @@ type xKeyboard struct {
 	// X error (for this request or an earlier one, ChangeKeyboardMapping
 	// having no reply) or a broken exchange. Every later call returns it.
 	err error
+	// stop ends the watch that closes the connection when the request's
+	// context ends (dialKeyboard).
+	stop func() bool
 }
 
-// xTimeout bounds one exchange with the X server.
-const xTimeout = 5 * time.Second
+// keymapTimeout bounds one exchange with the X server.
+const keymapTimeout = 5 * time.Second
 
 var xOrder = binary.LittleEndian
 
-func dialKeyboard(ctx context.Context) (keyboard, error) {
+func dialKeyboard(ctx context.Context) (keymapConn, error) {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", "/tmp/.X11-unix/X"+display[1:])
 	if err != nil {
 		return nil, err
 	}
-	x := &xKeyboard{conn: conn}
+	// A cancelled request (a handoff, Take control) breaks off a read a
+	// stalled X server is slow to answer, rather than holding the input
+	// locks for the rest of the deadline, as xwin.go's connection does.
+	// A restore opens its connection without cancel, so it runs to its end.
+	x := &xKeyboard{conn: conn, stop: context.AfterFunc(ctx, func() { _ = conn.Close() })}
 	if err := x.setup(); err != nil {
-		_ = conn.Close()
+		_ = x.Close()
 		return nil, err
 	}
 	return x, nil
@@ -395,7 +403,7 @@ func dialKeyboard(ctx context.Context) (keyboard, error) {
 // setup opens the connection: little-endian, protocol 11.0, and no
 // authorization, as for xdotool (Xvfb runs without -auth).
 func (x *xKeyboard) setup() error {
-	_ = x.conn.SetDeadline(time.Now().Add(xTimeout))
+	_ = x.conn.SetDeadline(time.Now().Add(keymapTimeout))
 	if _, err := x.conn.Write([]byte{'l', 0, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0}); err != nil {
 		return err
 	}
@@ -423,7 +431,12 @@ func (x *xKeyboard) setup() error {
 	return errors.New("the X server wants authentication")
 }
 
-func (x *xKeyboard) Close() error { return x.conn.Close() }
+func (x *xKeyboard) Close() error {
+	if x.stop != nil {
+		x.stop()
+	}
+	return x.conn.Close()
+}
 
 func (x *xKeyboard) keycodes() (byte, int) { return x.minKey, int(x.maxKey) - int(x.minKey) + 1 }
 
@@ -440,7 +453,7 @@ func (x *xKeyboard) send(req []byte) (uint16, error) {
 	if x.err != nil {
 		return 0, x.err
 	}
-	_ = x.conn.SetDeadline(time.Now().Add(xTimeout))
+	_ = x.conn.SetDeadline(time.Now().Add(keymapTimeout))
 	if _, err := x.conn.Write(req); err != nil {
 		return 0, x.fail(err)
 	}

@@ -254,7 +254,8 @@ func (a *API) choose(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ctx, done, err := a.m.AgentInput(r.Context(), s.ID)
+	tok, _ := auth.TokenFromContext(r.Context())
+	ctx, done, err := a.m.AgentInput(r.Context(), s.ID, tok.ID)
 	if errors.Is(err, sessions.ErrInputBusy) {
 		writeError(w, http.StatusConflict, "another input is still running in this browser; wait for it to finish, then send this one")
 		return
@@ -283,6 +284,12 @@ func (a *API) choose(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := a.control(ctx, s.Profile, http.MethodPost, "/chooser/"+in.ID, body)
 	if err != nil {
+		if ctx.Err() != nil && r.Context().Err() == nil {
+			// Cut short, as act's input is: a handoff, Take control, a
+			// stop or the token's revocation (401).
+			writeError(w, cutStatus(ctx), "input broke off: "+context.Cause(ctx).Error())
+			return
+		}
 		writeError(w, http.StatusBadGateway, "couldn't reach the browser: "+err.Error())
 		return
 	}
@@ -304,7 +311,6 @@ func (a *API) choose(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, fmt.Sprintf("the browser answered %d", resp.StatusCode))
 		return
 	}
-	tok, _ := auth.TokenFromContext(r.Context())
 	var what string
 	switch {
 	case in.Cancel:

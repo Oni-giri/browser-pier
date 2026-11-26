@@ -57,10 +57,16 @@ const (
 // (PROJ-23); 7 answers pages' file choosers through the container's
 // portal, with no GTK dialog left (PROJ-152, PROJ-181): a browser from
 // before it would keep the dialog, which can hand a page any file in the
-// container (PROJ-183); 8 types characters the keyboard map lacks by
-// binding them to spare keys for the whole call, so none is dropped
-// (PROJ-195).
-const Spec = "8"
+// container (PROJ-183); 8 adds the entrypoint's /input/live-type, which
+// the live view's Type button calls, so a person's typing doesn't wait
+// for an agent's shortcut gap (PROJ-151), and /input/open, which the open
+// action calls (PROJ-164): a browser from before either answers them 404;
+// 9 turns address-bar search suggestions off by managed policy
+// (PROJ-191): a browser from an older image would keep sending what is
+// typed into the address bar to the search engine; 10 types characters
+// the keyboard map lacks by binding them to spare keys for the whole
+// call, so none is dropped (PROJ-195).
+const Spec = "10"
 
 const (
 	// StopTimeout is how long a browser container gets to stop before Docker

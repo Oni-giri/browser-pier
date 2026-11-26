@@ -49,7 +49,7 @@ func (c *fakeClipboard) routes(mux *http.ServeMux) {
 	}
 	mux.HandleFunc("POST /input/release", record("release", func(_ []byte, w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) }))
 	mux.HandleFunc("POST /input/events", record("events", func(_ []byte, w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) }))
-	mux.HandleFunc("POST /input/type", record("type", func(b []byte, w http.ResponseWriter) {
+	mux.HandleFunc("POST /input/live-type", record("type", func(b []byte, w http.ResponseWriter) {
 		c.mu.Lock()
 		c.sent = append(c.sent, string(b))
 		c.mu.Unlock()
@@ -199,6 +199,15 @@ func TestViewerClipboardBox(t *testing.T) {
 	if !strings.Contains(acts, "Clipboard set") || !strings.Contains(acts, "Pasted from the clipboard box") || strings.Contains(acts, "characters") {
 		t.Errorf("activity: %s", acts)
 	}
+	// They are the person's, in the control entries (PROJ-158), never an
+	// agent's action.
+	for _, a := range m.Activity(s.ID) {
+		if strings.HasPrefix(a.What, "Clipboard set") || strings.HasPrefix(a.What, "Pasted from") {
+			if a.Kind != sessions.KindControl || a.TokenID != "" {
+				t.Errorf("clipboard entry %+v: want a control entry with no token", a)
+			}
+		}
+	}
 	k.send(`{"type":"release"}`)
 	// None of the texts is logged, in the activity log or the orchestrator's.
 	all := logs.String() + fmt.Sprint(m.Activity(s.ID))
@@ -221,7 +230,7 @@ func TestViewerTypesText(t *testing.T) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if strings.Join(c.calls, " ") != "type" || len(c.sent) != 1 || c.sent[0] != `{"pace":"instant","text":"héllo"}` {
+	if strings.Join(c.calls, " ") != "type" || len(c.sent) != 1 || c.sent[0] != `{"text":"héllo"}` {
 		t.Errorf("the browser got %v %v", c.calls, c.sent)
 	}
 }
@@ -235,7 +244,7 @@ func TestClipboardEmptiedWhenControlEnds(t *testing.T) {
 	var mu sync.Mutex
 	var during []error
 	c.onEmpty = func() {
-		_, done, err := m.AgentInput(context.Background(), s.ID)
+		_, done, err := m.AgentInput(context.Background(), s.ID, "tok")
 		if err == nil {
 			done()
 		}

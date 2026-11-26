@@ -51,7 +51,7 @@ func newFakeKeyboard(calls *[]call, spare ...byte) *fakeKeyboard {
 
 func (f *fakeKeyboard) log(args ...string) { *f.calls = append(*f.calls, call{"keymap", args}) }
 
-func (f *fakeKeyboard) open(context.Context) (keyboard, error) {
+func (f *fakeKeyboard) open(context.Context) (keymapConn, error) {
 	f.log("open")
 	if f.openErr != nil {
 		return nil, f.openErr
@@ -63,7 +63,7 @@ func (f *fakeKeyboard) open(context.Context) (keyboard, error) {
 func (f *fakeKeyboard) keycodes() (byte, int) { return 8, 248 }
 
 // reopen is bind's and restore's new connection: the same map.
-func (f *fakeKeyboard) reopen() (keyboard, error) { return f.open(context.Background()) }
+func (f *fakeKeyboard) reopen() (keymapConn, error) { return f.open(context.Background()) }
 
 func (f *fakeKeyboard) mapping(first byte, count int) (int, []uint32, error) {
 	i := int(first-8) * fakePerKey
@@ -247,7 +247,7 @@ func keymapVisual(t *testing.T, spare ...byte) (*visual, *[]call, *fakeKeyboard)
 	t.Helper()
 	v, calls := newTestVisual(false)
 	f := newFakeKeyboard(calls, spare...)
-	v.keyboard = f.open
+	v.keymap = f.open
 	return v, calls, f
 }
 
@@ -318,7 +318,7 @@ func TestTypeMappedInStretches(t *testing.T) {
 		}
 		return nil, nil
 	}
-	v.keyboard = func(ctx context.Context) (keyboard, error) {
+	v.keymap = func(ctx context.Context) (keymapConn, error) {
 		_, err := f.open(ctx)
 		return &watchKeyboard{f, bound}, err
 	}
@@ -503,8 +503,8 @@ func xReply(seq uint16, one byte, data []byte) []byte {
 	return append(r, data...)
 }
 
-// xError is an X error for request seq.
-func xError(seq uint16, code, major byte) []byte {
+// xErrorPacket is an X error for request seq.
+func xErrorPacket(seq uint16, code, major byte) []byte {
 	e := make([]byte, 32)
 	e[1], e[10] = code, major
 	xOrder.PutUint16(e[2:], seq)
@@ -548,7 +548,7 @@ func TestXKeyboardSpeaksX(t *testing.T) {
 			t.Errorf("ChangeKeyboardMapping %x", got)
 		}
 		s.read(8)
-		s.write(xError(3, 2, 100))
+		s.write(xErrorPacket(3, 2, 100))
 		s.write(xReply(4, 2, syms(0x101f601, 0x101f601)))
 	}()
 	if err := x.setup(); err != nil {

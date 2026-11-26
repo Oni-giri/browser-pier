@@ -249,6 +249,97 @@ What a page's own script records (`browsertest.Detector`'s input recorder, `Inpu
 
 None of this is fingerprint spoofing: the browser reports nothing different about itself. `TestVisualModeLooksLikeAPerson` and `TestPageToolsStayQuiet` pass unchanged with it. Not done: typing mistakes and corrections, and a check against a public behaviour-scoring page (to be done by hand).
 
+## Text typed right after a shortcut (PROJ-151)
+
+While a page has the keyboard, Chrome sends it every key and moves the focus to its own UI (the address bar for `ctrl+l`) only once the page has answered that it left the key alone. Keys that arrive before that answer are the page's. easi.run found this race in Google Chrome on Wayland; this measures it on BrowserPier's stack.
+
+**2026-11-17, Chromium 156.0.8078.79** (`localhost/bp-proj151-chromium`, built from origin/main with PROJ-113), 1280×800, on a 6-CPU VM shared with other work, load average 1–2. `TestMeasureTextAfterShortcut` (`go test -tags 'docker measure' -run TestMeasureTextAfterShortcut -v ./images/chromium/`, not part of `make test` or `make test-docker`) sends the three calls an agent makes, `key ctrl+l`, `type <the /arrived URL>` and `key Return`, straight to the control socket, back to back at instant pace (the fastest client there can be), on `browsertest.KeySite`'s `/keys` page, whose `keydown` listener busy-waits `slow` ms. A run is **lost** when `/arrived` never loads. One container at a time, no `-race`, under a memory cap. Runs per shape: 100 where quick; **30** where every run is lost, since a lost run behind a 400 ms handler takes about 25 s to clear (each key the page took costs it 400 ms), and the whole matrix at 100 would have taken several hours here; 20 for other shortcuts and the click, as the ticket asked.
+
+| Shape (instant pace, control socket) | Lost | Notes |
+|---|---|---|
+| `slow=0`, a focused field | 0 of 100 | |
+| `slow=0`, nothing focused (body) | 0 of 100 | |
+| `slow=50` | 1 of 100 | the page took one character |
+| `slow=100` | **30 of 30** | the page took 12.8 characters on average |
+| `slow=200` | **30 of 30** | at least 16 characters (a page Chrome replaced while it was still busy stopped reporting) |
+| `slow=400` | **30 of 30** | the whole address and Return |
+| A cross-site frame with the focus (clicked into), `slow=0` | 1 of 100 | the frame saw no character (below) |
+| The same, `slow=400` | **30 of 30** | 48.8 characters: a busy frame holds the shortcut as a busy page does |
+| One key call `["ctrl+l", "a", "b", "c"]`, `slow=0` | 0 of 100 | |
+| The same, `slow=200` | **30 of 30** | the page's field got all three letters |
+| `alt+d`, `F6`, `ctrl+k`, `ctrl+f` then text, `slow=0` | 0 of 20 each | |
+| The same, `slow=200` | **20 of 20 each** | `ctrl+k` and `ctrl+f`, which don't navigate, show the page took about 44 of 47 characters |
+| `ctrl+t` then text, `slow=0` and `slow=200` | 0 of 20 each | Chromium handles `ctrl+t` before the page (a reserved shortcut), so it can't lose text |
+| A click on the address bar (y = 63) then text, `slow=400` | 0 of 20 | the page saw no key: a click on the browser's UI moves the focus without asking the page |
+| **Restarted browser**: the restored `/keys` tab takes 2 s to load, the calls sent as soon as the control socket answers | 0 of 20 | the restored page saw a key in 1 run of 20: the focus is in the address bar while it loads |
+| **Fresh browser** (no profile), the calls at once | 0 of 10 | the focus starts in the address bar, over the start page (DuckDuckGo's home page here) |
+| Over REST (`/computer`), `slow=0` / `slow=200` | 0 of 30 / **30 of 30** | the orchestrator's round trip hides nothing |
+| Over MCP (`press_keys`, `type_text`), `slow=0` / `slow=200` | 0 of 30 / **30 of 30** | the same |
+
+**At human pace** (PROJ-113, the default; 10 runs each, as typing an address takes about 13 s): `slow=0` 0 of 10, `slow=100` **9 of 10**, `slow=200` **10 of 10** (the page took the first one or two characters: holding `ctrl+l` for about 116 ms is not enough), restarted 0 of 5, fresh 0 of 3. Over REST and MCP at human pace (10 each): `slow=0` 0 of 10, `slow=200` **10 of 10** (1.4 characters).
+
+Two runs in all (`slow=50` with a 25 ms gap, and the frame at `slow=0`) didn't arrive although the page saw no character but the shortcut's: the tab went back to an earlier `/keys` address, which the address bar suggested from history as the text was typed. That is the address bar's autocomplete, not this race, and it is counted as lost all the same.
+
+**The smallest gap with no loss** (a pause between the end of the `key` call and the `type` call): `slow=0`, the restarted and the fresh browser need none. `slow=50`: 25 ms lost 1 of 100, 50 ms 0 of 100. `slow=100`: 100 ms lost 1 of 100, **150 ms 0 of 100**. `slow=200`: 250 ms still lost 12 of 30 (and 18 more arrived with the page having taken a key). `slow=400`: 250 ms lost 30 of 30. Chrome waits for the page twice, for the `ctrl` key-down and the `l`, so a shortcut's window is about twice the handler's time from the key press.
+
+**Outcome: loss only behind a slow key handler**; a quick page, a restarted browser whose page is still loading and a fresh browser lost nothing. Phase 2 was built anyway, as the ticket decided: the container waits **150 ms** (`shortcutGap` in `entrypoint/visual.go`) between an agent's `key` call ending on a browser-bound combination and its next keyboard action, and inside a key list. The rule asked for the smallest clean gap for `slow=0` and the restarted browser (none) plus a margin; 150 ms is that margin, chosen as the smallest gap measured clean behind a 100 ms handler. With it (`localhost/bp-proj151-chromium:gap`, 30 runs each): `slow=0` 0 of 30, `slow=100` **0 of 30**, `slow=200` 30 of 30, the key list at `slow=200` 30 of 30; the three calls take about 150 ms longer (0.66 s instead of 0.51 s). **The residual:** a page whose key handler takes more than about 100 ms a key still gets the text, as does any page busy for longer than the gap when the shortcut comes. SPEC §8 says so, and `press_keys` tells agents to look at the screen before typing on such a page.
+
+**A real run** with the gap (2026-11-17): a script on the control socket sent `ctrl+l`, an address and Return back to back 20 times, alternating GitHub's golang/go page and Wikipedia's United States article, each round as soon as the last address showed in the tab, the page still loading: 20 of 20 navigated.
+
+Not built, as the ticket rules out: anything over CDP to learn that the browser handled a key. The X display can't tell either: Chromium's toolbar and page are one X window, so `xdotool getwindowfocus` named the same window (4194306, the tab's title) with the page focused and right after `ctrl+l`. The gap changes no event a page sees: the same keys, the next ones only later, as a person's are.
+
+## Opening an address with a click (PROJ-164)
+
+PROJ-151 left a residual: behind a page whose key handler takes more than about 100 ms a key, text typed after `ctrl+l` still goes to the page. Its measurement also found that a click on the address bar moves the focus without asking the page. Visual mode now has an `open {url}` action (MCP `open_url`): a click in the middle of the address bar, `ctrl+a`, the address typed, Delete, Return, all through xdotool at the action's pace (SPEC §8). Before clicking, the container reads the X window tree (`entrypoint/xwin.go`, read-only, no CDP) and refuses if anything but Chromium's tabbed window shows at that point.
+
+**2026-11-18, Chromium 156.0.8078.79** (`localhost/bp-proj164-chromium:open`), on the same shared 6-CPU VM, through the orchestrator's `/computer` (`TestOpenBehindABusyPage`, `TestOpenWithSomethingInTheWay`, `TestOpenAtEveryScreenSize` in `internal/api`, in `make test-docker`):
+
+| Shape | Lost | Notes |
+|---|---|---|
+| `open`, instant pace, `slow=400`, a focused field | **0 of 20** | the page saw no key and its field stayed empty; about 0.9 s a call for a 60-character address |
+| `open`, human pace, `slow=400` | **0 of 3** | the same; 15–16 s a call with the address typed at a typist's pace (before the review; now it goes in at 12 ms a key, see below) |
+| `ctrl+l`, `type`, Return through `/computer`, instant pace, `slow=400` (the same test with the old calls) | **lost at once** | the page took 17 keys and its field had `http://host.d` |
+| `open` at 640×480 and 1920×1080, `slow=400`, each pace | 0 of 2 each | the address bar is where the entrypoint computes it |
+| A page's `alert()` open | opens | the dialog is drawn inside the window, below the toolbar; opening dismisses it |
+| A pop-up window the size of the browser window, over it | **refused** (409) | geometry can't tell it from the browser window; its `WM_WINDOW_ROLE` (`pop-up`, not `browser`) does |
+| Full screen (F11), with its "press F11 to exit" bubble over the address bar and after it has gone | **refused** (409) | the window fills the whole screen, taskbar included |
+| A context menu over the address bar (by hand, with the X tree reader) | refused | an override-redirect window |
+
+**What a page can see.** Nothing of the address: the keys go to the browser's own address bar, never to the page. Before that, at human pace, the pointer glides from wherever it was to the toolbar, so the page sees it move and leave the viewport, then loses the focus (`blur`), as when a person reaches for the address bar; at instant pace it sees no move, only the blur. The new page loads with the focus (`document.hasFocus()` true). `TestVisualModeLooksLikeAPerson` now opens its detector page both ways, with `open` at human pace and with `ctrl+l`: nothing automated either way, and the page focused both times. One difference showed in that run: opened with `open`, the page's first script saw its real window size (1440×868); opened with `ctrl+l` it saw 0×0, the signal PROJ-65 is about. One run each, so this isn't a finding yet.
+
+**After the code review** (same day): the address now goes in at 12 ms a key at either pace (only the glide, the pause and the held button and keys are a hand's), since no page sees those keys and a person often pastes an address; a human-paced open takes about 2 s instead of 15. The last look comes after the hand's pause, just before the press. After the click, which window has the keyboard is read before every 64 characters and before Delete and Return, and the open stops if it changed. After the Codex review (2026-11-26) the look before each of Delete and Return comes after the pause before that key, not ahead of it, so a window that takes the keyboard during a pause gets neither key. It refuses on a Chromium other than 156, whose address bar hasn't been measured. Checked by hand with the window-tree reader: a tab's hover card over the address bar (the pointer resting on a tab) and the address bar's own suggestions are drawn inside the browser window, not as windows of their own; neither stops `open`, and an instant open through a hover card reached the address bar.
+
+**Residuals, accepted:**
+- **Delete before Return.** It drops an inline completion the address bar may have added after the typed text (the cause of the two autocomplete losses in PROJ-151's table). A person seldom presses it, but the key goes to the address bar, which no page sees.
+- **The address goes in at 12 ms a key**, faster than anyone types, at both paces. No page sees those keys, only the address bar; nor does the search engine's suggest service, since the image turns suggestions off (PROJ-191, below): without that, an `open` of an `http://` address sent its path to it, token included.
+- **The layout is Chromium 156's.** The address bar's place is computed (y = 63, the middle of x = 121 to width − 85), not found on the screen. On another Chromium `open` refuses (409) rather than click blind, and `TestOpenAtEveryScreenSize` fails until it is measured again.
+- **A window that opens between a look and the run after it.** Each look at the screen and the xdotool run it allows are separate: a pop-up opening in those few milliseconds would still take the press (the click, Delete or Return) or up to 64 characters of the address; the next look stops the rest. The pauses all come before a look, never between a look and its press, so this window stays a few milliseconds.
+
+## No address-bar search suggestions (PROJ-191)
+
+With suggestions on (Chromium's default), the address bar sent the default search engine what was being typed, a request per pause: a word in full, an `http://` address or one without a scheme up to its query, path and token included, and an `https://` address's host only; a query (`?token=…`) never went, and focusing the address bar sent nothing. Measured with `TestMeasureSuggest` (`go test -tags 'docker measure' -run TestMeasureSuggest -v ./images/chromium/`, 2026-11-18, Chromium 156), which makes the search engine a local one by a test policy and sends everything else to an isolated proxy:
+
+| Typed with `key ctrl+l` and `type` (instant pace / human pace) | Suggest requests | The secret in them |
+|---|---|---|
+| `pierword` | 2 / 8 | (a word) |
+| `http://site.test/reset?token=SECRET` | 2 / 23 | none: they stop at the `?` |
+| `http://site.test/reset/SECRET` | 4 / 35 | all of it |
+| `https://site.test/reset?token=SECRET`, `https://site.test/reset/SECRET` | 2 / 17 | none: the host only |
+| `site.test/login/SECRET` | 3 / 27–28 | all of it |
+| With the image's own engine, `http://site.test/reset/SECRET` | 4–5 / 35–38 attempts to connect to `duckduckgo.com` (counted at the proxy), over three runs | (TLS: not readable) |
+
+The image now sets `SearchSuggestEnabled: false`. In the same runs, typing sent the suggestion service no request before Return, and the browser asked for no `duckduckgo.com` while an address was typed (`TestTypedAddressReachesNoSuggestService` checks both, and that the address then opens exactly as typed). The test also opens the two `http://` addresses with PROJ-164's `open` action, which types into the same address bar: without the policy it sent 3–4 suggest requests at either pace, the path's token included, and with it none (2026-11-26). A word still goes to the engine as a search once Return is pressed; the test checks that too, which also shows its search engine is in effect.
+
+What can see it:
+- **A person**, in the live view or a handoff: the address bar's drop-down no longer offers the engine's completions. History and bookmarks still do. The setting shows on `chrome://policy`, next to the image's other policies, and Chromium already says it's managed.
+- **Not pages.** No web API reports it, and a page can't read `chrome://policy` (a `fetch` of it fails with a TypeError, as in any Chromium, with or without the policy; the test records it). Nothing about the browser's fingerprint changes.
+- **The search engine** sees searches that come without the suggest requests that usually precede them, as from anyone who turned suggestions off (a common privacy setting) or pasted the words. That's DuckDuckGo, not the sites an agent works on.
+
+Considered and left as they are:
+- **`NetworkPredictionOptions`** (preloading): no HTTP request reached the typed address's host before Return in any of the runs (connections weren't timed, so a bare preconnect wouldn't show), and turning prediction off would change what pages' speculation rules get, which a page can notice. Kept at Chromium's default.
+- **`UrlKeyedAnonymizedDataCollectionEnabled`**: off by default in Chromium, and it reports to Google only for a signed-in, synced profile. Nothing to change.
+- **The start page:** a new profile's first tab still opens `start.duckduckgo.com` (PROJ-127, separate). The runs also saw Chromium ask for `accounts.google.com`, `update.googleapis.com` and `connectivitycheck.gstatic.com` on its own (refused by the test's proxy, so not measured further; PROJ-192).
+
 ## Fixed along the way
 
 - **`Intl` contradicted the browser's languages.** The image had only Chromium's `en-US` interface, so whatever `LANGUAGE` said, `Intl` reported `en-US` while `navigator.languages` and Accept-Language followed the exit location (`fr-FR`). The image now installs `chromium-l10n` (about 120 MB), and its build fails if the locales are missing. `Intl` now follows the interface language: `de` for a German exit, as Chromium on a German Linux desktop reports.

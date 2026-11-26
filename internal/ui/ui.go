@@ -17,6 +17,7 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/handoff"
+	"github.com/Oni-giri/browser-pier/internal/notify"
 	"github.com/Oni-giri/browser-pier/internal/picker"
 	"github.com/Oni-giri/browser-pier/internal/recording"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
@@ -64,6 +65,8 @@ type Options struct {
 	// Recorder says whether a session that may be recorded is kept for now
 	// (no room, a broken stream); nil for always.
 	Recorder interface{ Losing(id string) bool }
+	// Notify is the admin's webhook (Settings → Notifications); nil hides it.
+	Notify *notify.Notifier
 	// Picker answers a page's file chooser for the person in control
 	// (PROJ-181); nil refuses it.
 	Picker *picker.Picker
@@ -82,6 +85,11 @@ type UI struct {
 	// admin is signed in, but a borrowed laptop shouldn't be able to guess.
 	pinTries *auth.Lockout
 
+	// twoStep holds, per admin session, a new authenticator secret until
+	// a code from it is right (twostep.go). In memory only.
+	twoStepMu     sync.Mutex
+	twoStepDrafts map[string]twoStepDraft
+
 	// prevMu also serialises screenshots: one at a time is plenty.
 	prevMu   sync.Mutex
 	previews map[string]cachedPreview
@@ -93,14 +101,15 @@ type UI struct {
 
 	// proxyTests limits the Test proxy button (proxytest.go).
 	proxyTests proxyLimiter
-	now        func() time.Time
+
+	now func() time.Time // the clock the two-step drafts and the proxy test's limiter read
 }
 
 func New(m *sessions.Manager, web *auth.Web, handoffs *handoff.Service, st *settings.Store, log *slog.Logger, o Options) *UI {
 	u := &UI{m: m, web: web, handoffs: handoffs, settings: st, log: log, o: o, pages: map[string]*template.Template{}, previews: map[string]cachedPreview{},
-		pinTries: auth.NewLockout(5, 15*time.Minute, 15*time.Minute), now: time.Now}
+		pinTries: auth.NewLockout(5, 15*time.Minute, 15*time.Minute), twoStepDrafts: map[string]twoStepDraft{}, now: time.Now}
 	base := template.Must(template.New("").Funcs(funcs).ParseFS(embedded, "templates/layout.html", "templates/parts.html"))
-	for _, page := range []string{"overview", "profiles", "profile", "profile-form", "agents", "settings", "recording"} {
+	for _, page := range []string{"overview", "profiles", "profile", "profile-log", "profile-form", "agents", "settings", "recording"} {
 		t := template.Must(base.Clone())
 		u.pages[page] = template.Must(t.ParseFS(embedded, "templates/"+page+".html"))
 	}
@@ -132,6 +141,7 @@ func (u *UI) Register(mux *http.ServeMux) {
 	mux.Handle("POST /profiles", admin(u.createProfile))
 	mux.Handle("GET /profiles/{name}", admin(u.profilePage))
 	mux.Handle("GET /profiles/{name}/side", admin(u.profileSide))
+	mux.Handle("GET /profiles/{name}/log", admin(u.profileLog))
 	mux.Handle("GET /profiles/{name}/preview.png", admin(u.preview))
 	mux.Handle("GET /profiles/{name}/icon", admin(u.icon))
 	mux.Handle("GET /profiles/{name}/edit", admin(u.editProfile))
@@ -162,7 +172,14 @@ func (u *UI) Register(mux *http.ServeMux) {
 	mux.Handle("POST /settings/pin", admin(u.savePIN))
 	mux.Handle("POST /settings/password", admin(u.changePassword))
 	mux.Handle("POST /settings/sign-out-others", admin(u.signOutOthers))
+	mux.Handle("POST /settings/two-step/on", admin(u.twoStepOn))
+	mux.Handle("POST /settings/two-step/confirm", admin(u.twoStepConfirm))
+	mux.Handle("POST /settings/two-step/manage", admin(u.twoStepManage))
 	mux.Handle("POST /settings/appearance", admin(u.saveAppearance))
+	mux.Handle("POST /settings/notify", admin(u.saveNotify))
+	mux.Handle("POST /settings/notify/remove", admin(u.removeNotify))
+	mux.Handle("POST /settings/notify/secret", admin(u.regenerateNotify))
+	mux.Handle("POST /settings/notify/test", admin(u.testNotify))
 }
 
 // page is what every app page's layout needs.
@@ -400,7 +417,9 @@ var funcs = template.FuncMap{
 		}
 		return t.Format("Mon 2 Jan, 15:04")
 	},
-	"pct": func(part, whole int64) float64 { return percent(part, whole) },
+	"pct":     func(part, whole int64) float64 { return percent(part, whole) },
+	"dayName": dayName,
+	"logLine": func(a sessions.Activity, link string) logLine { return logLine{a, link} },
 	"plural": func(n int, one, many string) string {
 		if n == 1 {
 			return one
