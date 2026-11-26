@@ -181,8 +181,13 @@ type live struct {
 	holds int
 	// generation changes each time a person takes the browser.
 	generation uint64
-	// human is set while a person has control from the live view.
-	human bool
+	// human is set while a person has control from the live view, and
+	// holder names who: the opaque id TakeControl was given (PROJ-184).
+	// controlTurn numbers each Take control, so a live view that lost
+	// control behind its back can't release the next one's (ReleaseTurn).
+	human       bool
+	holder      string
+	controlTurn uint64
 	// releasing is set while ReleaseControl empties the clipboard, before
 	// human is cleared; humanInputs counts the person's inputs under way
 	// (HumanInput), which it waits for first.
@@ -1263,6 +1268,9 @@ func (m *Manager) SetNeedsHelp(id string, needsHelp bool) (Session, error) {
 		if to == Running {
 			l.lastActivity = m.now() // idle time starts at hand-back
 		}
+		// A file chooser open at either end passes to the person, or back
+		// to the agent, with its whole time limit (PROJ-181).
+		m.restartChoosers(l.sess.Profile)
 	default:
 		return l.sess, ErrNotRunning
 	}

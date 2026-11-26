@@ -256,7 +256,7 @@ func TestAgentUploadsWithPageTools(t *testing.T) {
 	res, msg := call(t, env.cs, "act", map[string]any{"session_id": id, "steps": []any{
 		map[string]any{"action": "upload", "ref": ref(`button "Choose a file"`), "files": []string{"invoice..v2.pdf"}},
 	}})
-	if !res.IsError || !strings.Contains(msg, "file_upload handoff") {
+	if !res.IsError || !strings.Contains(msg, "choose_files") {
 		t.Errorf("a chooser button: %s", msg)
 	}
 }

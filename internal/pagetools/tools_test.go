@@ -565,7 +565,7 @@ func TestCallsAreRefusedAndCancelled(t *testing.T) {
 	f := newFixture(t)
 	tb := f.fb.addTab("https://example.com/", loginPage(), true)
 	// A person in the live view.
-	if err := f.m.TakeControl(f.sess.ID); err != nil {
+	if err := f.m.TakeControl(f.sess.ID, "person"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.snapshot(nil); !isStatus(err, http.StatusConflict) {
