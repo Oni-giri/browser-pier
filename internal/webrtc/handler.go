@@ -237,6 +237,13 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 		vw.handBack()
 		unwatch()
 	}()
+	if control {
+		// It may have been handed back meanwhile (its input channel's
+		// time ran out, its handoff ended): say how it is now.
+		vw.mu.Lock()
+		control = vw.control && h.m.InControl(s.ID, gen)
+		vw.mu.Unlock()
+	}
 	w.Header().Set("Content-Type", "application/json")
 	// control says whether this viewer starts with the mouse and keyboard.
 	_ = json.NewEncoder(w).Encode(map[string]any{"sdp": answer, "control": control})
@@ -381,18 +388,35 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 			return
 		}
 		defer done()
+		// ended: the browser refused the operation (409) because this
+		// takeover has ended, or it was cut short as its hand-back began.
+		// The viewer then gives control up, tells its page, and sends
+		// nothing more, rather than answer every move with an error.
+		ended := func(err error) bool {
+			var se *statusError
+			refused := errors.As(err, &se) && se.code == http.StatusConflict
+			if ctx.Err() == nil && !refused {
+				return false
+			}
+			v.releaseLocked()
+			say(map[string]any{"type": "control", "on": false})
+			return true
+		}
 		switch m.Type {
 		case "lift":
-			_ = v.post(ctx, "/input/release", nil)
+			_ = ended(v.post(ctx, "/input/release", nil))
 		case "clipboard":
 			text, err := v.do(ctx, http.MethodGet, "/input/clipboard", nil, http.StatusOK, controlWait)
 			if err != nil {
 				say(map[string]any{"type": "clipboard-error", "id": m.ID, "msg": "Couldn't read the browser's clipboard: " + err.Error()})
+				ended(err)
 				return
 			}
 			say(map[string]any{"type": "clipboard", "id": m.ID, "text": string(text)})
 		case "clipboard-set":
-			v.setClipboard(ctx, m.ID, m.Text, m.Paste, say)
+			if err := v.setClipboard(ctx, m.ID, m.Text, m.Paste, say); err != nil {
+				ended(err)
+			}
 		default:
 			path, body := "/input/events", []byte(m.Events)
 			if m.Type == "text" {
@@ -400,7 +424,7 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 				// A person typing: at once, not at an agent's human pace.
 				body, _ = json.Marshal(map[string]string{"text": m.Text, "pace": "instant"})
 			}
-			if err := v.post(ctx, path, body); err != nil {
+			if err := v.post(ctx, path, body); err != nil && !ended(err) {
 				say(map[string]any{"type": "error", "msg": err.Error()})
 			}
 		}
@@ -414,16 +438,16 @@ const maxClipboardSet = 10000
 // setClipboard puts the clipboard box's text on the browser's clipboard
 // and, with paste, presses Ctrl+V. The log says only that it happened:
 // not the text, nor its length, which would tell agents a password's.
-func (v *viewer) setClipboard(ctx context.Context, id int, text string, paste bool, say func(any)) {
+func (v *viewer) setClipboard(ctx context.Context, id int, text string, paste bool, say func(any)) error {
 	fail := func(msg string) { say(map[string]any{"type": "clipboard-error", "id": id, "msg": msg}) }
 	n := utf8.RuneCountInString(text)
 	switch {
 	case n == 0:
 		fail("There's no text to send.")
-		return
+		return nil
 	case n > maxClipboardSet:
 		fail(fmt.Sprintf("That's %d characters: at most %d can be sent at once.", n, maxClipboardSet))
-		return
+		return nil
 	}
 	path, what := "/input/clipboard", "Clipboard set"
 	if paste {
@@ -432,11 +456,21 @@ func (v *viewer) setClipboard(ctx context.Context, id int, text string, paste bo
 	body, _ := json.Marshal(map[string]string{"text": text})
 	if err := v.post(ctx, path, body); err != nil {
 		fail("Couldn't send it to the browser: " + err.Error())
-		return
+		return err
 	}
 	v.h.m.Note(v.session, "", what)
 	say(map[string]any{"type": "clipboard-set", "id": id})
+	return nil
 }
+
+// statusError is the browser's refusal of a person's call, with its
+// status.
+type statusError struct {
+	code int
+	msg  string
+}
+
+func (e *statusError) Error() string { return e.msg }
 
 // take takes control for this viewer: for a handoff's, only while its
 // handoff's Needs help lasts, checked by the manager in the same step.
@@ -507,7 +541,7 @@ func (v *viewer) do(ctx context.Context, method, path string, body []byte, want 
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != want {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return nil, errors.New(string(bytes.TrimSpace(b)))
+		return nil, &statusError{resp.StatusCode, string(bytes.TrimSpace(b))}
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, maxClipboard+1))
 	if err == nil && len(b) > maxClipboard {

@@ -641,3 +641,56 @@ func TestInputChannelClockStartsAtTheGrant(t *testing.T) {
 	default:
 	}
 }
+
+// A live view whose operation the browser refuses because its takeover
+// has ended (409) gives its control up at once: it tells its page, and
+// sends the browser nothing more, rather than answer every move with an
+// error (PROJ-196).
+func TestRefusedViewerGivesUpControl(t *testing.T) {
+	b := &fencingBrowser{}
+	h, m, s := offerFixtureWith(t, b.routes, slog.New(slog.DiscardHandler))
+	k := newTalk(t, &viewer{h: h, session: s.ID, sock: m.Layout().ControlSocket("google")})
+	if r := k.send(`{"type":"take"}`); len(r) != 1 || r[0]["on"] != true {
+		t.Fatalf("take: %v", r)
+	}
+	// The browser has fenced this takeover, though BrowserPier still
+	// counts it as holding control.
+	b.mu.Lock()
+	b.fence = k.v.gen
+	b.mu.Unlock()
+	if r := k.send(`{"type":"input","events":[]}`); len(r) != 1 || r[0]["type"] != "control" || r[0]["on"] != false {
+		t.Errorf("input refused by the browser: %v, want control off", r)
+	}
+	awaitHuman(t, m, false, 5*time.Second)
+	b.took()
+	for range 5 {
+		if r := k.send(`{"type":"input","events":[]}`); len(r) != 1 || r[0]["on"] != false {
+			t.Errorf("input after giving control up: %v", r)
+		}
+	}
+	if got := b.took(); got != "" {
+		t.Errorf("the viewer kept sending after giving control up: %q", got)
+	}
+}
+
+// An offer whose control has already been handed back by the time it
+// answers (its input channel's time ran out during a slow registration)
+// says so: control false (PROJ-196).
+func TestOfferAnswersTheControlItHas(t *testing.T) {
+	was := inputOpenWait
+	inputOpenWait = time.Millisecond
+	t.Cleanup(func() { inputOpenWait = was })
+	var c fakeClipboard
+	h, m, _ := offerFixtureWith(t, c.routes, slog.New(slog.DiscardHandler))
+	pv := newPionViewer(t)
+	rec := offer(h, OfferOptions{Control: true, Opened: func(*Viewer) { awaitHuman(t, m, false, 5*time.Second) }}, pv.body)
+	var answer struct {
+		Control bool `json:"control"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &answer) != nil {
+		t.Fatalf("offer: %d %s", rec.Code, rec.Body)
+	}
+	if answer.Control {
+		t.Error("the offer answered control: true for control already handed back")
+	}
+}
