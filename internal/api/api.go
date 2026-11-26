@@ -677,7 +677,8 @@ func takeDownloadWait(body []byte) ([]byte, *int, error) {
 // act runs one input action through the control socket and logs it, or
 // writes why it didn't run.
 func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, path string, body []byte) bool {
-	ctx, done, err := a.m.AgentInput(r.Context(), s.ID)
+	tok, _ := auth.TokenFromContext(r.Context())
+	ctx, done, err := a.m.AgentInput(r.Context(), s.ID, tok.ID)
 	if errors.Is(err, sessions.ErrInputBusy) {
 		writeError(w, http.StatusConflict, "another input is still running in this browser; wait for it to finish, then send this one")
 		return false
@@ -686,13 +687,27 @@ func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, pa
 		writeError(w, http.StatusConflict, "a person has this browser (live view or a handoff); wait until they hand it back")
 		return false
 	}
-	// Until this returns: a handoff, the live view's Take control or a
-	// stop cancels ctx, which aborts the request to the browser and waits
-	// for done. The browser then breaks the action off and lets go of any
-	// key or button it held, which can still take it some tens of
-	// milliseconds after the person has the browser.
+	// Until this returns: a handoff, the live view's Take control, a stop
+	// or the token's revocation cancels ctx, which aborts the request to
+	// the browser; all but the revocation then wait for done. The browser
+	// then breaks the action off and lets go of any key or button it held,
+	// which can still take it some tens of milliseconds after the person
+	// has the browser.
 	defer done()
-	tok, _ := auth.TokenFromContext(r.Context())
+	// The token was checked when the request came in, but its body is read
+	// since: a revocation meanwhile found no input to break off. Checked
+	// again now that the input is registered, so a revocation either shows
+	// here or breaks it off (the UI revokes, then disconnects).
+	if _, err := a.web.Tokens().Get(r.Context(), tok.ID); err != nil {
+		switch {
+		case errors.Is(err, auth.ErrTokenNotFound):
+			writeError(w, http.StatusUnauthorized, sessions.ErrRevoked.Error())
+		case r.Context().Err() != nil: // the client went away
+		default:
+			a.internal(w, "checking the token", err) // fails closed
+		}
+		return false
+	}
 	resp, err := a.control(ctx, s.Profile, http.MethodPost, path, body)
 	if err != nil {
 		if ctx.Err() != nil && r.Context().Err() == nil {
@@ -703,7 +718,7 @@ func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, pa
 				what = "Typing interrupted"
 			}
 			a.m.NoteFor(r.Context(), s.ID, tok.Name, what)
-			writeError(w, http.StatusConflict, "input broke off: "+context.Cause(ctx).Error())
+			writeError(w, cutStatus(ctx), "input broke off: "+context.Cause(ctx).Error())
 			return false
 		}
 		writeError(w, http.StatusBadGateway, "input failed: "+err.Error())
@@ -717,6 +732,16 @@ func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, pa
 	}
 	a.m.NoteFor(r.Context(), s.ID, tok.Name, describeInput(path, body))
 	return true
+}
+
+// cutStatus is the status of an input action cut short: 401 when its
+// token was revoked, as the page tools answer, since trying again can't
+// help; else 409 (a person took the browser, or it is stopping).
+func cutStatus(ctx context.Context) int {
+	if errors.Is(context.Cause(ctx), sessions.ErrRevoked) {
+		return http.StatusUnauthorized
+	}
+	return http.StatusConflict
 }
 
 // describeInput puts an input action in words for the activity log.

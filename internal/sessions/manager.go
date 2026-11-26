@@ -1122,7 +1122,8 @@ func (l *live) disconnectLocked() {
 }
 
 // DisconnectToken closes every connection opened with a token, for when
-// it is revoked.
+// it is revoked, and cancels its page calls (PageLease) and input actions
+// (AgentInput) under way with ErrRevoked.
 func (m *Manager) DisconnectToken(tokenID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1137,11 +1138,17 @@ func (m *Manager) DisconnectToken(tokenID string) {
 				ls.cancel(ErrRevoked)
 			}
 		}
+		for in := range l.inputs {
+			if in.tokenID == tokenID {
+				in.cancel(ErrRevoked)
+			}
+		}
 	}
 }
 
 // ConnectedTokens lists the tokens with an open connection to any
-// browser, or a page call under way (PageLease).
+// browser, or a page call (PageLease) or input action (AgentInput) under
+// way.
 func (m *Manager) ConnectedTokens() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1159,6 +1166,9 @@ func (m *Manager) ConnectedTokens() []string {
 		}
 		for ls := range l.leases {
 			add(ls.tokenID)
+		}
+		for in := range l.inputs {
+			add(in.tokenID)
 		}
 	}
 	return out

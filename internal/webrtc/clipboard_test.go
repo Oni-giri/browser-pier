@@ -244,7 +244,7 @@ func TestClipboardEmptiedWhenControlEnds(t *testing.T) {
 	var mu sync.Mutex
 	var during []error
 	c.onEmpty = func() {
-		_, done, err := m.AgentInput(context.Background(), s.ID)
+		_, done, err := m.AgentInput(context.Background(), s.ID, "tok")
 		if err == nil {
 			done()
 		}

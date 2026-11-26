@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -400,5 +401,45 @@ func TestChooserNoticeOnAFailedAct(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusConflict || out["error"] != "step 2 failed\na file chooser is open (c4): choose_files answers or cancels it" {
 		t.Fatalf("%d %q", resp.StatusCode, out["error"])
+	}
+}
+
+// Revoking a token cuts its chooser answer under way, as it cuts its
+// typing (PROJ-166): 401, and nothing reaches the chooser.
+func TestRevokingATokenCutsItsChooserAnswer(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	s := f.start(f.all, "google", "visual")
+	f.putUpload("google", "slowly.pdf", "%PDF")
+	f.openChooser(`[{"id":"c1","multiple":false,"accept":[]}]`)
+	tok, secret, err := f.tokens.Create(ctx, "doomed", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type answer struct {
+		code int
+		err  string
+	}
+	got := make(chan answer, 1)
+	go func() {
+		var out map[string]string
+		code := f.call(secret, http.MethodPost, "/api/sessions/"+s.ID+"/chooser", `{"id": "c1", "files": ["slowly.pdf"]}`, &out)
+		got <- answer{code, out["error"]}
+	}()
+	waitFor(t, func() bool { return slices.Contains(f.m.ConnectedTokens(), tok.ID) })
+	if err := f.tokens.Revoke(ctx, tok.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.api.checkRevocations(ctx)
+	select {
+	case r := <-got:
+		if r.code != http.StatusUnauthorized || !strings.Contains(r.err, "input broke off: the agent token was revoked") {
+			t.Fatalf("the cut answer: %d %q", r.code, r.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the chooser answer went on after its token was revoked")
+	}
+	if c := f.chosen(); len(c) != 0 {
+		t.Fatalf("the chooser got %q", c)
 	}
 }

@@ -146,7 +146,7 @@ func TestAReceiptRefusedBeforeItsLeaseIsGivenBack(t *testing.T) {
 	if _, err := f.m.PageLease(WithCall(context.Background(), c), s.ID, "tok"); !errors.Is(err, ErrHumanDriving) {
 		t.Fatal(err)
 	}
-	if _, _, err := f.m.AgentInput(WithCall(context.Background(), c), s.ID); !errors.Is(err, ErrHumanDriving) {
+	if _, _, err := f.m.AgentInput(WithCall(context.Background(), c), s.ID, "tok"); !errors.Is(err, ErrHumanDriving) {
 		t.Fatal(err)
 	}
 	c.End(false)
@@ -156,12 +156,12 @@ func TestAReceiptRefusedBeforeItsLeaseIsGivenBack(t *testing.T) {
 	f.m.ReleaseControl(s.ID)
 
 	// Refused: another input is under way.
-	_, done, err := f.m.AgentInput(context.Background(), s.ID)
+	_, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
 	c = take(t, f.m, s.ID, "tok", "x", fp)
-	if _, _, err := f.m.AgentInput(WithCall(context.Background(), c), s.ID); !errors.Is(err, ErrInputBusy) {
+	if _, _, err := f.m.AgentInput(WithCall(context.Background(), c), s.ID, "tok"); !errors.Is(err, ErrInputBusy) {
 		t.Fatal(err)
 	}
 	c.End(false)
@@ -310,7 +310,7 @@ func TestACutInputEndsItsCallInterrupted(t *testing.T) {
 	f := newFixture(t)
 	s := f.start(f.m)
 	c := take(t, f.m, s.ID, "tok", "x", FingerprintOf("type", nil))
-	ctx, done, err := f.m.AgentInput(WithCall(context.Background(), c), s.ID)
+	ctx, done, err := f.m.AgentInput(WithCall(context.Background(), c), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +336,7 @@ func TestACutInputEndsItsCallInterrupted(t *testing.T) {
 		t.Fatal(err)
 	}
 	c = take(t, f.m, s.ID, "tok", "y", FingerprintOf("type", nil))
-	_, done, err = f.m.AgentInput(WithCall(context.Background(), c), s.ID)
+	_, done, err = f.m.AgentInput(WithCall(context.Background(), c), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +347,7 @@ func TestACutInputEndsItsCallInterrupted(t *testing.T) {
 	}
 	// A panic in its handler ends it interrupted too.
 	c = take(t, f.m, s.ID, "tok", "z", FingerprintOf("type", nil))
-	_, done, err = f.m.AgentInput(WithCall(context.Background(), c), s.ID)
+	_, done, err = f.m.AgentInput(WithCall(context.Background(), c), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +383,7 @@ func TestReceiptsAreCapped(t *testing.T) {
 	for i := range maxReceipts {
 		c := take(t, f2.m, s2.ID, "tok", fmt.Sprint("c", i), fp)
 		if i%2 == 0 { // running, or still waiting
-			if _, _, err := f2.m.AgentInput(WithCall(context.Background(), c), s2.ID); err != nil && !errors.Is(err, ErrInputBusy) {
+			if _, _, err := f2.m.AgentInput(WithCall(context.Background(), c), s2.ID, "tok"); err != nil && !errors.Is(err, ErrInputBusy) {
 				t.Fatal(err)
 			}
 		}
@@ -485,7 +485,7 @@ func TestACancelledCallerIsNeverAdmitted(t *testing.T) {
 			}
 			t.Fatalf("round %d: PageLease = %v", i, err)
 		}
-		if _, done, err := f.m.AgentInput(ctx, s.ID); !errors.Is(err, context.Canceled) {
+		if _, done, err := f.m.AgentInput(ctx, s.ID, "tok"); !errors.Is(err, context.Canceled) {
 			if done != nil {
 				done()
 			}
@@ -512,7 +512,7 @@ func TestACallRunningAfterItsLeaseIsListed(t *testing.T) {
 	f := newFixture(t)
 	s := f.start(f.m)
 	c := take(t, f.m, s.ID, "tok", "dl", FingerprintOf("click", nil))
-	_, done, err := f.m.AgentInput(WithCall(context.Background(), c), s.ID)
+	_, done, err := f.m.AgentInput(WithCall(context.Background(), c), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}

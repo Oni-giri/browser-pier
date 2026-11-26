@@ -435,7 +435,7 @@ func TestControlEntries(t *testing.T) {
 	f.m.ReleaseControl(s.ID)
 	// An agent driving: refused, nothing written.
 	ctx := context.Background()
-	_, done, err := f.m.AgentInput(ctx, s.ID)
+	_, done, err := f.m.AgentInput(ctx, s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}

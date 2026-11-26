@@ -867,3 +867,29 @@ func TestRecentCallsAreScrubbedThenCut(t *testing.T) {
 		t.Errorf("under 2 KiB: %d characters, %q", n, short)
 	}
 }
+
+// A slow /type with a call id, cut by its token's revocation, answers
+// 401 and its receipt ends interrupted (PROJ-166, with PROJ-156).
+func TestRevokedTypeWithACallIDEndsInterrupted(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	v := f.start(f.all, "google", "visual")
+	tok, secret, err := f.tokens.Create(ctx, "doomed", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slow := make(chan reply, 1)
+	go func() { slow <- f.send(f.srv, secret, v.ID, "type", "r1", `{"text": "typed slowly"}`) }()
+	waitFor(t, func() bool { return strings.HasPrefix(f.lastInput(), "/input/type") })
+	if err := f.tokens.Revoke(ctx, tok.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.api.checkRevocations(ctx)
+	if r := <-slow; r.code != http.StatusUnauthorized || !strings.Contains(r.body.Error, "input broke off: the agent token was revoked") {
+		t.Fatalf("the cut type: %d %s", r.code, r.raw)
+	}
+	rc, ok := f.m.CallReceipt(v.ID, tok.ID, "r1")
+	if !ok || rc.State != sessions.CallInterrupted {
+		t.Fatalf("receipt = %+v, %v", rc, ok)
+	}
+}

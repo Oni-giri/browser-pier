@@ -20,16 +20,17 @@ const takeOverAfter = 3 * time.Second
 // person has control, and with ErrInputBusy while another is under way:
 // one at a time per session, so an agent can't queue up minutes of input.
 //
-// It is a lease: call done once the browser has answered. A handoff
-// (Needs help) or a stop cancels the context it returns, so an action
-// that takes a while (typing at human pace, PROJ-113) breaks off at once,
-// and waits for leases to end before the person gets the browser; it
-// refuses new ones. The browser lets go of what the action held as it
-// answers, so the person gets it at most tens of milliseconds after the
-// break. A person can take control from the live view once one has run
+// It is a lease, held by the token tokenID: call done once the browser
+// has answered. A handoff (Needs help), a stop or the token's revocation
+// (DisconnectToken, with ErrRevoked) cancels the context it returns, so
+// an action that takes a while (typing at human pace, PROJ-113) breaks
+// off at once. A handoff or a stop also waits for leases to end before
+// the person gets the browser, and refuses new ones; a revocation doesn't
+// wait. The browser lets go of what the action held as it answers, so the
+// person gets it at most tens of milliseconds after the break. A person can take control from the live view once one has run
 // for takeOverAfter, which breaks it off the same way; not before, nor
 // for agentQuiet after it ends.
-func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, func(), error) {
+func (m *Manager) AgentInput(ctx context.Context, id, tokenID string) (context.Context, func(), error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.findLocked(id)
@@ -50,7 +51,8 @@ func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, f
 	now := m.now()
 	l.lastActivity, l.lastAgentInput = now, now
 	cctx, cancel := context.WithCancelCause(ctx)
-	in := &lease{cancel: cancel, started: now, call: CallFrom(ctx)}
+	// tokenID: DisconnectToken cancels it with ErrRevoked.
+	in := &lease{cancel: cancel, started: now, call: CallFrom(ctx), tokenID: tokenID}
 	if in.call != nil {
 		// Granted: the call is admitted (its receipt stays, PROJ-156).
 		in.call.admitLocked()
