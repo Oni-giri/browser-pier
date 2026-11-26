@@ -147,7 +147,7 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 	// A viewer promised control gets it or isn't connected: a page that
 	// thinks it drives while it only watches would send input into nothing.
 	if o.Control {
-		turn, err := h.m.TakeControlTurn(s.ID, vw.holder)
+		turn, err := h.m.TakeControlTurnByLink(s.ID, vw.holder)
 		if err != nil {
 			unwatch()
 			msg, code := "The browser isn't running.", http.StatusConflict
@@ -381,7 +381,7 @@ func (v *viewer) setClipboard(id int, text string, paste bool, say func(any)) {
 		fail("Couldn't send it to the browser: " + err.Error())
 		return
 	}
-	v.h.m.Note(v.session, "", what)
+	v.h.m.NoteControl(v.session, what)
 	say(map[string]any{"type": "clipboard-set", "id": id})
 }
 

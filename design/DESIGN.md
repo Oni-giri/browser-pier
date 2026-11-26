@@ -11,6 +11,7 @@ The reference for the web UI (PROJ-11), the handoff page (PROJ-10) and the landi
 | Profiles (grid + table) | `screens/profiles.html` | `/profiles` | `screenshots/profiles.png` |
 | New profile (modal over Profiles) | `screens/new-profile.html` | `/profiles/new` (modal, htmx) | `screenshots/new-profile.png` |
 | Live view | `screens/live-view.html` | `/profiles/{name}` | `screenshots/live-view.png` |
+| Activity log (current run and kept runs) | `screens/activity-log.html` | `/profiles/{name}/log` | `screenshots/activity-log.png` |
 | Agents (tokens, quick start) | `screens/agents.html` | `/agents` | `screenshots/agents.png` |
 | Settings | `screens/settings.html` | `/settings` | `screenshots/settings.png` |
 | Handoff link (phone) | `screens/handoff.html` | `/h/{token}` | `screenshots/handoff.png` |

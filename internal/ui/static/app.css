@@ -492,6 +492,29 @@ body.full-open{overflow:hidden}
 .log li.attention{color:var(--orange-text)}
 .log li.attention::before{background:var(--orange)}
 .log time{display:block;font-size:12px;color:var(--ink-3)}
+.log-agent{font-weight:500}
+.log li.control::before{background:var(--blue)}
+.log li.session::before{background:var(--ink-3)}
+.log li.watch{color:var(--ink-2)}
+.log li.page{color:var(--ink-2)}
+.log-title{color:var(--ink);overflow-wrap:anywhere;quotes:"“" "”"}
+
+/* Activity log page (PROJ-158) */
+.log-page{display:grid;gap:14px;max-width:880px}
+.run-facts{margin:-4px 0 14px}
+.run-end{color:var(--ink-2)}
+.run-end.failed{color:var(--red-text)}
+.runs{list-style:none;margin:0;padding:0}
+.runs>li+li{border-top:1px solid var(--line-soft)}
+details.run>summary{list-style:none;display:flex;align-items:center;justify-content:space-between;gap:6px 16px;flex-wrap:wrap;padding:12px 0;cursor:pointer}
+details.run>summary::-webkit-details-marker{display:none}
+details.run>summary::after{content:"";flex:none;width:7px;height:7px;border-right:1.5px solid var(--ink-2);border-bottom:1.5px solid var(--ink-2);transform:rotate(45deg);margin:0 4px 4px 0}
+details.run[open]>summary::after{transform:rotate(-135deg);margin:4px 4px 0 0}
+.run-when{display:flex;flex-direction:column;gap:2px;min-width:0}
+.run-when b{font-weight:500}
+details.run>summary .run-end{flex:1;text-align:right;font-size:13px}
+details.run>.log{padding:4px 0 6px}
+@media (max-width:640px){details.run>summary .run-end{text-align:left;flex-basis:100%;order:3}}
 
 /* Agents */
 .endpoints{list-style:none;margin:0;padding:0}

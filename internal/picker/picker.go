@@ -301,7 +301,7 @@ func (p *Picker) answer(w http.ResponseWriter, r *http.Request, s sessions.Sessi
 	if len(names) > 0 {
 		what = chose(len(names))
 	}
-	p.m.Note(s.ID, "", what)
+	p.m.NoteControl(s.ID, what)
 	p.log.Info("a person answered a file chooser", "profile", s.Profile, "chooser", id, "files", len(names))
 	w.WriteHeader(http.StatusNoContent)
 }

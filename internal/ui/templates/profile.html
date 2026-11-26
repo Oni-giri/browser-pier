@@ -93,11 +93,16 @@
   </dl>
 </section>
 <section class="cell" aria-labelledby="log-title">
-  <h2 class="cell-title" id="log-title" style="margin-bottom:12px">Agent log</h2>
+  <div class="cell-head"><h2 class="cell-title" id="log-title">Agent log</h2><a class="cell-link" href="/profiles/{{.Name}}/log">{{if .LogMore}}All entries{{else}}Full log{{end}} →</a></div>
   {{if .Log}}
-  <ol class="log">{{range .Log}}<li{{if .Attention}} class="attention"{{end}}>{{if .Agent}}<b style="font-weight:500">{{.Agent}}</b>: {{end}}{{.What}}{{with $.LogLink .At}}<a class="at" href="{{.}}" title="Play the recording from here">{{end}}<time datetime="{{.At.Format "2006-01-02T15:04:05Z07:00"}}">{{clock .At}}</time>{{if $.LogLink .At}}</a>{{end}}</li>{{end}}</ol>
-  {{else}}
-  <p class="small muted" style="margin:0">{{if .Live}}Nothing yet. What agents do in this browser shows up here.{{else}}Starts when the browser does.{{end}}</p>
+  <ol class="log">{{range .Log}}{{template "log-entry" (logLine . ($.LogLink .At))}}{{end}}</ol>
+  {{else if .Live}}
+  <p class="small muted" style="margin:0">Nothing yet. What agents do in this browser shows up here.</p>
+  {{else if .LastRun}}{{with .LastRun}}
+  <p class="small" style="margin:0">Last run ended <time datetime="{{.Ended.Format "2006-01-02T15:04:05Z07:00"}}">{{if ne (dayName .Ended) "Today"}}{{dayName .Ended}} {{end}}{{hhmm .Ended}}</time>. <span class="run-end{{if .End.Failed}} failed{{end}}">{{.EndText}}</span>.</p>
+  <p style="margin:8px 0 0"><a class="cell-link" href="/profiles/{{$.Name}}/log#run-{{.SessionID}}">What happened in it →</a></p>
+  {{end}}{{else}}
+  <p class="small muted" style="margin:0">Starts when the browser does.</p>
   {{end}}
 </section>
 {{if or .Record .Recordings}}

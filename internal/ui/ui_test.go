@@ -302,7 +302,7 @@ func TestEveryPageRenders(t *testing.T) {
 func TestSignedOutIsSentToLogin(t *testing.T) {
 	f := newFixture(t)
 	f.client.Jar, _ = cookiejar.New(nil)
-	for _, p := range []string{"/", "/profiles", "/agents", "/settings", "/profiles/x/preview.png"} {
+	for _, p := range []string{"/", "/profiles", "/agents", "/settings", "/profiles/x/preview.png", "/profiles/x/log"} {
 		if r := f.get(p); r.code != http.StatusSeeOther || !strings.HasPrefix(r.location, "/login") {
 			t.Fatalf("%s signed out: %d %s", p, r.code, r.location)
 		}

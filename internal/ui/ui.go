@@ -100,7 +100,7 @@ func New(m *sessions.Manager, web *auth.Web, handoffs *handoff.Service, st *sett
 	u := &UI{m: m, web: web, handoffs: handoffs, settings: st, log: log, o: o, pages: map[string]*template.Template{}, previews: map[string]cachedPreview{},
 		pinTries: auth.NewLockout(5, 15*time.Minute, 15*time.Minute), now: time.Now}
 	base := template.Must(template.New("").Funcs(funcs).ParseFS(embedded, "templates/layout.html", "templates/parts.html"))
-	for _, page := range []string{"overview", "profiles", "profile", "profile-form", "agents", "settings", "recording"} {
+	for _, page := range []string{"overview", "profiles", "profile", "profile-log", "profile-form", "agents", "settings", "recording"} {
 		t := template.Must(base.Clone())
 		u.pages[page] = template.Must(t.ParseFS(embedded, "templates/"+page+".html"))
 	}
@@ -132,6 +132,7 @@ func (u *UI) Register(mux *http.ServeMux) {
 	mux.Handle("POST /profiles", admin(u.createProfile))
 	mux.Handle("GET /profiles/{name}", admin(u.profilePage))
 	mux.Handle("GET /profiles/{name}/side", admin(u.profileSide))
+	mux.Handle("GET /profiles/{name}/log", admin(u.profileLog))
 	mux.Handle("GET /profiles/{name}/preview.png", admin(u.preview))
 	mux.Handle("GET /profiles/{name}/icon", admin(u.icon))
 	mux.Handle("GET /profiles/{name}/edit", admin(u.editProfile))
@@ -400,7 +401,9 @@ var funcs = template.FuncMap{
 		}
 		return t.Format("Mon 2 Jan, 15:04")
 	},
-	"pct": func(part, whole int64) float64 { return percent(part, whole) },
+	"pct":     func(part, whole int64) float64 { return percent(part, whole) },
+	"dayName": dayName,
+	"logLine": func(a sessions.Activity, link string) logLine { return logLine{a, link} },
 	"plural": func(n int, one, many string) string {
 		if n == 1 {
 			return one

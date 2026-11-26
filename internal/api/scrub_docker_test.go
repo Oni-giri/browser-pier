@@ -86,6 +86,24 @@ func TestFilledSecretIsHiddenEverywhere(t *testing.T) {
 	if n := a.m.SecretCount(s.ID); n != 0 {
 		t.Errorf("%d secrets outlived the session", n)
 	}
+	// The run's kept log, entries and titles, hides it too (PROJ-158):
+	// the page's title echoed it.
+	runs := a.m.Runs(s.Profile)
+	if len(runs) != 1 {
+		t.Fatalf("kept runs: %+v", runs)
+	}
+	hiddenTitle := false
+	for _, e := range runs[0].Entries {
+		for _, l := range leaks {
+			if strings.Contains(e.What, l) || strings.Contains(e.Title, l) {
+				t.Errorf("the kept log leaks %q: %+v", l, e)
+			}
+		}
+		hiddenTitle = hiddenTitle || strings.Contains(e.Title, "<hidden>")
+	}
+	if !hiddenTitle {
+		t.Errorf("no kept title says <hidden>: %+v", runs[0].Entries)
+	}
 	var s2 sessionJSON
 	if code := a.do(http.MethodPost, "/api/sessions", fmt.Sprintf(`{"profile": %q}`, s.Profile), &s2); code != http.StatusCreated {
 		t.Fatalf("start again: %d %+v", code, s2)

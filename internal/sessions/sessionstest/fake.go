@@ -63,6 +63,7 @@ type FakeContainer struct {
 	Exited    chan struct{}
 	Status    int
 	srv       *http.Server
+	lost      chan struct{} // closed by Lose
 }
 
 func New(dataDir string) *FakeRuntime {
@@ -82,7 +83,7 @@ func (f *FakeRuntime) Create(_ context.Context, spec docker.BrowserSpec) (string
 	}
 	f.next++
 	f.Creates++
-	c := &FakeContainer{ID: fmt.Sprintf("c%d", f.next), State: "created", Spec: spec, Version: docker.Spec, Exited: make(chan struct{})}
+	c := &FakeContainer{ID: fmt.Sprintf("c%d", f.next), State: "created", Spec: spec, Version: docker.Spec, Exited: make(chan struct{}), lost: make(chan struct{})}
 	f.Containers[c.ID] = c
 	return c.ID, nil
 }
@@ -179,9 +180,19 @@ func (f *FakeRuntime) Wait(ctx context.Context, id string) (int, error) {
 	select {
 	case <-c.Exited:
 		return c.Status, nil
+	case <-c.lost:
+		return -1, errors.New("lost the container")
 	case <-ctx.Done():
 		return -1, ctx.Err()
 	}
+}
+
+// Lose makes waiting for a container created here fail, as when the
+// runtime loses track of it.
+func (f *FakeRuntime) Lose(id string) {
+	f.Mu.Lock()
+	defer f.Mu.Unlock()
+	close(f.Containers[id].lost)
 }
 
 func (f *FakeRuntime) LastLogLine(context.Context, string) (string, error) {

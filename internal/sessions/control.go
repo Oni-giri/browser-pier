@@ -106,6 +106,24 @@ func (m *Manager) TakeControl(id, holder string) error {
 // TakeControlTurn is TakeControl, and returns this turn's number, for
 // HoldsTurn and ReleaseTurn: a live view releases only its own turn.
 func (m *Manager) TakeControlTurn(id, holder string) (uint64, error) {
+	return m.takeControlTurn(id, holder, tookControl)
+}
+
+// TakeControlByLink is TakeControl for the person a handoff link gave
+// the browser to (webrtc.OfferOptions.Control); the log says so
+// (PROJ-158).
+func (m *Manager) TakeControlByLink(id, holder string) error {
+	_, err := m.TakeControlTurnByLink(id, holder)
+	return err
+}
+
+// TakeControlTurnByLink is TakeControlTurn for a handoff link's holder.
+func (m *Manager) TakeControlTurnByLink(id, holder string) (uint64, error) {
+	return m.takeControlTurn(id, holder, tookControlByLink)
+}
+
+// takeControlTurn is TakeControlTurn; entry is what the log says.
+func (m *Manager) takeControlTurn(id, holder, entry string) (uint64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if holder == "" {
@@ -151,6 +169,7 @@ func (m *Manager) TakeControlTurn(id, holder string) (uint64, error) {
 	l.generation++
 	l.lastActivity = now
 	m.restartChoosers(l.sess.Profile)
+	l.noteLocked(now, KindControl, entry)
 	if breakOff {
 		// New agent input and page calls are refused from now on
 		// (l.human); what is under way breaks off. Every lease left here
@@ -263,7 +282,8 @@ func (m *Manager) HoldsTurn(id string, turn uint64) bool {
 // along, or, if the stop fails, runStop empties it before agents get the
 // browser back. Recording (PROJ-23) stays off throughout, and the gate is
 // asked again only as agents get the browser back. It drops m.mu while
-// it empties the clipboard, and returns once agents have the browser.
+// it empties the clipboard, and returns once agents have the browser. The
+// log says so (PROJ-158).
 func (m *Manager) releaseLocked(id string, l *live) {
 	if l.releasing {
 		// Another hand-back is emptying the clipboard: done when it is,
@@ -304,6 +324,7 @@ func (m *Manager) releaseLocked(id string, l *live) {
 	// gate record again (PROJ-23): never while the person's control is
 	// still ending. A session stopped meanwhile has nothing to record.
 	if m.findLocked(id) == l {
+		l.noteLocked(l.lastActivity, KindControl, controlHandedBack)
 		m.regateLocked(l)
 	}
 	m.inputsDone.Broadcast()
@@ -331,7 +352,10 @@ func (m *Manager) emptyClipboard(sessionID, profile string) {
 }
 
 // Watch records an open live view until release is called; a watched
-// browser is never stopped as idle.
+// browser is never stopped as idle. The log says when the first view
+// opens and when the last one goes, never who watches; a view that
+// opens again within unwatchGrace of the last one going takes that
+// entry back instead (a reload, a reconnection).
 func (m *Manager) Watch(id string) (release func(), err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -340,6 +364,9 @@ func (m *Manager) Watch(id string) (release func(), err error) {
 		return nil, ErrNotRunning
 	}
 	l.viewers++
+	if l.viewers == 1 {
+		m.firstViewerLocked(l)
+	}
 	done := false
 	return func() {
 		m.mu.Lock()
@@ -348,8 +375,31 @@ func (m *Manager) Watch(id string) (release func(), err error) {
 			done = true
 			l.viewers--
 			l.lastActivity = m.now()
+			if l.viewers == 0 && m.findLocked(id) == l {
+				l.noteLocked(l.lastActivity, KindWatch, nobodyWatching)
+				l.unwatchedAt = l.lastActivity
+			}
 		}
 	}, nil
+}
+
+// firstViewerLocked notes that someone started watching, or takes back
+// the "Nobody is watching" entry if the last view went within
+// unwatchGrace.
+func (m *Manager) firstViewerLocked(l *live) {
+	now := m.now()
+	gone := l.unwatchedAt
+	l.unwatchedAt = time.Time{}
+	if gone.IsZero() || now.Sub(gone) >= unwatchGrace {
+		l.noteLocked(now, KindWatch, startedWatching)
+		return
+	}
+	for i := len(l.activity) - 1; i >= 0; i-- {
+		if a := l.activity[i]; a.Kind == KindWatch && a.What == nobodyWatching && a.At.Equal(gone) {
+			l.removeLocked(i)
+			return
+		}
+	}
 }
 
 // ControlledBy reports whether holder holds control of the session (the
