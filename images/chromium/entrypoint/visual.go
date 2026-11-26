@@ -71,14 +71,14 @@ const shortcutGap = motion.ShortcutGap
 
 // browserBound reports whether a key combination is one the browser's
 // own UI may take instead of the page: any with ctrl, alt or super (by
-// any of their names, in any case), and F1–F12, alone or with shift.
+// any of their names, in any case, wherever they come in it, as xdotool
+// presses them all at once), and F1–F12, alone or with shift.
 // Plain keys, Return, Tab, Escape, arrows and shift-only combinations are
 // the page's, in order, so they don't wait: typing a password key by key
 // isn't slowed.
 func browserBound(combo string) bool {
-	parts := strings.Split(combo, "+")
-	fkey := false
-	for _, p := range parts {
+	fkey, other := false, false
+	for _, p := range strings.Split(combo, "+") {
 		k := strings.ToLower(strings.TrimSpace(p))
 		if a, ok := keyAliases[k]; ok {
 			k = a
@@ -92,10 +92,10 @@ func browserBound(combo string) bool {
 		case fkeyRE.MatchString(k):
 			fkey = true
 		case k != "shift" && !strings.HasPrefix(k, "shift_"):
-			return false
+			other = true
 		}
 	}
-	return fkey
+	return fkey && !other
 }
 
 var fkeyRE = regexp.MustCompile(`^f([1-9]|1[0-2])$`)

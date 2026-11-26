@@ -650,13 +650,15 @@ func (c *clockedVisual) do(t *testing.T, method, path, body string) time.Duratio
 
 func TestBrowserBound(t *testing.T) {
 	for _, c := range []string{"ctrl+l", "alt+d", "super+l", "ctrl+shift+t", "F6", "Control+l", "CTRL+L", "cmd+a", "option+d",
-		"Control_L+l", "Alt_R+d", "F1", "F12", "shift+F6", "f6"} {
+		"Control_L+l", "Alt_R+d", "F1", "F12", "shift+F6", "f6",
+		// A modifier after an ordinary key is pressed with it all the same.
+		"a+Control_L", "l+ctrl", "d+alt", "a+shift+super", "F6+ctrl"} {
 		if !browserBound(c) {
 			t.Errorf("%s doesn't arm the gap", c)
 		}
 	}
 	for _, c := range []string{"a", "shift+a", "Return", "Tab", "Escape", "BackSpace", "Left", "space", "shift+Tab", "F13",
-		"F24", "Delete", "Next", "U00E9", "Shift_L+a"} {
+		"F24", "Delete", "Next", "U00E9", "Shift_L+a", "a+F6", "F6+a", "a+shift"} {
 		if browserBound(c) {
 			t.Errorf("%s arms the gap", c)
 		}
