@@ -159,8 +159,8 @@ func New(o Options) (*Client, error) {
 	if p := userProblem(o.User); p != "" {
 		return nil, fmt.Errorf("the browsers' user must be a numeric uid:gid other than root, each part below 2^32; %q %s", o.User, p)
 	}
-	if !guardUsernsRE.MatchString(o.UsernsMode) {
-		return nil, fmt.Errorf("the user namespace mode must be unset or keep-id, got %q", o.UsernsMode)
+	if !ValidUsernsMode(o.UsernsMode) {
+		return nil, fmt.Errorf("the user namespace mode must be unset or keep-id (with uid, gid or size), got %q", o.UsernsMode)
 	}
 	var seccomp bytes.Buffer
 	if err := json.Compact(&seccomp, chromium.SeccompProfile); err != nil {

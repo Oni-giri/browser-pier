@@ -99,8 +99,8 @@ var (
 	guardProfileRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$`)
 	// uid:gid, numeric.
 	guardUserRE = regexp.MustCompile(`^([0-9]{1,10}):([0-9]{1,10})$`)
-	// The user namespace modes allowed: none, or Podman's keep-id.
-	guardUsernsRE = regexp.MustCompile(`^(?:keep-id(?::[a-z]+=[0-9]+(?:,[a-z]+=[0-9]+)*)?)?$`)
+	// The options Podman's keep-id takes.
+	guardKeepIDOptions = []string{"uid", "gid", "size"}
 )
 
 // userProblem says what is wrong with s as the browsers' uid:gid, or ""
@@ -119,6 +119,35 @@ func userProblem(s string) string {
 		return "is out of range"
 	}
 	return ""
+}
+
+// ValidUsernsMode reports whether s is a user namespace mode the
+// containers may get: unset, or Podman's keep-id, with each of its
+// options (uid, gid, size) at most once and a 32-bit number. The config
+// check of BROWSERPIER_USERNS_MODE, New and the guard all use it.
+func ValidUsernsMode(s string) bool {
+	if s == "" || s == "keep-id" {
+		return true
+	}
+	opts, ok := strings.CutPrefix(s, "keep-id:")
+	if !ok {
+		return false
+	}
+	seen := map[string]bool{}
+	for o := range strings.SplitSeq(opts, ",") {
+		name, value, ok := strings.Cut(o, "=")
+		if !ok || !slices.Contains(guardKeepIDOptions, name) || seen[name] {
+			return false
+		}
+		seen[name] = true
+		if value == "" || strings.Trim(value, "0123456789") != "" {
+			return false
+		}
+		if _, err := strconv.ParseUint(value, 10, 32); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // The environment variables a browser container may get, and the ones it
@@ -197,7 +226,7 @@ func (c *Client) checkCreate(kind createKind, o client.ContainerCreateOptions) e
 	if err := g.user(c.user, cfg.User); err != nil {
 		return err
 	}
-	if !guardUsernsRE.MatchString(c.userns) {
+	if !ValidUsernsMode(c.userns) {
 		return g.refuse("HostConfig.UsernsMode", "is neither unset nor keep-id")
 	}
 	if string(host.UsernsMode) != c.userns {

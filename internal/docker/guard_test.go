@@ -87,6 +87,43 @@ func TestGuardAcceptsWhatTheBuildersMake(t *testing.T) {
 	}
 }
 
+// The user namespace modes allowed: Podman's keep-id options by name, each
+// once, numeric (item 3 of the Codex review). New and the guard agree.
+var (
+	goodUserns = []string{"", "keep-id", "keep-id:uid=1000", "keep-id:uid=1000,gid=1000", "keep-id:size=65536",
+		"keep-id:gid=0,uid=4294967295,size=1"}
+	badUserns = []string{"host", "private", "auto", "nomap", "keep-id:", "keep-id:typo=1000", "keep-id:uid=1000,typo=1",
+		"keep-id:uid=1,uid=2", "keep-id:uid=", "keep-id:uid=x", "keep-id:uid=+1", "keep-id:uid=4294967296",
+		"keep-id:uid=1000,", "keep-id:,uid=1000", "keep-id:UID=1000", "keep-id;host", " keep-id", "Keep-id"}
+)
+
+func TestUsernsModes(t *testing.T) {
+	for _, v := range goodUserns {
+		if !ValidUsernsMode(v) {
+			t.Errorf("%q refused", v)
+		}
+		c := guardClient(t, true, appArmorPlan{})
+		c.userns = v
+		if err := c.checkCreate(kindBrowser, c.browserCreateOptions("", goldenSpec())); err != nil {
+			t.Errorf("%q: the guard refused it: %v", v, err)
+		}
+	}
+	for _, v := range badUserns {
+		if ValidUsernsMode(v) {
+			t.Errorf("%q accepted", v)
+		}
+		c := guardClient(t, true, appArmorPlan{})
+		c.userns = v
+		err := c.checkCreate(kindBrowser, c.browserCreateOptions("", goldenSpec()))
+		if !errors.Is(err, ErrOutsideEnvelope) || !strings.Contains(err.Error(), "HostConfig.UsernsMode is neither unset nor keep-id") {
+			t.Errorf("%q: the guard took it: %v", v, err)
+		}
+		if _, err := New(Options{Image: "img", Instance: "i1", User: "1000:1000", UsernsMode: v}); err == nil {
+			t.Errorf("New took the user namespace mode %q", v)
+		}
+	}
+}
+
 type widening struct {
 	name   string
 	kind   createKind // the browser, unless set

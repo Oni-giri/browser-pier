@@ -8,13 +8,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/pion/stun/v4"
 
 	"github.com/Oni-giri/browser-pier/internal/blocklist"
+	"github.com/Oni-giri/browser-pier/internal/docker"
 )
 
 const (
@@ -196,10 +196,6 @@ func (c *Config) loadTURN(get func(key, def string) string) error {
 	return nil
 }
 
-// usernsModeRE is BROWSERPIER_USERNS_MODE's allowed values: unset, or
-// Podman's keep-id with its numeric options.
-var usernsModeRE = regexp.MustCompile(`^(?:keep-id(?::[a-z]+=[0-9]+(?:,[a-z]+=[0-9]+)*)?)?$`)
-
 // Load reads the configuration from the process environment.
 func Load() (Config, error) {
 	return load(os.LookupEnv)
@@ -297,8 +293,8 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	// The only user namespace mode browsers may get besides the daemon's
 	// own is Podman's keep-id; "host" and the rest would widen what a
 	// browser container may do, and the create guard refuses them too.
-	if !usernsModeRE.MatchString(c.UsernsMode) {
-		return Config{}, fmt.Errorf("BROWSERPIER_USERNS_MODE: want it unset, keep-id or keep-id:uid=N,gid=N (rootless Podman), got %q", c.UsernsMode)
+	if !docker.ValidUsernsMode(c.UsernsMode) {
+		return Config{}, fmt.Errorf("BROWSERPIER_USERNS_MODE: want it unset, keep-id or keep-id:uid=N,gid=N,size=N (rootless Podman), got %q", c.UsernsMode)
 	}
 	if c.HostDataDir != "" && !filepath.IsAbs(c.HostDataDir) {
 		return Config{}, fmt.Errorf("BROWSERPIER_HOST_DATA_DIR: want an absolute path, got %q", c.HostDataDir)
