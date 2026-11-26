@@ -146,7 +146,11 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 				m.mu.Unlock()
 			}()
 			m.liftHeld(p.ctx, p.id, p.profile)
-			m.emptyClipboard(p.ctx, p.id, p.profile)
+			// As ReleaseControl does: a copy pressed just before the
+			// restart lands first, and is emptied too.
+			if settle(p.ctx) {
+				m.emptyClipboard(p.ctx, p.id, p.profile)
+			}
 		})
 	}
 	emptied.Wait()

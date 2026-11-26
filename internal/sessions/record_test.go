@@ -737,14 +737,20 @@ func TestReconcileEmptiesTheClipboardBeforeAnyRecording(t *testing.T) {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
 	// Whatever key or button a person held as BrowserPier went is let go
 	// first, as at any hand-back.
+	var lifted atomic.Int64
 	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, _ *http.Request) {
 		if rec := recP.Load(); rec != nil {
+			lifted.Store(time.Now().UnixNano())
 			rec.note("lifted")
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) {
 		if rec := recP.Load(); rec != nil {
+			// A copy pressed just before the restart lands first.
+			if waited := time.Duration(time.Now().UnixNano() - lifted.Load()); waited < clipboardSettle {
+				t.Errorf("emptied %v after the lift, before a copy could land", waited)
+			}
 			rec.mu.Lock()
 			if rec.calls != 0 {
 				t.Errorf("the recorder was told %v before the clipboard was emptied", rec.events)
