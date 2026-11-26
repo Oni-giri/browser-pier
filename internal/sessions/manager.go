@@ -177,6 +177,9 @@ type live struct {
 	// (PageLease); turn lets one run at a time.
 	leases map[*lease]struct{}
 	turn   chan struct{}
+	// queued are page calls waiting for their turn, which a token's
+	// revocation ends as it ends leases.
+	queued map[*lease]struct{}
 	// holds counts HoldSession holds: page calls wait while there is one.
 	holds int
 	// generation changes each time a person takes the browser.
@@ -1052,11 +1055,16 @@ func (m *Manager) DisconnectToken(tokenID string) {
 				ls.cancel(ErrRevoked)
 			}
 		}
+		for q := range l.queued {
+			if q.tokenID == tokenID {
+				q.cancel(ErrRevoked)
+			}
+		}
 	}
 }
 
 // ConnectedTokens lists the tokens with an open connection to any
-// browser, or a page call under way (PageLease).
+// browser, or a page call under way or waiting for its turn (PageLease).
 func (m *Manager) ConnectedTokens() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1074,6 +1082,9 @@ func (m *Manager) ConnectedTokens() []string {
 		}
 		for ls := range l.leases {
 			add(ls.tokenID)
+		}
+		for q := range l.queued {
+			add(q.tokenID) // waiting for its turn
 		}
 	}
 	return out

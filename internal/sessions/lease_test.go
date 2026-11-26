@@ -423,3 +423,50 @@ func TestReadLeasesDontKeepAPersonOut(t *testing.T) {
 	}
 	read.Release()
 }
+
+// TestRevokingATokenEndsItsWaitForATurn: a page call waiting for another
+// to finish is listed under its token, and revoking the token ends the
+// wait with ErrRevoked; the other token's call goes on.
+func TestRevokingATokenEndsItsWaitForATurn(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	held, err := f.m.PageLease(context.Background(), s.ID, "keeper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Release()
+	got := make(chan error, 1)
+	go func() {
+		ls, err := f.m.ReadLease(context.Background(), s.ID, "doomed")
+		if ls != nil {
+			ls.Release()
+		}
+		got <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		toks := f.m.ConnectedTokens()
+		if len(toks) == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("ConnectedTokens = %v; want the waiting call's token too", toks)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	f.m.DisconnectToken("doomed")
+	select {
+	case err := <-got:
+		if !errors.Is(err, ErrRevoked) {
+			t.Fatalf("revoked while waiting: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the call went on waiting after its token was revoked")
+	}
+	if held.Ctx.Err() != nil {
+		t.Fatal("another token's revocation ended the call under way")
+	}
+	if toks := f.m.ConnectedTokens(); len(toks) != 1 || toks[0] != "keeper" {
+		t.Fatalf("ConnectedTokens after = %v", toks)
+	}
+}

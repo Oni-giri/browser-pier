@@ -32,6 +32,9 @@ type Tools struct {
 	states map[string]*state // by session ID
 	// sock finds a profile's control socket; tests set it.
 	sock func(profile string) string
+	// afterRead, if set, runs as a snapshot's tree has been read, before
+	// it is formatted (tests).
+	afterRead func()
 }
 
 // state is what the tools remember about one session between calls.
@@ -111,7 +114,7 @@ func leaseError(err error) error {
 
 // read runs f under a read lease, mapping a lease that ended under it to
 // why.
-func (t *Tools) read(ctx context.Context, s sessions.Session, who Caller, f func(lctx context.Context, st *state) error) error {
+func (t *Tools) read(ctx context.Context, s sessions.Session, who Caller, f func(lctx context.Context, st *state, gen uint64) error) error {
 	if err := check(s); err != nil {
 		return err
 	}
@@ -123,14 +126,16 @@ func (t *Tools) read(ctx context.Context, s sessions.Session, who Caller, f func
 	t.mu.Lock()
 	st := t.state(s.ID, lease.Generation)
 	t.mu.Unlock()
-	err = f(lease.Ctx, st)
+	err = f(lease.Ctx, st, lease.Generation)
+	// A lease that ended under the call (a revocation, Take control) wins
+	// over its success: what it read is not handed over.
 	switch {
-	case err == nil:
-		return nil
 	case lease.Ctx.Err() != nil && ctx.Err() == nil:
 		return leaseError(context.Cause(lease.Ctx))
 	case ctx.Err() != nil:
 		return ctx.Err()
+	case err == nil:
+		return nil
 	}
 	var e *Error
 	if errors.As(err, &e) {
@@ -159,10 +164,13 @@ func (t *Tools) Snapshot(ctx context.Context, s sessions.Session, who Caller, in
 		return "", &Error{Status: http.StatusBadRequest, Msg: "query: want a max_chars above 0"}
 	}
 	var out string
-	err := t.read(ctx, s, who, func(lctx context.Context, st *state) error {
+	err := t.read(ctx, s, who, func(lctx context.Context, st *state, _ uint64) error {
 		tree, err := reader{t.sock(s.Profile)}.read(lctx)
 		if err != nil {
 			return err
+		}
+		if t.afterRead != nil {
+			t.afterRead()
 		}
 		t.mu.Lock()
 		defer t.mu.Unlock()
@@ -203,6 +211,10 @@ type Target struct {
 	X, Y int
 	// What names the element: its role and name, fenced.
 	What string
+	// Generation is the lease generation the point was read under: the
+	// click must be refused if a person had the browser since
+	// (sessions.Manager.AgentInputAt).
+	Generation uint64
 }
 
 // Locate reads a ref's element again and gives the point to click: its
@@ -212,7 +224,7 @@ type Target struct {
 // scrolls for the agent.
 func (t *Tools) Locate(ctx context.Context, s sessions.Session, who Caller, ref string) (Target, error) {
 	var out Target
-	err := t.read(ctx, s, who, func(lctx context.Context, st *state) error {
+	err := t.read(ctx, s, who, func(lctx context.Context, st *state, gen uint64) error {
 		t.mu.Lock()
 		k, err := st.refs.lookup(ref)
 		t.mu.Unlock()
@@ -241,7 +253,7 @@ func (t *Tools) Locate(ctx context.Context, s sessions.Session, who Caller, ref 
 		if n.At != nil && !n.At.Contains {
 			return &Error{Status: http.StatusConflict, Msg: ref + " is covered at its centre; close or move what covers it first. It is " + wrap("page element", name) + "\nWhat covers it: " + wrap("page element", roleWord(n.At.Role)+" "+field(n.At.Name))}
 		}
-		out = Target{X: x, Y: y, What: wrap("page element", name)}
+		out = Target{X: x, Y: y, What: wrap("page element", name), Generation: gen}
 		return nil
 	})
 	return out, err

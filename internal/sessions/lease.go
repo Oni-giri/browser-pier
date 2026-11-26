@@ -101,24 +101,47 @@ func (m *Manager) pageLease(ctx context.Context, id, tokenID string, read bool) 
 		l.turn = make(chan struct{}, 1)
 	}
 	turn := l.turn
+	// A call waiting for its turn is already its token's: revoking the
+	// token (DisconnectToken) ends the wait, as it ends a lease.
+	cctx, cancel := context.WithCancelCause(ctx)
+	waiting := &lease{tokenID: tokenID, cancel: cancel}
+	if l.queued == nil {
+		l.queued = map[*lease]struct{}{}
+	}
+	l.queued[waiting] = struct{}{}
 	m.mu.Unlock()
 
 	// One call at a time per session.
 	select {
 	case turn <- struct{}{}:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	case <-cctx.Done():
+		m.mu.Lock()
+		delete(l.queued, waiting)
+		m.mu.Unlock()
+		cancel(context.Canceled)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return nil, context.Cause(cctx)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if err := leaseRefusal(l); err != nil || m.findLocked(id) != l {
-		<-turn
-		if err == nil {
-			err = ErrNotRunning
+	delete(l.queued, waiting)
+	err := leaseRefusal(l)
+	if err == nil && m.findLocked(id) != l {
+		err = ErrNotRunning
+	}
+	if err == nil && cctx.Err() != nil {
+		// Revoked, or the caller gone, as the turn came.
+		if err = ctx.Err(); err == nil {
+			err = context.Cause(cctx)
 		}
+	}
+	if err != nil {
+		<-turn
+		cancel(context.Canceled)
 		return nil, err
 	}
-	cctx, cancel := context.WithCancelCause(ctx)
 	now := m.now()
 	ls := &lease{tokenID: tokenID, cancel: cancel, started: now, yields: read}
 	if l.leases == nil {
