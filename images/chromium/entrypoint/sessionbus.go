@@ -221,10 +221,11 @@ func busGone(b *sessionBus) bool {
 }
 
 // chromiumEnv is Chromium's environment: the entrypoint's own, the
-// display, the location's, and the bus's address. The address goes to
-// Chromium only, never into the entrypoint's environment (base), which
-// Xvfb, JWM, xdotool and GStreamer get.
+// display, the location's, the bus's address, and Mesa's settings
+// (mesaEnv). The address goes to Chromium only, never into the
+// entrypoint's environment (base), which Xvfb, JWM, xdotool and GStreamer
+// get.
 func chromiumEnv(base, geo []string, bus *sessionBus) []string {
 	env := append(append([]string{}, base...), "DISPLAY="+display)
-	return append(append(env, geo...), bus.env()...)
+	return append(append(append(env, geo...), bus.env()...), mesaEnv()...)
 }
