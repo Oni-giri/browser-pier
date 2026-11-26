@@ -54,8 +54,10 @@ const (
 // entrypoint's /input/clipboard and /input/paste, which the orchestrator
 // calls to empty the clipboard when a person's control ends (PROJ-194);
 // 6 adds the entrypoint's /record pipeline, which the recorder reads
-// (PROJ-23).
-const Spec = "6"
+// (PROJ-23); 7 adds the entrypoint's /input/live-type, which the live
+// view's Type button calls, so a person's typing doesn't wait for an
+// agent's shortcut gap (PROJ-151).
+const Spec = "7"
 
 const (
 	// StopTimeout is how long a browser container gets to stop before Docker

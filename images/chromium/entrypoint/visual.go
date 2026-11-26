@@ -142,6 +142,7 @@ func (v *visual) register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /screenshot", v.screenshot)
 	mux.HandleFunc("POST /input/click", v.click)
 	mux.HandleFunc("POST /input/type", v.typeText)
+	mux.HandleFunc("POST /input/live-type", v.liveType)
 	mux.HandleFunc("POST /input/scroll", v.scroll)
 	mux.HandleFunc("POST /input/key", v.key)
 	mux.HandleFunc("POST /input/drag", v.drag)
@@ -303,7 +304,7 @@ type xcmd struct{ args, release []string }
 type keyboard int
 
 const (
-	pointerAction  keyboard = iota // neither waits for the gap nor arms it: pointer actions, and the person's paste
+	pointerAction  keyboard = iota // neither waits for the gap nor arms it: pointer actions
 	keysAction                     // waits for the gap
 	shortcutAction                 // waits for the gap, and arms it again as it ends
 	// shortcutInside waits for the gap and, if the run is cut short or
@@ -311,6 +312,11 @@ const (
 	// its last, whose own pause after it may not have run out (PROJ-151).
 	shortcutInside
 )
+
+// personAction is the live view's typing and its clipboard box's paste:
+// the person's keys, which neither wait for an agent's gap nor arm it,
+// as their keys in /input/events don't.
+const personAction = pointerAction
 
 // perform runs an action's xdotool commands one after another, with v.mu
 // held: build can ask where the pointer is now. A keyboard action first
@@ -548,6 +554,27 @@ func (v *visual) typeText(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v.perform(w, r, keysAction, func(func() hand) []xcmd { return v.humanType(t.Text) })
+}
+
+// liveTypeRequest is the live view's Type button's text, typed at instant
+// pace, as /input/type's.
+type liveTypeRequest struct{ Text string }
+
+// liveType types the person's text from the live view's Type button: as
+// /input/type at instant pace, but as the person's input, so it doesn't
+// wait for an agent's shortcut gap (PROJ-151). Only the orchestrator's
+// live view calls it; agents' input never reaches it.
+func (v *visual) liveType(w http.ResponseWriter, r *http.Request) {
+	var t liveTypeRequest
+	if !decode(w, r, &t) {
+		return
+	}
+	args, err := typeArgs(t.Text)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	v.input(w, r, personAction, args)
 }
 
 type scrollRequest struct {

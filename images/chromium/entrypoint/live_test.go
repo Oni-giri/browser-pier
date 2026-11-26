@@ -141,3 +141,30 @@ func TestLivePasteIgnoresTheShortcutGap(t *testing.T) {
 		t.Fatalf("the person's Ctrl+V made the agent wait %v", c.slept)
 	}
 }
+
+// The live view's Type button is the person's input too: it types at once
+// without waiting for an agent's shortcut gap, and doesn't arm it. Its text
+// is checked as /input/type's.
+func TestLiveTypeIgnoresTheShortcutGap(t *testing.T) {
+	c := newClockedVisual()
+	c.do(t, http.MethodPost, "/input/key", `{"keys": "ctrl+l", "pace": "instant"}`)
+	at := c.do(t, http.MethodPost, "/input/live-type", `{"text": "héllo"}`)
+	if len(c.slept) != 0 || at != xdotoolTakes {
+		t.Fatalf("the person's text waited %v, started at %v", c.slept, at)
+	}
+	if got := strings.Join(c.calls[1].args, " "); got != "type --clearmodifiers --delay 12 -- héllo" {
+		t.Fatalf("typed with %q", got)
+	}
+	// Past the agent's gap, the person's text doesn't arm it again.
+	c.t = c.t.Add(time.Second)
+	c.do(t, http.MethodPost, "/input/live-type", `{"text": "x"}`)
+	c.do(t, http.MethodPost, "/input/type", `{"text": "x", "pace": "instant"}`)
+	if len(c.slept) != 0 {
+		t.Fatalf("the person's text made the agent wait %v", c.slept)
+	}
+	for _, body := range []string{`{"text": ""}`, `{"text": "` + strings.Repeat("a", maxTypeLen+1) + `"}`, `{"text": "x", "pace": "human"}`, `{}`} {
+		if rec := serveVisual(c.visual, http.MethodPost, "/input/live-type", body); rec.Code != http.StatusBadRequest {
+			t.Errorf("%.40s: %d", body, rec.Code)
+		}
+	}
+}

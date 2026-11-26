@@ -61,7 +61,7 @@ func TestPersonsInputNeverReachesARecordedPage(t *testing.T) {
 	posts := 0
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok\n") })
-	for _, path := range []string{"POST /input/events", "POST /input/type"} {
+	for _, path := range []string{"POST /input/events", "POST /input/live-type"} {
 		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
 			mu.Lock()
 			posts++

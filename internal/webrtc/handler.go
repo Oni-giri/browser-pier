@@ -307,9 +307,10 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 		default:
 			path, body := "/input/events", []byte(m.Events)
 			if m.Type == "text" {
-				path = "/input/type"
-				// A person typing: at once, not at an agent's human pace.
-				body, _ = json.Marshal(map[string]string{"text": m.Text, "pace": "instant"})
+				// A person typing: at once, not at an agent's human pace,
+				// and not held back by an agent's shortcut gap (PROJ-151).
+				path = "/input/live-type"
+				body, _ = json.Marshal(map[string]string{"text": m.Text})
 			}
 			if err := v.post(path, body); err != nil {
 				say(map[string]any{"type": "error", "msg": err.Error()})
