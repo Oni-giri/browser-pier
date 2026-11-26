@@ -216,7 +216,7 @@ class Component extends DCLogic {
       pinChanged: 'Set · changed ' + s.pinChanged,
       editPin: () => this.setState({ pin: 'editing' }),
       cancelPin: () => this.setState({ pin: 'idle' }),
-      savePin: () => { this.setState({ pin: 'idle', pinSet: true, pinChanged: 'just now' }); this.flash(s.pinSet ? 'Handoff PIN changed' : 'Handoff PIN set'); },
+      savePin: () => { this.setState({ pin: 'idle', pinSet: true, pinChanged: 'just now' }); this.flash('PIN saved'); },
       policies: P.map((p) => ({ ...p, ...seg(p.id === s.policy), on: p.id === s.policy ? 'true' : 'false', pick: () => this.setState({ policy: p.id }) })),
       policyHint: cur.hint,
       ram: s.ram, ramGb, fits: Math.max(0, Math.floor((16 * s.ram / 100 - 7.1) / 0.9)),
