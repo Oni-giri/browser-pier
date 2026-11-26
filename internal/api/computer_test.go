@@ -276,7 +276,7 @@ func TestComputerOneInputAtATime(t *testing.T) {
 func TestComputerWhileAPersonDrives(t *testing.T) {
 	f := newFixture(t)
 	s := f.start(f.all, "google", "visual")
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatal(err)
 	}
 	var e map[string]string

@@ -46,7 +46,7 @@ func (a *API) reportDownloads(w http.ResponseWriter, r *http.Request, s sessions
 	}
 	tok, _ := auth.TokenFromContext(r.Context())
 	for _, line := range files.LogLines(ds) {
-		a.m.Note(s.ID, tok.Name, line)
+		a.m.NoteDownloadFor(r.Context(), s.ID, tok.Name, line)
 	}
 	w.Header().Set(DownloadsHeader, downloadsHeader(ds))
 }

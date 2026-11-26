@@ -290,23 +290,13 @@ func (c *Client) checkable(ctx context.Context, pull bool) (bool, string) {
 // daemon refusing the profile, or the check itself failing, counts as
 // fails; any other error is unknown.
 func (c *Client) checkSandbox(ctx context.Context, opt string) (verdict, string) {
-	cfg, host := browserConfig(c.image, c.seccompOpt, opt, BrowserSpec{User: c.user})
-	cfg.Cmd = []string{checkArg}
-	cfg.Env = nil
-	cfg.StopTimeout = nil
-	cfg.Labels = map[string]string{LabelCheck: "true", LabelInstance: c.instance}
-	host.Mounts = nil
-	host.ShmSize = 0
-	host.NetworkMode = "none"
-	host.UsernsMode = container.UsernsMode(c.userns)
+	opts := c.sandboxCheckOptions(opt)
 	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()
-	// "_" keeps it apart from browsers, named "browserpier-<profile>".
-	name := "browserpier_check_" + c.instance
-	if err := c.removeCheck(ctx, name); err != nil {
+	if err := c.removeCheck(ctx, opts.Name); err != nil {
 		return unknown, err.Error()
 	}
-	res, err := c.api.ContainerCreate(ctx, client.ContainerCreateOptions{Name: name, Config: cfg, HostConfig: host})
+	res, err := c.create(ctx, kindSandboxCheck, opts)
 	if err != nil {
 		// A daemon may refuse a profile that isn't loaded when creating.
 		return appArmorVerdict(err), shorten(err.Error())
@@ -339,9 +329,30 @@ func (c *Client) checkSandbox(ctx context.Context, opt string) (verdict, string)
 	return unknown, "the sandbox check didn't run: " + line
 }
 
+// sandboxCheckOptions is the sandbox check's body under the AppArmor
+// option opt: a browser's settings, without its mounts, environment,
+// shared memory or network.
+func (c *Client) sandboxCheckOptions(opt string) client.ContainerCreateOptions {
+	cfg, host := browserConfig(c.image, c.seccompOpt, opt, BrowserSpec{User: c.user})
+	cfg.Cmd = []string{checkArg}
+	cfg.Env = nil
+	cfg.StopTimeout = nil
+	cfg.Labels = map[string]string{LabelCheck: "true", LabelInstance: c.instance}
+	host.Mounts = nil
+	host.ShmSize = 0
+	host.NetworkMode = "none"
+	host.UsernsMode = container.UsernsMode(c.userns)
+	// "_" keeps it apart from browsers, named "browserpier-<profile>".
+	return client.ContainerCreateOptions{Name: "browserpier_check_" + c.instance, Config: cfg, HostConfig: host}
+}
+
 // appArmorVerdict is a create or start error's verdict: fails if the
-// daemon couldn't apply the AppArmor profile, unknown otherwise.
+// daemon couldn't apply the AppArmor profile, unknown otherwise. A body
+// the create guard refused says nothing about the profile: unknown.
 func appArmorVerdict(err error) verdict {
+	if errors.Is(err, ErrOutsideEnvelope) {
+		return unknown
+	}
 	if isAppArmorError(err) {
 		return fails
 	}

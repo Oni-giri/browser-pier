@@ -116,7 +116,7 @@ func TestTakeControlStopsTheRecorderBeforeItReturns(t *testing.T) {
 						rec.note("person has it")
 						return
 					}
-				} else if done, err := f.m.HumanInput(s.ID); err == nil {
+				} else if done, err := f.m.HumanInput(s.ID, "person"); err == nil {
 					done()
 					rec.note("person has it")
 					return
@@ -127,7 +127,7 @@ func TestTakeControlStopsTheRecorderBeforeItReturns(t *testing.T) {
 			if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
 				t.Fatal(err)
 			}
-		} else if err := f.m.TakeControl(s.ID); err != nil {
+		} else if err := f.m.TakeControl(s.ID, "person"); err != nil {
 			t.Fatal(err)
 		}
 		want := recording.Person
@@ -175,7 +175,7 @@ func TestRecordingWaitsForTheAgentAfterHandBack(t *testing.T) {
 	done()
 	advance(agentQuiet + time.Second) // within the tail, past the agent's quiet time
 	wantRecording(t, rec, s.ID, true, "")
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatal(err)
 	}
 	f.m.ReleaseControl(s.ID)
@@ -578,7 +578,7 @@ func TestRecordingStaysOffWhileTheClipboardIsEmptied(t *testing.T) {
 	// page's form and a failed offer: each is ReleaseControl).
 	agentActs()
 	m := mark()
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatal(err)
 	}
 	wantRecording(t, rec, s.ID, false, recording.Person)
@@ -587,10 +587,10 @@ func TestRecordingStaysOffWhileTheClipboardIsEmptied(t *testing.T) {
 
 	// With the person's input under way: off while it is waited for too.
 	m = mark()
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatal(err)
 	}
-	done, err := f.m.HumanInput(s.ID)
+	done, err := f.m.HumanInput(s.ID, "person")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -608,7 +608,7 @@ func TestRecordingStaysOffWhileTheClipboardIsEmptied(t *testing.T) {
 	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatal(err)
 	}
 	f.m.ReleaseControl(s.ID)
@@ -697,7 +697,7 @@ func TestAFailedStopEmptiesTheClipboardOfAHandBackDuringIt(t *testing.T) {
 	done()
 	advance(agentQuiet + time.Second)
 	wantRecording(t, rec, s.ID, true, "")
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatal(err)
 	}
 	rec.mu.Lock()

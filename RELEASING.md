@@ -3,7 +3,7 @@
 Versions follow semver; 0.x releases may still change the API.
 
 1. **Changelog.** On `main`, add a `## X.Y.Z` section at the top of `CHANGELOG.md`: what changed for people running BrowserPier and for agents. CI uses this section as the release notes.
-2. **Browser definition.** If anything about how browser containers are started changed since the last release (flags, environment, mounts, entrypoint behaviour), bump `docker.Spec` in `internal/docker/docker.go`, so an update stops the old browsers instead of picking them up.
+2. **Browser definition.** If anything about how browser containers are started changed since the last release (flags, environment, mounts, entrypoint behaviour), bump `docker.Spec` in `internal/docker/docker.go`, so an update stops the old browsers instead of picking them up. Say so in the changelog's **Before you update** line, and say to restart any browser still running on the old image. The release with the file chooser portal (PROJ-152, PROJ-181; definition 7) must say it: a browser left on the old image keeps Chromium's GTK file dialog, which can hand a page any file in the container (PROJ-183), until it restarts.
 3. **Check the files.** `deploy/release-files.sh X.Y.Z /tmp/dist` must succeed: it pins the install files and pulls the notes out of the changelog.
 4. **Tag:** `git tag -a vX.Y.Z -m "BrowserPier X.Y.Z" && git push origin vX.Y.Z`. CI then:
    - runs the tests

@@ -41,6 +41,9 @@ type Runtime interface {
 	// Outdated reports whether a container labelled with this definition
 	// version (docker.Container.Spec) must not run on: Reconcile stops it.
 	Outdated(spec string) bool
+	// TestProxy runs the proxy check with the proxy file in spec.Dir
+	// (see TestProxy).
+	TestProxy(ctx context.Context, spec docker.ProxyTestSpec) (docker.ProxyResult, error)
 }
 
 // Layout is where profile folders live:
@@ -143,6 +146,9 @@ type Manager struct {
 	// markMu makes RegisterSecret's first secret wait until the session's
 	// mark is stored, so no second caller types before it is.
 	markMu sync.Mutex
+	// kept are the runs whose sessions ended, by profile, oldest first
+	// (Runs); in memory only.
+	kept map[string][]*keptRun
 
 	// rec records screens and recStore keeps the recordings
 	// (SetRecorder); nil for none.
@@ -152,6 +158,8 @@ type Manager struct {
 	// admit is held from checking there is room for a new browser to
 	// recording its session, so two starts can't both squeeze in.
 	admit sync.Mutex
+	// proxyTest is held by the one proxy test running (TestProxy).
+	proxyTest sync.Mutex
 }
 
 // live is a session with a container, from Starting until it is final.
@@ -181,8 +189,13 @@ type live struct {
 	holds int
 	// generation changes each time a person takes the browser.
 	generation uint64
-	// human is set while a person has control from the live view.
-	human bool
+	// human is set while a person has control from the live view, and
+	// holder names who: the opaque id TakeControl was given (PROJ-184).
+	// controlTurn numbers each Take control, so a live view that lost
+	// control behind its back can't release the next one's (ReleaseTurn).
+	human       bool
+	holder      string
+	controlTurn uint64
 	// releasing is set while ReleaseControl empties the clipboard, before
 	// human is cleared; humanInputs counts the person's inputs under way
 	// (HumanInput), which it waits for first.
@@ -198,8 +211,23 @@ type live struct {
 	// exemptFull is set once the browser refused an exemption from the ad
 	// and tracker list for its cap (logged once).
 	exemptFull atomic.Bool
-	// activity is what agents did, oldest first; it goes with the session.
-	activity []Activity
+	// activity is the run's log, oldest first, and activityBytes what it
+	// counts for (entrySize); it moves to the kept runs when the session
+	// ends (keepRunLocked).
+	activity      []Activity
+	activityBytes int
+	// lastTitle is a hash of the last tab title recorded (NoteTitle).
+	lastTitle [32]byte
+	// unwatchedAt is when the last live view went, if its "Nobody is
+	// watching" entry may still be taken back.
+	unwatchedAt time.Time
+	// startedBy and fromApp say who started the browser (StartOptions).
+	startedBy string
+	fromApp   bool
+	// stopWhy is why the stop in progress was asked for, and stopFrom the
+	// state it stopped from.
+	stopWhy  StopReason
+	stopFrom State
 	// record is the profile's Record sessions setting, as of the start or
 	// the admin's last change (RefreshRecording).
 	record bool
@@ -215,6 +243,10 @@ type live struct {
 	recWhy   recording.Reason
 	recEver  bool // the recorder was told yes once
 	recTimer *time.Timer
+	// calls are the receipts of calls with an id (PROJ-156), by token and
+	// id; endSeq counts the ones that ended. They go with the session.
+	calls  map[callKey]*receipt
+	endSeq uint64
 }
 
 // conn is one agent connection to a browser; cancelling it closes it.
@@ -253,6 +285,7 @@ func NewManager(db *sql.DB, rt Runtime, layout Layout, log *slog.Logger) (*Manag
 		live:         map[string]*live{},
 		held:         map[string]bool{},
 		secrets:      scrub.NewRegistry(),
+		kept:         map[string][]*keptRun{},
 	}
 	m.inputsDone = sync.NewCond(&m.mu)
 	return m, nil
@@ -328,6 +361,11 @@ type StartOptions struct {
 	// session, a running one included. Blocking can only be turned off
 	// this way, never on, and the profile's setting doesn't change.
 	AllowAds bool
+	// By is the name of the agent's token starting it, if an agent is.
+	By string
+	// FromApp: the admin starts it from the web UI. The run's log then
+	// starts with "Started from the app".
+	FromApp bool
 }
 
 // Start starts the profile's browser, or attaches to it if it is already
@@ -339,7 +377,6 @@ func (m *Manager) Start(ctx context.Context, profile string, mode profiles.Mode)
 
 // StartWith is Start with options.
 func (m *Manager) StartWith(ctx context.Context, profile string, opts StartOptions) (s Session, attached bool, err error) {
-	mode := opts.Mode
 	if m.ctx.Err() != nil {
 		return Session{}, false, ErrClosed
 	}
@@ -365,7 +402,7 @@ func (m *Manager) StartWith(ctx context.Context, profile string, opts StartOptio
 			}
 			return s, attached, err
 		}
-		l, p, again, err := m.admitAndBegin(ctx, profile, mode, opts.AllowAds)
+		l, p, again, err := m.admitAndBegin(ctx, profile, opts)
 		if err != nil {
 			return Session{}, false, err
 		}
@@ -373,7 +410,10 @@ func (m *Manager) StartWith(ctx context.Context, profile string, opts StartOptio
 			continue // another start got there first: attach to it
 		}
 		if !m.spawn(func() { m.launch(l, p) }) {
-			m.end(l, "", func(s *Session) { s.State, s.Error = Failed, "BrowserPier was shutting down" })
+			m.end(l, "", func(s *Session) StopReason {
+				s.State, s.Error = Failed, "BrowserPier was shutting down"
+				return endStartFailed
+			})
 			return Session{}, false, ErrClosed
 		}
 		return m.awaitStart(ctx, l, false)
@@ -384,7 +424,8 @@ func (m *Manager) StartWith(ctx context.Context, profile string, opts StartOptio
 // start at a time: the admission lock is held from the memory check until
 // the session counts towards memory. again is true if a session for the
 // profile appeared meanwhile, to attach to instead.
-func (m *Manager) admitAndBegin(ctx context.Context, profile string, mode profiles.Mode, allowAds bool) (l *live, p profiles.Profile, again bool, err error) {
+func (m *Manager) admitAndBegin(ctx context.Context, profile string, opts StartOptions) (l *live, p profiles.Profile, again bool, err error) {
+	mode := opts.Mode
 	// Check the request before stopping anyone's browser for it.
 	if _, err := m.profiles.Get(ctx, profile); err != nil {
 		return nil, p, false, err
@@ -405,7 +446,7 @@ func (m *Manager) admitAndBegin(ctx context.Context, profile string, mode profil
 	if _, ok := m.live[profile]; ok {
 		return nil, p, true, nil
 	}
-	l, p, err = m.begin(ctx, profile, mode, allowAds)
+	l, p, err = m.begin(ctx, profile, opts)
 	return l, p, false, err
 }
 
@@ -417,7 +458,8 @@ func (m *Manager) hasLive(profile string) bool {
 }
 
 // begin records a new Starting session. m.mu must be held.
-func (m *Manager) begin(ctx context.Context, profile string, mode profiles.Mode, allowAds bool) (*live, profiles.Profile, error) {
+func (m *Manager) begin(ctx context.Context, profile string, opts StartOptions) (*live, profiles.Profile, error) {
+	mode := opts.Mode
 	if m.draining {
 		return nil, profiles.Profile{}, ErrClosed
 	}
@@ -441,13 +483,17 @@ func (m *Manager) begin(ctx context.Context, profile string, mode profiles.Mode,
 		WHERE profile = ? AND state IN ('starting', 'running', 'needs_help', 'stopping')`, now.UnixMilli(), profile); err != nil {
 		return nil, p, err
 	}
-	s := Session{ID: newID(), Profile: profile, Mode: mode, State: Starting, CreatedAt: now, UpdatedAt: now, BlockAds: p.BlockAds && !allowAds}
+	s := Session{ID: newID(), Profile: profile, Mode: mode, State: Starting, CreatedAt: now, UpdatedAt: now, BlockAds: p.BlockAds && !opts.AllowAds}
 	if err := insertSession(ctx, m.db, s); err != nil {
 		return nil, p, err
 	}
 	l := newLive(s)
 	l.lastActivity = now
 	l.record = p.Record
+	l.startedBy, l.fromApp = opts.By, opts.FromApp
+	if opts.FromApp {
+		l.noteLocked(now, KindSession, startedFromApp)
+	}
 	m.live[profile] = l
 	return l, p, nil
 }
@@ -477,7 +523,7 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 		m.abort(l, "", fmt.Sprintf("closing the tabs of a session a secret was typed into: %v", err))
 		return
 	}
-	if err := m.writeProxyFile(p); err != nil {
+	if err := m.writeProxyFile(ctx, p); err != nil {
 		m.abort(l, "", fmt.Sprintf("handing over the proxy: %v", err))
 		return
 	}
@@ -525,6 +571,11 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 	for retried := false; ; retried = true {
 		var err error
 		cid, err = m.rt.Create(ctx, spec)
+		if errors.Is(err, docker.ErrOutsideEnvelope) {
+			// It says which container it refused, and why.
+			m.abort(l, "", err.Error())
+			return
+		}
 		if err != nil {
 			m.abort(l, "", fmt.Sprintf("creating the browser container: %v", err))
 			return
@@ -725,18 +776,30 @@ func (m *Manager) finish(l *live, cid string, code int, waitErr error) {
 	if graceful {
 		m.refreshIcon(profile)
 	}
-	m.end(l, lastLog, func(s *Session) {
+	m.end(l, lastLog, func(s *Session) StopReason {
 		switch {
 		case l.failure != "":
+			// Set while it was starting: it never got to Running.
 			s.State, s.Error = Failed, l.failure
+			return endStartFailed
 		case waitErr != nil:
 			s.State, s.Error = Failed, fmt.Sprintf("lost track of the browser container: %v", waitErr)
+			return endLost
 		case s.State == Stopping && code == 0:
 			s.State = Stopped
+			if l.stopWhy.end == "" {
+				return endUnknown // a stop the BrowserPier before a restart began
+			}
+			return l.stopWhy
 		case s.State == Stopping:
 			s.State, s.Error = Failed, fmt.Sprintf("the browser didn't close cleanly (exit status %d), so recent logins may be lost", code)
+			return endUnclean
+		case s.State == Starting:
+			s.State, s.Error = Failed, fmt.Sprintf("the browser exited unexpectedly (exit status %d)", code)
+			return endStartFailed
 		default:
 			s.State, s.Error = Failed, fmt.Sprintf("the browser exited unexpectedly (exit status %d)", code)
+			return endCrashed
 		}
 	})
 }
@@ -798,7 +861,10 @@ func (m *Manager) abort(l *live, cid, reason string) {
 	if cid != "" {
 		lastLog = m.cleanup(cid)
 	}
-	m.end(l, lastLog, func(s *Session) { s.State, s.Error = Failed, reason })
+	m.end(l, lastLog, func(s *Session) StopReason {
+		s.State, s.Error = Failed, reason
+		return endStartFailed
+	})
 }
 
 // proxyFile is where the proxy URL waits for the entrypoint, which reads
@@ -807,7 +873,9 @@ const proxyFile = "proxy.json"
 
 // writeProxyFile hands the profile's proxy, credentials included, to the
 // browser container through its control folder, never its environment.
-func (m *Manager) writeProxyFile(p profiles.Profile) error {
+// A template's {sticky} is filled in here, and only here, with the
+// profile's own token: what is stored and shown stays the template.
+func (m *Manager) writeProxyFile(ctx context.Context, p profiles.Profile) error {
 	root, err := os.OpenRoot(m.layout.dir(p.Name, "run"))
 	if err != nil {
 		return err
@@ -819,7 +887,17 @@ func (m *Manager) writeProxyFile(p profiles.Profile) error {
 	if p.Proxy == "" {
 		return nil
 	}
-	b, err := json.Marshal(map[string]string{"url": p.Proxy})
+	proxy := p.Proxy
+	if profiles.HasSticky(proxy) {
+		// Read again rather than taken from p: a profile from before
+		// tokens gets its own here, once.
+		tok, err := m.profiles.StickyToken(ctx, p.Name)
+		if err != nil {
+			return err
+		}
+		proxy = profiles.FillSticky(proxy, tok)
+	}
+	b, err := json.Marshal(map[string]string{"url": proxy})
 	if err != nil {
 		return err
 	}
@@ -898,14 +976,18 @@ func (m *Manager) cleanup(cid string) string {
 }
 
 // end makes the session final and releases its profile, and makes sure no
-// proxy credentials are left in its control folder. If the final
-// state can't be saved after a few tries, the profile is released anyway:
-// the next Start for it, or the next Reconcile, clears the stale row.
-func (m *Manager) end(l *live, lastLog string, final func(*Session)) {
+// proxy credentials are left in its control folder. final sets the final
+// state and says how the run ended, which ends its activity log before
+// the log is kept (Runs). If the final state can't be saved after a few
+// tries, the profile is released anyway: the next Start for it, or the
+// next Reconcile, clears the stale row.
+func (m *Manager) end(l *live, lastLog string, final func(*Session) StopReason) {
 	// The container's words are kept and shown after the session, when
 	// its secrets are gone: scrubbed now (PROJ-125).
 	sc := m.lockScrubber(l.sess.ID)
-	final(&l.sess)
+	// A handoff was open: it is cancelled once the session has ended.
+	inHelp := l.sess.State == NeedsHelp || (l.sess.State == Stopping && l.stopFrom == NeedsHelp)
+	why := final(&l.sess)
 	l.sess.LastLog = sc.String(lastLog)
 	l.sess.Error = sc.String(l.sess.Error)
 	l.sess.UpdatedAt = m.now()
@@ -921,11 +1003,17 @@ func (m *Manager) end(l *live, lastLog string, final func(*Session)) {
 		}
 		m.log.Error("saving the final session state", "session", s.ID, "state", s.State, "try", i+1, "err", err)
 	}
-	m.mu.Lock()
+	// The session's final secrets: one registered while the state was
+	// saved is in them.
+	sc = m.lockScrubber(s.ID)
 	if m.live[s.Profile] == l {
 		delete(m.live, s.Profile)
 	}
+	// Scrubbed with them before they are forgotten: after that, nothing
+	// could hide them in the kept log (PROJ-158).
+	m.keepRunLocked(l, s, why, inHelp, sc)
 	m.secrets.Forget(s.ID)
+	l.calls = nil
 	l.disconnectLocked()
 	l.cancelAllLocked(ErrStopping)
 	hooks := slices.Clone(m.onEnd)
@@ -1098,12 +1186,19 @@ func (m *Manager) stopContainer(cid string) {
 	})
 }
 
-// Stop closes the session's browser gracefully and waits until its
-// container is gone. Stopping a session that has already ended returns it.
-// If Docker fails to stop the container, the session goes back to the
-// state it was in and every caller gets the error.
+// Stop is StopFor with StopFromApp, the admin's reason.
 func (m *Manager) Stop(ctx context.Context, id string) (Session, error) {
-	return m.stopIf(ctx, id, nil)
+	return m.StopFor(ctx, id, StopFromApp)
+}
+
+// StopFor closes the session's browser gracefully and waits until its
+// container is gone; why says who asked, in the run's log and its kept
+// run (the first stop's reason, when several ask at once). Stopping a
+// session that has already ended returns it. If Docker fails to stop
+// the container, the session goes back to the state it was in and every
+// caller gets the error.
+func (m *Manager) StopFor(ctx context.Context, id string, why StopReason) (Session, error) {
+	return m.stopIf(ctx, id, nil, why)
 }
 
 // errStillInUse: stopIf found the session no longer met its condition.
@@ -1113,7 +1208,7 @@ var errStillInUse = errors.New("the browser is in use again")
 // step that moves the session to Stopping) holds; otherwise it returns
 // errStillInUse. It closes the race between picking an idle browser and
 // an agent attaching to it.
-func (m *Manager) stopIf(ctx context.Context, id string, cond func(*live) bool) (Session, error) {
+func (m *Manager) stopIf(ctx context.Context, id string, cond func(*live) bool, why StopReason) (Session, error) {
 	if m.ctx.Err() != nil {
 		return Session{}, ErrClosed
 	}
@@ -1142,6 +1237,7 @@ func (m *Manager) stopIf(ctx context.Context, id string, cond func(*live) bool) 
 		}
 		attempt = &stopAttempt{done: make(chan struct{})}
 		l.stop = attempt
+		l.stopWhy, l.stopFrom = why, prev
 		// Page calls under way stop first (an act lets go of what it
 		// pressed), then the browser closes.
 		l.cancelAllLocked(ErrStopping)
@@ -1226,6 +1322,7 @@ func (m *Manager) runStop(l *live, attempt *stopAttempt, cid string, prev State)
 				}
 			}
 			l.stop = nil
+			l.stopWhy, l.stopFrom = StopReason{}, ""
 			m.mu.Unlock()
 		}
 	}
@@ -1273,6 +1370,9 @@ func (m *Manager) SetNeedsHelp(id string, needsHelp bool) (Session, error) {
 		if to == Running {
 			l.lastActivity = m.now() // idle time starts at hand-back
 		}
+		// A file chooser open at either end passes to the person, or back
+		// to the agent, with its whole time limit (PROJ-181).
+		m.restartChoosers(l.sess.Profile)
 	default:
 		return l.sess, ErrNotRunning
 	}
@@ -1362,6 +1462,7 @@ func (m *Manager) DeleteProfile(ctx context.Context, name string) error {
 			m.log.Warn("removing a deleted profile's folder; will retry at the next start", "profile", name, "err", err)
 		}
 	}
+	delete(m.kept, name)
 	return nil
 }
 

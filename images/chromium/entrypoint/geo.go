@@ -30,10 +30,14 @@ type geo struct {
 
 var countryRE = regexp.MustCompile(`^[A-Z]{2}$`)
 
+// lookupTimeout bounds one location lookup, at a start and in the proxy
+// check alike.
+var lookupTimeout = 5 * time.Second
+
 // lookupGeo asks an echoip-style endpoint (ifconfig.co/json) where the
 // request came from.
 func lookupGeo(ctx context.Context, client *http.Client, endpoint string) (ip, country, tz string, err error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, lookupTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
