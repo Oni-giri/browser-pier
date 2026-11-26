@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -21,13 +22,22 @@ import (
 // ones from outside Latin-1, and an emoji from outside the BMP.
 const nonASCII = "héllo Rīga ūdens naïve ĀČĒ ģķļ šž 😀"
 
-// TestVisualTypesNonASCII is PROJ-195's check: Visual-mode typing puts
-// text with characters the keyboard map lacks into a page exactly, at
-// both paces, every time; a call that can't type it fails instead.
+// cyrillic has 34 distinct letters the keyboard map lacks, more than
+// there are spare keys, so it is typed in stretches and every spare key
+// is used.
+const cyrillic = "Съешь же ещё этих мягких французских булок, да выпей же чаю"
+
+// TestVisualTypesNonASCII is PROJ-195's check of Visual-mode typing of
+// characters the keyboard map lacks. For each text it measures, over
+// several calls: that each call answers 204 and the page's textarea then
+// settles, for a second, on exactly the text (no character missing or
+// extra); and that no keydown the page sees, other than those of the
+// text's own ASCII keys, is a key that acts (by code and by keyCode).
 // The page's own script reports what its textarea holds: nothing reads
-// it over CDP. It types the text 5 times at instant pace and 2 at human
-// pace, and one such character alone 5 times at instant pace;
-// BROWSERPIER_TEST_TYPING_RUNS=20 types each that many times.
+// it over CDP. It types the Latin text 5 times at instant pace and 2 at
+// human pace, one accent alone and the Cyrillic text 5 times each at
+// instant pace; BROWSERPIER_TEST_TYPING_RUNS=20 types each that many
+// times.
 func TestVisualTypesNonASCII(t *testing.T) {
 	instantRuns, humanRuns := 5, 2
 	if s := os.Getenv("BROWSERPIER_TEST_TYPING_RUNS"); s != "" {
@@ -93,40 +103,40 @@ func TestVisualTypesNonASCII(t *testing.T) {
 	}
 	must(fmt.Sprintf(`{"action": "click", "x": %d, "y": %d, "pace": "instant"}`, sw/2, int(offY)+40))
 
-	// value waits up to wait for the textarea to hold want, then returns
-	// what it holds once it has stopped changing.
-	value := func(want string, wait time.Duration) string {
-		deadline := time.Now().Add(wait)
-		for time.Now().Before(deadline) {
-			if det.Value() == want {
-				return want
-			}
+	// value returns what the textarea holds once it has stayed the same
+	// for a second: as soon as that is want, or after 6 s whatever it is.
+	// A late extra character shows.
+	value := func(want string) string {
+		deadline := time.Now().Add(6 * time.Second)
+		got, still := det.Value(), time.Now()
+		for {
 			time.Sleep(50 * time.Millisecond)
-		}
-		got := det.Value()
-		for still := time.Now(); time.Since(still) < time.Second; time.Sleep(50 * time.Millisecond) {
 			if v := det.Value(); v != got {
 				got, still = v, time.Now()
 			}
-		}
-		return got
-	}
-	// The text's own keys: its ASCII characters, and Shift for its capital.
-	ownKeys := map[string]bool{"Shift": true}
-	for _, r := range nonASCII {
-		if r < 0x80 {
-			ownKeys[string(r)] = true
+			if time.Since(still) >= time.Second && (got == want || time.Now().After(deadline)) {
+				return got
+			}
 		}
 	}
 	// One character alone too: its key is bound for the shortest time.
 	for _, pace := range []struct {
 		name, text string
 		runs       int
-	}{{"instant", nonASCII, instantRuns}, {"human", nonASCII, humanRuns}, {"instant", "ž", instantRuns}} {
+	}{{"instant", nonASCII, instantRuns}, {"human", nonASCII, humanRuns}, {"instant", "ž", instantRuns}, {"instant", cyrillic, instantRuns}} {
+		// The text's own keys: its ASCII characters, and Shift for a
+		// capital.
+		ownKeys := map[string]bool{"Shift": true}
+		for _, r := range pace.text {
+			if r < 0x80 {
+				ownKeys[string(r)] = true
+			}
+		}
 		exact, failed := 0, 0
+		var slowest time.Duration
 		for i := range pace.runs {
 			must(`{"action": "key", "keys": ["ctrl+a", "BackSpace"], "pace": "instant"}`)
-			if got := value("", 5*time.Second); got != "" {
+			if got := value(""); got != "" {
 				t.Fatalf("%s run %d: the textarea didn't empty: %q", pace.name, i+1, got)
 			}
 			time.Sleep(200 * time.Millisecond)
@@ -134,7 +144,8 @@ func TestVisualTypesNonASCII(t *testing.T) {
 			start := time.Now()
 			code, msg := computer(fmt.Sprintf(`{"action": "type", "text": %q, "pace": %q}`, pace.text, pace.name))
 			took := time.Since(start)
-			got := value(pace.text, 3*time.Second)
+			slowest = max(slowest, took)
+			got := value(pace.text)
 			switch {
 			case code != http.StatusNoContent:
 				failed++
@@ -153,7 +164,7 @@ func TestVisualTypesNonASCII(t *testing.T) {
 					continue
 				}
 				k := fmt.Sprintf("key %q code %q keyCode %d", e.Key, e.Code, e.KeyCode)
-				if actingKeyCode(e.KeyCode) && !seen[k] {
+				if (actingCode(e.Code) || actingKeyCode(e.KeyCode)) && !seen[k] {
 					t.Errorf("%s run %d: a keydown with %s", pace.name, i+1, k)
 				}
 				if i == 0 && !seen[k] {
@@ -162,9 +173,18 @@ func TestVisualTypesNonASCII(t *testing.T) {
 				seen[k] = true
 			}
 		}
-		t.Logf("%s pace, %d characters: %d of %d runs exact, %d calls failed", pace.name, utf8.RuneCountInString(pace.text), exact, pace.runs, failed)
+		t.Logf("%s pace, %d characters: %d of %d runs exact, %d calls failed; the slowest call took %s", pace.name, utf8.RuneCountInString(pace.text), exact, pace.runs, failed, slowest.Round(time.Millisecond))
 	}
 }
+
+// actingCode reports a key event's code for a key that acts: F1 to F24,
+// the browser, media, launch, audio, power, editing and navigation keys,
+// and the modifiers, whose codes Chromium's table (dom_code_data.inc)
+// names.
+var actingCode = regexp.MustCompile(`^(F[0-9]+|Browser.*|Media.*|Launch.*|Audio.*|Mail.*|Brightness.*|Display.*|Power|Sleep|WakeUp|Eject|` +
+	`Help|Undo|Redo|Copy|Cut|Paste|Find|Open|Props|Select|Again|Close|New|Save|Print|PrintScreen|ContextMenu|ShowAllWindows|` +
+	`Arrow.*|Home|End|PageUp|PageDown|Insert|Delete|Backspace|Tab|Enter|NumpadEnter|Escape|Pause|.*Lock|` +
+	`(Meta|Control|Alt|Shift)(Left|Right)|Fn.*)$`).MatchString
 
 // actingKeyCode reports a keyCode that Chromium or the page's editing acts
 // on: Backspace, Tab, Enter, Escape, Space to Delete (pages, arrows,
