@@ -54,8 +54,11 @@ const (
 // entrypoint's /input/clipboard and /input/paste, which the orchestrator
 // calls to empty the clipboard when a person's control ends (PROJ-194);
 // 6 adds the entrypoint's /record pipeline, which the recorder reads
-// (PROJ-23).
-const Spec = "6"
+// (PROJ-23); 7 keeps a held key or button until its release has been
+// sent, by the person's own key-up or by the hand-back's lift, so the
+// orchestrator's second try at the lift lets go of what the first
+// failed to (PROJ-196).
+const Spec = "7"
 
 const (
 	// StopTimeout is how long a browser container gets to stop before Docker

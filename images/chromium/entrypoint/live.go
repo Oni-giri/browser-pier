@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
@@ -145,22 +146,30 @@ func (li *liveInput) events(w http.ResponseWriter, r *http.Request) {
 	}
 	li.mu.Lock()
 	defer li.mu.Unlock()
+	// A key or button counts as held from before its press is sent (a
+	// failed send may have pressed it), and stops counting only once its
+	// release has been sent: a release that fails leaves it for the
+	// hand-back's lift (release) to let go of.
+	held := maps.Clone(li.held)
 	for _, e := range evs {
 		switch e.T {
 		case "down":
 			li.held["b"+strconv.Itoa(e.B)] = true
+			held["b"+strconv.Itoa(e.B)] = true
 		case "up":
-			delete(li.held, "b"+strconv.Itoa(e.B))
+			delete(held, "b"+strconv.Itoa(e.B))
 		case "keydown":
 			li.held["k"+e.K] = true
+			held["k"+e.K] = true
 		case "keyup":
-			delete(li.held, "k"+e.K)
+			delete(held, "k"+e.K)
 		}
 	}
 	if err := li.send(all); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	li.held = held
 	w.WriteHeader(http.StatusNoContent)
 }
 

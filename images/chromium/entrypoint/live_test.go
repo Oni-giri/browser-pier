@@ -114,3 +114,31 @@ func TestLiveReleaseThatFailsIsTriedAgain(t *testing.T) {
 		t.Fatalf("the release after: %d %q", rec.Code, fresh.buf.String())
 	}
 }
+
+// A key-up or button-up xdotool doesn't take leaves the key or button
+// held, for the hand-back's lift to let go of: forgetting it before the
+// send would leave it down for good (PROJ-196).
+func TestLiveReleaseThatFailsStaysHeld(t *testing.T) {
+	x := &fakeXdotool{}
+	dead1, dead2, fresh := &fakeXdotool{broken: true}, &fakeXdotool{broken: true}, &fakeXdotool{}
+	li, _ := newTestLive(x, dead1, dead2, fresh)
+	if rec := post(li.events, `[{"t":"keydown","k":"Shift_L"},{"t":"down","b":1}]`); rec.Code != http.StatusNoContent {
+		t.Fatalf("down: %d", rec.Code)
+	}
+	x.broken = true // the key-up and button-up don't get through
+	if rec := post(li.events, `[{"t":"keyup","k":"Shift_L"},{"t":"up","b":1}]`); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("an up xdotool didn't take: %d", rec.Code)
+	}
+	if rec := post(li.release, ""); rec.Code != http.StatusNoContent || fresh.buf.String() != "mouseup 1\nkeyup Shift_L\n" {
+		t.Fatalf("the hand-back's lift: %d %q", rec.Code, fresh.buf.String())
+	}
+	// Ups that do get through are forgotten.
+	fresh.buf.Reset()
+	if rec := post(li.events, `[{"t":"keydown","k":"a"},{"t":"keyup","k":"a"}]`); rec.Code != http.StatusNoContent {
+		t.Fatalf("a key: %d", rec.Code)
+	}
+	fresh.buf.Reset()
+	if rec := post(li.release, ""); rec.Code != http.StatusNoContent || fresh.buf.String() != "" {
+		t.Fatalf("nothing held: %d %q", rec.Code, fresh.buf.String())
+	}
+}
