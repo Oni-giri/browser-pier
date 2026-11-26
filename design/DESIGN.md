@@ -11,9 +11,11 @@ The reference for the web UI (PROJ-11), the handoff page (PROJ-10) and the landi
 | Profiles (grid + table) | `screens/profiles.html` | `/profiles` | `screenshots/profiles.png` |
 | New profile (modal over Profiles) | `screens/new-profile.html` | `/profiles/new` (modal, htmx) | `screenshots/new-profile.png` |
 | Live view | `screens/live-view.html` | `/profiles/{name}` | `screenshots/live-view.png` |
+| Activity log (current run and kept runs) | `screens/activity-log.html` | `/profiles/{name}/log` | `screenshots/activity-log.png` |
 | Agents (tokens, quick start) | `screens/agents.html` | `/agents` | `screenshots/agents.png` |
 | Settings | `screens/settings.html` | `/settings` | `screenshots/settings.png` |
 | Handoff link (phone) | `screens/handoff.html` | `/h/{token}` | `screenshots/handoff.png` |
+| File chooser (modal over Live view and the handoff page) | `screens/live-view.html?props={"chooser":"one"}`, `screens/handoff.html?props={"chooser":"one"}` (also `several`, `empty`, `uploading`) | over `/profiles/{name}` and `/h/{token}` | `screenshots/live-view-chooser.png`, `screenshots/handoff-chooser.png` |
 | Landing page (marketing site) | `screens/landing.html` | separate site | `screenshots/landing.png` |
 | Recordings: indicator, list, player, handoff line, settings (PROJ-23) | `screens/recordings.html` | `/profiles/{name}/recordings/{session}` and cells on other screens | none yet |
 
@@ -191,6 +193,7 @@ Live view, the browser previews on profile cards and the Overview's needs-you pr
 - Segmented control (filters, mode, policy)
 - Profile card with live preview, plus the table row variant
 - Centred modal and alert dialog
+- File chooser modal (PROJ-181): shown over the live view or the handoff page while you have control and a page asks for a file. Title "Choose a file for the page" ("…files…" when it takes several), the profile's uploads in a well as radio or checkbox rows (name in Geist, size and age as a caption; the picked row gets the selected-radio-card background and a blue ring), then **Upload from this device** (secondary, with an upload icon), **Cancel** (secondary) and **Choose** (the dialog's primary, disabled until something is picked; "Choose 2 files" for several). Wide: one footer row, Upload on the left. Phone: Upload on its own full-width row, then Cancel and Choose side by side, 46px tall. Empty: a well saying there are no uploads yet. Uploading: a well with the file's name, the bytes sent and a blue bar. Esc doesn't close it: the page waits for an answer, so Cancel is explicit.
 - Frosted needs-you chip and warm emphasis card
 - Toast (bottom centre, `ink`) and unsaved-changes bar (Settings)
 - Code block (dark, with tabs and a Copy button)

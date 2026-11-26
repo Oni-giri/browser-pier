@@ -56,9 +56,8 @@ var (
 		"templates/parts.html": {
 			lit(`<article class="card{{if eq .Status.Key "help"}} help{{if .Emph}} emph{{end}}{{end}}" id="card-{{.Name}}">`),
 			lit(`<tr{{if eq .Status.Key "help"}} class="help"{{end}}>`),
-		},
-		"templates/profile.html": {
-			lit(`<li{{if .Attention}} class="attention"{{end}}>`),
+			// The activity log's entry: Attention is set only for a handoff.
+			lit(`<li class="{{.Kind}}{{if .Attention}} attention{{end}}">`),
 		},
 		"../handoff/handoff.html": {
 			lit(`<span class="pill help plain">{{.Reason}}</span>`),

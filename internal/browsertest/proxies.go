@@ -8,12 +8,14 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 )
 
 // Proxy is an upstream proxy for tests: it requires a username and
-// password and records every target it was asked to reach.
+// password and records every target it was asked to reach, and the
+// credentials each was reached with.
 type Proxy struct {
 	Addr    string // host:port it listens on, on every interface
 	ln      net.Listener
@@ -21,7 +23,20 @@ type Proxy struct {
 	conns   map[net.Conn]struct{}
 	mu      sync.Mutex
 	targets []string
+	logins  []Login
 	denied  int
+}
+
+// Login is a user name and password a proxy let through, and the target
+// they reached.
+type Login struct{ User, Pass, Target string }
+
+// Auth decides whether a user name and password may use a proxy.
+type Auth func(user, pass string) bool
+
+// Exactly is an Auth for one user name and password.
+func Exactly(user, pass string) Auth {
+	return func(u, p string) bool { return u == user && p == pass }
 }
 
 // Alias makes the proxy reach name at addr (an IP), like a DNS entry only
@@ -72,6 +87,13 @@ func (p *Proxy) track(c net.Conn) {
 // Port is the port it listens on.
 func (p *Proxy) Port() string { _, port, _ := net.SplitHostPort(p.Addr); return port }
 
+// Logins lists the credentials of every connection let through, in order.
+func (p *Proxy) Logins() []Login {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]Login(nil), p.logins...)
+}
+
 // Targets lists the host:port targets the proxy connected, in order.
 func (p *Proxy) Targets() []string {
 	p.mu.Lock()
@@ -86,11 +108,12 @@ func (p *Proxy) Denied() int {
 	return p.denied
 }
 
-func (p *Proxy) record(target string, ok bool) {
+func (p *Proxy) record(target, user, pass string, ok bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if ok {
 		p.targets = append(p.targets, target)
+		p.logins = append(p.logins, Login{user, pass, target})
 	} else {
 		p.denied++
 	}
@@ -115,9 +138,14 @@ func pipe(a, b net.Conn) {
 // NewConnectProxy starts an HTTP proxy that only does CONNECT, with
 // basic authentication.
 func NewConnectProxy(t *testing.T, user, pass string) *Proxy {
+	return NewConnectProxyAuth(t, Exactly(user, pass))
+}
+
+// NewConnectProxyAuth is NewConnectProxy letting through whatever ok
+// accepts, as a provider taking a session code in the user name does.
+func NewConnectProxyAuth(t *testing.T, ok Auth) *Proxy {
 	ln := listen(t)
 	p := &Proxy{Addr: ln.Addr().String(), ln: ln}
-	want := "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+pass))
 	go func() {
 		for {
 			c, err := ln.Accept()
@@ -131,8 +159,9 @@ func NewConnectProxy(t *testing.T, user, pass string) *Proxy {
 					_ = c.Close()
 					return
 				}
-				if req.Method != http.MethodConnect || req.Header.Get("Proxy-Authorization") != want {
-					p.record(req.Host, false)
+				user, pass := basicAuth(req.Header.Get("Proxy-Authorization"))
+				if req.Method != http.MethodConnect || !ok(user, pass) {
+					p.record(req.Host, user, pass, false)
 					_, _ = io.WriteString(c, "HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n")
 					_ = c.Close()
 					return
@@ -143,7 +172,7 @@ func NewConnectProxy(t *testing.T, user, pass string) *Proxy {
 					_ = c.Close()
 					return
 				}
-				p.record(req.Host, true)
+				p.record(req.Host, user, pass, true)
 				p.track(c)
 				p.track(up)
 				_, _ = io.WriteString(c, "HTTP/1.1 200 OK\r\n\r\n")
@@ -158,10 +187,29 @@ func NewConnectProxy(t *testing.T, user, pass string) *Proxy {
 	return p
 }
 
+// basicAuth reads a Basic Proxy-Authorization header; empty if there is none.
+func basicAuth(h string) (user, pass string) {
+	enc, ok := strings.CutPrefix(h, "Basic ")
+	if !ok {
+		return "", ""
+	}
+	b, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil {
+		return "", ""
+	}
+	user, pass, _ = strings.Cut(string(b), ":")
+	return user, pass
+}
+
 // NewSOCKS5Proxy starts a SOCKS5 proxy with username and password
 // authentication. It records targets as sent, so a host name arriving
 // here was not resolved by the client.
 func NewSOCKS5Proxy(t *testing.T, user, pass string) *Proxy {
+	return NewSOCKS5ProxyAuth(t, Exactly(user, pass))
+}
+
+// NewSOCKS5ProxyAuth is NewSOCKS5Proxy letting through whatever ok accepts.
+func NewSOCKS5ProxyAuth(t *testing.T, ok Auth) *Proxy {
 	ln := listen(t)
 	p := &Proxy{Addr: ln.Addr().String(), ln: ln}
 	go func() {
@@ -170,13 +218,13 @@ func NewSOCKS5Proxy(t *testing.T, user, pass string) *Proxy {
 			if err != nil {
 				return
 			}
-			go p.socks(c, user, pass)
+			go p.socks(c, ok)
 		}
 	}()
 	return p
 }
 
-func (p *Proxy) socks(c net.Conn, user, pass string) {
+func (p *Proxy) socks(c net.Conn, ok Auth) {
 	defer func() { _ = c.Close() }()
 	h := make([]byte, 2)
 	if _, err := io.ReadFull(c, h); err != nil {
@@ -196,8 +244,9 @@ func (p *Proxy) socks(c net.Conn, user, pass string) {
 	_, _ = io.ReadFull(c, l)
 	pw := make([]byte, l[0])
 	_, _ = io.ReadFull(c, pw)
-	if string(u) != user || string(pw) != pass {
-		p.record("", false)
+	user, pass := string(u), string(pw)
+	if !ok(user, pass) {
+		p.record("", user, pass, false)
 		_, _ = c.Write([]byte{0x01, 0x01})
 		return
 	}
@@ -231,7 +280,7 @@ func (p *Proxy) socks(c net.Conn, user, pass string) {
 		_, _ = c.Write([]byte{0x05, 0x04, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 		return
 	}
-	p.record(target, true)
+	p.record(target, user, pass, true)
 	p.track(c)
 	p.track(up)
 	_, _ = c.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})

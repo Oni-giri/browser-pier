@@ -39,6 +39,14 @@ func TestPageToolsAreAPIModeOnly(t *testing.T) {
 			t.Errorf("%s: %q", name, desc[name])
 		}
 	}
+	// PROJ-151: what an agent must do itself after a shortcut.
+	if !strings.Contains(desc["press_keys"], "look at the screen before you type") || !strings.Contains(desc["press_keys"], "use open_url") {
+		t.Errorf("press_keys: %q", desc["press_keys"])
+	}
+	// PROJ-164: when to open a URL with open_url rather than ctrl+l.
+	if !strings.Contains(desc["open_url"], "rather than press_keys ctrl+l") || !strings.Contains(desc["open_url"], "full screen") {
+		t.Errorf("open_url: %q", desc["open_url"])
+	}
 	// The fixture's browsers start in Visual mode: the API answers 409.
 	call(t, cs, "start_browser", map[string]any{"profile": "google"})
 	s, _ := f.m.Live("google")
@@ -95,9 +103,10 @@ func TestActStepsMatchREST(t *testing.T) {
 		t.Errorf("MCP step fields %v, REST step fields %v", m, r)
 	}
 	// So do act's and snapshot's own options (PROJ-114), and wait_for's
-	// (PROJ-122), but session_id.
+	// (PROJ-122), but session_id and call_id (the API's Idempotency-Key
+	// header, PROJ-156).
 	without := func(v any) []string {
-		return slices.DeleteFunc(names(v), func(n string) bool { return n == "session_id" })
+		return slices.DeleteFunc(names(v), func(n string) bool { return n == "session_id" || n == "call_id" })
 	}
 	if m, r := without(actArgs{}), names(pagetools.ActIn{}); !slices.Equal(m, r) {
 		t.Errorf("MCP act fields %v, REST act fields %v", m, r)

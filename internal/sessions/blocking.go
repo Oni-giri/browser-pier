@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
+
+	"golang.org/x/net/idna"
 
 	"github.com/Oni-giri/browser-pier/internal/domainset"
 )
@@ -69,6 +72,21 @@ func (m *Manager) allowAds(ctx context.Context, l *live) Session {
 	}
 	_ = m.update(l, func(s *Session) { s.BlockAds = false })
 	return m.snapshot(l)
+}
+
+// ExemptURL is ExemptHost for the host of an address the agent is opening
+// (navigate, a new tab, Visual mode's open), in its ASCII form. It does
+// nothing for a session that doesn't block, or an address with no host.
+func (m *Manager) ExemptURL(ctx context.Context, id, raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" {
+		return nil
+	}
+	host := u.Hostname()
+	if h, err := idna.Lookup.ToASCII(host); err == nil {
+		host = h
+	}
+	return m.ExemptHost(ctx, id, host)
 }
 
 // ExemptHost lets a session's browser reach host, and its subdomains,

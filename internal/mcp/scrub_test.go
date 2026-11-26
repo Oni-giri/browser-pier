@@ -31,12 +31,14 @@ var toolArgs = map[string]map[string]any{
 	"click":            {"session_id": "s1", "x": 1, "y": 1},
 	"type_text":        {"session_id": "s1", "text": "hi"},
 	"press_keys":       {"session_id": "s1", "keys": "Return"},
+	"open_url":         {"session_id": "s1", "url": "https://example.com/"},
 	"scroll":           {"session_id": "s1", "x": 1, "y": 1, "down": 1},
 	"drag":             {"session_id": "s1", "from_x": 1, "from_y": 1, "to_x": 2, "to_y": 2},
 	"wait":             {"session_id": "s1", "seconds": 0},
 	"zoom":             {"session_id": "s1", "x": 0, "y": 0, "width": 10, "height": 10},
 	"list_files":       {"profile": "google"},
 	"upload_file":      {"session_id": "s1", "name": "a.txt", "content_base64": "aGk="},
+	"choose_files":     {"session_id": "s1", "id": "c1", "files": []string{"a.txt"}},
 	"snapshot":         {"session_id": "s1"},
 	"find":             {"session_id": "s1", "text": "x"},
 	"navigate":         {"session_id": "s1", "url": "https://example.com/"},
@@ -47,6 +49,8 @@ var toolArgs = map[string]map[string]any{
 	"request_handoff":  {"session_id": "s1", "reason": "captcha", "detail": "Solve it"},
 	"wait_for_handoff": {"handoff_id": "h1", "seconds": 1},
 	"cancel_handoff":   {"handoff_id": "h1"},
+	"call_status":      {"session_id": "s1", "call_id": "c1"},
+	"session_status":   {"session_id": "s1"},
 }
 
 // leakyAPI stands in for the agent API with no scrub of its own: every

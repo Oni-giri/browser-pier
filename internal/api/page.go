@@ -1,8 +1,8 @@
 package api
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -17,14 +17,14 @@ import (
 // take the same JSON as the MCP tools, and answer {"text": "..."}, the
 // same text the MCP tools return, with page content fenced.
 func (a *API) registerPageTools(mux Router) {
-	t := a.agent
+	t, c := a.agent, a.agentCall
 	mux.Handle("POST /api/sessions/{id}/snapshot", t(pageTool(a, (*pagetools.Tools).Snapshot)))
 	mux.Handle("POST /api/sessions/{id}/find", t(pageTool(a, (*pagetools.Tools).Find)))
-	mux.Handle("POST /api/sessions/{id}/navigate", t(pageTool(a, (*pagetools.Tools).Navigate)))
-	mux.Handle("POST /api/sessions/{id}/act", t(pageTool(a, (*pagetools.Tools).Act)))
+	mux.Handle("POST /api/sessions/{id}/navigate", c("navigate", pageTool(a, (*pagetools.Tools).Navigate)))
+	mux.Handle("POST /api/sessions/{id}/act", c("act", pageToolNotice(a, (*pagetools.Tools).Act)))
 	mux.Handle("POST /api/sessions/{id}/wait", t(pageTool(a, (*pagetools.Tools).WaitFor)))
 	mux.Handle("GET /api/sessions/{id}/tabs", t(pageTool(a, (*pagetools.Tools).Tabs)))
-	mux.Handle("POST /api/sessions/{id}/tabs", t(pageTool(a, (*pagetools.Tools).Tabs)))
+	mux.Handle("POST /api/sessions/{id}/tabs", c("tabs", pageTool(a, (*pagetools.Tools).Tabs)))
 	mux.Handle("POST /api/sessions/{id}/content", t(a.content))
 }
 
@@ -36,7 +36,15 @@ type pageFunc[In any] func(*pagetools.Tools, context.Context, sessions.Session, 
 // pageTool serves one page tool: the session as the token may see it
 // (404 otherwise), the input as JSON (an empty body is the defaults), and
 // the tool's text or its error.
-func pageTool[In any](a *API, f pageFunc[In]) http.HandlerFunc {
+func pageTool[In any](a *API, f pageFunc[In]) http.HandlerFunc { return pageToolWith(a, f, false) }
+
+// pageToolNotice is pageTool for a tool that acts (act): its text ends
+// with the file chooser notice when a chooser is open after it.
+func pageToolNotice[In any](a *API, f pageFunc[In]) http.HandlerFunc {
+	return pageToolWith(a, f, true)
+}
+
+func pageToolWith[In any](a *API, f pageFunc[In], notice bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		s, ok := a.session(w, r)
 		if !ok {
@@ -49,9 +57,7 @@ func pageTool[In any](a *API, f pageFunc[In]) http.HandlerFunc {
 			return
 		}
 		if strings.TrimSpace(string(body)) != "" {
-			dec := json.NewDecoder(strings.NewReader(string(body)))
-			dec.DisallowUnknownFields()
-			if err := dec.Decode(&in); err != nil {
+			if err := decodeOne(bytes.NewReader(body), &in); err != nil {
 				writeError(w, http.StatusBadRequest, "bad JSON: "+err.Error())
 				return
 			}
@@ -61,13 +67,25 @@ func pageTool[In any](a *API, f pageFunc[In]) http.HandlerFunc {
 		var pe *pagetools.Error
 		switch {
 		case errors.As(err, &pe):
-			writeError(w, pe.Status, pe.Msg)
+			msg := pe.Msg
+			if notice {
+				// A step that failed after one that opened a chooser.
+				if line := a.chooserNotice(r.Context(), s); line != "" {
+					msg += "\n" + line
+				}
+			}
+			writeError(w, pe.Status, msg)
 			return
 		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 			return // the client went away
 		case err != nil:
 			a.pageInternal(w, s, "a page tool", err)
 			return
+		}
+		if notice {
+			if line := a.chooserNotice(r.Context(), s); line != "" {
+				out += "\n" + line
+			}
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"text": out})
 	}
