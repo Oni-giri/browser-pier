@@ -92,7 +92,7 @@ func (m *Manager) TakeControl(id string) error {
 // way and someone else has taken the browser, nothing they still send
 // reaches it (PROJ-196).
 func (m *Manager) TakeControlGen(id string) (gen uint64, err error) {
-	return m.takeControl(id, 0)
+	return m.takeControl(id, false, 0)
 }
 
 // ErrHandoffEnded: the handoff a Take control was for has ended.
@@ -118,18 +118,22 @@ func (m *Manager) HelpEpoch(id string) (uint64, bool) {
 // handoff's link that outlives its handoff, even by a moment, never
 // takes the browser back from the agent it was handed back to.
 func (m *Manager) TakeControlInHandoff(id string, epoch uint64) (gen uint64, err error) {
-	return m.takeControl(id, epoch)
+	return m.takeControl(id, true, epoch)
 }
 
-// takeControl is TakeControlGen, and with epoch, TakeControlInHandoff.
-func (m *Manager) takeControl(id string, epoch uint64) (gen uint64, err error) {
+// takeControl is TakeControlGen, and for a handoff, TakeControlInHandoff:
+// no epoch, 0 included, lets a handoff's take through once its Needs
+// help is over.
+func (m *Manager) takeControl(id string, handoff bool, epoch uint64) (gen uint64, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.findLocked(id)
 	if l == nil || (l.sess.State != Running && l.sess.State != NeedsHelp) {
 		return 0, ErrNotRunning
 	}
-	handoffOver := func() bool { return epoch != 0 && (l.sess.State != NeedsHelp || l.helpEpoch != epoch) }
+	handoffOver := func() bool {
+		return handoff && (epoch == 0 || l.sess.State != NeedsHelp || l.helpEpoch != epoch)
+	}
 	if handoffOver() {
 		return 0, ErrHandoffEnded
 	}
@@ -355,34 +359,38 @@ func (m *Manager) releaseLocked(l *live, id string) {
 		return
 	}
 	l.releasing = true
-	// What the person's live view still has under way breaks off now: it
-	// can't reach the browser any more, and returns at once. It is waited
-	// for all the same, before anything else, so none is left alive
-	// once agents are let in.
+	// What the person's live view still has under way breaks off now, on
+	// this side: it returns at once, and can't reach the browser any
+	// more.
 	l.takeCancel()
-	if !m.waitBoundedLocked(inputWait, func() bool { return l.humanInputs > 0 && m.findLocked(id) == l }) {
-		// Something admitted never said done. Rather than hand the
-		// browser back with it alive, the session ends: its end waits
-		// (with its own backstop) and lets go of the profile.
-		m.log.Error("a person's input was still under way "+inputWait.String()+" after their control began to end; stopping the browser rather than handing it back", "session", id)
-		m.spawn(func() {
-			ctx, cancel := context.WithTimeout(m.ctx, stopTimeout+time.Minute)
-			defer cancel()
-			if _, err := m.Stop(ctx, id); err != nil {
-				m.log.Error("stopping the browser", "session", id, "err", err)
-			}
-		})
-		for l.humanInputs > 0 && m.findLocked(id) == l {
-			m.inputsDone.Wait()
-		}
-	}
-	profile := l.sess.Profile
-	// Let go of whatever key or button the person still holds, so whoever
-	// drives next doesn't inherit a pressed one, however their control
-	// ended. While the browser runs, waits for help or is stopping (a
-	// stop may fail); not once the session is over.
+	gen, profile := l.humanGen, l.sess.Profile
+	// And on the browser's: it fences this takeover, so whatever of it
+	// is still on its way there, or held up in there, is refused from
+	// now on; an action already under way there finishes first. Then it
+	// lets go of whatever key or button the person still holds, so
+	// whoever drives next doesn't inherit a pressed one. Tried until the
+	// browser answers or the session ends: agents wait meanwhile. While
+	// the browser runs, waits for help or is stopping (a stop may fail);
+	// not once the session is over.
+	fenced := false
 	if l.sess.State == Running || l.sess.State == NeedsHelp || l.sess.State == Stopping {
-		m.unlockedOpLocked(l, func(ctx context.Context) { m.liftHeld(ctx, id, profile) })
+		m.unlockedOpLocked(l, func(ctx context.Context) {
+			_, fenced = m.fenceTakeover(ctx, id, profile, strconv.FormatUint(gen, 10))
+		})
+	}
+	// The person's operations under way return, cancelled or refused.
+	// One that doesn't (a bug) can do nothing to the browser once it has
+	// fenced the takeover, so the hand-back goes on after inputWait; it
+	// only waits for it if the browser didn't fence it, which happens
+	// only as the session ends.
+	if !m.waitBoundedLocked(inputWait, func() bool { return l.humanInputs > 0 && m.findLocked(id) == l }) {
+		if fenced {
+			m.log.Warn("a person's input was still under way "+inputWait.String()+" after their control began to end; the browser refuses it, so the hand-back goes on", "session", id)
+		} else {
+			for l.humanInputs > 0 && m.findLocked(id) == l {
+				m.inputsDone.Wait()
+			}
+		}
 	}
 	switch l.sess.State {
 	case Running, NeedsHelp:
@@ -427,10 +435,10 @@ func settle(ctx context.Context) bool {
 }
 
 // inputWait is how long a hand-back waits for the person's input under
-// way, already cancelled, before it gives up on handing back and stops
-// the browser instead. A cancelled call returns at once: only one that
-// never says done (a bug) gets there.
-const inputWait = time.Minute
+// way, already cancelled and fenced: a cancelled call returns at once,
+// so only one that never says done (a bug) makes it wait this long.
+// Tests shorten it.
+var inputWait = 30 * time.Second
 
 // emptyClipboard empties a running browser's clipboard, a person's
 // control ending (PROJ-194). A failure is logged without what the
@@ -442,28 +450,56 @@ func (m *Manager) emptyClipboard(ctx context.Context, sessionID, profile string)
 	}
 }
 
-// liftHeld lets go of every key and button the person still holds, as
-// their control ends, trying once more after a moment if the browser
-// fails to: a key left down would be the next driver's (a modifier, a
-// drag). A failure is logged by its kind alone (controlFailure).
-func (m *Manager) liftHeld(ctx context.Context, sessionID, profile string) {
-	err := m.control(ctx, profile, http.MethodPost, "/input/release", nil, nil)
-	if err != nil && ctx.Err() == nil {
-		t := time.NewTimer(liftRetry)
+// TakeoverHeader names, on each operation a person's live view sends the
+// browser, the takeover it is for (its generation); FenceHeader, on the
+// lift as a takeover ends, the takeover to fence, or "all": the browser
+// refuses, from then on, anything from it or an earlier one, however
+// long it was held up on its way (images/chromium/entrypoint/fence.go,
+// PROJ-196).
+const (
+	TakeoverHeader = "X-BrowserPier-Takeover"
+	FenceHeader    = "X-BrowserPier-Fence"
+)
+
+// fenceTakeover has the browser fence takeover (a generation, or "all")
+// and let go of every key and button the person still holds (a key left
+// down would be the next driver's: a modifier, a drag). It tries until
+// the browser answers or ctx ends, waiting a little longer each time,
+// and returns the fence the browser answered (0 if it didn't say). A
+// failure is logged by its kind alone (controlFailure).
+func (m *Manager) fenceTakeover(ctx context.Context, sessionID, profile, takeover string) (fence uint64, ok bool) {
+	wait := liftRetry
+	for try := 1; ; try++ {
+		var out struct {
+			Fence uint64 `json:"fence"`
+		}
+		err := m.controlWith(ctx, profile, http.MethodPost, "/input/release", map[string]string{FenceHeader: takeover}, nil, &out)
+		if err == nil {
+			return out.Fence, true
+		}
+		if ctx.Err() != nil {
+			return 0, false
+		}
+		if try == 1 || try%20 == 0 {
+			m.log.Warn("the browser didn't fence and let go of a person's control as it ended; trying again, agents waiting", "session", sessionID, "tries", try, "failure", controlFailure(err))
+		}
+		t := time.NewTimer(wait)
 		select {
 		case <-t.C:
-			err = m.control(ctx, profile, http.MethodPost, "/input/release", nil, nil)
 		case <-ctx.Done():
+			t.Stop()
+			return 0, false
 		}
-		t.Stop()
-	}
-	if err != nil && ctx.Err() == nil {
-		m.log.Warn("couldn't let go of the keys and buttons held as a person's control ended", "session", sessionID, "failure", controlFailure(err))
+		wait = min(2*wait, maxLiftRetry)
 	}
 }
 
-// liftRetry is how long liftHeld waits before trying again.
-const liftRetry = 100 * time.Millisecond
+// liftRetry is how long fenceTakeover first waits before trying again;
+// it doubles each time, up to maxLiftRetry.
+const (
+	liftRetry    = 100 * time.Millisecond
+	maxLiftRetry = 5 * time.Second
+)
 
 // controlFailure describes a failed call on a browser's control socket
 // for the log: the answer's status code, or what kind of failure it was,

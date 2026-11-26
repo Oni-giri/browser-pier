@@ -107,7 +107,7 @@ func (f *FakeRuntime) Start(_ context.Context, id string) error {
 			mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 			h = mux
 		}
-		c.srv = &http.Server{Handler: h} //nolint:gosec // test server
+		c.srv = &http.Server{Handler: withLift(h)} //nolint:gosec // test server
 		go func() { _ = c.srv.Serve(ln) }()
 	}
 	return nil
@@ -252,3 +252,23 @@ func (f *FakeRuntime) Count() int {
 // Outdated reports a container created under another definition than
 // docker.Spec, which Create labels containers with.
 func (f *FakeRuntime) Outdated(spec string) bool { return spec != docker.Spec }
+
+// withLift answers the lift every browser answers as a person's control
+// ends (POST /input/release, which fences the takeover: PROJ-196) for a
+// test's control mux that has no route of its own for it: the
+// orchestrator waits for that answer before agents get the browser back.
+func withLift(h http.Handler) http.Handler {
+	mux, ok := h.(*http.ServeMux)
+	if !ok {
+		return h
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/input/release" {
+			if _, pattern := mux.Handler(r); pattern == "" {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
+		h.ServeHTTP(w, r)
+	})
+}

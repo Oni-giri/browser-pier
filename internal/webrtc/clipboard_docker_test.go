@@ -3,6 +3,7 @@
 package webrtc
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -175,8 +176,24 @@ func TestRealBrowserClipboardBox(t *testing.T) {
 	if r := next("control"); r["on"] != false {
 		t.Fatalf("release: %v", r)
 	}
-	if got, err := v.do(context.Background(), http.MethodGet, "/input/clipboard", nil, http.StatusOK, controlWait); err != nil || len(got) != 0 {
-		t.Errorf("after handing back the clipboard holds %q (%v)", got, err)
+	// The browser has fenced the person's takeover (PROJ-196): anything
+	// of theirs still on its way is refused, with 409.
+	if _, err := v.do(context.Background(), http.MethodPost, "/input/clipboard", []byte(`{"text":"late"}`), http.StatusNoContent, controlWait); err == nil || !strings.Contains(err.Error(), "ended") {
+		t.Errorf("a set from the ended takeover: %v, want it refused", err)
+	}
+	agent := func(method, path string, body []byte) (int, []byte) {
+		t.Helper()
+		req, _ := http.NewRequest(method, "http://control"+path, bytes.NewReader(body))
+		resp, err := browsertest.ControlClient(sock).Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, b
+	}
+	if code, got := agent(http.MethodGet, "/input/clipboard", nil); code != http.StatusOK || len(got) != 0 {
+		t.Errorf("after handing back the clipboard holds %q (%d)", got, code)
 	}
 	for _, sel := range []string{"clipboard", "primary"} {
 		if got, ok := xselection(t, name, sel, "TARGETS"); ok {
@@ -186,8 +203,8 @@ func TestRealBrowserClipboardBox(t *testing.T) {
 	// An agent's middle-click into the field pastes nothing.
 	after := page.state()
 	body, _ := json.Marshal(map[string]any{"x": 640, "y": 400, "button": "middle", "pace": "instant"})
-	if _, err := v.do(context.Background(), http.MethodPost, "/input/click", body, http.StatusNoContent, controlWait); err != nil {
-		t.Fatal(err)
+	if code, msg := agent(http.MethodPost, "/input/click", body); code != http.StatusNoContent {
+		t.Fatalf("an agent's click: %d %s", code, msg)
 	}
 	time.Sleep(1500 * time.Millisecond)
 	// (Chromium still fires a paste event, with nothing to paste.)

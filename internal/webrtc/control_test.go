@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -486,10 +489,10 @@ func TestHandoffViewAfterItsHandoffEndedTakesNothing(t *testing.T) {
 	defer done()
 	time.Sleep(3100 * time.Millisecond) // long enough for a take to break it off
 	pv := newPionViewer(t, InputLabel)
-	if rec := offer(h, OfferOptions{Control: true, Session: s.ID, HelpEpoch: epoch}, pv.body); rec.Code != http.StatusConflict {
+	if rec := offer(h, OfferOptions{Control: true, Session: s.ID, Handoff: true, HelpEpoch: epoch}, pv.body); rec.Code != http.StatusConflict {
 		t.Fatalf("the ended handoff's offer: %d %s", rec.Code, rec.Body)
 	}
-	old := newTalk(t, &viewer{h: h, session: s.ID, sock: m.Layout().ControlSocket("google"), helpEpoch: epoch})
+	old := newTalk(t, &viewer{h: h, session: s.ID, sock: m.Layout().ControlSocket("google"), handoff: true, helpEpoch: epoch})
 	if r := old.send(`{"type":"take"}`); len(r) != 1 || r[0]["type"] != "error" {
 		t.Errorf("the ended handoff's view taking control: %v", r)
 	}
@@ -498,5 +501,115 @@ func TestHandoffViewAfterItsHandoffEndedTakesNothing(t *testing.T) {
 	}
 	if got, _ := m.Live("google"); got.HumanControl {
 		t.Error("taken")
+	}
+}
+
+// fencingBrowser is a browser's control socket as far as the fence goes
+// (images/chromium/entrypoint/fence.go): a lift naming a fence refuses,
+// from then on, the operations of takeovers up to it, checked right
+// before each acts. Its clipboard set can be held up after reading its
+// request, as a busy browser's might be.
+type fencingBrowser struct {
+	mu     sync.RWMutex // read across a person's action, written to raise the fence
+	fence  uint64
+	cmu    sync.Mutex
+	calls  []string
+	holdUp chan struct{} // if set, a set waits for it once its request is read
+	inSet  chan struct{} // gets a value as a set is held up
+}
+
+func (b *fencingBrowser) note(what string) {
+	b.cmu.Lock()
+	b.calls = append(b.calls, what)
+	b.cmu.Unlock()
+}
+
+func (b *fencingBrowser) took() string {
+	b.cmu.Lock()
+	defer b.cmu.Unlock()
+	out := strings.Join(b.calls, " ")
+	b.calls = nil
+	return out
+}
+
+func (b *fencingBrowser) routes(mux *http.ServeMux) {
+	gen := func(r *http.Request) uint64 {
+		n, _ := strconv.ParseUint(r.Header.Get(sessions.TakeoverHeader), 10, 64)
+		return n
+	}
+	// act runs a person's action unless their takeover is fenced; an
+	// operation naming none (an agent's) always runs.
+	act := func(w http.ResponseWriter, r *http.Request, what string) {
+		n := gen(r)
+		b.mu.RLock()
+		defer b.mu.RUnlock()
+		if n != 0 && n <= b.fence {
+			b.note("refused")
+			http.Error(w, "this person's control of the browser has ended", http.StatusConflict)
+			return
+		}
+		b.note(what)
+		w.WriteHeader(http.StatusNoContent)
+	}
+	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, r *http.Request) {
+		if f := r.Header.Get(sessions.FenceHeader); f != "" {
+			n, _ := strconv.ParseUint(f, 10, 64)
+			b.mu.Lock()
+			b.fence = max(b.fence, n)
+			b.mu.Unlock()
+			b.note("lift")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"fence":%d}`, n)
+			return
+		}
+		act(w, r, "lift")
+	})
+	mux.HandleFunc("POST /input/clipboard", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		if b.holdUp != nil {
+			b.inSet <- struct{}{}
+			<-b.holdUp
+		}
+		act(w, r, "set")
+	})
+	mux.HandleFunc("POST /input/events", func(w http.ResponseWriter, r *http.Request) { act(w, r, "events") })
+	mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) {
+		b.note("empty")
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+// A clipboard set the person's live view sent, held up inside the
+// browser after its request was read, across the hand-back (the
+// orchestrator's side long since gave up on it), never acts after the
+// lift and the emptying: the browser has fenced the takeover by then
+// (PROJ-196).
+func TestHeldUpSetNeverActsAfterTheHandBack(t *testing.T) {
+	b := &fencingBrowser{holdUp: make(chan struct{}), inSet: make(chan struct{}, 1)}
+	h, m, s := offerFixtureWith(t, b.routes, slog.New(slog.DiscardHandler))
+	k := newTalk(t, &viewer{h: h, session: s.ID, sock: m.Layout().ControlSocket("google")})
+	if r := k.send(`{"type":"take"}`); len(r) != 1 || r[0]["on"] != true {
+		t.Fatalf("take: %v", r)
+	}
+	setDone := make(chan []map[string]any, 1)
+	go func() { setDone <- k.send(set(1, "the person's secret", false)) }()
+	select {
+	case <-b.inSet:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the set never reached the browser")
+	}
+	m.ReleaseControl(s.ID) // a handoff ends, say
+	if r := <-setDone; len(r) == 0 || r[0]["type"] != "clipboard-error" {
+		t.Errorf("the set as the control ended: %v", r)
+	}
+	close(b.holdUp) // the browser gets round to it
+	time.Sleep(100 * time.Millisecond)
+	if got := b.took(); got != "lift empty refused" {
+		t.Errorf("the browser got %q, want the lift, the emptying, and the held-up set refused", got)
+	}
+	if _, done, err := m.AgentInput(context.Background(), s.ID); err != nil {
+		t.Fatalf("agent input after = %v", err)
+	} else {
+		done()
 	}
 }

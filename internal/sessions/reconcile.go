@@ -78,6 +78,11 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			delete(byID, c.ID)
 		}
 		l := newLive(m.ctx, s)
+		if s.State == NeedsHelp {
+			// Waiting for help as BrowserPier went: an epoch of its own,
+			// never 0, for the open handoff's take (HelpEpoch).
+			l.helpEpoch = 1
+		}
 		if p, err := m.profiles.Get(ctx, s.Profile); err == nil {
 			// Recorded again by the same rules: a Needs help session
 			// isn't, and a running one only from the agent's next action.
@@ -138,6 +143,8 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	// (PROJ-23) waits for an agent's next action, which can't come before
 	// Reconcile has returned.
 	var emptied sync.WaitGroup
+	var unfencedMu sync.Mutex
+	var unfenced []stop
 	for _, p := range running {
 		emptied.Go(func() {
 			defer func() {
@@ -145,7 +152,24 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 				m.sockOpDoneLocked(p.l)
 				m.mu.Unlock()
 			}()
-			m.liftHeld(p.ctx, p.id, p.profile)
+			// Every takeover the browser has seen is fenced, whatever the
+			// BrowserPier before this one left under way in it, and its
+			// held keys let go. This BrowserPier numbers its takeovers
+			// from the fence on, so the browser takes theirs. A browser
+			// that doesn't answer within reconcileFenceWait is stopped
+			// below rather than handed to agents unfenced.
+			fctx, cancel := context.WithTimeout(p.ctx, reconcileFenceWait)
+			fence, ok := m.fenceTakeover(fctx, p.id, p.profile, "all")
+			cancel()
+			if !ok {
+				unfencedMu.Lock()
+				unfenced = append(unfenced, stop{p.id, "didn't answer as BrowserPier restarted, so what a person's control may have left under way in it couldn't be fenced", slog.LevelWarn})
+				unfencedMu.Unlock()
+				return
+			}
+			m.mu.Lock()
+			p.l.generation = max(p.l.generation, fence)
+			m.mu.Unlock()
 			// As ReleaseControl does: a copy pressed just before the
 			// restart lands first, and is emptied too.
 			if settle(p.ctx) {
@@ -154,6 +178,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		})
 	}
 	emptied.Wait()
+	outdated = append(outdated, unfenced...)
 
 	// They lack what BrowserPier has added since, such as the egress
 	// filter, so they don't run on under this one. If one won't stop,
@@ -224,3 +249,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	strays.Wait()
 	return nil
 }
+
+// reconcileFenceWait bounds Reconcile's fencing of each browser it picks
+// up (fenceTakeover). Tests shorten it.
+var reconcileFenceWait = 10 * time.Second

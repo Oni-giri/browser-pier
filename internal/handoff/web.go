@@ -376,6 +376,7 @@ func (w *Web) offer(rw http.ResponseWriter, r *http.Request) {
 		// on the profile meanwhile, the offer is refused, and that one is
 		// never taken.
 		Session:   h.SessionID,
+		Handoff:   true,
 		HelpEpoch: epoch,
 	})
 }

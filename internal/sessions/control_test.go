@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -867,7 +868,16 @@ func TestHandBackWarningsKeepTheBrowsersWordsOut(t *testing.T) {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
-	mux.HandleFunc("POST /input/release", refuse)
+	// The lift is refused once (then answered: the hand-back tries until
+	// the browser fences the takeover), the emptying every time.
+	var lifts atomic.Int32
+	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, r *http.Request) {
+		if lifts.Add(1) == 1 {
+			refuse(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("DELETE /input/clipboard", refuse)
 	f.rt.Control = mux
 	s := f.start(f.m)
@@ -1023,5 +1033,180 @@ func TestTakeControlInAnEndedHandoff(t *testing.T) {
 	next, _ := f.m.HelpEpoch(s.ID)
 	if _, err := f.m.TakeControlInHandoff(s.ID, next); err != nil {
 		t.Errorf("the open handoff's take = %v", err)
+	}
+}
+
+// A hand-back lets agents in only once the browser has fenced the
+// takeover: a lift it fails is tried again, a little later each time,
+// and agents wait meanwhile (PROJ-196).
+func TestHandBackWaitsForTheFence(t *testing.T) {
+	f := newFixture(t)
+	var lifts atomic.Int32
+	answer := make(chan struct{})
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, r *http.Request) {
+		lifts.Add(1)
+		if r.Header.Get(FenceHeader) == "" {
+			t.Error("a hand-back's lift without a fence")
+		}
+		select {
+		case <-answer:
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(w, "busy", http.StatusServiceUnavailable)
+		}
+	})
+	f.rt.Control = mux
+	s := f.start(f.m)
+	if err := f.m.TakeControl(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan struct{})
+	go func() { f.m.ReleaseControl(s.ID); close(released) }()
+	for deadline := time.Now().Add(5 * time.Second); lifts.Load() < 3 && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, done, err := f.m.AgentInput(context.Background(), s.ID); !errors.Is(err, ErrHumanDriving) {
+		if err == nil {
+			done()
+		}
+		t.Fatalf("agent input before the fence = %v", err)
+	}
+	select {
+	case <-released:
+		t.Fatal("handed back without the fence")
+	default:
+	}
+	close(answer)
+	select {
+	case <-released:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the hand-back never finished")
+	}
+	if _, done, err := f.m.AgentInput(context.Background(), s.ID); err != nil {
+		t.Fatalf("agent input after = %v", err)
+	} else {
+		done()
+	}
+}
+
+// An operation of the person's that never says done doesn't hold the
+// browser for good: once the browser has fenced the takeover, it can do
+// nothing there, and the hand-back goes on after inputWait, without
+// stopping anything (PROJ-196).
+func TestHandBackGoesOnOnceFenced(t *testing.T) {
+	was := inputWait
+	inputWait = 200 * time.Millisecond
+	t.Cleanup(func() { inputWait = was })
+	f := newFixture(t)
+	s := f.start(f.m)
+	gen, err := f.m.TakeControlGen(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.m.HumanInput(s.ID, gen); err != nil { // and never done
+		t.Fatal(err)
+	}
+	released := make(chan struct{})
+	go func() { f.m.ReleaseControl(s.ID); close(released) }()
+	select {
+	case <-released:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the hand-back is held by an input that never ends")
+	}
+	if got, _ := f.m.Live("google"); got.State != Running || got.HumanControl {
+		t.Fatalf("after: %s, person in control %v", got.State, got.HumanControl)
+	}
+	f.rt.Mu.Lock()
+	stops := f.rt.Stops
+	f.rt.Mu.Unlock()
+	if stops != 0 {
+		t.Errorf("the browser was stopped %d times", stops)
+	}
+}
+
+// After BrowserPier restarts, a browser waiting for help gets a help
+// epoch of its own, never 0, so its handoff's view can only take it
+// while that help lasts; and BrowserPier numbers its takeovers above the
+// fence the browser answers to its lift, so the browser takes their
+// input (PROJ-196).
+func TestReconcileFencesAndNumbersAbove(t *testing.T) {
+	f := newFixture(t)
+	var fences []string
+	var mu sync.Mutex
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		fences = append(fences, r.Header.Get(FenceHeader))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"fence":41}`))
+	})
+	f.rt.Control = mux
+	s := f.start(f.m)
+	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	f.m.Close()
+
+	m := f.manager()
+	if err := m.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	if len(fences) == 0 || fences[len(fences)-1] != "all" {
+		t.Errorf("the restart's lift fenced %v, want all", fences)
+	}
+	mu.Unlock()
+	epoch, ok := m.HelpEpoch(s.ID)
+	if !ok || epoch == 0 {
+		t.Fatalf("HelpEpoch after the restart = %d, %v", epoch, ok)
+	}
+	if _, err := m.TakeControlInHandoff(s.ID, 0); !errors.Is(err, ErrHandoffEnded) {
+		t.Errorf("a handoff's take with no epoch = %v, want ErrHandoffEnded", err)
+	}
+	gen, err := m.TakeControlInHandoff(s.ID, epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gen <= 41 {
+		t.Errorf("the first takeover after the restart is %d, at or below the browser's fence 41", gen)
+	}
+}
+
+// A browser picked up after BrowserPier restarts that doesn't fence its
+// takeovers in time is stopped, not handed to agents with whatever a
+// person's control left under way in it (PROJ-196).
+func TestReconcileStopsABrowserItCantFence(t *testing.T) {
+	was := reconcileFenceWait
+	reconcileFenceWait = 300 * time.Millisecond
+	t.Cleanup(func() { reconcileFenceWait = was })
+	f := newFixture(t)
+	var refuse atomic.Bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, _ *http.Request) {
+		if refuse.Load() {
+			http.Error(w, "busy", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	f.rt.Control = mux
+	s := f.start(f.m)
+	f.m.Close()
+	refuse.Store(true)
+
+	m := f.manager()
+	if err := m.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := m.Live("google"); ok {
+		t.Fatalf("the unfenced browser runs on: %s", got.State)
+	}
+	if got := f.stored(s.ID); got.State != Stopped {
+		t.Errorf("saved as %s", got.State)
 	}
 }

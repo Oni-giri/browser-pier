@@ -126,6 +126,12 @@ func (m *Manager) Blocked(ctx context.Context, profile string) (n int64, ok bool
 // control calls the profile's browser on its control socket, with in as
 // a JSON body and the answer decoded into out, each when not nil.
 func (m *Manager) control(ctx context.Context, profile, method, path string, in, out any) error {
+	return m.controlWith(ctx, profile, method, path, nil, in, out)
+}
+
+// controlWith is control, with header's fields on the request. An answer
+// with no content (204) leaves out as it was.
+func (m *Manager) controlWith(ctx context.Context, profile, method, path string, header map[string]string, in, out any) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	var body io.Reader
@@ -140,6 +146,9 @@ func (m *Manager) control(ctx context.Context, profile, method, path string, in,
 	if err != nil {
 		return err
 	}
+	for k, v := range header {
+		req.Header.Set(k, v)
+	}
 	resp, err := controlClient(m.layout.ControlSocket(profile)).Do(req) //nolint:gosec // our own control socket
 	if err != nil {
 		return err
@@ -149,7 +158,7 @@ func (m *Manager) control(ctx context.Context, profile, method, path string, in,
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
 		return &controlError{resp.StatusCode, fmt.Sprintf("the browser answered %s: %s", resp.Status, bytes.TrimSpace(msg))}
 	}
-	if out != nil {
+	if out != nil && resp.StatusCode != http.StatusNoContent {
 		return json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(out)
 	}
 	return nil

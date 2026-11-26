@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -122,9 +123,12 @@ type OfferOptions struct {
 	// profile's live session, and control is only ever taken of it,
 	// never of a session that replaced it meanwhile.
 	Session string
-	// HelpEpoch, if set, is the handoff's (sessions.Manager.HelpEpoch):
-	// control, at the offer or a later take, is taken only while the
-	// session still waits for that help (TakeControlInHandoff).
+	// Handoff marks a handoff's live view, and HelpEpoch is its handoff's
+	// (sessions.Manager.HelpEpoch): control, at the offer or a later
+	// take, is taken only while the session still waits for that help
+	// (TakeControlInHandoff). A handoff's view never falls back to the
+	// admin's take, whatever its epoch.
+	Handoff   bool
 	HelpEpoch uint64
 }
 
@@ -156,7 +160,7 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 		http.Error(w, "the browser isn't running", http.StatusConflict)
 		return
 	}
-	vw := &viewer{h: h, session: s.ID, sock: h.m.Layout().ControlSocket(profile), allowed: o.Allowed, helpEpoch: o.HelpEpoch}
+	vw := &viewer{h: h, session: s.ID, sock: h.m.Layout().ControlSocket(profile), allowed: o.Allowed, handoff: o.Handoff, helpEpoch: o.HelpEpoch}
 	// A viewer promised control gets it or isn't connected: a page that
 	// thinks it drives while it only watches would send input into nothing.
 	var granted time.Time
@@ -241,8 +245,9 @@ type viewer struct {
 
 	allowed func() bool // nil: always
 	conn    *Viewer
-	// helpEpoch, for a handoff's viewer, is its handoff's: it takes
-	// control only while the session still waits for that help.
+	// handoff marks a handoff's viewer, and helpEpoch is its handoff's:
+	// it takes control only while the session still waits for that help.
+	handoff   bool
 	helpEpoch uint64
 
 	mu sync.Mutex
@@ -430,7 +435,7 @@ func (v *viewer) setClipboard(ctx context.Context, id int, text string, paste bo
 // take takes control for this viewer: for a handoff's, only while its
 // handoff's Needs help lasts, checked by the manager in the same step.
 func (v *viewer) take() (uint64, error) {
-	if v.helpEpoch != 0 {
+	if v.handoff {
 		return v.h.m.TakeControlInHandoff(v.session, v.helpEpoch)
 	}
 	return v.h.m.TakeControlGen(v.session)
@@ -468,9 +473,9 @@ const controlWait = 10 * time.Second
 // it too.
 const maxClipboard = 32 << 10
 
-// do calls the container's control socket, wanting status want, within
-// wait and while ctx lasts (HumanInput's: the session's), and returns the
-// answer's body.
+// do calls the container's control socket for the person, wanting status
+// want, within wait and while ctx lasts (HumanInput's: the takeover's),
+// and returns the answer's body. v.mu must be held.
 func (v *viewer) do(ctx context.Context, method, path string, body []byte, want int, wait time.Duration) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
@@ -485,6 +490,10 @@ func (v *viewer) do(ctx context.Context, method, path string, body []byte, want 
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	// Every call here is the person's, for the takeover this viewer took:
+	// once its hand-back has fenced it, the browser refuses the call,
+	// however long it was held up (PROJ-196).
+	req.Header.Set(sessions.TakeoverHeader, strconv.FormatUint(v.gen, 10))
 	resp, err := c.Do(req) //nolint:gosec // as above
 	if err != nil {
 		return nil, err
