@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"encoding/base32"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -214,5 +215,50 @@ func TestTwoStepRoutesNeedTheAdminCookie(t *testing.T) {
 				t.Errorf("%s with %q and no admin cookie: %d", path, auth, resp.StatusCode)
 			}
 		}
+	}
+}
+
+// Through the Manage form itself: a wrong password costs the account-wide
+// code budget nothing, and wrong app codes spend the same budget that
+// sign-in's code step sees.
+func TestManageCodesShareTheSignInBudget(t *testing.T) {
+	f := newFixture(t)
+	secret, _ := f.turnOn()
+	f.app.pinTries = auth.NewLockout(1000, time.Minute, time.Minute) // only the account-wide cap counts here
+	manage := func(password, code string) reply {
+		return f.post("/settings/two-step/manage", url.Values{"action": {"codes"}, "current": {password}, "code": {code}}, "HX-Request", "true")
+	}
+	for range 5 {
+		if r := manage("wrong-password", "000000"); !strings.Contains(r.body, "current password isn") {
+			t.Fatalf("wrong password: %d %.300s", r.code, r.body)
+		}
+	}
+	for i := range 10 {
+		if r := manage("the-admin-password", "000000"); !strings.Contains(r.body, "That code isn") {
+			t.Fatalf("wrong code %d with the right password: %d %.300s", i+1, r.code, r.body)
+		}
+	}
+	if r := manage("the-admin-password", nextCode(secret)); !strings.Contains(r.body, "for this account today") {
+		t.Fatalf("an app code in Manage past the cap: %d %.300s", r.code, r.body)
+	}
+	// Sign-in from a new browser meets the same cap at its code step.
+	jar, _ := cookiejar.New(nil)
+	b := &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	send := func(path string, form url.Values) reply {
+		req, _ := http.NewRequest(http.MethodPost, f.srv.URL+path, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		resp, err := b.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		body, _ := io.ReadAll(resp.Body)
+		return reply{resp.StatusCode, resp.Header.Get("Location"), string(body), resp.Header}
+	}
+	if r := send("/login", url.Values{"password": {"the-admin-password"}}); r.code != http.StatusSeeOther || r.location != "/login/code" {
+		t.Fatalf("password step: %d to %q", r.code, r.location)
+	}
+	if r := send("/login/code", url.Values{"code": {nextCode(secret)}}); r.code != http.StatusTooManyRequests || !strings.Contains(r.body, "for this account today") {
+		t.Fatalf("sign-in's code step after 10 wrong codes in Manage: %d %.300s", r.code, r.body)
 	}
 }
