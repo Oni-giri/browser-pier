@@ -179,10 +179,10 @@ func (v *visual) setClipboard(w http.ResponseWriter, r *http.Request) {
 }
 
 // paste sets the clipboard, then presses Ctrl+V. Pasting, not typing, puts
-// the text in exactly: xdotool types a character the keyboard map lacks
-// (an accent, sometimes) by mapping it to a spare key on the fly, and
-// Chromium misses the change now and then. A key press cut short lets go
-// of Ctrl, as an agent's input does (perform).
+// the text in at once and exactly as it is: typing presses a key for each
+// character, and binds a key to each character the keyboard map lacks
+// first (keymap.go). A key press cut short lets go of Ctrl, as an agent's
+// input does (perform).
 func (v *visual) paste(w http.ResponseWriter, r *http.Request) {
 	text, ok := clipboardText(w, r)
 	if !ok {
