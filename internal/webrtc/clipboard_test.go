@@ -199,6 +199,15 @@ func TestViewerClipboardBox(t *testing.T) {
 	if !strings.Contains(acts, "Clipboard set") || !strings.Contains(acts, "Pasted from the clipboard box") || strings.Contains(acts, "characters") {
 		t.Errorf("activity: %s", acts)
 	}
+	// They are the person's, in the control entries (PROJ-158), never an
+	// agent's action.
+	for _, a := range m.Activity(s.ID) {
+		if strings.HasPrefix(a.What, "Clipboard set") || strings.HasPrefix(a.What, "Pasted from") {
+			if a.Kind != sessions.KindControl || a.TokenID != "" {
+				t.Errorf("clipboard entry %+v: want a control entry with no token", a)
+			}
+		}
+	}
 	k.send(`{"type":"release"}`)
 	// None of the texts is logged, in the activity log or the orchestrator's.
 	all := logs.String() + fmt.Sprint(m.Activity(s.ID))

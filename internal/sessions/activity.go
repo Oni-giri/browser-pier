@@ -135,6 +135,13 @@ func (m *Manager) NoteHandoff(sessionID, what string) {
 	m.note(sessionID, Activity{Kind: KindHandoff, What: what})
 }
 
+// NoteControl adds what the person with control did through the live
+// view (KindControl), in BrowserPier's own fixed words: never what they
+// typed or sent.
+func (m *Manager) NoteControl(sessionID, what string) {
+	m.note(sessionID, Activity{Kind: KindControl, What: what})
+}
+
 // byCall records the call ctx carries in a.
 func byCall(ctx context.Context, a Activity) Activity {
 	if c := CallFrom(ctx); c != nil {

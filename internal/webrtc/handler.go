@@ -345,7 +345,7 @@ func (v *viewer) setClipboard(id int, text string, paste bool, say func(any)) {
 		fail("Couldn't send it to the browser: " + err.Error())
 		return
 	}
-	v.h.m.Note(v.session, "", what)
+	v.h.m.NoteControl(v.session, what)
 	say(map[string]any{"type": "clipboard-set", "id": id})
 }
 
