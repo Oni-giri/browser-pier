@@ -64,6 +64,9 @@ func proxyCheck(ctx context.Context, proxyFile, geoURL string) checkResult {
 	// bounds the whole check. Whether the tunnel opened tells a slow
 	// proxy from a slow endpoint when that timeout passes.
 	client := lookupClient(fwd)
+	// To BROWSERPIER_GEOIP_URL and nothing else: a redirect is an answer
+	// the check can't use, not a host to contact with this exit.
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	var tunnel atomic.Bool
 	tr := client.Transport.(*http.Transport)
 	dial := tr.DialContext
