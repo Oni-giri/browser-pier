@@ -103,6 +103,12 @@ func (m *Manager) PageLease(ctx context.Context, id, tokenID string) (*Lease, er
 		}
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		// The turn came as the caller went away (select picks either):
+		// it never began, so it isn't admitted.
+		<-turn
+		return nil, err
+	}
 	cctx, cancel := context.WithCancelCause(ctx)
 	now := m.now()
 	ls := &lease{tokenID: tokenID, cancel: cancel, started: now, call: CallFrom(ctx)}

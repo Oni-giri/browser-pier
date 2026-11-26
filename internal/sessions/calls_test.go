@@ -464,3 +464,67 @@ func TestRecentCalls(t *testing.T) {
 		t.Errorf("activity: %+v", a)
 	}
 }
+
+// A caller gone by the time its turn comes is never admitted, though the
+// turn may win the race with its cancellation: its id is given back and
+// the turn isn't kept.
+func TestACancelledCallerIsNeverAdmitted(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	fp := FingerprintOf("act", []byte(`{}`))
+	// With the turn free and the context already done, both of
+	// PageLease's select cases are ready, and either can be picked: try
+	// it often enough that the turn wins some.
+	for i := range 64 {
+		c := take(t, f.m, s.ID, "tok", "gone", fp)
+		ctx, cancel := context.WithCancel(WithCall(context.Background(), c))
+		cancel()
+		if ls, err := f.m.PageLease(ctx, s.ID, "tok"); !errors.Is(err, context.Canceled) {
+			if ls != nil {
+				ls.Release()
+			}
+			t.Fatalf("round %d: PageLease = %v", i, err)
+		}
+		if _, done, err := f.m.AgentInput(ctx, s.ID); !errors.Is(err, context.Canceled) {
+			if done != nil {
+				done()
+			}
+			t.Fatalf("round %d: AgentInput = %v", i, err)
+		}
+		c.End(false)
+		if r, ok := f.m.CallReceipt(s.ID, "tok", "gone"); ok {
+			t.Fatalf("round %d: a cancelled call kept its receipt: %+v", i, r)
+		}
+	}
+	// The turn was given back each time.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ls, err := f.m.PageLease(ctx, s.ID, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ls.Release()
+}
+
+// A call with an id still running after its lease (a click looking for
+// its download) shows in RunningCalls until it ends.
+func TestACallRunningAfterItsLeaseIsListed(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	c := take(t, f.m, s.ID, "tok", "dl", FingerprintOf("click", nil))
+	_, done, err := f.m.AgentInput(WithCall(context.Background(), c), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.m.RunningCalls(s.ID, "tok"); len(got) != 1 || got[0].CallID != "dl" || got[0].State != CallRunning {
+		t.Fatalf("holding its lease: %+v", got)
+	}
+	done()
+	if got := f.m.RunningCalls(s.ID, "tok"); len(got) != 1 || got[0].CallID != "dl" || got[0].State != CallRunning || got[0].Tool != "act" {
+		t.Fatalf("after its lease: %+v", got)
+	}
+	c.End(true)
+	if got := f.m.RunningCalls(s.ID, "tok"); len(got) != 0 {
+		t.Fatalf("ended: %+v", got)
+	}
+}

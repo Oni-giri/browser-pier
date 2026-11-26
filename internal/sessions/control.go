@@ -42,6 +42,11 @@ func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, f
 	if len(l.inputs) > 0 {
 		return nil, nil, ErrInputBusy
 	}
+	if err := ctx.Err(); err != nil {
+		// The caller went away before its turn: it never began, so it
+		// isn't admitted.
+		return nil, nil, err
+	}
 	now := m.now()
 	l.lastActivity, l.lastAgentInput = now, now
 	cctx, cancel := context.WithCancelCause(ctx)
