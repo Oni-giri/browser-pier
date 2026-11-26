@@ -94,7 +94,7 @@ func TestPersonsInputNeverReachesARecordedPage(t *testing.T) {
 	sessID = s.ID
 	mu.Unlock()
 	h := NewHandler(nil, m, nil, log)
-	v := &viewer{h: h, session: s.ID, sock: m.Layout().ControlSocket("google")}
+	v := &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: m.Layout().ControlSocket("google")}
 	input := []byte(`{"type": "input", "events": [{"t": "keydown", "k": "a"}, {"t": "keyup", "k": "a"}]}`)
 	text := []byte(`{"type": "text", "text": "hunter2"}`)
 	reply := func(string) {}

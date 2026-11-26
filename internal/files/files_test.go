@@ -325,3 +325,26 @@ func TestUploadIsCountedOnce(t *testing.T) {
 		t.Fatalf("Enforce removed %v, %v", removed, err)
 	}
 }
+
+// TestListUploads (PROJ-181): the person's picker lists what a chooser
+// can be answered with, newest first, and nothing else.
+func TestListUploads(t *testing.T) {
+	s, dir := setup(t, 0)
+	up := filepath.Join(dir, Uploads)
+	write(t, filepath.Join(up, "old.pdf"), "old", time.Hour)
+	write(t, filepath.Join(up, "new <b>.pdf"), "new", time.Minute)
+	write(t, filepath.Join(up, ".upload-123"), "partial", 0)
+	if err := os.Symlink("/etc/passwd", filepath.Join(up, "link.pdf")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(up, "folder"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListUploads("google")
+	if err != nil || len(got) != 2 || got[0].Name != "new <b>.pdf" || got[1].Name != "old.pdf" || got[1].Size != 3 {
+		t.Fatalf("ListUploads = %+v, %v", got, err)
+	}
+	if got, err := s.ListUploads("nobody"); err != nil || len(got) != 0 {
+		t.Fatalf("a profile with no files: %+v, %v", got, err)
+	}
+}

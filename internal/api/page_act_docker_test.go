@@ -363,7 +363,7 @@ func TestPageToolsUpload(t *testing.T) {
 	if code, msg := a.tool(s.ID, "act", steps(map[string]any{"action": "upload", "ref": doc, "files": []string{reportName, photoName}})); code != http.StatusUnprocessableEntity || !strings.Contains(msg, "takes one file") {
 		t.Errorf("two files to a single input: %d %s", code, msg)
 	}
-	if code, msg := a.tool(s.ID, "act", steps(map[string]any{"action": "upload", "ref": refFor(t, snap, `button "Choose a file"`), "files": []string{reportName}})); code != http.StatusUnprocessableEntity || !strings.Contains(msg, "file_upload handoff") {
+	if code, msg := a.tool(s.ID, "act", steps(map[string]any{"action": "upload", "ref": refFor(t, snap, `button "Choose a file"`), "files": []string{reportName}})); code != http.StatusUnprocessableEntity || !strings.Contains(msg, "choose_files") {
 		t.Errorf("a chooser button: %d %s", code, msg)
 	}
 	if code, msg := a.tool(s.ID, "act", steps(map[string]any{"action": "upload", "ref": doc, "files": []string{"nothing.pdf"}})); code != http.StatusUnprocessableEntity || !strings.Contains(msg, `no uploaded file named "nothing.pdf"; upload it first with upload_file`) {

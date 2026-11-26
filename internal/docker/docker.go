@@ -54,8 +54,11 @@ const (
 // entrypoint's /input/clipboard and /input/paste, which the orchestrator
 // calls to empty the clipboard when a person's control ends (PROJ-194);
 // 6 adds the entrypoint's /record pipeline, which the recorder reads
-// (PROJ-23).
-const Spec = "6"
+// (PROJ-23); 7 answers pages' file choosers through the container's
+// portal, with no GTK dialog left (PROJ-152, PROJ-181): a browser from
+// before it would keep the dialog, which can hand a page any file in the
+// container (PROJ-183).
+const Spec = "7"
 
 const (
 	// StopTimeout is how long a browser container gets to stop before Docker
