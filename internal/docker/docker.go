@@ -54,8 +54,11 @@ const (
 // entrypoint's /input/clipboard and /input/paste, which the orchestrator
 // calls to empty the clipboard when a person's control ends (PROJ-194);
 // 6 adds the entrypoint's /record pipeline, which the recorder reads
-// (PROJ-23).
-const Spec = "6"
+// (PROJ-23); 7 answers pages' file choosers through the container's
+// portal, with no GTK dialog left (PROJ-152, PROJ-181): a browser from
+// before it would keep the dialog, which can hand a page any file in the
+// container (PROJ-183).
+const Spec = "7"
 
 const (
 	// StopTimeout is how long a browser container gets to stop before Docker
@@ -116,7 +119,10 @@ type Client struct {
 	userns          string
 	user            string // uid:gid browsers run as, and the sandbox check
 	instance        string
-	log             *slog.Logger
+	// hostDataDir is the data dir as the daemon sees it, set by
+	// UseDataDir: the create guard checks browsers' mounts against it.
+	hostDataDir string
+	log         *slog.Logger
 }
 
 // Options configure a Client.
@@ -133,7 +139,8 @@ type Options struct {
 	// chosen to suit the host (see planAppArmor).
 	AppArmor string
 	// User is the uid:gid browsers run as; the sandbox check runs as it
-	// too. Empty means the image's own user.
+	// too. Required, numeric, and not root: the create guard refuses any
+	// other.
 	User string
 	// Log gets what's worth saying about the AppArmor choice, and what
 	// the daemon reports that isn't an error for the caller (see Stop).
@@ -149,6 +156,14 @@ func New(o Options) (*Client, error) {
 	}
 	if o.Instance == "" {
 		return nil, errors.New("no instance ID set")
+	}
+	// What the create guard would refuse at every browser start, refused
+	// now instead.
+	if p := userProblem(o.User); p != "" {
+		return nil, fmt.Errorf("the browsers' user must be a numeric uid:gid other than root, each part below 2^32; %q %s", o.User, p)
+	}
+	if !ValidUsernsMode(o.UsernsMode) {
+		return nil, fmt.Errorf("the user namespace mode must be unset or keep-id (with uid, gid or size), got %q", o.UsernsMode)
 	}
 	var seccomp bytes.Buffer
 	if err := json.Compact(&seccomp, chromium.SeccompProfile); err != nil {
@@ -174,6 +189,10 @@ func New(o Options) (*Client, error) {
 // short-lived container to check (see planAppArmor). It doesn't pull the
 // browser image for that: without it, the first browser start chooses.
 func (c *Client) UseDataDir(ctx context.Context, dataDir, hostDataDir string) error {
+	if !filepath.IsAbs(hostDataDir) {
+		return fmt.Errorf("the data dir's path on the Docker host must be absolute, got %q", hostDataDir)
+	}
+	c.hostDataDir = filepath.Clean(hostDataDir)
 	info, err := c.api.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		return err
@@ -233,23 +252,41 @@ func (c *Client) Ping(ctx context.Context) error {
 // Create creates a browser container, pulling the image first if Docker
 // doesn't have it.
 func (c *Client) Create(ctx context.Context, spec BrowserSpec) (string, error) {
-	opt := c.appArmorForCreate(ctx)
-	cfg, host := browserConfig(c.image, c.seccompOpt, opt, spec)
-	cfg.Labels[LabelInstance] = c.instance
-	cfg.Labels[LabelSpec] = specLabel(opt)
-	host.UsernsMode = container.UsernsMode(c.userns)
-	opts := client.ContainerCreateOptions{Name: spec.Name, Config: cfg, HostConfig: host}
-	res, err := c.api.ContainerCreate(ctx, opts)
+	// The body under the current AppArmor option goes through the guard
+	// first: choosing the option may pull the image, while the choice
+	// isn't settled, and a body the guard refuses mustn't get that far.
+	// The option chosen next is one the plan allows too, so a refusal here
+	// is about the body, not the option.
+	c.apparmorMu.Lock()
+	current := c.apparmorOpt
+	c.apparmorMu.Unlock()
+	if err := c.guardCreate(kindBrowser, c.browserCreateOptions(current, spec)); err != nil {
+		return "", err
+	}
+	opts := c.browserCreateOptions(c.appArmorForCreate(ctx), spec)
+	// Both attempts go through the guard; a refusal isn't NotFound, so it
+	// never leads to a pull.
+	res, err := c.create(ctx, kindBrowser, opts)
 	if cerrdefs.IsNotFound(err) {
 		if err := c.pull(ctx); err != nil {
 			return "", err
 		}
-		res, err = c.api.ContainerCreate(ctx, opts)
+		res, err = c.create(ctx, kindBrowser, opts)
 	}
 	if err != nil {
 		return "", err
 	}
 	return res.ID, nil
+}
+
+// browserCreateOptions is the body Create sends for spec, under the
+// AppArmor option opt.
+func (c *Client) browserCreateOptions(opt string, spec BrowserSpec) client.ContainerCreateOptions {
+	cfg, host := browserConfig(c.image, c.seccompOpt, opt, spec)
+	cfg.Labels[LabelInstance] = c.instance
+	cfg.Labels[LabelSpec] = specLabel(opt)
+	host.UsernsMode = container.UsernsMode(c.userns)
+	return client.ContainerCreateOptions{Name: spec.Name, Config: cfg, HostConfig: host}
 }
 
 func (c *Client) pull(ctx context.Context) error {

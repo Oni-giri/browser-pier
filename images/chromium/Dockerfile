@@ -33,7 +33,7 @@ COPY --from=no-terminal /no-terminal.deb /tmp/
 RUN apt-get update \
  && apt-get install -y --no-install-recommends /tmp/no-terminal.deb \
  && apt-get install -y --no-install-recommends \
-      chromium chromium-l10n xvfb xdotool xclip jwm \
+      chromium chromium-l10n xvfb xdotool xclip jwm dbus-daemon \
       libgl1 libglx-mesa0 \
       gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-ugly \
       fonts-liberation fonts-dejavu-core fonts-noto-color-emoji fonts-noto-cjk \
@@ -42,6 +42,17 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* /tmp/no-terminal.deb \
  && for t in x-terminal-emulator xterm urxvt rxvt gnome-terminal konsole; do \
       ! command -v "$t" >/dev/null || { echo "a terminal emulator was installed: $t"; exit 1; }; done
+RUN command -v dbus-daemon >/dev/null || { echo "dbus-daemon is missing"; exit 1; }
+# The session bus (entrypoint/sessionbus.go) is the entrypoint's own
+# dbus-daemon, and the file chooser portal on it is the entrypoint
+# (portal.go). Nothing else may answer for the portal: no
+# xdg-desktop-portal or backend, and no D-Bus service file that would
+# start one (the bus has no service directory anyway).
+RUN for t in xdg-desktop-portal xdg-desktop-portal-gtk xdg-desktop-portal-gnome xdg-desktop-portal-kde; do \
+      ! dpkg -s "$t" >/dev/null 2>&1 || { echo "a portal was installed: $t"; exit 1; }; done \
+ && ! ls /usr/libexec/xdg-desktop-portal* /usr/lib/xdg-desktop-portal* >/dev/null 2>&1 \
+ && ! grep -rlis 'portal' /usr/share/dbus-1/services /usr/share/dbus-1/system-services /etc/dbus-1 2>/dev/null | grep -q . \
+ || { echo "a desktop portal, or a service file for one, is in the image"; exit 1; }
 
 # Fail the build, not the first session, if a plugin or a switch the entrypoint
 # relies on is missing. Chromium ignores unknown switches silently, so each
