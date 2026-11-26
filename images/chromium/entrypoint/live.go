@@ -205,10 +205,15 @@ func (li *liveInput) lines(e event) ([]string, error) {
 	return nil, fmt.Errorf("event %q: want move, down, up, wheel, keydown or keyup", e.T)
 }
 
-// send writes commands to xdotool, starting it if needed.
-func (li *liveInput) send(lines []string) error {
+// send writes commands to xdotool, starting it if needed. build makes
+// them for the process they go to, so it runs again for a new one: after
+// a write fails, the old one may not have run a release it was sent, so
+// nothing counts as released any more, and build sees that.
+func (li *liveInput) send(build func() []string) error {
 	for attempt := 0; attempt < 2; attempt++ {
 		if li.stdin == nil {
+			// A new xdotool has run nothing yet.
+			clear(li.released)
 			in, err := li.start()
 			if err != nil {
 				return err
@@ -216,7 +221,7 @@ func (li *liveInput) send(lines []string) error {
 			li.stdin = in
 		}
 		var err error
-		for _, l := range lines {
+		for _, l := range build() {
 			if _, err = io.WriteString(li.stdin, l+"\n"); err != nil {
 				break
 			}
@@ -257,7 +262,7 @@ func (li *liveInput) events(w http.ResponseWriter, r *http.Request) {
 	// A press counts as held even if the write fails part way (it may
 	// have run); a release counts as queued only once written, and its
 	// key stays held until it is known to have run (drain).
-	err := li.send(all)
+	err := li.send(func() []string { return all })
 	written := err == nil
 	for _, e := range evs {
 		h := "k" + e.K
@@ -288,17 +293,28 @@ func (li *liveInput) events(w http.ResponseWriter, r *http.Request) {
 func (li *liveInput) release(w http.ResponseWriter, _ *http.Request) {
 	li.mu.Lock()
 	defer li.mu.Unlock()
-	// What already has a release queued needs none; everything stays
-	// held until its release is known to have run (drain), and counts as
-	// queued only once written.
-	if lines := li.releaseLines(false); len(lines) > 0 {
-		if err := li.send(lines); err != nil {
+	// What already has a release queued in the running xdotool needs
+	// none; everything stays held until its release is known to have run
+	// (drain), and counts as queued only once written. The lines are made
+	// for the process they go to: a new one gets a release for everything
+	// held. With nothing new to send but releases still queued, a no-op
+	// checks the xdotool that has them is still there; if it isn't, its
+	// releases go to a new one.
+	if len(li.held) > 0 {
+		err := li.send(func() []string {
+			lines := li.releaseLines(false)
+			if len(lines) == 0 {
+				lines = []string{"sleep 0"}
+			}
+			return lines
+		})
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-	}
-	for h := range li.held {
-		li.released[h] = true
+		for h := range li.held {
+			li.released[h] = true
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

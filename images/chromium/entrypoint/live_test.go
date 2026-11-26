@@ -98,14 +98,15 @@ func TestLiveRestartsXdotool(t *testing.T) {
 }
 
 // A release written to xdotool keeps its key held until xdotool is known
-// to have run it (drain), and isn't written twice meanwhile.
+// to have run it (drain), and isn't written twice meanwhile (the second
+// release only checks xdotool is there, with a no-op).
 func TestLiveReleaseStaysHeldUntilItRan(t *testing.T) {
 	x := &fakeXdotool{}
 	li, _ := newTestLive(x)
 	post(li.events, `[{"t":"keydown","k":"Control_L"}]`)
 	post(li.release, "")
 	post(li.release, "")
-	if got := x.buf.String(); got != "keydown Control_L\nkeyup Control_L\n" {
+	if got := x.buf.String(); got != "keydown Control_L\nkeyup Control_L\nsleep 0\n" {
 		t.Fatalf("sent %q", got)
 	}
 	if !li.held["kControl_L"] || !li.released["kControl_L"] {
@@ -196,5 +197,60 @@ func TestLiveDrainWithNothingRunningKeepsReleasesUnconfirmed(t *testing.T) {
 	li.mu.Unlock()
 	if err != nil || len(synced) != 1 || synced[0] != "keyup Shift_L" {
 		t.Fatalf("drain: %v, synced %v", err, synced)
+	}
+}
+
+// A hand-back release that finds xdotool dead sends a new one a release
+// for every key held, not only those that had none queued in the dead
+// one, which may never have run them.
+func TestLiveReleaseAfterADeadXdotoolReleasesEverything(t *testing.T) {
+	dead, fresh := &fakeXdotool{}, &fakeXdotool{}
+	li, _ := newTestLive(dead, fresh)
+	post(li.events, `[{"t":"keydown","k":"Control_L"},{"t":"keydown","k":"a"},{"t":"keyup","k":"Control_L"}]`)
+	if !li.released["kControl_L"] || li.released["ka"] {
+		t.Fatalf("released %v", li.released)
+	}
+	// xdotool crashes before running keyup Control_L.
+	dead.mu.Lock()
+	dead.broken = true
+	dead.mu.Unlock()
+	if rec := post(li.release, ""); rec.Code != http.StatusNoContent {
+		t.Fatal(rec.Code)
+	}
+	if got := fresh.buf.String(); got != "keyup Control_L\nkeyup a\n" {
+		t.Fatalf("the new xdotool got %q", got)
+	}
+	if !li.released["kControl_L"] || !li.released["ka"] {
+		t.Fatalf("released %v", li.released)
+	}
+}
+
+// With every held key's release already queued, a hand-back release still
+// checks the xdotool that has them; a dead one's go to a new one.
+func TestLiveReleaseChecksTheXdotoolWithTheQueuedReleases(t *testing.T) {
+	dead, fresh := &fakeXdotool{}, &fakeXdotool{}
+	li, _ := newTestLive(dead, fresh)
+	post(li.events, `[{"t":"keydown","k":"Control_L"},{"t":"keyup","k":"Control_L"}]`)
+	dead.mu.Lock()
+	dead.broken = true
+	dead.mu.Unlock()
+	if rec := post(li.release, ""); rec.Code != http.StatusNoContent {
+		t.Fatal(rec.Code)
+	}
+	if got := fresh.buf.String(); got != "keyup Control_L\n" {
+		t.Fatalf("the new xdotool got %q", got)
+	}
+	// Alive, it gets only the no-op, and nothing is released twice.
+	x := &fakeXdotool{}
+	li, _ = newTestLive(x)
+	post(li.events, `[{"t":"keydown","k":"Control_L"},{"t":"keyup","k":"Control_L"}]`)
+	post(li.release, "")
+	if got := x.buf.String(); got != "keydown Control_L\nkeyup Control_L\nsleep 0\n" {
+		t.Fatalf("sent %q", got)
+	}
+	// Nothing held: nothing sent, no xdotool started.
+	li, starts := newTestLive()
+	if rec := post(li.release, ""); rec.Code != http.StatusNoContent || *starts != 0 {
+		t.Fatalf("nothing held: %d, %d starts", rec.Code, *starts)
 	}
 }
