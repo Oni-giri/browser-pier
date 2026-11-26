@@ -18,11 +18,13 @@ const (
 	// oldest entries go first. It counts the entries' text and a fixed
 	// overhead, not the Go values' whole size, which is about twice that.
 	maxActivityBytes = 64 << 10
-	// maxEntryRunes is how much of an entry's words are shown, and kept
-	// when its run ends: cut after the scrub, so a secret registered later
-	// still matches whole. maxEntryBytes caps what a live entry stores,
-	// cut when it is written (only a text that long can lose the end of a
-	// later secret across that cut).
+	// maxEntryRunes is how much of an entry's words are shown, to the
+	// admin and to an agent (RecentCalls), and kept when its run ends: cut
+	// after the scrub, so a secret registered later still matches whole.
+	// maxEntryBytes caps what a live entry stores: a longer one (a long
+	// list of file names) is kept as tooLongEntry instead, since cutting
+	// it could leave a secret registered later cut across the end, where
+	// no scrub would match it.
 	maxEntryRunes = 400
 	maxEntryBytes = 2 << 10
 	// entryOverhead is what an entry counts for beyond its text.
@@ -69,6 +71,7 @@ const (
 	restartedNote        = "BrowserPier restarted: earlier entries of this run are gone"
 	startedFromApp       = "Started from the app"
 	helpCancelledStopped = "Help request cancelled: the browser stopped"
+	tooLongEntry         = "An entry too long to keep (over 2 KiB)"
 )
 
 // Activity is one entry of a browser run's activity log, for the web UI:
@@ -159,9 +162,12 @@ func (m *Manager) note(sessionID string, a Activity) {
 	if l == nil {
 		return
 	}
-	// Scrubbed before it is cut, so a secret cut short still matches; cut
-	// to maxEntryRunes only when shown, after the scrubs then.
-	a.What = cutBytes(sc.String(a.What), maxEntryBytes)
+	// Scrubbed whole; cut to maxEntryRunes only when shown, after the
+	// scrubs then, so a secret registered later still matches whole.
+	a.What = sc.String(a.What)
+	if len(a.What) > maxEntryBytes {
+		a.What, a.FromPage = tooLongEntry, false
+	}
 	if a.Kind == "" {
 		a.Kind = KindAction
 	}
@@ -251,19 +257,6 @@ func cleanTitle(s string) string {
 		return r
 	}, s)
 	return strings.Join(strings.Fields(s), " ")
-}
-
-// cutBytes cuts s to at most n bytes, on a character boundary, the last
-// of them "…" when it was cut.
-func cutBytes(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	cut := n - len("…")
-	for cut > 0 && !utf8.RuneStart(s[cut]) {
-		cut--
-	}
-	return s[:cut] + "…"
 }
 
 // cutRunes cuts s to at most n characters, the last of them "…" when it

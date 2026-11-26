@@ -14,6 +14,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Oni-giri/browser-pier/internal/pagetools"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
@@ -826,5 +827,43 @@ func TestEveryRouteGivesARefusedIDBack(t *testing.T) {
 			waitFor(t, func() bool { return f.lastInput() == "cut short" })
 		}
 		runs(sid, rt, id)
+	}
+}
+
+// recent_calls gives an entry as the web UI shows it: scrubbed with the
+// secrets as they are now, then cut to 400 characters. One too long to
+// store whole is a fixed summary, so a secret registered later can't be
+// left cut across its end, where no scrub would match it.
+func TestRecentCallsAreScrubbedThenCut(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.all, "google", "visual")
+	tok, err := f.tokens.Authenticate(context.Background(), f.all)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := sessions.WithCall(context.Background(), f.m.NewCall(tok.ID, tok.Name, "click"))
+	// Under 2 KiB, the secret within the first 400 characters.
+	f.m.NoteFor(ctx, s.ID, tok.Name, "Uploaded "+filledSecret+" "+strings.Repeat("x", 1500))
+	// Over 2 KiB, the secret across byte 2048.
+	f.m.NoteFor(ctx, s.ID, tok.Name, "Uploaded "+strings.Repeat("b", 2025)+filledSecret)
+	if err := f.m.RegisterSecret(s.ID, filledSecret); err != nil {
+		t.Fatal(err)
+	}
+	var st sessionStatusJSON
+	f.call(f.all, http.MethodGet, "/api/sessions/"+s.ID, "", &st)
+	if len(st.RecentCalls) != 3 || st.RecentCalls[2].What != "Started the browser" {
+		t.Fatalf("recent_calls: %+v", st.RecentCalls)
+	}
+	for _, c := range st.RecentCalls {
+		if strings.Contains(c.What, filledSecret[:7]) {
+			t.Errorf("a secret's start in %q", c.What)
+		}
+	}
+	if long := st.RecentCalls[0].What; !strings.HasPrefix(long, "An entry too long to keep") {
+		t.Errorf("over 2 KiB: %q", long)
+	}
+	short := st.RecentCalls[1].What
+	if n := utf8.RuneCountInString(short); n != 400 || !strings.HasPrefix(short, "Uploaded <hidden> xxx") || !strings.HasSuffix(short, "…") {
+		t.Errorf("under 2 KiB: %d characters, %q", n, short)
 	}
 }

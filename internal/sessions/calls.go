@@ -407,7 +407,9 @@ type RecentCall struct {
 // since (its receipt given back, or dropped 1,000 receipts later), an old
 // entry shows the new call's.
 func (m *Manager) RecentCalls(sessionID, tokenID string, n int) []RecentCall {
-	m.mu.Lock()
+	// Scrubbed with the session's secrets as they are now, then cut, as
+	// the web UI shows an entry (shown).
+	sc := m.lockScrubber(sessionID)
 	defer m.mu.Unlock()
 	l := m.findLocked(sessionID)
 	if l == nil {
@@ -421,7 +423,7 @@ func (m *Manager) RecentCalls(sessionID, tokenID string, n int) []RecentCall {
 		if a.Kind != KindAction || a.TokenID != tokenID || tokenID == "" {
 			continue
 		}
-		rc := RecentCall{At: a.At, What: a.What, FromPage: a.FromPage, Tool: a.Tool, CallID: a.CallID}
+		rc := RecentCall{At: a.At, What: shown(sc, a).What, FromPage: a.FromPage, Tool: a.Tool, CallID: a.CallID}
 		if a.CallID != "" {
 			if r, ok := l.calls[callKey{tokenID, a.CallID}]; ok {
 				rc.State = r.state

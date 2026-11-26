@@ -113,7 +113,8 @@ func TestKeptRunsBounds(t *testing.T) {
 		t.Fatalf("live: %d entries, %q to %q", len(got), got[len(got)-1].What, got[0].What)
 	}
 	// ...and at most 64 KiB of them, the oldest dropped first; an entry
-	// is shown cut to 400 characters, and stored cut to 2 KiB.
+	// is shown cut to 400 characters, and one over 2 KiB is stored as a
+	// fixed summary.
 	long := strings.Repeat("x", 1000)
 	for range 200 {
 		f.m.Note(s.ID, "claude", long)
@@ -135,8 +136,8 @@ func TestKeptRunsBounds(t *testing.T) {
 	if size > maxActivityBytes || size < maxActivityBytes-entrySize(Activity{What: long, Agent: "claude"}) || live[0].What != "last" {
 		t.Fatalf("live log of %d entries is %d bytes", len(live), size)
 	}
-	if len(stored) > maxEntryBytes || !strings.HasSuffix(stored, "…") {
-		t.Fatalf("a 3,000-byte entry is stored as %d bytes", len(stored))
+	if stored != tooLongEntry {
+		t.Fatalf("a 3,000-byte entry is stored as %q", stored)
 	}
 	if _, err := f.m.Stop(ctx, s.ID); err != nil {
 		t.Fatal(err)
