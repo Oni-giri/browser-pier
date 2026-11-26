@@ -590,6 +590,29 @@ func TestRefusedCreateNeverReachesTheDaemon(t *testing.T) {
 	checkGolden(t, "create-browser-docker.json", d.creates[0])
 }
 
+// Item 1 of the Codex review: with the AppArmor choice unsettled and the
+// image missing, choosing the option pulls the image. A body the guard
+// refuses must be refused before that.
+func TestRefusedCreateDoesntPullWhileAppArmorIsUnsettled(t *testing.T) {
+	d := &createDaemon{missing: true, noImage: true}
+	c, _ := goldenClient(t, d, false, optUnconfined)
+	c.apparmorSettled = false
+	spec := goldenSpec()
+	spec.FilesDir = "/srv/bp/profiles/other/files"
+	_, err := c.Create(context.Background(), spec)
+	if !errors.Is(err, ErrOutsideEnvelope) || !strings.Contains(err.Error(), "HostConfig.Mounts[2].Source") {
+		t.Fatalf("Create = %v", err)
+	}
+	if creates, pulls := d.counts(); creates != 0 || pulls != 0 {
+		t.Fatalf("a refused body reached the daemon: %d creates, %d pulls; requests %q", creates, pulls, d.requests)
+	}
+	for _, r := range d.requests {
+		if strings.Contains(r, "/images/") {
+			t.Fatalf("a refused body led to %s", r)
+		}
+	}
+}
+
 func TestRefusalIsNotAnAppArmorVerdict(t *testing.T) {
 	ctx := context.Background()
 	// An AppArmor option outside the plan: the refusal names AppArmor,

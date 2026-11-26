@@ -69,12 +69,20 @@ func (e *envelopeError) Unwrap() error { return ErrOutsideEnvelope }
 // create is the only call to ContainerCreate in BrowserPier. It refuses a
 // body outside kind's envelope before anything reaches the daemon.
 func (c *Client) create(ctx context.Context, kind createKind, opts client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
-	if err := c.checkCreate(kind, opts); err != nil {
-		c.log.Error("refused to create a container outside BrowserPier's envelope; this is a bug in BrowserPier, please report it",
-			"kind", string(kind), "err", err)
+	if err := c.guardCreate(kind, opts); err != nil {
 		return client.ContainerCreateResult{}, err
 	}
 	return c.api.ContainerCreate(ctx, opts)
+}
+
+// guardCreate is checkCreate, logging a refusal.
+func (c *Client) guardCreate(kind createKind, opts client.ContainerCreateOptions) error {
+	err := c.checkCreate(kind, opts)
+	if err != nil {
+		c.log.Error("refused to create a container outside BrowserPier's envelope; this is a bug in BrowserPier, please report it",
+			"kind", string(kind), "err", err)
+	}
+	return err
 }
 
 // The envelope's constants, restated here rather than taken from the

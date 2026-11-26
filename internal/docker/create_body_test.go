@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -27,6 +28,7 @@ var updateGolden = flag.Bool("update-golden", false, "rewrite the golden create 
 type createDaemon struct {
 	mu       sync.Mutex
 	missing  bool // the first create finds no image, as before a pull
+	noImage  bool // inspecting the image finds none until a pull
 	creates  []recordedCreate
 	pulls    int
 	requests []string
@@ -64,6 +66,8 @@ func (d *createDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && path == "/images/create":
 		d.pulls++
 		_, _ = w.Write([]byte(`{"status":"done"}` + "\n"))
+	case d.noImage && d.pulls == 0 && r.Method == http.MethodGet && strings.HasPrefix(path, "/images/"):
+		fail(http.StatusNotFound, "No such image: img")
 	case r.Method == http.MethodGet && path == "/containers/browserpier_check_i1/json":
 		fail(http.StatusNotFound, "no such container")
 	default:

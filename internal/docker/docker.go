@@ -249,6 +249,17 @@ func (c *Client) Ping(ctx context.Context) error {
 // Create creates a browser container, pulling the image first if Docker
 // doesn't have it.
 func (c *Client) Create(ctx context.Context, spec BrowserSpec) (string, error) {
+	// The body under the current AppArmor option goes through the guard
+	// first: choosing the option may pull the image, while the choice
+	// isn't settled, and a body the guard refuses mustn't get that far.
+	// The option chosen next is one the plan allows too, so a refusal here
+	// is about the body, not the option.
+	c.apparmorMu.Lock()
+	current := c.apparmorOpt
+	c.apparmorMu.Unlock()
+	if err := c.guardCreate(kindBrowser, c.browserCreateOptions(current, spec)); err != nil {
+		return "", err
+	}
 	opts := c.browserCreateOptions(c.appArmorForCreate(ctx), spec)
 	// Both attempts go through the guard; a refusal isn't NotFound, so it
 	// never leads to a pull.
