@@ -137,12 +137,14 @@ func goldenSpec() BrowserSpec {
 }
 
 // checkGolden compares a create body with testdata/name, the inline
-// seccomp profile replaced by a placeholder so the file doesn't follow
-// every change to the profile.
+// seccomp profile and the browser definition's version (Spec) replaced by
+// placeholders, so the file doesn't follow every change to the profile or
+// every bump of Spec. The guard checks the spec label against Spec itself.
 func checkGolden(t *testing.T, name string, got recordedCreate) {
 	t.Helper()
 	esc, _ := json.Marshal("seccomp=" + compactSeccomp(t))
 	body := bytes.ReplaceAll(got.body, esc[1:len(esc)-1], []byte("seccomp=<the embedded profile>"))
+	body = bytes.ReplaceAll(body, []byte(`"`+LabelSpec+`":"`+Spec), []byte(`"`+LabelSpec+`":"<Spec>`))
 	body = append([]byte("name="+got.name+"\n"), body...)
 	file := filepath.Join("testdata", name)
 	if *updateGolden {
