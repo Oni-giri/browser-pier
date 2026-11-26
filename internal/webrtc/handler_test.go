@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/db"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
@@ -91,5 +92,16 @@ func TestOfferWithControlIsRefusedWhileSomeoneElseHasIt(t *testing.T) {
 	}
 	if s, _ := m.Live("google"); !s.HumanControl || s.Viewers != 0 {
 		t.Fatalf("the refused viewer changed control or still watches: %+v", s)
+	}
+}
+
+// The Type button's call has time for the longest text the container
+// takes (2,000 characters), however many of them the keyboard map lacks.
+func TestTypeWaitFitsTheText(t *testing.T) {
+	if got := typeWait(""); got != controlWait {
+		t.Fatalf("no text: %s", got)
+	}
+	if got := typeWait(strings.Repeat("字", 2000)); got != 130*time.Second {
+		t.Fatalf("2,000 characters: %s", got)
 	}
 }

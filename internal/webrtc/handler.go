@@ -305,13 +305,13 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 		case "clipboard-set":
 			v.setClipboard(m.ID, m.Text, m.Paste, say)
 		default:
-			path, body := "/input/events", []byte(m.Events)
+			path, body, wait := "/input/events", []byte(m.Events), controlWait
 			if m.Type == "text" {
-				path = "/input/type"
+				path, wait = "/input/type", typeWait(m.Text)
 				// A person typing: at once, not at an agent's human pace.
 				body, _ = json.Marshal(map[string]string{"text": m.Text, "pace": "instant"})
 			}
-			if err := v.post(path, body); err != nil {
+			if _, err := v.do(http.MethodPost, path, body, http.StatusNoContent, wait); err != nil {
 				say(map[string]any{"type": "error", "msg": err.Error()})
 			}
 		}
@@ -373,6 +373,15 @@ func (v *viewer) post(path string, body []byte) error {
 
 // controlWait bounds a call to the container's control socket.
 const controlWait = 10 * time.Second
+
+// typeWait bounds the Type button's call, which may type up to 2,000
+// characters: 12 ms a key at instant pace, and, for characters the
+// keyboard map lacks, stretches of up to 16 bound keys that each wait
+// 0.3 s for Chromium (PROJ-195). 60 ms a character covers text where
+// every character is a new one.
+func typeWait(text string) time.Duration {
+	return controlWait + time.Duration(utf8.RuneCountInString(text))*60*time.Millisecond
+}
 
 // maxClipboard caps what a clipboard read brings back; the container caps
 // it too.
