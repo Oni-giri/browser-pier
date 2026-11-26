@@ -65,6 +65,7 @@ func startXdotool() (ioWriteCloser, error) {
 	}
 	exited, err := procs.start(cmd)
 	if err != nil {
+		_ = in.Close()
 		return nil, err
 	}
 	x := &xdotoolStdin{WriteCloser: in, exited: make(chan struct{}), proc: cmd.Process}
@@ -106,7 +107,9 @@ func (x *xdotoolStdin) Close() error {
 // so everything held is let go by a new xdotool first; drain fails if
 // that fails.
 func (li *liveInput) drain() error {
-	clean := true
+	// With no xdotool running, nothing should be marked released; if
+	// something is, its release can't be shown to have run.
+	clean := len(li.released) == 0
 	if li.stdin != nil {
 		clean = li.stdin.Close() == nil
 		li.stdin = nil
@@ -251,6 +254,11 @@ func (li *liveInput) events(w http.ResponseWriter, r *http.Request) {
 	}
 	li.mu.Lock()
 	defer li.mu.Unlock()
+	// A press counts as held even if the write fails part way (it may
+	// have run); a release counts as queued only once written, and its
+	// key stays held until it is known to have run (drain).
+	err := li.send(all)
+	written := err == nil
 	for _, e := range evs {
 		h := "k" + e.K
 		if e.T == "down" || e.T == "up" {
@@ -259,15 +267,16 @@ func (li *liveInput) events(w http.ResponseWriter, r *http.Request) {
 		switch e.T {
 		case "down", "keydown":
 			li.held[h] = true
-			delete(li.released, h)
+			if written {
+				delete(li.released, h)
+			}
 		case "up", "keyup":
-			// Held until the release is known to have run (drain).
-			if li.held[h] {
+			if written && li.held[h] {
 				li.released[h] = true
 			}
 		}
 	}
-	if err := li.send(all); err != nil {
+	if !written {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -280,16 +289,16 @@ func (li *liveInput) release(w http.ResponseWriter, _ *http.Request) {
 	li.mu.Lock()
 	defer li.mu.Unlock()
 	// What already has a release queued needs none; everything stays
-	// held until its release is known to have run (drain).
-	lines := li.releaseLines(false)
-	for h := range li.held {
-		li.released[h] = true
-	}
-	if len(lines) > 0 {
+	// held until its release is known to have run (drain), and counts as
+	// queued only once written.
+	if lines := li.releaseLines(false); len(lines) > 0 {
 		if err := li.send(lines); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+	}
+	for h := range li.held {
+		li.released[h] = true
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
