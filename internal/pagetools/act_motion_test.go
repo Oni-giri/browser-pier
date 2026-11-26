@@ -318,11 +318,11 @@ func TestTakeControlBreaksOffActAfterThreeSeconds(t *testing.T) {
 		done <- err
 	}()
 	<-blocked
-	if err := f.m.TakeControl(f.sess.ID); !errors.Is(err, sessions.ErrAgentDriving) {
+	if err := f.m.TakeControl(f.sess.ID, "person"); !errors.Is(err, sessions.ErrAgentDriving) {
 		t.Fatalf("Take control in act's first seconds = %v", err)
 	}
 	time.Sleep(time.Until(start.Add(3*time.Second + 100*time.Millisecond)))
-	if err := f.m.TakeControl(f.sess.ID); err != nil {
+	if err := f.m.TakeControl(f.sess.ID, "person"); err != nil {
 		t.Fatalf("Take control after 3 s of act = %v", err)
 	}
 	var err error

@@ -20,7 +20,8 @@ import (
 // The detection page is opened in Visual mode as a person would: in fresh
 // containers (MEASURE_FRESH, the antibot test's flow), in new tabs of one
 // container (MEASURE_TABS) and again in the same tab (MEASURE_SAME); then
-// in API mode with Page.navigate (MEASURE_API).
+// in API mode with Page.navigate (MEASURE_API). The URL is typed at
+// instant pace, as before PROJ-113, so the numbers compare with PROJ-29's.
 func TestMeasureWindowAtLoad(t *testing.T) {
 	image := testImage(t)
 	det := browsertest.NewDetector(t, browsertest.SiteHost(t))
@@ -36,7 +37,7 @@ func TestMeasureWindowAtLoad(t *testing.T) {
 	}
 	open := func(b *browser, keys, url string) browsertest.Signals {
 		b.input(t, "/input/key", fmt.Sprintf(`{"keys": %q}`, keys))
-		b.input(t, "/input/type", fmt.Sprintf(`{"text": %q}`, url))
+		b.input(t, "/input/type", fmt.Sprintf(`{"text": %q, "pace": "instant"}`, url))
 		b.input(t, "/input/key", `{"keys": "Return"}`)
 		return det.Report(t)
 	}

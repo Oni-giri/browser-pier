@@ -9,7 +9,9 @@ import (
 	"image/png"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -327,7 +329,7 @@ func TestComputerOneInputAtATime(t *testing.T) {
 func TestComputerWhileAPersonDrives(t *testing.T) {
 	f := newFixture(t)
 	s := f.start(f.all, "google", "visual")
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatal(err)
 	}
 	var e map[string]string
@@ -414,5 +416,111 @@ func TestComputerScreenshotOverTheCap(t *testing.T) {
 	code, _, raw := f.computer(s.ID, `{"action": "click", "x": 10, "y": 10, "screenshot": true, "width": 640}`)
 	if code != http.StatusOK || string(raw) != "PNG:640" {
 		t.Fatalf("at the cap: %d %q", code, raw)
+	}
+}
+
+// Revoking a token breaks off its long human-paced type at once, as it
+// does its page calls, whether from the UI or the token CLI (the
+// revocation watcher) (PROJ-166).
+func TestRevokingATokenInterruptsItsType(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	s := f.start(f.all, "google", "visual")
+	tok, secret, err := f.tokens.Create(ctx, "doomed", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type answer struct {
+		code int
+		raw  []byte
+	}
+	got := make(chan answer, 1)
+	go func() {
+		req, _ := http.NewRequest(http.MethodPost, f.srv.URL+"/api/sessions/"+s.ID+"/type", strings.NewReader(`{"text": "typed slowly"}`))
+		req.Header.Set("Authorization", "Bearer "+secret)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			got <- answer{0, []byte(err.Error())}
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		raw, _ := io.ReadAll(resp.Body)
+		got <- answer{resp.StatusCode, raw}
+	}()
+	waitFor(t, func() bool { return f.lastInput() != "" })
+	// A check before the revocation leaves it be.
+	f.api.checkRevocations(ctx)
+	if err := f.tokens.Revoke(ctx, tok.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.api.checkRevocations(ctx)
+	var a answer
+	select {
+	case a = <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the type went on after its token was revoked")
+	}
+	if a.code != http.StatusUnauthorized || !strings.Contains(string(a.raw), "input broke off: the agent token was revoked") {
+		t.Fatalf("the type cut short answered %d %s", a.code, a.raw)
+	}
+	waitFor(t, func() bool { return f.lastInput() == "cut short" })
+	if got := strings.Join(f.whats(s.ID), "\n"); !strings.HasSuffix(got, "doomed: Typing interrupted") {
+		t.Fatalf("activity:\n%s", got)
+	}
+}
+
+// gatedBody is a request body that says when the handler starts reading
+// it, then waits to be let go.
+type gatedBody struct {
+	r       io.Reader
+	reading chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (g *gatedBody) Read(p []byte) (int, error) {
+	g.once.Do(func() { close(g.reading) })
+	<-g.release
+	return g.r.Read(p)
+}
+
+// A token revoked after its request was let in, while the body is still
+// being read (before the input is registered, where the revocation has
+// nothing to break off), sends no input: it answers 401 (PROJ-166).
+func TestATokenRevokedBeforeItsInputBeginsSendsNone(t *testing.T) {
+	for _, route := range []string{"type", "click", "computer"} {
+		t.Run(route, func(t *testing.T) {
+			f := newFixture(t)
+			ctx := context.Background()
+			s := f.start(f.all, "google", "visual")
+			tok, secret, err := f.tokens.Create(ctx, "doomed", true, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := map[string]string{"type": `{"text": "hi"}`, "click": `{"x": 1, "y": 2}`, "computer": `{"action": "click", "x": 1, "y": 2}`}[route]
+			g := &gatedBody{r: strings.NewReader(body), reading: make(chan struct{}), release: make(chan struct{})}
+			req := httptest.NewRequest(http.MethodPost, "/api/sessions/"+s.ID+"/"+route, g)
+			req.Header.Set("Authorization", "Bearer "+secret)
+			rec := httptest.NewRecorder()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				f.srv.Config.Handler.ServeHTTP(rec, req)
+			}()
+			<-g.reading
+			// As the UI revokes: the token goes, then its connections.
+			if err := f.tokens.Revoke(ctx, tok.ID); err != nil {
+				t.Fatal(err)
+			}
+			f.m.DisconnectToken(tok.ID)
+			close(g.release)
+			<-done
+			if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "revoked") {
+				t.Fatalf("answered %d %s", rec.Code, rec.Body)
+			}
+			if in := f.lastInput(); in != "" {
+				t.Fatalf("the browser got %q", in)
+			}
+		})
 	}
 }
