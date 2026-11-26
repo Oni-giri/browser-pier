@@ -376,3 +376,45 @@ func TestVisualReadsDontKeepAPersonOut(t *testing.T) {
 		t.Fatal("Take control right after a click by ref: want it refused for a few seconds")
 	}
 }
+
+// TestClickByRefAfterAHandBack: a person takes the browser and hands it
+// back between a click by ref's lookup and its dispatch. The point was
+// read from the page they left, so the click is refused and never
+// reaches the browser, through /click and /computer alike.
+func TestClickByRefAfterAHandBack(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.all, "google", "visual")
+	f.setTree(loginTree(onScreen), nodeAt(615, 167, onScreen, ""))
+	for _, endpoint := range []string{"click", "computer"} {
+		_, snap := f.vsnapshot(f.all, s.ID, "")
+		btn := refNamed(t, snap, `button "Sign in"`)
+		f.api.afterLocate = func() {
+			if err := takeControlSoon(f.m, s.ID); err != nil {
+				t.Error(err)
+			}
+			f.m.ReleaseControl(s.ID)
+		}
+		n := f.inputCount()
+		var code int
+		var msg string
+		if endpoint == "click" {
+			code, msg = f.clickBody(s.ID, `{"ref": "`+btn+`"}`)
+		} else {
+			var body []byte
+			code, _, body = f.computer(s.ID, `{"action": "click", "ref": "`+btn+`"}`)
+			msg = string(body)
+		}
+		f.api.afterLocate = nil
+		if code != http.StatusConflict || !strings.Contains(msg, "visual_snapshot") {
+			t.Errorf("%s by ref across a hand-back: %d %s", endpoint, code, msg)
+		}
+		if f.inputCount() != n {
+			t.Fatalf("%s: the click reached the browser: %v", endpoint, f.b.inputs[n:])
+		}
+		// A new snapshot's refs click again.
+		_, snap = f.vsnapshot(f.all, s.ID, "")
+		if code, msg := f.clickBody(s.ID, `{"ref": "`+refNamed(t, snap, `button "Sign in"`)+`"}`); code != http.StatusOK {
+			t.Fatalf("%s: a new ref: %d %s", endpoint, code, msg)
+		}
+	}
+}

@@ -40,6 +40,9 @@ type API struct {
 	public   string // BROWSERPIER_PUBLIC_URL, if set
 	tools    *pagetools.Tools
 	tree     *visualtree.Tools // Visual mode's element tree (PROJ-150)
+	// afterLocate, if set, runs between a click by ref's lookup and its
+	// dispatch (tests).
+	afterLocate func()
 }
 
 func New(m *sessions.Manager, web *auth.Web, fs *files.Store, log *slog.Logger, publicURL string) *API {
@@ -580,7 +583,7 @@ func (a *API) input(path string) http.HandlerFunc {
 		if rc != nil {
 			note = describeRefClick(rc.ref, body)
 		}
-		if !a.actNoted(w, r, s, path, body, note) {
+		if !a.actNoted(w, r, s, path, body, note, rc.generation()) {
 			return
 		}
 		if mark != nil {
@@ -617,9 +620,22 @@ func takeDownloadWait(body []byte) ([]byte, *int, error) {
 }
 
 // actNoted runs one input action through the control socket and logs it
-// as note, or writes why it didn't run.
-func (a *API) actNoted(w http.ResponseWriter, r *http.Request, s sessions.Session, path string, body []byte, note string) bool {
-	ctx, done, err := a.m.AgentInput(r.Context(), s.ID)
+// as note, or writes why it didn't run. gen, if set, is the lease
+// generation the action was aimed under (a click by ref): it is refused
+// if a person had the browser since.
+func (a *API) actNoted(w http.ResponseWriter, r *http.Request, s sessions.Session, path string, body []byte, note string, gen *uint64) bool {
+	var ctx context.Context
+	var done func()
+	var err error
+	if gen != nil {
+		ctx, done, err = a.m.AgentInputAt(r.Context(), s.ID, *gen)
+	} else {
+		ctx, done, err = a.m.AgentInput(r.Context(), s.ID)
+	}
+	if errors.Is(err, sessions.ErrPersonHadIt) {
+		writeError(w, http.StatusConflict, err.Error())
+		return false
+	}
 	if errors.Is(err, sessions.ErrInputBusy) {
 		writeError(w, http.StatusConflict, "another input is still running in this browser; wait for it to finish, then send this one")
 		return false

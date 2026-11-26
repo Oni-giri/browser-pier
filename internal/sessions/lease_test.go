@@ -470,3 +470,35 @@ func TestRevokingATokenEndsItsWaitForATurn(t *testing.T) {
 		t.Fatalf("ConnectedTokens after = %v", toks)
 	}
 }
+
+// TestAgentInputAtRefusesAfterAPerson: an action aimed by a read is
+// refused once a person has had the browser since that read.
+func TestAgentInputAtRefusesAfterAPerson(t *testing.T) {
+	f := newFixture(t)
+	advance := f.clock()
+	s := f.start(f.m)
+	ls, err := f.m.ReadLease(context.Background(), s.ID, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gen := ls.Generation
+	ls.Release()
+	_, done, err := f.m.AgentInputAt(context.Background(), s.ID, gen)
+	if err != nil {
+		t.Fatalf("same generation: %v", err)
+	}
+	done()
+	advance(agentQuiet + time.Second)
+	if err := f.m.TakeControl(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.m.ReleaseControl(s.ID)
+	if _, _, err := f.m.AgentInputAt(context.Background(), s.ID, gen); !errors.Is(err, ErrPersonHadIt) {
+		t.Fatalf("after a hand-back: %v, want ErrPersonHadIt", err)
+	}
+	if _, done, err := f.m.AgentInput(context.Background(), s.ID); err != nil {
+		t.Fatalf("a click by point after a hand-back: %v", err)
+	} else {
+		done()
+	}
+}

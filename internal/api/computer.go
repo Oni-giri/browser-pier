@@ -221,7 +221,7 @@ func (a *API) computer(w http.ResponseWriter, r *http.Request) {
 	if rc != nil {
 		note = describeRefClick(rc.ref, raw)
 	}
-	if !a.actNoted(w, r, s, path, raw, note) {
+	if !a.actNoted(w, r, s, path, raw, note, rc.generation()) {
 		return
 	}
 	mark.Ended()

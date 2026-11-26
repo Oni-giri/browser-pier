@@ -20,6 +20,10 @@ var (
 	ErrTookControl = errors.New("a person took control of this browser in the live view; wait until they hand it back")
 	// ErrRevoked: the caller's token was revoked.
 	ErrRevoked = errors.New("the agent token was revoked")
+	// ErrPersonHadIt: a person had the browser (a handoff or Take
+	// control) since the read an agent's action was aimed by
+	// (AgentInputAt).
+	ErrPersonHadIt = errors.New("a person had this browser since the element was read; its refs are stale: take a new visual_snapshot")
 	// ErrSessionHeld: something holds the session (HoldSession) and
 	// agents' page calls wait until it's done.
 	ErrSessionHeld = errors.New("BrowserPier is busy with this browser; try again shortly")

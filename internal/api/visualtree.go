@@ -81,7 +81,19 @@ func (a *API) locateRef(w http.ResponseWriter, r *http.Request, s sessions.Sessi
 	if !a.treeError(w, r, s, err) {
 		return nil, false
 	}
+	if a.afterLocate != nil {
+		a.afterLocate()
+	}
 	return &refClick{ref: ref, target: t}, true
+}
+
+// generation is the lease generation a ref click's point was read
+// under, for AgentInputAt, or nil for a click that isn't by ref.
+func (rc *refClick) generation() *uint64 {
+	if rc == nil {
+		return nil
+	}
+	return &rc.target.Generation
 }
 
 // clickedText is a ref click's answer: what it clicked, fenced.

@@ -30,6 +30,19 @@ const takeOverAfter = 3 * time.Second
 // for takeOverAfter, which breaks it off the same way; not before, nor
 // for agentQuiet after it ends.
 func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, func(), error) {
+	return m.agentInput(ctx, id, nil)
+}
+
+// AgentInputAt is AgentInput for an action aimed by what a read under
+// lease generation gen learnt about the page (a click by a Visual-mode
+// ref, whose point the element tree gave). It fails with ErrPersonHadIt
+// if a person has had the browser since: what the read learnt is out of
+// date, and the action must not land on the page they left.
+func (m *Manager) AgentInputAt(ctx context.Context, id string, gen uint64) (context.Context, func(), error) {
+	return m.agentInput(ctx, id, &gen)
+}
+
+func (m *Manager) agentInput(ctx context.Context, id string, gen *uint64) (context.Context, func(), error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.findLocked(id)
@@ -38,6 +51,9 @@ func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, f
 	}
 	if l.human || l.sess.State == NeedsHelp {
 		return nil, nil, ErrHumanDriving
+	}
+	if gen != nil && *gen != l.generation {
+		return nil, nil, ErrPersonHadIt
 	}
 	if len(l.inputs) > 0 {
 		return nil, nil, ErrInputBusy
