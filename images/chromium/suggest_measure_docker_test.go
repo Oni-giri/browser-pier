@@ -25,10 +25,38 @@ import (
 // secret in its address sends anything. With the image's own engine
 // (DuckDuckGo), which the isolated proxy refuses, it logs which hosts the
 // browser asked for while a word and an address were typed.
+//
+// A trial counts only if the typing reached the address bar: an http
+// address (or one without a scheme, which falls back to http) must open
+// exactly as typed, and a plain word must search suggest.test, or the
+// trial fails rather than report zero requests. An https address can't
+// be checked that way, since its certificate fails before any request;
+// its line says so.
 func TestMeasureSuggest(t *testing.T) {
 	image := testImage(t)
 	var summary []string
-	report := func(pace string, tp typed, secret string) {
+	// verified says how the trial was checked, and fails the test if the
+	// typing didn't reach the address bar.
+	verified := func(r *suggestRig, tp typed) string {
+		switch {
+		case strings.HasPrefix(tp.text, "https://"):
+			return "unchecked (https)"
+		case !strings.Contains(tp.text, "/"):
+			for _, s := range r.since("suggest.test", tp.enter) {
+				if s.uri == "/search?q="+tp.text {
+					return "searched"
+				}
+			}
+			t.Errorf("%q: Return didn't search suggest.test for it, so this trial's counts mean nothing", tp.text)
+			return "NOT SEARCHED"
+		case r.opened(tp):
+			return "opened"
+		}
+		t.Errorf("%q: the address didn't open as typed, so this trial's counts mean nothing; site.test got %v", tp.text, r.since("site.test", tp.enter))
+		return "NOT OPENED"
+	}
+	report := func(r *suggestRig, pace string, tp typed, secret string) {
+		check := verified(r, tp)
 		var qs []string
 		for _, s := range tp.suggests {
 			qs = append(qs, s.uri)
@@ -41,7 +69,7 @@ func TestMeasureSuggest(t *testing.T) {
 		if secret != "" {
 			line += fmt.Sprintf(", secret carried %q of %q", leaked(tp.suggests, secret), secret)
 		}
-		line += fmt.Sprintf("; site before Return %d; refused %v", len(tp.early), otherHosts(tp.refused))
+		line += fmt.Sprintf("; site before Return %d; refused %v; %s", len(tp.early), otherHosts(tp.refused), check)
 		summary = append(summary, line)
 		t.Logf("%s\n  suggest: %s\n  site before Return: %s\n  proxy reached %v", line, strings.Join(qs, " | "), strings.Join(early, " | "), tp.targets)
 	}
@@ -55,16 +83,18 @@ func TestMeasureSuggest(t *testing.T) {
 		"site.test/login/%s",
 	}
 	for _, pace := range []string{"instant", "human"} {
-		report(pace, r.open(t, "pierword", pace), "")
+		report(r, pace, r.open(t, "pierword", pace), "")
 		for i, form := range forms {
 			secret := fmt.Sprintf("Zq%dx%dWv", i, time.Now().UnixNano()%1e6)
-			report(pace, r.open(t, fmt.Sprintf(form, secret), pace), secret)
+			report(r, pace, r.open(t, fmt.Sprintf(form, secret), pace), secret)
 		}
 	}
 
 	// Focus alone, on a page whose address carries a secret (zero suggest).
 	secret := fmt.Sprintf("Zq9x%dWv", time.Now().UnixNano()%1e6)
-	r.open(t, "http://site.test/reset?token="+secret, "instant")
+	// The page must be the one with the secret, or focusing it proves
+	// nothing.
+	verified(r, r.open(t, "http://site.test/reset?token="+secret, "instant"))
 	from := time.Now()
 	r.b.input(t, "/input/key", `{"keys": "ctrl+l", "pace": "instant"}`)
 	time.Sleep(3 * time.Second)
@@ -90,13 +120,19 @@ func TestMeasureSuggest(t *testing.T) {
 				text = fmt.Sprintf(form, time.Now().UnixNano()%1e6)
 			}
 			tp := d.open(t, text, pace)
+			// The word's search goes to DuckDuckGo, which the proxy
+			// refuses, so only the address can be checked.
+			check := "unchecked (refused search)"
+			if text != "pierword" {
+				check = verified(d, tp)
+			}
 			n := 0
 			for _, tg := range tp.refused {
 				if host, _, _ := net.SplitHostPort(tg); host == "duckduckgo.com" { // its suggest host; not start.duckduckgo.com
 					n++
 				}
 			}
-			line := fmt.Sprintf("image's engine: %-7s %-40q duckduckgo.com asked for %d times; refused %v", pace, text, n, otherHosts(tp.refused))
+			line := fmt.Sprintf("image's engine: %-7s %-40q duckduckgo.com asked for %d times; refused %v; %s", pace, text, n, otherHosts(tp.refused), check)
 			summary = append(summary, line)
 			t.Logf("%s\n  refused, in order: %v", line, tp.refused)
 		}
