@@ -184,7 +184,7 @@ func (a *API) replay(w http.ResponseWriter, s sessions.Session, r sessions.Recei
 		status = http.StatusOK
 		out["text"] = "This " + what + " ran already and ended ok; it wasn't run again. Its result isn't kept: read the page again (snapshot, or a screenshot in Visual mode) to see where things are."
 	case sessions.CallWaiting:
-		out["error"] = "This " + what + " is waiting for its turn; it wasn't run again. Ask GET /api/sessions/" + s.ID + "/calls/" + r.CallID + " (MCP: call_status) how it went: if that answers 404, it never ran and can be sent again."
+		out["error"] = "This " + what + " is waiting for its turn; it wasn't run again. Ask GET /api/sessions/" + s.ID + "/calls/" + r.CallID + " (MCP: call_status) how it went. A 404 there doesn't prove it never ran: it may have been given back unrun, or have run and had its receipt dropped since (1,000 calls later, or the browser restarted). Read the page before sending it again."
 	case sessions.CallRunning:
 		out["error"] = "This " + what + " is still running; it wasn't run again. Ask GET /api/sessions/" + s.ID + "/calls/" + r.CallID + " (MCP: call_status) how it ended."
 	case sessions.CallInterrupted:
@@ -210,7 +210,7 @@ func (a *API) callStatus(w http.ResponseWriter, r *http.Request) {
 	tok, _ := auth.TokenFromContext(r.Context())
 	rec, ok := a.m.CallReceipt(s.ID, tok.ID, id)
 	if !ok {
-		writeError(w, http.StatusNotFound, "no call with this id in this session: it was never taken (or was given back, as a call refused before it ran is), its receipt was dropped as the 1000th after it ended, or the browser has restarted since")
+		writeError(w, http.StatusNotFound, "no call with this id in this session: it was never taken, or was given back (as a call refused before it ran is), or its receipt was dropped as the 1000th after it ended, or the browser has restarted since. How it went isn't known: read the page before sending it again")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"call": callOut(rec)})

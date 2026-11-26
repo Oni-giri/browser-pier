@@ -525,7 +525,7 @@ func TestARepeatWhileTheFirstRuns(t *testing.T) {
 		hold.Release()
 		t.Fatalf("both copies waited for their turn; act ran %d times", page.count())
 	}
-	if !got[0].replayed || got[0].body.Call.State != "waiting" || !strings.Contains(got[0].body.Error, "waiting for its turn") {
+	if !got[0].replayed || got[0].body.Call.State != "waiting" || !strings.Contains(got[0].body.Error, "waiting for its turn") || !strings.Contains(got[0].body.Error, "Read the page before sending it again") {
 		t.Fatalf("the second copy: %d %s", got[0].code, got[0].raw)
 	}
 	hold.Release()

@@ -13,7 +13,7 @@ import (
 // Asking how calls went (PROJ-156): each tool reads its REST endpoint in
 // the caller's name, so it sees the token's own calls only.
 func (s *Server) addCallTools(srv *sdk.Server) {
-	sdk.AddTool(srv, &sdk.Tool{Name: "call_status", Description: "How a call you sent with a call_id went: waiting or running (still under way), ok (it ran), error (it answered with an error after it began, so some of it may have happened) or interrupted (cut short: a person took the browser, it stopped, or the call was cancelled; how far it got isn't known). Its result isn't kept: read the page again. An unknown id means it never ran (or the browser has restarted since)."}, s.callStatus)
+	sdk.AddTool(srv, &sdk.Tool{Name: "call_status", Description: "How a call you sent with a call_id went: waiting or running (still under way), ok (it ran), error (it answered with an error after it began, so some of it may have happened) or interrupted (cut short: a person took the browser, it stopped, or the call was cancelled; how far it got isn't known). Its result isn't kept: read the page again. An unknown id doesn't prove it never ran (its receipt goes 1,000 calls later, or when the browser restarts): read the page before sending it again."}, s.callStatus)
 	sdk.AddTool(srv, &sdk.Tool{Name: "session_status", Description: "A browser's state and mode, your calls under way in it, and what your last calls did there (newest first, up to 20, with each one's call_id and how it ended), for when an answer was lost."}, s.sessionStatus)
 }
 

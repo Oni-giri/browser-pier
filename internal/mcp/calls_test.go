@@ -254,7 +254,7 @@ func TestARepeatedClickRunsOnceOverMCP(t *testing.T) {
 	if res, out := call(t, cs, "call_status", map[string]any{"session_id": s.ID, "call_id": "pay-1"}); res.IsError || !strings.Contains(out, "Call pay-1 (computer): ok.") {
 		t.Fatalf("call_status: %s", out)
 	}
-	if res, out := call(t, cs, "call_status", map[string]any{"session_id": s.ID, "call_id": "never"}); !res.IsError || !strings.Contains(out, "no call with this id") {
+	if res, out := call(t, cs, "call_status", map[string]any{"session_id": s.ID, "call_id": "never"}); !res.IsError || !strings.Contains(out, "no call with this id") || !strings.Contains(out, "read the page before sending it again") {
 		t.Fatalf("call_status of an unknown id: %s", out)
 	}
 	res, out = call(t, cs, "session_status", map[string]any{"session_id": s.ID})
