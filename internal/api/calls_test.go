@@ -508,8 +508,8 @@ func TestARepeatWhileTheFirstRuns(t *testing.T) {
 	waitFor(t, func() bool { return f.inputCount() == 1 })
 	r := f.send(f.srv, f.all, v.ID, "computer", "r1", `{"action": "type", "text": "typed slowly"}`)
 	checkReplay(t, "the type again", r, "running")
-	if !strings.Contains(r.body.Error, "/calls/r1") {
-		t.Fatalf("the type again doesn't say where to ask: %s", r.raw)
+	if !strings.Contains(r.body.Error, "/calls/r1") || !strings.Contains(r.body.Error, "A 404 there doesn't prove it never ran") {
+		t.Fatalf("the type again doesn't say where to ask, or what a 404 means: %s", r.raw)
 	}
 	var st sessionStatusJSON
 	f.call(f.all, http.MethodGet, "/api/sessions/"+v.ID, "", &st)
