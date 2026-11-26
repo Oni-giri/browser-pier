@@ -92,6 +92,18 @@ func TestStickyProxyForm(t *testing.T) {
 		t.Fatalf("an edit kept from the shown value: %d, stored %q", r.code, got.Proxy)
 	}
 
+	// An encoded colon stays in a SOCKS5 user name through an edit of
+	// another part of the field.
+	p.Proxy = "socks5://team%3A{sticky}:s3cret@proxy.example:1080"
+	if _, err := f.m.Profiles().Update(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	want(t, f.get("/profiles/bank/edit"), http.StatusOK, `value="socks5://team%3A{sticky}:••••@proxy.example:1080"`)
+	r = f.post("/profiles/bank/edit", url.Values{"policy": {"pin"}, "proxy": {"socks5://team%3A{sticky}:pw@other.example:1080"}})
+	if got, _ := f.m.Profiles().Get(context.Background(), "bank"); r.code != http.StatusSeeOther || got.Proxy != "socks5://team%3A{sticky}:pw@other.example:1080" {
+		t.Fatalf("an edit of the host: %d, stored %q", r.code, got.Proxy)
+	}
+
 	// Settings take a template too, and show it masked.
 	if r := f.post("/settings", url.Values{"proxy": {stickyProxy}}); r.code != http.StatusSeeOther {
 		t.Fatalf("settings: %d %s", r.code, r.body)

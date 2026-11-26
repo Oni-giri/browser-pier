@@ -599,6 +599,8 @@ func TestFormatting(t *testing.T) {
 		"http://{sticky}-{sticky}@h:8080":  "http://{sticky}-{sticky}@h:8080",
 		"http://user-%7Bsticky%7D:pw@h:80": "http://user-%7Bsticky%7D:••••@h:80", // a literal stays one
 		"http://a%7B{sticky}%7D:pw@h:80":   "http://a%7B{sticky}%7D:••••@h:80",
+		"socks5://team%3A{sticky}:pw@h:1":  "socks5://team%3A{sticky}:••••@h:1", // the colon stays in the user name
+		"socks5://a%40b:pw@h:1":            "socks5://a%40b:••••@h:1",
 		"http://u:p@[::1":                  "(hidden)",
 	} {
 		if got := maskProxy(in); got != out {
