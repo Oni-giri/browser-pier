@@ -158,7 +158,11 @@ func run(log *slog.Logger) error {
 		return fmt.Errorf("start Chromium: %w", err)
 	}
 	browser, err := spawn(chromium)
-	fatal.started()
+	pid := 0
+	if err == nil {
+		pid = chromium.Process.Pid
+	}
+	fatal.started(pid)
 	if err != nil {
 		return fmt.Errorf("start Chromium: %w", err)
 	}
@@ -172,8 +176,14 @@ func run(log *slog.Logger) error {
 		_ = resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
 	}); err != nil {
-		_ = stopBrowser(browser, cdpAddr, cfg.StopTimeout, portal, bus)
-		return fmt.Errorf("chromium: %w%s", err, fatal.reason(true))
+		ended, exited := time.Now(), false
+		select {
+		case <-browser.done:
+			exited = true
+		default:
+		}
+		reason := giveUp(fatal, ended, exited, func() { _ = stopBrowser(browser, cdpAddr, cfg.StopTimeout, portal, bus) })
+		return fmt.Errorf("chromium: %w%s", err, reason)
 	}
 
 	ln, err := listenControl(cfg.ControlSocket)
@@ -194,13 +204,14 @@ func run(log *slog.Logger) error {
 	log.Info("ready", "screen", fmt.Sprintf("%dx%d", cfg.Width, cfg.Height), "control_socket", cfg.ControlSocket)
 
 	if !waitEnd(ctx, log, browser, bus) {
+		ended := time.Now()
 		_ = srv.Close()
 		portal.browserExited()
 		why := ""
 		if busGone(bus) {
 			why = " (the session bus had exited, and Chromium aborts without it)"
 		}
-		return fmt.Errorf("chromium exited on its own: %s%s%s", describe(browser.status), why, fatal.reason(false))
+		return fmt.Errorf("chromium exited on its own: %s%s%s", describe(browser.status), why, fatal.reason(false, ended, true))
 	}
 
 	log.Info("stopping: closing Chromium", "timeout", cfg.StopTimeout)
