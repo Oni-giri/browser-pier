@@ -119,10 +119,11 @@ func newSuggestRig(t *testing.T, image string, localEngine bool) *suggestRig {
 	// A new profile's first tab opens start.duckduckgo.com (PROJ-127),
 	// which the proxy refuses, and an address typed while that settles
 	// can be lost. Open one until it opens, so no check passes on typing
-	// that never reached the address bar.
+	// that never reached the address bar. Each try has its own path, so a
+	// late answer to one doesn't count for the next.
 	for i := 0; ; i++ {
-		tp := r.open(t, "http://site.test/ready", "instant")
-		if len(r.since("site.test", tp.enter)) > 0 {
+		tp := r.open(t, fmt.Sprintf("http://site.test/ready/%d", i), "instant")
+		if r.opened(tp) {
 			break
 		}
 		if i == 4 {
@@ -130,6 +131,20 @@ func newSuggestRig(t *testing.T, image string, localEngine bool) *suggestRig {
 		}
 	}
 	return r
+}
+
+// opened reports whether site.test got, after Return, exactly the path
+// and query typed: not just any request to it, which an earlier
+// address's late answer, or one that lost part of what was typed, could
+// make.
+func (r *suggestRig) opened(tp typed) bool {
+	want := strings.TrimPrefix(strings.TrimPrefix(tp.text, "http://"), "site.test")
+	for _, s := range r.since("site.test", tp.enter) {
+		if s.uri == want {
+			return true
+		}
+	}
+	return false
 }
 
 // since lists the requests to host from t on.
@@ -259,8 +274,8 @@ func TestTypedAddressReachesNoSuggestService(t *testing.T) {
 			if len(tp.refused) != 0 {
 				t.Logf("%s %s: refused, so nothing reached them: %v", pace, text, tp.refused)
 			}
-			if len(r.since("site.test", tp.enter)) == 0 {
-				t.Errorf("%s %s: the address never opened", pace, text)
+			if !r.opened(tp) {
+				t.Errorf("%s %s: the address never opened as typed; site.test got %v after Return", pace, text, r.since("site.test", tp.enter))
 			}
 		}
 	}
@@ -279,8 +294,8 @@ func TestTypedAddressReachesNoSuggestService(t *testing.T) {
 				break
 			}
 		}
-		if len(d.since("site.test", tp.enter)) == 0 {
-			t.Errorf("%s %s: the address never opened, so the typing may not have reached the address bar", pace, text)
+		if !d.opened(tp) {
+			t.Errorf("%s %s: the address never opened as typed, so the typing may not have reached the address bar; site.test got %v after Return", pace, text, d.since("site.test", tp.enter))
 		}
 	}
 
