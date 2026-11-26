@@ -121,6 +121,11 @@ RUN useradd --uid 1000 --user-group --create-home --shell /usr/sbin/nologin pier
  && chmod 1777 /tmp/.X11-unix
 
 COPY --from=build /out/entrypoint /usr/local/bin/browserpier-entrypoint
+# Typing binds characters the keyboard map lacks to spare keys (PROJ-195),
+# and the orchestrator's time estimates assume as many as keyplan.SpareKeys:
+# fail the build if this image's layout data (xkb-data, unpinned) leaves
+# fewer. The check starts an Xvfb of its own and counts them.
+RUN /usr/local/bin/browserpier-entrypoint spare-keys
 COPY LICENSE NOTICE /usr/share/doc/browserpier/
 # Managed policy: hides the "unsupported command-line flag" bar that
 # --disable-blink-features would put over every page, and sends downloads

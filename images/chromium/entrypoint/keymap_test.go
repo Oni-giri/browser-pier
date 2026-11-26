@@ -991,3 +991,10 @@ func TestKeymapConnectionEndsWithItsRequest(t *testing.T) {
 		t.Fatalf("the cancel took %s", d)
 	}
 }
+
+// The spare-key check is one of the entrypoint's checks.
+func TestSpareKeysIsACheck(t *testing.T) {
+	if checkMode([]string{"entrypoint", spareKeysArg}) == nil {
+		t.Fatal("spare-keys isn't a check")
+	}
+}
