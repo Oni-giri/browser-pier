@@ -32,6 +32,7 @@ type fatalLine struct {
 	mu      sync.Mutex
 	buf     []byte       // the line being written
 	pid     int          // the browser process's, once started
+	known   bool         // started has run: pid is known, or 0 for no browser
 	browser fatalEntry   // its last FATAL line, if any
 	others  []fatalEntry // the last few FATAL lines of other pids, oldest first
 	error   string       // ERROR
@@ -77,6 +78,12 @@ const keptFatals = 16
 // the browser down within milliseconds.
 const fatalWindow = 3 * time.Second
 
+// drainAllowance is how long after the browser exited a line read from the
+// pipe still counts as written before the exit: the reader may be a moment
+// behind. A child writing later, as it dies with the browser, isn't why
+// the browser ended.
+const drainAllowance = 250 * time.Millisecond
+
 // watchFatal points cmd's output at a pipe read by a fatalLine, which
 // tells warn (if not nil) what an admin should know. Call started once cmd
 // has started.
@@ -102,8 +109,9 @@ func watchFatal(cmd *exec.Cmd, warn func(msg string)) (*fatalLine, error) {
 // from its own PID namespace; other children log their pid in ours.
 func (f *fatalLine) started(pid int) {
 	f.mu.Lock()
-	f.pid = pid
-	// Lines read before we knew the pid.
+	f.pid, f.known = pid, true
+	// Lines read before we knew the pid, all of them kept until now so
+	// children's can't push the browser's out.
 	kept := f.others[:0]
 	for _, e := range f.others {
 		if pid != 0 && e.pid == pid {
@@ -112,7 +120,7 @@ func (f *fatalLine) started(pid int) {
 			kept = append(kept, e)
 		}
 	}
-	f.others = kept
+	f.others = kept[max(0, len(kept)-keptFatals):]
 	f.mu.Unlock()
 	_ = f.w.Close()
 }
@@ -127,26 +135,27 @@ func (f *fatalLine) Write(p []byte) (int, error) {
 			break
 		}
 		line := string(f.buf[:i])
+		pid, level, m := parseChromiumLine(line)
 		switch {
 		case strings.Contains(line, gpuSandboxFailed):
 			f.gpuWaiting = true
 		case strings.Contains(line, "InitializeSandbox() called with multiple threads"):
 			f.gpuWaiting = false // another process type's
-		case f.gpuWaiting && strings.Contains(line, gpuNotMonoThreaded) && chromiumLine(line, "FATAL") != "":
+		case f.gpuWaiting && strings.Contains(line, gpuNotMonoThreaded) && level == "FATAL":
 			f.gpuWaiting = false
 			if !f.gpuWarned && f.warn != nil {
 				f.gpuWarned = true
 				f.warn(gpuSandboxWarning)
 			}
 		}
-		switch pid, level, m := parseChromiumLine(line); level {
+		switch level {
 		case "FATAL":
 			e := fatalEntry{pid: pid, at: time.Now(), msg: m}
 			if f.pid != 0 && pid == f.pid {
 				f.browser = e
 				break
 			}
-			if len(f.others) == keptFatals {
+			if f.known && len(f.others) == keptFatals {
 				f.others = append(f.others[:0], f.others[1:]...)
 			}
 			f.others = append(f.others, e)
@@ -164,8 +173,9 @@ func (f *fatalLine) Write(p []byte) (int, error) {
 // reason is ": " and the FATAL line that can explain why the browser
 // ended, or "" if there was none. ended is when it exited (exited true),
 // or when startup was given up on, with the browser still running (a
-// timeout, or a stop): then lines read later, as we close it, don't count.
-// Only lines read within fatalWindow before ended count, the browser
+// timeout, or a stop): then lines read later don't count, and the caller
+// asks before closing it (giveUp). Only lines read within fatalWindow
+// before ended count, or within drainAllowance after an exit, the browser
 // process's own first. During startup (startup true) the last ERROR line
 // stands in for a missing FATAL one: later on, ERROR lines are mostly ones
 // Chromium recovered from. It waits briefly for the output still in the
@@ -178,7 +188,13 @@ func (f *fatalLine) reason(startup bool, ended time.Time, exited bool) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	explains := func(e fatalEntry) bool {
-		return !e.at.IsZero() && ended.Sub(e.at) <= fatalWindow && (exited || !e.at.After(ended))
+		switch {
+		case e.at.IsZero():
+			return false
+		case e.at.After(ended):
+			return exited && e.at.Sub(ended) <= drainAllowance
+		}
+		return ended.Sub(e.at) <= fatalWindow
 	}
 	if explains(f.browser) {
 		return ": " + f.browser.msg
@@ -192,6 +208,15 @@ func (f *fatalLine) reason(startup bool, ended time.Time, exited bool) string {
 		return ": " + f.error
 	}
 	return ""
+}
+
+// giveUp is the reason startup failed, read before close closes Chromium,
+// so nothing written as it closes (a FATAL line in the browser's name, an
+// ERROR line) can take the place of what came before.
+func giveUp(f *fatalLine, ended time.Time, exited bool, close func()) string {
+	r := f.reason(true, ended, exited)
+	close()
+	return r
 }
 
 // parseChromiumLine splits a Chromium log line,

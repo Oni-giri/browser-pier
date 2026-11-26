@@ -190,9 +190,83 @@ func TestFatalLineWhenStartupIsGivenUp(t *testing.T) {
 	if got := f.reason(true, gaveUp, false); got != "" {
 		t.Fatalf("reason %q", got)
 	}
-	// After an exit, a line read a little after it is still its own.
-	if got := f.reason(true, gaveUp, true); got != ": closing (gpu.cc:1)" {
+	// After an exit, a line read a second later was written after it, by
+	// a child dying with the browser: not why it ended.
+	if got := f.reason(true, gaveUp, true); got != "" {
 		t.Fatalf("reason after an exit %q", got)
+	}
+	// One read a moment after it may have been waiting in the pipe.
+	f.others[0].at = gaveUp.Add(drainAllowance)
+	if got := f.reason(true, gaveUp, true); got != ": closing (gpu.cc:1)" {
+		t.Fatalf("reason right after an exit %q", got)
+	}
+}
+
+// TestGiveUpReadsTheReasonBeforeClosing: what Chromium writes as startup's
+// failure closes it, a FATAL line in the browser's name or an ERROR line,
+// doesn't replace the reason it had.
+func TestGiveUpReadsTheReasonBeforeClosing(t *testing.T) {
+	f := newFatalLine()
+	f.started(7)
+	_, _ = f.Write([]byte("[7:7:0:FATAL:browser.cc:1] the cause\n"))
+	gaveUp := time.Now()
+	got := giveUp(f, gaveUp, false, func() {
+		_, _ = f.Write([]byte("[7:7:0:FATAL:browser.cc:2] closing\n[7:7:0:ERROR:browser.cc:3] shutting down\n"))
+	})
+	if got != ": the cause (browser.cc:1)" {
+		t.Fatalf("reason %q", got)
+	}
+
+	// With no FATAL line, the ERROR line from before closing stands in.
+	f = newFatalLine()
+	f.started(7)
+	_, _ = f.Write([]byte("[7:7:0:ERROR:browser.cc:1] before\n"))
+	got = giveUp(f, time.Now(), false, func() {
+		_, _ = f.Write([]byte("[7:7:0:ERROR:browser.cc:3] shutting down\n"))
+	})
+	if got != ": before (browser.cc:1)" {
+		t.Fatalf("reason %q", got)
+	}
+}
+
+// TestFatalLineWindowIsThreeSeconds: a line counts up to fatalWindow
+// before the browser ended, and not a nanosecond more, the browser's own
+// as a child's.
+func TestFatalLineWindowIsThreeSeconds(t *testing.T) {
+	at := time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC)
+	for _, browsers := range []bool{true, false} {
+		f := newFatalLine()
+		e := fatalEntry{pid: 40, at: at, msg: "x"}
+		if browsers {
+			f.pid, e.pid = 7, 7
+			f.browser = e
+		} else {
+			f.others = []fatalEntry{e}
+		}
+		if got := f.reason(false, at.Add(3*time.Second), true); got != ": x" {
+			t.Fatalf("browser's %t: reason at the window's edge %q", browsers, got)
+		}
+		if got := f.reason(false, at.Add(3*time.Second+time.Nanosecond), true); got != "" {
+			t.Fatalf("browser's %t: reason past the window %q", browsers, got)
+		}
+	}
+}
+
+// TestFatalLineKeepsTheBrowsersLineFromBeforeItsPIDThroughAFlood: lines
+// read before started can't push the browser's own out.
+func TestFatalLineKeepsTheBrowsersLineFromBeforeItsPIDThroughAFlood(t *testing.T) {
+	f := &fatalLine{copied: make(chan struct{})}
+	close(f.copied)
+	_, _ = f.Write([]byte("[7:7:0:FATAL:browser.cc:1] mine\n"))
+	for i := range 2 * keptFatals {
+		_, _ = fmt.Fprintf(f, "[%d:1:0:FATAL:x.cc:1] child %d\n", 100+i, i)
+	}
+	f.started(7)
+	if got := f.reason(false, time.Now(), true); got != ": mine (browser.cc:1)" {
+		t.Fatalf("reason %q", got)
+	}
+	if len(f.others) != keptFatals {
+		t.Fatalf("kept %d others", len(f.others))
 	}
 }
 

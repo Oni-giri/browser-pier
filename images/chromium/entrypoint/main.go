@@ -168,8 +168,8 @@ func run(log *slog.Logger) error {
 			exited = true
 		default:
 		}
-		_ = closeChromium(browser, cdpAddr, cfg.StopTimeout)
-		return fmt.Errorf("chromium: %w%s", err, fatal.reason(true, ended, exited))
+		reason := giveUp(fatal, ended, exited, func() { _ = closeChromium(browser, cdpAddr, cfg.StopTimeout) })
+		return fmt.Errorf("chromium: %w%s", err, reason)
 	}
 
 	ln, err := listenControl(cfg.ControlSocket)
