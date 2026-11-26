@@ -21,7 +21,7 @@ const MaxUpload = 20 << 20
 
 func (s *Server) addUploadTools(srv *sdk.Server) {
 	sdk.AddTool(srv, &sdk.Tool{Name: "upload_file", Description: fmt.Sprintf("Put a file into the session's uploads, at most %s, for a page's file input: then set it with act's upload step "+
-		`({"action": "upload", "ref": <the <input type=file> or its label>, "files": [<the name this returns>]}). A person can also pick it in the file chooser during a handoff. The name may come back changed if one is taken.`, mib(s.maxUpload))}, s.uploadFile)
+		`({"action": "upload", "ref": <the <input type=file> or its label>, "files": [<the name this returns>]}), or answer a file chooser a page opened with choose_files. The name may come back changed if one is taken.`, mib(s.maxUpload))}, s.uploadFile)
 }
 
 type uploadArgs struct {

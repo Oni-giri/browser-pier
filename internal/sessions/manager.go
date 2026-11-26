@@ -41,6 +41,9 @@ type Runtime interface {
 	// Outdated reports whether a container labelled with this definition
 	// version (docker.Container.Spec) must not run on: Reconcile stops it.
 	Outdated(spec string) bool
+	// TestProxy runs the proxy check with the proxy file in spec.Dir
+	// (see TestProxy).
+	TestProxy(ctx context.Context, spec docker.ProxyTestSpec) (docker.ProxyResult, error)
 }
 
 // Layout is where profile folders live:
@@ -152,6 +155,8 @@ type Manager struct {
 	// admit is held from checking there is room for a new browser to
 	// recording its session, so two starts can't both squeeze in.
 	admit sync.Mutex
+	// proxyTest is held by the one proxy test running (TestProxy).
+	proxyTest sync.Mutex
 }
 
 // live is a session with a container, from Starting until it is final.
@@ -181,8 +186,13 @@ type live struct {
 	holds int
 	// generation changes each time a person takes the browser.
 	generation uint64
-	// human is set while a person has control from the live view.
-	human bool
+	// human is set while a person has control from the live view, and
+	// holder names who: the opaque id TakeControl was given (PROJ-184).
+	// controlTurn numbers each Take control, so a live view that lost
+	// control behind its back can't release the next one's (ReleaseTurn).
+	human       bool
+	holder      string
+	controlTurn uint64
 	// releasing is set while ReleaseControl empties the clipboard, before
 	// human is cleared; humanInputs counts the person's inputs under way
 	// (HumanInput), which it waits for first.
@@ -481,7 +491,7 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 		m.abort(l, "", fmt.Sprintf("closing the tabs of a session a secret was typed into: %v", err))
 		return
 	}
-	if err := m.writeProxyFile(p); err != nil {
+	if err := m.writeProxyFile(ctx, p); err != nil {
 		m.abort(l, "", fmt.Sprintf("handing over the proxy: %v", err))
 		return
 	}
@@ -529,6 +539,11 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 	for retried := false; ; retried = true {
 		var err error
 		cid, err = m.rt.Create(ctx, spec)
+		if errors.Is(err, docker.ErrOutsideEnvelope) {
+			// It says which container it refused, and why.
+			m.abort(l, "", err.Error())
+			return
+		}
 		if err != nil {
 			m.abort(l, "", fmt.Sprintf("creating the browser container: %v", err))
 			return
@@ -811,7 +826,9 @@ const proxyFile = "proxy.json"
 
 // writeProxyFile hands the profile's proxy, credentials included, to the
 // browser container through its control folder, never its environment.
-func (m *Manager) writeProxyFile(p profiles.Profile) error {
+// A template's {sticky} is filled in here, and only here, with the
+// profile's own token: what is stored and shown stays the template.
+func (m *Manager) writeProxyFile(ctx context.Context, p profiles.Profile) error {
 	root, err := os.OpenRoot(m.layout.dir(p.Name, "run"))
 	if err != nil {
 		return err
@@ -823,7 +840,17 @@ func (m *Manager) writeProxyFile(p profiles.Profile) error {
 	if p.Proxy == "" {
 		return nil
 	}
-	b, err := json.Marshal(map[string]string{"url": p.Proxy})
+	proxy := p.Proxy
+	if profiles.HasSticky(proxy) {
+		// Read again rather than taken from p: a profile from before
+		// tokens gets its own here, once.
+		tok, err := m.profiles.StickyToken(ctx, p.Name)
+		if err != nil {
+			return err
+		}
+		proxy = profiles.FillSticky(proxy, tok)
+	}
+	b, err := json.Marshal(map[string]string{"url": proxy})
 	if err != nil {
 		return err
 	}
@@ -1268,6 +1295,9 @@ func (m *Manager) SetNeedsHelp(id string, needsHelp bool) (Session, error) {
 		if to == Running {
 			l.lastActivity = m.now() // idle time starts at hand-back
 		}
+		// A file chooser open at either end passes to the person, or back
+		// to the agent, with its whole time limit (PROJ-181).
+		m.restartChoosers(l.sess.Profile)
 	default:
 		return l.sess, ErrNotRunning
 	}

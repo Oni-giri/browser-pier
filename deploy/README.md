@@ -77,6 +77,7 @@ Browser containers publish no ports. They're reached only through BrowserPier, b
 
 BrowserPier starts browsers through `/var/run/docker.sock`, and **anything that can use the Docker socket controls the host**. A flaw in BrowserPier could therefore become a way into the server. What limits that:
 - BrowserPier starts containers only from its own browser image. Browsers run without capabilities beyond what Chromium's sandbox needs, with no-new-privileges, seccomp, and no published ports.
+- Right before each container is created, BrowserPier checks its whole definition against a fixed list of what its containers may get, and refuses anything else (a device, another folder, a host namespace, a published port). That catches mistakes in BrowserPier itself; it doesn't contain a BrowserPier that has been taken over, which holds the socket anyway. A refusal fails the browser's start with an error naming the setting: please report it.
 - The orchestrator image is distroless and runs as your user, not root.
 
 Still:
@@ -182,6 +183,26 @@ The TURN server must reach this server on 7438 UDP, where it relays to. Anyone B
 
 Add `?ice=relay` to a live view's address (`https://pier.example.com/profiles/google?ice=relay`), or to a handoff link's once it's open (after the PIN), and reload. That page connects only through TURN: if the video plays, TURN works. Without it, a viewer connects directly where it can and through TURN only where it must.
 
+## Upstream proxies
+
+Pages can leave through an upstream proxy, such as a residential one: set it per profile under Advanced, or as the default for new profiles in Settings. It's a URL with the scheme, credentials, host and port, and nothing else:
+
+```
+http://user:password@proxy.example.net:8080      # also https:// and socks5://
+```
+
+Percent-encode a reserved character in the user name or password (`@` is `%40`, `:` is `%3A`). For `socks5://` each may be at most 255 bytes, and an `http`/`https` user name can't hold a colon. Time zone and language follow where the proxy exits.
+
+**One exit per profile: `{sticky}`.** Many providers keep a client on one exit IP while it sends the same session code, in the user name or the password. Write `{sticky}` where the code goes and each profile fills in a code of its own (8 lowercase letters and digits), kept until you choose **New exit IP** in its ⋯ menu. So one default proxy in Settings gives every profile its own exit, instead of all sharing one. For example, with IPRoyal, whose session code goes in the password and must be 8 characters:
+
+```
+http://USERNAME:PASSWORD_country-de_session-{sticky}_lifetime-30m@geo.iproyal.com:12321
+```
+
+Oxylabs takes it in the user name: `http://customer-USERNAME-cc-DE-sessid-{sticky}-sesstime-1440:PASSWORD@pr.oxylabs.io:7777`. Check your provider's current documentation for its syntax.
+
+How long an exit is kept is the provider's choice, not BrowserPier's: often minutes unless the URL asks for longer (by default Oxylabs ends a session after 10 minutes, or after 60 seconds without a request; `sesstime` asks for up to 24 hours), and a session moves to another IP when its exit goes offline. So `{sticky}` asks for a stable exit; it can't guarantee one. While the country stays the same, a profile keeps its time zone anyway.
+
 ## Settings
 
 Set in `.env` and passed through by `docker-compose.yml`. Add any other variable from this list to its `environment:`. An empty value means unset.
@@ -204,13 +225,13 @@ Leave `BROWSERPIER_LISTEN` and `BROWSERPIER_WEBRTC_PORT` alone with this compose
 | `BROWSERPIER_NET` | `10.247.74` | The compose network's first three numbers (compose only). |
 | `BROWSERPIER_VERSION` | the release the files came from | The image tag (compose only): a release such as `0.1.0` stays put, `latest` follows each release, `edge` follows the main branch. |
 | `BROWSERPIER_COOKIE_SECURE` | auto | `always` or `never` to override. |
-| `BROWSERPIER_GEOIP_URL` | `https://ifconfig.co/json` | How browsers find their exit location, to match time zone and language. `off` disables it. |
+| `BROWSERPIER_GEOIP_URL` | `https://ifconfig.co/json` | How browsers find their exit location, to match time zone and language. `off` disables it, and with it the Test button next to proxy fields, which looks the exit up the same way, from a short-lived browser-image container. |
 | `BROWSERPIER_BLOCKLIST_URLS` | Peter Lowe's ad servers and EasyPrivacy | The ad and tracker domain lists that profiles with Block ads and trackers on block, separated by commas or spaces; `none` for none. Hosts-format lists and Adblock Plus `||name^` rules are read; other rules are skipped. Downloaded into `<data dir>/blocklists/` and checked again every 4 days. |
 | `BROWSERPIER_LISTEN` | `:7437` | The app's address inside the container. |
 | `BROWSERPIER_BROWSER_IMAGE` | this release's | The browser image. Only BrowserPier's own. |
 | `BROWSERPIER_DATA_DIR` | `/data` | The database and one folder per profile, inside the container. Keep the `./data:/data` mount. |
 | `BROWSERPIER_HOST_DATA_DIR` | detected | The data folder's path on the host, if detection fails. |
-| `BROWSERPIER_USERNS_MODE` | unset | `keep-id` under rootless Podman. |
+| `BROWSERPIER_USERNS_MODE` | unset | `keep-id` under rootless Podman (or `keep-id:uid=…,gid=…`; keep-id's options are `uid`, `gid` and `size`, each at most once, as numbers). Nothing else is accepted: BrowserPier refuses to start with any other value, `host` included. |
 | `BROWSERPIER_BROWSER_APPARMOR` | unset | The browser containers' AppArmor profile. Unset, BrowserPier picks one: see [AppArmor](#apparmor). Set, that profile is used as it is, unchecked: `browserpier`, `unconfined`, or one of your own. A named profile that isn't loaded makes every browser fail to start, with an error saying so. |
 | `BROWSERPIER_STOP_BROWSERS_ON_EXIT` | `false` | `true` stops every browser when BrowserPier stops. Otherwise they keep running through an update. |
 

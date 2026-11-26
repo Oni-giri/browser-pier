@@ -39,6 +39,7 @@ type API struct {
 	log      *slog.Logger
 	public   string // BROWSERPIER_PUBLIC_URL, if set
 	tools    *pagetools.Tools
+	choosers choosersSeen // file choosers the activity log has noted
 }
 
 func New(m *sessions.Manager, web *auth.Web, fs *files.Store, log *slog.Logger, publicURL string) *API {
@@ -47,7 +48,9 @@ func New(m *sessions.Manager, web *auth.Web, fs *files.Store, log *slog.Logger, 
 	if fs != nil {
 		m.OnEnd(fs.Forget) // what download notices keep about a session
 	}
-	return &API{m: m, web: web, files: fs, log: log, public: strings.TrimRight(publicURL, "/"), tools: tools}
+	a := &API{m: m, web: web, files: fs, log: log, public: strings.TrimRight(publicURL, "/"), tools: tools}
+	m.OnEnd(a.choosers.forget)
+	return a
 }
 
 // SetSettings makes profiles created through the API start from the
@@ -71,6 +74,8 @@ func (a *API) Register(mux Router) {
 	mux.Handle("POST /api/sessions/{id}/type", c("type", a.input("/input/type")))
 	mux.Handle("POST /api/sessions/{id}/computer", c("computer", a.computer))
 	mux.Handle("POST /api/sessions/{id}/files", t(a.uploadFile))
+	mux.Handle("GET /api/sessions/{id}/chooser", t(a.listChoosers))
+	mux.Handle("POST /api/sessions/{id}/chooser", t(a.choose))
 	mux.Handle("GET /api/profiles/{name}/files", t(a.listFiles))
 	mux.Handle("GET /api/profiles/{name}/files/{file}", t(a.getFile))
 	mux.Handle("DELETE /api/profiles/{name}/files/{file}", t(a.deleteFile))
@@ -150,15 +155,17 @@ func (a *API) profileOut(p profiles.Profile) profileJSON {
 	return out
 }
 
+// redactProxy shows a profile's proxy without its password: a template
+// stays a template, its {sticky} never filled in.
 func redactProxy(raw string) string {
 	if raw == "" {
 		return ""
 	}
-	u, err := url.Parse(raw)
+	out, err := profiles.FormatProxy(raw, (*url.URL).Redacted)
 	if err != nil {
 		return "(set)"
 	}
-	return u.Redacted()
+	return out
 }
 
 func (a *API) listProfiles(w http.ResponseWriter, r *http.Request) {
@@ -591,6 +598,7 @@ func (a *API) input(path string) http.HandlerFunc {
 			mark.Ended()
 			a.reportDownloads(w, r, s, mark, wait)
 		}
+		a.setChooserNotice(w, r, s)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

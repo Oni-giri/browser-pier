@@ -43,6 +43,13 @@ type browser struct {
 	pageURL string
 	// methods are the CDP methods sent on the browser's WebSocket.
 	methods []string
+	// choosers is what GET /chooser answers (JSON), "" for none open;
+	// noPortal makes it 503. chosen records each POST /chooser/{id}.
+	choosers string
+	noPortal bool
+	chosen   []string
+	// chooserStatus, if set, is what POST /chooser/{id} answers.
+	chooserStatus int
 }
 
 func (b *browser) handler() http.Handler {
@@ -145,6 +152,35 @@ func (b *browser) handler() http.Handler {
 	for _, p := range []string{"click", "type", "scroll", "key", "drag"} {
 		mux.HandleFunc("POST /input/"+p, input)
 	}
+	mux.HandleFunc("GET /chooser", func(w http.ResponseWriter, _ *http.Request) {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if b.noPortal {
+			http.Error(w, "the file chooser portal isn't running in this browser", http.StatusServiceUnavailable)
+			return
+		}
+		list := b.choosers
+		if list == "" {
+			list = "[]"
+		}
+		_, _ = io.WriteString(w, `{"choosers":`+list+`}`)
+	})
+	// Control changing hands restarts the choosers' time limit (PROJ-181).
+	mux.HandleFunc("POST /chooser/restart", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	mux.HandleFunc("POST /chooser/{id}", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		b.chosen = append(b.chosen, r.PathValue("id")+" "+string(body))
+		switch {
+		case b.noPortal:
+			http.Error(w, "the file chooser portal isn't running in this browser", http.StatusServiceUnavailable)
+		case b.chooserStatus != 0:
+			http.Error(w, "refused", b.chooserStatus)
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
 	return mux
 }
 
