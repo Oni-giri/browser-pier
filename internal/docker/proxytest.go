@@ -119,9 +119,16 @@ func proxyTestConfig(image, seccompOpt, apparmorOpt, user, userns, instance stri
 	return cfg, host
 }
 
+// proxyTestOptions is the proxy test's create body under the AppArmor
+// option opt, as the create guard checks it (kindProxyTest).
+func (c *Client) proxyTestOptions(opt string, spec ProxyTestSpec) client.ContainerCreateOptions {
+	cfg, host := proxyTestConfig(c.image, c.seccompOpt, opt, c.user, c.userns, c.instance, spec)
+	return client.ContainerCreateOptions{Name: ProxyTestName(c.instance), Config: cfg, HostConfig: host}
+}
+
 // TestProxy runs the proxy check in a short-lived container and returns
 // what it found. An error means the test didn't run (ErrProxyTestBusy,
-// ErrNoProxyCheck, or the daemon's own); its text holds nothing of the
+// ErrNoProxyCheck, ErrOutsideEnvelope, or the daemon's own); its text holds nothing of the
 // proxy, which this package never sees. The container is gone when it
 // returns, whatever happened.
 func (c *Client) TestProxy(ctx context.Context, spec ProxyTestSpec) (ProxyResult, error) {
@@ -139,8 +146,10 @@ func (c *Client) TestProxy(ctx context.Context, spec ProxyTestSpec) (ProxyResult
 	if err := c.removeProxyTest(ctx, name); err != nil {
 		return ProxyResult{}, err
 	}
-	cfg, host := proxyTestConfig(c.image, c.seccompOpt, opt, c.user, c.userns, c.instance, spec)
-	res, err := c.api.ContainerCreate(ctx, client.ContainerCreateOptions{Name: name, Config: cfg, HostConfig: host})
+	res, err := c.create(ctx, kindProxyTest, c.proxyTestOptions(opt, spec))
+	if errors.Is(err, ErrOutsideEnvelope) {
+		return ProxyResult{}, err // the guard refused it: nothing reached the daemon
+	}
 	if err != nil {
 		// Cut short while the daemon was creating it, the container may
 		// exist all the same: remove it by name (label checked).

@@ -194,7 +194,9 @@ func proxyClient(t *testing.T, d *proxyDaemon) *Client {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = api.Close() })
-	return &Client{api: api, image: "img", instance: "inst1", user: "1000:1000", seccompOpt: "seccomp={}", log: slog.New(slog.DiscardHandler)}
+	// As UseDataDir leaves it, so the create guard takes the test's body.
+	return &Client{api: api, image: "img", instance: "inst1", user: "1000:1000", seccompOpt: "seccomp=" + compactSeccomp(t),
+		hostDataDir: "/srv/bp", log: slog.New(slog.DiscardHandler)}
 }
 
 var spec = ProxyTestSpec{Dir: "/srv/bp/proxytest", GeoURL: "https://ifconfig.co/json"}
@@ -268,5 +270,27 @@ func TestProxyTestCreateCutShort(t *testing.T) {
 	}
 	if len(d.removed) != 1 || d.removed[0] != ProxyTestName("inst1") || d.leftover != nil {
 		t.Fatalf("removed %v; the half-made container is still there", d.removed)
+	}
+}
+
+// TestProxyTestGoesThroughTheGuard: the test's body is checked like any
+// other create (PROJ-159). One outside the envelope, here a folder that
+// isn't the test's own, never reaches the daemon, and nothing is removed
+// after it, since nothing was made.
+func TestProxyTestGoesThroughTheGuard(t *testing.T) {
+	d := &proxyDaemon{labels: map[string]string{LabelProxyCheck: "1"}}
+	c := proxyClient(t, d)
+	_, err := c.TestProxy(context.Background(), ProxyTestSpec{Dir: "/srv/bp/profiles/google/run", GeoURL: spec.GeoURL})
+	if !errors.Is(err, ErrOutsideEnvelope) || !strings.Contains(err.Error(), "refused to create the proxy-test container: HostConfig.Mounts[0].Source") {
+		t.Fatalf("err = %v", err)
+	}
+	if d.creates != 0 || len(d.removed) != 0 {
+		t.Fatalf("%d creates, removed %v; a refused body must not reach the daemon", d.creates, d.removed)
+	}
+	// Before UseDataDir, no proxy test either.
+	c = proxyClient(t, d)
+	c.hostDataDir = ""
+	if _, err := c.TestProxy(context.Background(), spec); !errors.Is(err, ErrOutsideEnvelope) || d.creates != 0 {
+		t.Fatalf("before UseDataDir: %v, %d creates", err, d.creates)
 	}
 }

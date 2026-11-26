@@ -124,10 +124,10 @@ curl -H "Authorization: Bearer $TOKEN" -X DELETE localhost:7437/api/sessions/<id
 
 ### Changing what a container gets
 
-Every container BrowserPier creates passes the create guard (`internal/docker/guard.go`) right before Docker sees it. The guard states, per kind of container (`browser`, `sandbox-check`), the value of every field BrowserPier sets, and refuses any other field that is set at all. It restates the builders' values on purpose instead of calling them, so don't make it derive anything from `browserConfig` or a `BrowserSpec`. To give a container something new (a device, a mount, a network, a limit, an environment variable for the entrypoint):
+Every container BrowserPier creates passes the create guard (`internal/docker/guard.go`) right before Docker sees it. The guard states, per kind of container (`browser`, `sandbox-check`, `proxy-test`), the value of every field BrowserPier sets, and refuses any other field that is set at all. It restates the builders' values on purpose instead of calling them, so don't make it derive anything from `browserConfig` or a `BrowserSpec`. To give a container something new (a device, a mount, a network, a limit, an environment variable for the entrypoint):
 
-1. Allow it in the guard first: name the field in `guardNamed` and check its exact value for the kinds that get it (for an environment variable, add its name to `guardBrowserEnv`).
-2. Then change the builder (`browserConfig`, `browserCreateOptions` or `sandboxCheckOptions`).
+1. Allow it in the guard first: name the field in `guardNamed` and check its exact value for the kinds that get it (for a browser's environment variable, add its name to `guardBrowserEnv`; the proxy test's one variable is checked in `proxyTestEnv`).
+2. Then change the builder (`browserConfig`, `browserCreateOptions`, `sandboxCheckOptions`, or `proxyTestConfig` and `proxyTestOptions`).
 3. Then the tests: a row in `TestGuardRefusesEachWidening` for each way the new value could be wrong, and the golden bodies in `internal/docker/testdata` (`go test ./internal/docker -run TestCreateBodiesAreUnchanged -update-golden`), whose diff shows the change.
 
 A new kind of container is a new `createKind` and a new case in `checkCreate`, written by hand. A new Docker operation (an exec, a network, a copy) is a deliberate edit of the list in `TestDockerOperationsAreAClosedSet`. Only `internal/docker` may import the Docker SDK, with two exceptions the test names: `internal/docker/memusage`, which uses the SDK's stats types and is handed `ContainerStats` alone, never the client, and the memory measure test in `images/chromium`.
