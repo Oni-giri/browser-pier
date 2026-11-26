@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -168,7 +169,14 @@ func (b *browser) handler() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		_, _ = io.WriteString(w, node(r.URL.Query()))
+		answer := node(r.URL.Query())
+		if code, msg, ok := strings.Cut(answer, " "); ok && strings.HasPrefix(code, "!") {
+			// "!502 why": the reader failed.
+			status, _ := strconv.Atoi(code[1:])
+			http.Error(w, msg, status)
+			return
+		}
+		_, _ = io.WriteString(w, answer)
 	})
 	return mux
 }

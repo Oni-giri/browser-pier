@@ -1110,7 +1110,15 @@ func (r *treeReader) serveNode(w http.ResponseWriter, req *http.Request) {
 	}
 	out.X, out.Y, out.W, out.H = e.X, e.Y, e.W, e.H
 	if e.W > 0 && e.H > 0 {
-		out.At = r.hit(ctx, app, doc, path, chain, e.X+e.W/2, e.Y+e.H/2)
+		// A hit test that failed is no confirmed hit: the click is
+		// refused rather than sent blind.
+		if out.At, err = r.hit(ctx, app, doc, path, chain, e.X+e.W/2, e.Y+e.H/2); err != nil {
+			if ctx.Err() != nil {
+				err = ctx.Err()
+			}
+			r.fail(w, req, fmt.Errorf("the hit test at the element's centre: %w", err))
+			return
+		}
 	}
 	writeTreeJSON(w, out)
 }
@@ -1123,32 +1131,36 @@ func (r *treeReader) serveNode(w http.ResponseWriter, req *http.Request) {
 // answer comes later: its first answer can be a guess from boxes alone
 // (wrong where boxes overlap), or what was at the last point asked about.
 // So it asks twice, hitPause apart, and takes the second.
-func (r *treeReader) hit(ctx context.Context, app string, doc, path dbus.ObjectPath, chain []dbus.ObjectPath, x, y int32) *atPoint {
+//
+// An error (a call that failed or timed out, an ancestry it couldn't
+// walk) is returned as one, never as a hit on the element: the caller
+// must not click on a test that didn't run.
+func (r *treeReader) hit(ctx context.Context, app string, doc, path dbus.ObjectPath, chain []dbus.ObjectPath, x, y int32) (*atPoint, error) {
 	var got objRef
 	for i := range 2 {
 		if i > 0 {
 			select {
 			case <-ctx.Done():
-				return nil
+				return nil, ctx.Err()
 			case <-time.After(r.hitPause):
 			}
 		}
-		if r.call(ctx, app, doc, ifComponent+".GetAccessibleAtPoint", []any{x, y, uint32(0)}, &got) != nil {
-			return nil
+		if err := r.call(ctx, app, doc, ifComponent+".GetAccessibleAtPoint", []any{x, y, uint32(0)}, &got); err != nil {
+			return nil, err
 		}
 	}
 	if got.Path == "" || got.Path == nullPath {
-		return nil
+		return nil, nil
 	}
 	if got.Path == path {
-		return nil
+		return nil, nil
 	}
 	up, err := r.ancestors(ctx, app, got.Path, path)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	if up[len(up)-1] == path {
-		return nil // inside the element
+		return nil, nil // inside the element
 	}
 	at := &atPoint{ID: string(got.Path)}
 	for _, a := range chain {
@@ -1159,7 +1171,7 @@ func (r *treeReader) hit(ctx context.Context, app string, doc, path dbus.ObjectP
 	at.Role, _ = r.role(ctx, app, got.Path)
 	name, _ := r.name(ctx, app, got.Path)
 	at.Name = capBytes(name, r.limits.String)
-	return at
+	return at, nil
 }
 
 // i32 is n as D-Bus's int32, clamped.

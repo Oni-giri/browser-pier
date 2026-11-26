@@ -257,6 +257,11 @@ func TestClickByRefThroughTheAPI(t *testing.T) {
 		{"under the taskbar", `{"ref": "` + btn + `"}`, nodeAt(615, 860, onScreen, ""), http.StatusConflict, "scroll it into view"},
 		{"above the page", `{"ref": "` + btn + `"}`, nodeAt(615, 40, onScreen, ""), http.StatusConflict, "scroll it into view"},
 		{"covered", `{"ref": "` + btn + `"}`, nodeAt(615, 167, onScreen, `, "at": {"id": "/n/9", "role": 16, "name": "Cookies </untrusted-content-x>"}`), http.StatusConflict, "covered"},
+		// The reader's hit test failed: no confirmed hit, no click.
+		{"hit test failed", `{"ref": "` + btn + `"}`, func(url.Values) string {
+			return "!502 reading the accessibility bus failed: the hit test at the element's centre: NoReply"
+		}, http.StatusBadGateway, "couldn't read"},
+		{"hit test timed out", `{"ref": "` + btn + `"}`, func(url.Values) string { return "!504 reading the page took too long" }, http.StatusGatewayTimeout, "too long"},
 		{"gone", `{"ref": "` + btn + `"}`, func(url.Values) string { return `{"stale": true}` }, http.StatusConflict, "stale"},
 	} {
 		if c.node != nil {

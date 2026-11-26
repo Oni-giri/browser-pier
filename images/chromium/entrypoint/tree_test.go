@@ -46,6 +46,9 @@ type fakeBus struct {
 	calls     int
 	// onCall, if set, sees each call's context.
 	onCall func(ctx context.Context)
+	// hits counts hit tests; failHit, if set, fails the one with that
+	// number (1 for the first).
+	hits, failHit int
 }
 
 func show(bits ...int) uint64 {
@@ -146,6 +149,10 @@ func (f *fakeBus) call(ctx context.Context, dest string, path dbus.ObjectPath, m
 	case ifComponent + ".GetExtents":
 		return []any{[]any{o.ext.X, o.ext.Y, o.ext.W, o.ext.H}}, nil
 	case ifComponent + ".GetAccessibleAtPoint":
+		f.hits++
+		if f.hits == f.failHit {
+			return nil, errors.New("org.freedesktop.DBus.Error.NoReply")
+		}
 		p := f.at[[2]int32{args[0].(int32), args[1].(int32)}]
 		if p == "" {
 			p = string(nullPath)
@@ -554,5 +561,36 @@ func TestTreeSendsWhatJudgesASliderSecret(t *testing.T) {
 	// fields: TestReaderSliderJSON).
 	if body := rec.Body.String(); !strings.Contains(body, `"attrs":{"html-input-name":"pin","id":"pin-dial"},"attrs_read":true`) {
 		t.Fatalf("the slider's JSON: %s", body)
+	}
+}
+
+// TestTreeNodeRefusesWhenTheHitTestFails: a hit test that fails is no
+// confirmed hit: /tree/node answers an error, and nothing is clicked.
+func TestTreeNodeRefusesWhenTheHitTestFails(t *testing.T) {
+	for _, fail := range []int{1, 2} {
+		f := browserBus(t)
+		f.at = map[[2]int32]string{{644, 178}: p + "35"}
+		f.failHit = fail
+		r := newTestReader(f)
+		mux := http.NewServeMux()
+		r.register(mux)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/tree/node?app=:1.0&doc="+p+"30&id="+p+"35", nil))
+		if rec.Code == http.StatusOK {
+			t.Fatalf("hit test %d failed: %d %s, want an error", fail, rec.Code, rec.Body)
+		}
+	}
+	// The hit test's pause cut short by the deadline: an error too.
+	f := browserBus(t)
+	f.at = map[[2]int32]string{{644, 178}: p + "35"}
+	r := newTestReader(f)
+	r.hitPause = time.Hour
+	r.limits.Time = 200 * time.Millisecond
+	mux := http.NewServeMux()
+	r.register(mux)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/tree/node?app=:1.0&doc="+p+"30&id="+p+"35", nil))
+	if rec.Code == http.StatusOK {
+		t.Fatalf("the hit test timed out: %d %s, want an error", rec.Code, rec.Body)
 	}
 }
