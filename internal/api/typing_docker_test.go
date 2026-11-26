@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -31,8 +30,10 @@ const cyrillic = "Съешь же ещё этих мягких французс�
 // characters the keyboard map lacks. For each text it measures, over
 // several calls: that each call answers 204 and the page's textarea then
 // settles, for a second, on exactly the text (no character missing or
-// extra); and that no keydown the page sees, other than those of the
-// text's own ASCII keys, is a key that acts (by code and by keyCode).
+// extra); and that every keydown the page sees is one of the text's own
+// ASCII keys (by its code, whatever its key says) or a quiet one: no code
+// or Lang5's, and keyCode 0, 229 or 244, so no key that acts, no keypad
+// key and no F-key.
 // The page's own script reports what its textarea holds: nothing reads
 // it over CDP. It types the Latin text 5 times at instant pace and 2 at
 // human pace, one accent alone and the Cyrillic text 5 times each at
@@ -124,12 +125,20 @@ func TestVisualTypesNonASCII(t *testing.T) {
 		name, text string
 		runs       int
 	}{{"instant", nonASCII, instantRuns}, {"human", nonASCII, humanRuns}, {"instant", "ž", instantRuns}, {"instant", cyrillic, instantRuns}} {
-		// The text's own keys: its ASCII characters, and Shift for a
-		// capital.
-		ownKeys := map[string]bool{"Shift": true}
+		// The codes of the text's own keys: its ASCII characters', and
+		// Shift's for a capital.
+		ownCodes := map[string]bool{}
 		for _, r := range pace.text {
-			if r < 0x80 {
-				ownKeys[string(r)] = true
+			if r >= 0x80 {
+				continue
+			}
+			c, ok := usCode(r)
+			if !ok {
+				t.Fatalf("no US key code for %q here", r)
+			}
+			ownCodes[c] = true
+			if r >= 'A' && r <= 'Z' {
+				ownCodes["ShiftLeft"] = true
 			}
 		}
 		exact, failed := 0, 0
@@ -155,16 +164,18 @@ func TestVisualTypesNonASCII(t *testing.T) {
 			default:
 				exact++
 			}
-			// A character on a spare key reaches the page as text; its
-			// keydown, if it has one, is never a key that does something.
+			// Every keydown is one of the text's own keys, whatever its
+			// key says, or a character on a spare key, which reaches the
+			// page as text: no code, or an input-method key's, and a key
+			// code that is none, an input method's (229) or Lang5's (244).
+			// Never a key that acts, a keypad key (108, Numpad*) or an
+			// F-key.
 			time.Sleep(200 * time.Millisecond)
 			seen := map[string]bool{}
 			for _, e := range ofType(det.Events(), "keydown") {
-				if ownKeys[e.Key] {
-					continue
-				}
 				k := fmt.Sprintf("key %q code %q keyCode %d", e.Key, e.Code, e.KeyCode)
-				if (actingCode(e.Code) || actingKeyCode(e.KeyCode)) && !seen[k] {
+				quiet := (e.Code == "" || e.Code == "Lang5") && (e.KeyCode == 0 || e.KeyCode == 229 || e.KeyCode == 244)
+				if !ownCodes[e.Code] && !quiet && !seen[k] {
 					t.Errorf("%s run %d: a keydown with %s", pace.name, i+1, k)
 				}
 				if i == 0 && !seen[k] {
@@ -177,23 +188,17 @@ func TestVisualTypesNonASCII(t *testing.T) {
 	}
 }
 
-// actingCode reports a key event's code for a key that acts: F1 to F24,
-// the browser, media, launch, audio, power, editing and navigation keys,
-// and the modifiers, whose codes Chromium's table (dom_code_data.inc)
-// names.
-var actingCode = regexp.MustCompile(`^(F[0-9]+|Browser.*|Media.*|Launch.*|Audio.*|Mail.*|Brightness.*|Display.*|Power|Sleep|WakeUp|Eject|` +
-	`Help|Undo|Redo|Copy|Cut|Paste|Find|Open|Props|Select|Again|Close|New|Save|Print|PrintScreen|ContextMenu|ShowAllWindows|` +
-	`Arrow.*|Home|End|PageUp|PageDown|Insert|Delete|Backspace|Tab|Enter|NumpadEnter|Escape|Pause|.*Lock|` +
-	`(Meta|Control|Alt|Shift)(Left|Right)|Fn.*)$`).MatchString
-
-// actingKeyCode reports a keyCode that Chromium or the page's editing acts
-// on: Backspace, Tab, Enter, Escape, Space to Delete (pages, arrows,
-// Insert), the Windows and menu keys, F1 to F24, and the browser, media
-// and launch keys.
-func actingKeyCode(c int) bool {
+// usCode is the code of the US keyboard's key for an ASCII character the
+// texts here have.
+func usCode(r rune) (string, bool) {
 	switch {
-	case c == 8, c == 9, c == 13, c == 27, c >= 32 && c <= 46, c >= 91 && c <= 93, c >= 112 && c <= 135, c >= 166 && c <= 183:
-		return true
+	case r >= 'a' && r <= 'z':
+		return "Key" + strings.ToUpper(string(r)), true
+	case r >= 'A' && r <= 'Z':
+		return "Key" + string(r), true
+	case r >= '0' && r <= '9':
+		return "Digit" + string(r), true
 	}
-	return false
+	c, ok := map[rune]string{' ': "Space", ',': "Comma", '.': "Period"}[r]
+	return c, ok
 }
