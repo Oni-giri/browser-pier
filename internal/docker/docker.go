@@ -57,8 +57,11 @@ const (
 // (PROJ-23); 7 keeps a held key or button until its release has been
 // sent, by the person's own key-up or by the hand-back's lift, so the
 // orchestrator's second try at the lift lets go of what the first
-// failed to (PROJ-196).
-const Spec = "7"
+// failed to (PROJ-196); 8 fences a person's takeover as it ends
+// (X-BrowserPier-Takeover, X-BrowserPier-Fence): the orchestrator lets
+// agents back in only once the browser refuses whatever of that
+// takeover is still on its way (PROJ-196).
+const Spec = "8"
 
 const (
 	// StopTimeout is how long a browser container gets to stop before Docker

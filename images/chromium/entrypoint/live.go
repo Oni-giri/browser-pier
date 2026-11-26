@@ -26,10 +26,13 @@ type liveInput struct {
 	mu    sync.Mutex
 	stdin io.WriteCloser
 	held  map[string]bool // keys and buttons down, to release on hand-back
+	// fence refuses what a person sends once their takeover has ended
+	// (fence.go); the clipboard box's side shares it.
+	fence *takeoverFence
 }
 
 func newLiveInput(width, height int) *liveInput {
-	return &liveInput{width: width, height: height, held: map[string]bool{}, start: startXdotool}
+	return &liveInput{width: width, height: height, held: map[string]bool{}, start: startXdotool, fence: &takeoverFence{}}
 }
 
 // ioWriteCloser is xdotool's stdin.
@@ -127,6 +130,11 @@ func (li *liveInput) send(lines []string) error {
 }
 
 func (li *liveInput) events(w http.ResponseWriter, r *http.Request) {
+	gen, person, err := li.fence.takeover(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	var evs []event
 	if !decode(w, r, &evs) {
 		return
@@ -144,6 +152,14 @@ func (li *liveInput) events(w http.ResponseWriter, r *http.Request) {
 		}
 		all = append(all, ls...)
 	}
+	// Right before the input goes to xdotool: a takeover that ended
+	// while this waited sends nothing.
+	done, ok := li.fence.admit(gen, person)
+	if !ok {
+		refuseFenced(w)
+		return
+	}
+	defer done()
 	li.mu.Lock()
 	defer li.mu.Unlock()
 	// A key or button counts as held from before its press is sent (a
@@ -178,7 +194,34 @@ func (li *liveInput) events(w http.ResponseWriter, r *http.Request) {
 // forgotten only once xdotool has taken the releases: if it fails, they
 // are still held here, so the orchestrator's next try sends them again
 // (letting go of one already up is harmless).
-func (li *liveInput) release(w http.ResponseWriter, _ *http.Request) {
+//
+// The orchestrator's lift as a takeover ends names it in fenceHeader:
+// the fence goes up first, once the person's actions under way are
+// over, so nothing from that takeover can act after this lift (or the
+// emptying that follows it), and the answer gives the fence. The
+// person's own lift (their page losing focus) names their takeover
+// instead, and is refused once it has ended.
+func (li *liveInput) release(w http.ResponseWriter, r *http.Request) {
+	gen, person, err := li.fence.takeover(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	n, all, fenced, err := fenceRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var fence uint64
+	if fenced {
+		fence = li.fence.raise(n, all)
+	}
+	done, ok := li.fence.admit(gen, person)
+	if !ok {
+		refuseFenced(w)
+		return
+	}
+	defer done()
 	li.mu.Lock()
 	defer li.mu.Unlock()
 	names := make([]string, 0, len(li.held))
@@ -201,5 +244,9 @@ func (li *liveInput) release(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 	li.held = map[string]bool{}
+	if fenced {
+		answerFence(w, fence)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }

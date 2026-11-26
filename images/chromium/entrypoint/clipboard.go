@@ -140,6 +140,17 @@ func hasTarget(targets []byte, target string) bool {
 // only then, never polled, so a page can't put text in the person's
 // clipboard on its own.
 func (v *visual) readClipboard(w http.ResponseWriter, r *http.Request) {
+	gen, person, err := v.fence.takeover(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	done, ok := v.fence.admit(gen, person)
+	if !ok {
+		refuseFenced(w)
+		return
+	}
+	defer done()
 	out, code, err := v.readClipboardText(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), code)
@@ -165,10 +176,23 @@ func clipboardText(w http.ResponseWriter, r *http.Request) (string, bool) {
 }
 
 func (v *visual) setClipboard(w http.ResponseWriter, r *http.Request) {
+	gen, person, err := v.fence.takeover(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	text, ok := clipboardText(w, r)
 	if !ok {
 		return
 	}
+	// Right before xclip starts: a takeover that ended while this waited
+	// touches nothing, not even the text it held before.
+	done, ok := v.fence.admit(gen, person)
+	if !ok {
+		refuseFenced(w)
+		return
+	}
+	defer done()
 	v.clip.mu.Lock()
 	defer v.clip.mu.Unlock()
 	if err := v.holdText(r.Context(), text); err != nil {
@@ -184,10 +208,21 @@ func (v *visual) setClipboard(w http.ResponseWriter, r *http.Request) {
 // Chromium misses the change now and then. A key press cut short lets go
 // of Ctrl, as an agent's input does (perform).
 func (v *visual) paste(w http.ResponseWriter, r *http.Request) {
+	gen, person, err := v.fence.takeover(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	text, ok := clipboardText(w, r)
 	if !ok {
 		return
 	}
+	done, ok := v.fence.admit(gen, person)
+	if !ok {
+		refuseFenced(w)
+		return
+	}
+	defer done()
 	v.clip.mu.Lock()
 	defer v.clip.mu.Unlock()
 	if err := v.holdText(r.Context(), text); err != nil {

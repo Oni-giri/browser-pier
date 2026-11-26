@@ -42,6 +42,9 @@ type visual struct {
 	// clip is the live view's clipboard box's side of the X clipboard
 	// (clipboard.go).
 	clip clipState
+	// fence refuses what a person sends once their takeover has ended
+	// (fence.go): the live input's, shared.
+	fence *takeoverFence
 }
 
 // maxTypeLen caps one type action; at human pace, which takes about a
@@ -53,7 +56,8 @@ const (
 )
 
 func newVisual(width, height int) *visual {
-	return &visual{width: width, height: height, run: runCommand, output: runStdout, mot: motion.NewRandom(), live: newLiveInput(width, height), clip: clipState{hold: holdClipboard, read: readSelection}}
+	live := newLiveInput(width, height)
+	return &visual{width: width, height: height, run: runCommand, output: runStdout, mot: motion.NewRandom(), live: live, clip: clipState{hold: holdClipboard, read: readSelection}, fence: live.fence}
 }
 
 func (v *visual) register(mux *http.ServeMux) {
@@ -413,6 +417,13 @@ func (v *visual) humanType(text string) []xcmd {
 }
 
 func (v *visual) typeText(w http.ResponseWriter, r *http.Request) {
+	// The live view's Type button names the person's takeover; an
+	// agent's typing names none.
+	gen, person, err := v.fence.takeover(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	var t typeRequest
 	if !decode(w, r, &t) {
 		return
@@ -422,17 +433,24 @@ func (v *visual) typeText(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	var args []string
 	if now {
-		args, err := typeArgs(t.Text)
-		if err != nil {
+		if args, err = typeArgs(t.Text); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		v.input(w, r, args)
+	} else if err := checkText(t.Text, maxHumanTypeLen); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := checkText(t.Text, maxHumanTypeLen); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	done, ok := v.fence.admit(gen, person)
+	if !ok {
+		refuseFenced(w)
+		return
+	}
+	defer done()
+	if now {
+		v.input(w, r, args)
 		return
 	}
 	v.perform(w, r, func(func() hand) []xcmd { return v.humanType(t.Text) })
