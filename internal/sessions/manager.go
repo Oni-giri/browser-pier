@@ -530,6 +530,11 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 	for retried := false; ; retried = true {
 		var err error
 		cid, err = m.rt.Create(ctx, spec)
+		if errors.Is(err, docker.ErrOutsideEnvelope) {
+			// It says which container it refused, and why.
+			m.abort(l, "", err.Error())
+			return
+		}
 		if err != nil {
 			m.abort(l, "", fmt.Sprintf("creating the browser container: %v", err))
 			return
