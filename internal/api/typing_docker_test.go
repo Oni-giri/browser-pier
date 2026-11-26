@@ -26,6 +26,14 @@ const nonASCII = "héllo Rīga ūdens naïve ĀČĒ ģķļ šž 😀"
 // is used.
 const cyrillic = "Съешь же ещё этих мягких французских булок, да выпей же чаю"
 
+// legacy has characters whose keysym, or its low 16 bits, Chromium's
+// keysym-to-key-code tables know (Latin-1, and Greek κ, 0x3BA, whose low
+// bits are XK_emacron's). Read from the source, a page would get a
+// letter, digit, keypad or punctuation key's keyCode for them; measured,
+// the image's Chromium gives none (keyCode 0), as it did for xdotool's
+// own binding before PROJ-195.
+const legacy = "ê ß ñ × « ° κ ý ù ë î » é"
+
 // TestVisualTypesNonASCII is PROJ-195's check of Visual-mode typing of
 // characters the keyboard map lacks. For each text it measures, over
 // several calls: that each call answers 204 and the page's textarea then
@@ -120,11 +128,43 @@ func TestVisualTypesNonASCII(t *testing.T) {
 			}
 		}
 	}
+	// What the page sees for each character typed alone (on the first
+	// spare key): key, code and keyCode.
+	for _, r := range legacy + "āžжκ😀" {
+		if r == ' ' {
+			continue
+		}
+		must(`{"action": "key", "keys": ["ctrl+a", "BackSpace"], "pace": "instant"}`)
+		if got := value(""); got != "" {
+			t.Fatalf("the textarea didn't empty: %q", got)
+		}
+		time.Sleep(200 * time.Millisecond)
+		det.ResetEvents()
+		code, msg := computer(fmt.Sprintf(`{"action": "type", "text": %q, "pace": "instant"}`, string(r)))
+		got := value(string(r))
+		time.Sleep(200 * time.Millisecond)
+		var downs []string
+		for _, e := range ofType(det.Events(), "keydown") {
+			downs = append(downs, fmt.Sprintf("key %q code %q keyCode %d", e.Key, e.Code, e.KeyCode))
+		}
+		t.Logf("%q U+%04X alone: %d %s, textarea %q, keydowns %v", r, r, code, msg, got, downs)
+		// Alone, a character is on the first spare key, 8: one keydown,
+		// key "\u0000", no code, keyCode 0; an emoji's is the input
+		// method's, "Process", 229.
+		want := `[key "\x00" code "" keyCode 0]`
+		if r > 0xffff {
+			want = `[key "Process" code "" keyCode 229]`
+		}
+		if code != http.StatusNoContent || got != string(r) || fmt.Sprint(downs) != want {
+			t.Errorf("%q alone: %d, textarea %q, keydowns %v, want %s", r, code, got, downs, want)
+		}
+	}
+
 	// One character alone too: its key is bound for the shortest time.
 	for _, pace := range []struct {
 		name, text string
 		runs       int
-	}{{"instant", nonASCII, instantRuns}, {"human", nonASCII, humanRuns}, {"instant", "ž", instantRuns}, {"instant", cyrillic, instantRuns}} {
+	}{{"instant", nonASCII, instantRuns}, {"human", nonASCII, humanRuns}, {"instant", "ž", instantRuns}, {"instant", cyrillic, instantRuns}, {"instant", legacy, instantRuns}} {
 		// The codes of the text's own keys: its ASCII characters', and
 		// Shift's for a capital.
 		ownCodes := map[string]bool{}
@@ -172,7 +212,11 @@ func TestVisualTypesNonASCII(t *testing.T) {
 			// F-key.
 			time.Sleep(200 * time.Millisecond)
 			seen := map[string]bool{}
+			spareDowns := 0
 			for _, e := range ofType(det.Events(), "keydown") {
+				if !ownCodes[e.Code] {
+					spareDowns++
+				}
 				k := fmt.Sprintf("key %q code %q keyCode %d", e.Key, e.Code, e.KeyCode)
 				quiet := (e.Code == "" || e.Code == "Lang5") && (e.KeyCode == 0 || e.KeyCode == 229 || e.KeyCode == 244)
 				if !ownCodes[e.Code] && !quiet && !seen[k] {
@@ -182,6 +226,15 @@ func TestVisualTypesNonASCII(t *testing.T) {
 					t.Logf("%s pace: a keydown with %s", pace.name, k)
 				}
 				seen[k] = true
+			}
+			if i == 0 {
+				n := 0
+				for _, r := range pace.text {
+					if r >= 0x80 {
+						n++
+					}
+				}
+				t.Logf("%s pace: %d keydowns for the %d characters on spare keys", pace.name, spareDowns, n)
 			}
 		}
 		t.Logf("%s pace, %d characters: %d of %d runs exact, %d calls failed; the slowest call took %s", pace.name, utf8.RuneCountInString(pace.text), exact, pace.runs, failed, slowest.Round(time.Millisecond))

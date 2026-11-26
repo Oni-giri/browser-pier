@@ -131,7 +131,11 @@ func (m keyboardMap) spare() []byte {
 // VKEY_OEM_102), 132 (IntlYen, VKEY_OEM_5) or 103 (none, but
 // VKEY_SEPARATOR, the keypad's), whose key codes are a punctuation or a
 // keypad key's. From 136 up, every keycode that neither table names.
-// Source: Chromium's ui/events/keycodes/dom/dom_code_data.inc (blob
+// (Chromium's keysym tables come before the hardware fallback, and know
+// Latin-1 keysyms and some above; that would make the key code depend on
+// the character, not the key. Measured, the image's Chromium gives
+// keyCode 0 for every character bound here, as for xdotool's own binding
+// before; TestVisualTypesNonASCII checks a sample.) Source: Chromium's ui/events/keycodes/dom/dom_code_data.inc (blob
 // 3c5ef403df15) and keyboard_code_conversion_x.cc (kHardwareKeycodeMap
 // and DefaultKeyboardCodeFromHardwareKeycode, blob eae62840c180), main of
 // 2026-11-26; TestVisualTypesNonASCII checks the page sees no other key.
