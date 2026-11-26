@@ -173,6 +173,8 @@ So the flag isn't named (Chrome masks the reasons it gives pages), but with the 
 | Cache off, spare on (`BackForwardCache`) | 207 | 205 | 207 | 4 (353–354 MiB) |
 | Cache off, spare off (`BackForwardCache,SpareRendererForSitePerProcess`) | 198 | 197 | 196 | 3 (266–279 MiB) |
 
+The renderer column counted the measuring shell too, as its command line named the pattern it looked for: one process and a few MiB too many in every row. The memory columns come from the cgroup and are unaffected. The measure now counts Chromium's processes only (after the PR #82 review).
+
 Its name is in this Chromium only as `kSpareRendererForSitePerProcess`: Chromium's `BASE_FEATURE` now names a feature from its constant, reading the string from its second character, so a whole-string search for the name finds nothing though the feature is there, and turning it off did drop a renderer. It saves 6–11 MiB, as easi.run measured, under the 20 MiB threshold: **left on**. (The Dockerfile's feature check lists each feature in the one form the binary stores it in; `BackForwardCache` is stored whole. A misspelt name fails the build: checked with `BackForwardCach`.)
 
 ## Continue where you left off (PROJ-112)

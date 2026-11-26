@@ -12,8 +12,10 @@ const panelHeight = 32
 // disabledFeatures are the Chromium features the image turns off, all in
 // chromiumArgs' one --disable-features: Chromium reads only the last
 // --disable-features it is given (ANTI-BOT.md, PROJ-160). Each must be in
-// the Dockerfile's feature check, which fails the build if Chromium no
-// longer knows it: an unknown feature name is ignored without a word.
+// the Dockerfile's feature check, which fails the build if the name is no
+// longer a string in Chromium's binary: an unknown feature name is ignored
+// without a word. That a feature still takes effect, the Docker tests show
+// (TestBrowserEnvironment/back for the back/forward cache).
 var disabledFeatures = []string{
 	// The back/forward cache kept a page the tab had left whole in memory,
 	// to show it at once on Back: a 200 MB page was still counted against
