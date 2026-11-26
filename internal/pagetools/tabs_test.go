@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -133,8 +134,20 @@ func TestManyTabsAreMentioned(t *testing.T) {
 		case n == 0:
 		case !strings.HasSuffix(out, "\n"+line(n)) || strings.Count(out, "tabs are open") != 1:
 			t.Errorf("%s: want the line for %d tabs, last:\n%s", what, n, out)
-		case strings.LastIndex(out, "</untrusted-content-") > strings.LastIndex(out, line(n)):
-			t.Errorf("%s: the line is inside the fence:\n%s", what, out)
+		default:
+			// The fence is whole, with the page's text (a tab's URL) inside
+			// it, and the line after its own closing tag, the one carrying
+			// the opening tag's marker, not the one named in its intro.
+			m := regexp.MustCompile(`<untrusted-content-([0-9a-f]{16}) source="`).FindStringSubmatchIndex(out)
+			if m == nil {
+				t.Errorf("%s: no fence:\n%s", what, out)
+				return
+			}
+			end := strings.Index(out, "\n</untrusted-content-"+out[m[2]:m[3]]+">\n")
+			page := strings.Index(out, "https://example.com/")
+			if end < 0 || page < m[0] || page > end || strings.LastIndex(out, line(n)) < end {
+				t.Errorf("%s: the line isn't after a whole fence around the page's text:\n%s", what, out)
+			}
 		}
 	}
 	list := func() string {
