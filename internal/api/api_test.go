@@ -169,6 +169,15 @@ func (b *browser) handler() http.Handler {
 	mux.HandleFunc("POST /chooser/restart", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc("POST /chooser/{id}", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), "slowly") {
+			// An answer the browser is slow to take: it lasts until it's
+			// cut short.
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(30 * time.Second):
+			}
+		}
 		b.mu.Lock()
 		defer b.mu.Unlock()
 		b.chosen = append(b.chosen, r.PathValue("id")+" "+string(body))

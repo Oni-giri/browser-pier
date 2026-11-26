@@ -284,6 +284,12 @@ func (a *API) choose(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := a.control(ctx, s.Profile, http.MethodPost, "/chooser/"+in.ID, body)
 	if err != nil {
+		if ctx.Err() != nil && r.Context().Err() == nil {
+			// Cut short, as act's input is: a handoff, Take control, a
+			// stop or the token's revocation (401).
+			writeError(w, cutStatus(ctx), "input broke off: "+context.Cause(ctx).Error())
+			return
+		}
 		writeError(w, http.StatusBadGateway, "couldn't reach the browser: "+err.Error())
 		return
 	}
