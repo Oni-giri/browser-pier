@@ -48,12 +48,19 @@ type profilePageData struct {
 func (d profilePageData) LogLink(at time.Time) string { return recordingAt(d.Name, d.liveRec, at) }
 
 // recordingAt is the player of profile's recording ix at the moment at,
-// while ix covers it; "" otherwise.
+// while one of ix's segments covers it (from a second before it starts,
+// as an entry can be written just before); "" otherwise, in a gap
+// between segments too (a person had control, say).
 func recordingAt(profile string, ix *recording.Index, at time.Time) string {
-	if ix == nil || at.Before(ix.Start().Add(-time.Second)) || at.After(ix.End()) {
+	if ix == nil {
 		return ""
 	}
-	return "/profiles/" + url.PathEscape(profile) + "/recordings/" + ix.Session + "?t=" + strconv.FormatInt(at.UnixMilli(), 10)
+	for _, seg := range ix.Segments {
+		if !at.Before(seg.Start.Add(-time.Second)) && !at.After(seg.End) {
+			return "/profiles/" + url.PathEscape(profile) + "/recordings/" + ix.Session + "?t=" + strconv.FormatInt(at.UnixMilli(), 10)
+		}
+	}
+	return ""
 }
 
 // RecordingLabel says whether the live session is being recorded, for a

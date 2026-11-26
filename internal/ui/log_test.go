@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -198,5 +199,65 @@ func TestLogEntriesLinkToTheRecording(t *testing.T) {
 	want(t, r, http.StatusOK, "Clicked at 1, 2")
 	if strings.Contains(r.body, link) {
 		t.Fatal("a kept run's entry links to the player")
+	}
+
+	// A new run whose recording covers the kept run's moments: only its
+	// own entries link.
+	time.Sleep(5 * time.Millisecond) // the runs' entries are a few ms apart
+	s2, _, err := f.m.Start(context.Background(), "google", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.m.Note(s2.ID, "claude", "Clicked at 3, 4")
+	dir2 := filepath.Join(f.m.Layout().DataDir, "recordings", "google", s2.ID)
+	if err := os.MkdirAll(dir2, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ix.Session = s2.ID
+	b, _ = json.Marshal(ix)
+	for name, body := range map[string]string{"index.json": string(b), "000001.mp4": "ftypMP4-one"} {
+		if err := os.WriteFile(filepath.Join(dir2, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.recordings.Reconcile([]string{"google"}); err != nil {
+		t.Fatal(err)
+	}
+	r = f.get("/profiles/google/log")
+	link2 := "/profiles/google/recordings/" + s2.ID + "?t="
+	current := f.m.Activity(s2.ID)
+	for _, a := range current {
+		want(t, r, http.StatusOK, link2+strconv.FormatInt(a.At.UnixMilli(), 10))
+	}
+	for _, a := range f.m.Runs("google")[0].Entries {
+		if l := link2 + strconv.FormatInt(a.At.UnixMilli(), 10); strings.Contains(r.body, l) {
+			t.Fatalf("the kept entry %q links to the current recording", a.What)
+		}
+	}
+	if n := strings.Count(r.body, "Play the recording from here"); n != len(current) {
+		t.Fatalf("%d links for %d current entries", n, len(current))
+	}
+}
+
+// An entry in a gap between a recording's segments (a person had
+// control) has no link; one in a segment does.
+func TestRecordingAtSkipsGaps(t *testing.T) {
+	t0 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	ix := &recording.Index{Session: "0123456789abcdef01234567", Segments: []recording.Segment{
+		{File: "000001.mp4", Start: t0, End: t0.Add(time.Minute)},
+		{File: "000002.mp4", Start: t0.Add(5 * time.Minute), End: t0.Add(6 * time.Minute)},
+	}}
+	for at, linked := range map[time.Time]bool{
+		t0.Add(-2 * time.Second):            false,
+		t0.Add(-500 * time.Millisecond):     true, // written just before
+		t0.Add(30 * time.Second):            true,
+		t0.Add(2 * time.Minute):             false, // the gap
+		t0.Add(5*time.Minute - time.Hour):   false,
+		t0.Add(5*time.Minute + time.Second): true,
+		t0.Add(7 * time.Minute):             false,
+	} {
+		if got := recordingAt("google", ix, at) != ""; got != linked {
+			t.Errorf("at %s: linked %t", at.Sub(t0), got)
+		}
 	}
 }
