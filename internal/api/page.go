@@ -1,8 +1,8 @@
 package api
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -49,9 +49,7 @@ func pageTool[In any](a *API, f pageFunc[In]) http.HandlerFunc {
 			return
 		}
 		if strings.TrimSpace(string(body)) != "" {
-			dec := json.NewDecoder(strings.NewReader(string(body)))
-			dec.DisallowUnknownFields()
-			if err := dec.Decode(&in); err != nil {
+			if err := decodeOne(bytes.NewReader(body), &in); err != nil {
 				writeError(w, http.StatusBadRequest, "bad JSON: "+err.Error())
 				return
 			}

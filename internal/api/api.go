@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -560,11 +561,11 @@ func (a *API) input(path string) http.HandlerFunc {
 		}
 		var mark *files.Mark
 		var wait time.Duration
+		var ms *int
 		if path == "/input/click" {
 			// A click may start a download (PROJ-116); the browser
 			// doesn't take download_wait_ms, which is BrowserPier's.
 			// When it is set, the click expects one (files.Mark.Expect).
-			var ms *int
 			if body, ms, err = takeDownloadWait(body); err == nil {
 				wait, err = files.DownloadWait(ms)
 			}
@@ -572,6 +573,12 @@ func (a *API) input(path string) http.HandlerFunc {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
+		}
+		if err := checkInput(path, body); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if path == "/input/click" {
 			mark = a.markDownloads(s)
 			if ms != nil {
 				mark.Expect(wait)
@@ -586,6 +593,55 @@ func (a *API) input(path string) http.HandlerFunc {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// checkInput refuses a /click or /type body the browser would refuse for
+// its shape, before the input's turn, so a call id is given back
+// (PROJ-156): fields of the wrong type or unknown, more after the JSON, a
+// pace or button it doesn't know, no text to type. The browser checks the
+// same again, and what only it knows (the screen's size, the text's
+// length at the pace asked).
+func checkInput(path string, body []byte) error {
+	var pace string
+	switch path {
+	case "/input/click":
+		// As the browser's clickRequest: no tags, so names match as
+		// encoding/json matches them, in any case.
+		var c struct {
+			X, Y   int
+			Button string
+			Double bool
+			Pace   string
+		}
+		if err := decodeOne(bytes.NewReader(body), &c); err != nil {
+			return errors.New("bad JSON: " + err.Error())
+		}
+		switch c.Button {
+		case "", "left", "middle", "right":
+		default:
+			return fmt.Errorf("button %q: want left, middle or right", c.Button)
+		}
+		pace = c.Pace
+	case "/input/type":
+		var t struct {
+			Text string
+			Pace string
+		}
+		if err := decodeOne(bytes.NewReader(body), &t); err != nil {
+			return errors.New("bad JSON: " + err.Error())
+		}
+		if t.Text == "" || !utf8.ValidString(t.Text) {
+			return errors.New("text: want non-empty UTF-8")
+		}
+		pace = t.Pace
+	default:
+		return nil
+	}
+	switch pace {
+	case "", "human", "instant":
+		return nil
+	}
+	return fmt.Errorf("pace %q: want human or instant", pace)
 }
 
 // takeDownloadWait takes download_wait_ms out of a click's JSON body,
@@ -739,13 +795,27 @@ func relay(w http.ResponseWriter, resp *http.Response, headers ...string) {
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
+	if err := decodeOne(http.MaxBytesReader(w, r.Body, 64<<10), v); err != nil {
 		writeError(w, http.StatusBadRequest, "bad JSON: "+err.Error())
 		return false
 	}
 	return true
+}
+
+// decodeOne reads exactly one JSON value into v, refusing unknown fields
+// and anything after the value but white space: a valid action followed
+// by a stray "}" is refused, not run (PROJ-156: running it would take its
+// call id, and the corrected retry would then be another call).
+func decodeOne(r io.Reader, v any) error {
+	dec := json.NewDecoder(r)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return err
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("more after the JSON value")
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

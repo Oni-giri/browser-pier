@@ -184,6 +184,10 @@ func (a *API) computer(w http.ResponseWriter, r *http.Request) {
 		a.internal(w, "encoding an action", err)
 		return
 	}
+	if err := checkInput(path, raw); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	var mark *files.Mark
 	if c.downloads() {
 		mark = a.markDownloads(s)

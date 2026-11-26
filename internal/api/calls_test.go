@@ -410,7 +410,7 @@ func TestACallThatRanKeepsItsReceipt(t *testing.T) {
 	srv, page := f.fakePageServer()
 
 	// The control socket answers 500, or refuses the point.
-	for _, c := range [][3]string{{"click", "k1", `{"x": 1, "y": 2, "button": "boom"}`}, {"computer", "k2", `{"action": "type", "text": "boom"}`}, {"computer", "k3", `{"action": "click", "x": 99999, "y": 1}`}} {
+	for _, c := range [][3]string{{"type", "k1", `{"text": "boom"}`}, {"computer", "k2", `{"action": "type", "text": "boom"}`}, {"computer", "k3", `{"action": "click", "x": 99999, "y": 1}`}} {
 		before := f.inputCount()
 		if r := f.send(f.srv, f.all, v.ID, c[0], c[1], c[2]); r.code < 400 || r.replayed {
 			t.Fatalf("%s: %d %s", c[2], r.code, r.raw)
@@ -702,8 +702,10 @@ func TestTooManyCallsUnderWay(t *testing.T) {
 	}
 }
 
-// A Visual click whose lease has ended but which still looks for its
-// download shows in running_calls, as call_status says it runs.
+// A Visual click looking for its download shows in running_calls, as
+// call_status says it runs, until it answers. That it stays listed once
+// its lease has ended is sessions' TestACallRunningAfterItsLeaseIsListed,
+// which can order the two without a sleep.
 func TestAClickWaitingForItsDownloadIsRunning(t *testing.T) {
 	f := newFixture(t)
 	s := f.start(f.all, "google", "visual")
@@ -712,7 +714,6 @@ func TestAClickWaitingForItsDownloadIsRunning(t *testing.T) {
 		done <- f.send(f.srv, f.all, s.ID, "click", "dl-1", `{"x": 1, "y": 2, "download_wait_ms": 1500}`)
 	}()
 	waitFor(t, func() bool { return f.inputCount() == 1 })
-	time.Sleep(200 * time.Millisecond) // the browser answered: the lease is over, the look isn't
 	var st sessionStatusJSON
 	f.call(f.all, http.MethodGet, "/api/sessions/"+s.ID, "", &st)
 	if len(st.RunningCalls) != 1 || st.RunningCalls[0].CallID != "dl-1" || st.RunningCalls[0].State != "running" || st.RunningCalls[0].Tool != "click" {
@@ -735,19 +736,37 @@ func TestAClickWaitingForItsDownloadIsRunning(t *testing.T) {
 // browser, a real page tool gets its lease and fails at the fake CDP,
 // keeping its receipt as error).
 func TestEveryRouteGivesARefusedIDBack(t *testing.T) {
-	type route struct{ tool, body string }
-	visual := []route{{"click", `{"x": 1, "y": 2}`}, {"type", `{"text": "hi"}`}, {"computer", `{"action": "click", "x": 1, "y": 2}`}}
-	page := []route{{"act", `{"steps": [{"action": "press", "keys": "Enter"}]}`}, {"navigate", `{"url": "https://example.com"}`}, {"tabs", `{"action": "new"}`}}
+	// bad: bodies of the right JSON syntax the route refuses for their
+	// shape (a field of the wrong type, a pace, button or text the
+	// browser would refuse).
+	type route struct {
+		tool, body string
+		bad        []string
+	}
+	visual := []route{
+		{"click", `{"x": 1, "y": 2}`, []string{`{"x": "1", "y": 2}`, `{"x": 1, "y": 2, "button": "side"}`, `{"x": 1, "y": 2, "pace": "slow"}`, `{"x": 1, "y": 2, "nope": 1}`}},
+		{"type", `{"text": "hi"}`, []string{`{"text": 42}`, `{"text": ""}`, `{}`, `{"text": "hi", "pace": "slow"}`}},
+		{"computer", `{"action": "click", "x": 1, "y": 2}`, []string{`{"action": "click", "x": "1", "y": 2}`, `{"action": "type", "text": ""}`, `{"action": "click", "x": 1, "y": 2, "button": "side"}`}},
+	}
+	page := []route{
+		{"act", `{"steps": [{"action": "press", "keys": "Enter"}]}`, []string{`{"steps": "press"}`}},
+		{"navigate", `{"url": "https://example.com"}`, []string{`{"url": 42}`}},
+		{"tabs", `{"action": "new"}`, []string{`{"action": 1}`}},
+	}
 	f := newFixture(t)
 	v := f.start(f.all, "google", "visual")
 	a := f.start(f.all, "github", "api")
 	refused := func(sessionID string, rt route, id, body string, want int) {
 		t.Helper()
+		before := f.inputCount()
 		if r := f.send(f.srv, f.all, sessionID, rt.tool, id, body); r.code != want || r.replayed {
-			t.Fatalf("%s %s: %d %s", rt.tool, id, r.code, r.raw)
+			t.Fatalf("%s %s %s: %d %s", rt.tool, id, body, r.code, r.raw)
 		}
 		if st := f.receipt(f.all, sessionID, id); st != "" {
-			t.Fatalf("%s %s kept a receipt: %s", rt.tool, id, st)
+			t.Fatalf("%s %s %s kept a receipt: %s", rt.tool, id, body, st)
+		}
+		if n := f.inputCount() - before; n != 0 {
+			t.Fatalf("%s %s %s: %d inputs reached the browser", rt.tool, id, body, n)
 		}
 	}
 	runs := func(sessionID string, rt route, id string) {
@@ -765,13 +784,17 @@ func TestEveryRouteGivesARefusedIDBack(t *testing.T) {
 		}
 	}
 	all := append(append([]route{}, visual...), page...)
-	for _, rt := range all {
+	for i, rt := range all {
 		sid := v.ID
-		if slices.Contains(page, rt) {
+		if i >= len(visual) {
 			sid = a.ID
 		}
 		id := "rel-" + rt.tool
-		refused(sid, rt, id, `{"oops"`, http.StatusBadRequest)                                      // bad JSON
+		refused(sid, rt, id, `{"oops"`, http.StatusBadRequest)   // bad JSON
+		refused(sid, rt, id, rt.body+"}", http.StatusBadRequest) // more after the JSON
+		for _, bad := range rt.bad {
+			refused(sid, rt, id, bad, http.StatusBadRequest)
+		}
 		if r := f.send(f.srv, f.all, "nope", rt.tool, id, rt.body); r.code != http.StatusNotFound { // unknown session
 			t.Fatalf("%s on no session: %d", rt.tool, r.code)
 		}

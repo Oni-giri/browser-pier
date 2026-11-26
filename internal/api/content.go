@@ -1,13 +1,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/pagetools"
@@ -44,9 +43,7 @@ func (a *API) content(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "body too large")
 		return
 	}
-	dec := json.NewDecoder(strings.NewReader(string(body)))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&in); err != nil {
+	if err := decodeOne(bytes.NewReader(body), &in); err != nil {
 		writeError(w, http.StatusBadRequest, "bad JSON: "+err.Error())
 		return
 	}
