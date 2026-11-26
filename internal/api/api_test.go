@@ -133,6 +133,12 @@ func (b *browser) handler() http.Handler {
 			http.Error(w, "xdotool failed", http.StatusInternalServerError)
 			return
 		}
+		if strings.Contains(string(body), "unbound") {
+			// A type that failed before any key was pressed (PROJ-195).
+			w.Header().Set("X-Nothing-Typed", "1")
+			http.Error(w, "typing failed before anything was typed, so it can be retried, with the same call id if it had one: the keyboard map has no spare key to bind a character to", http.StatusInternalServerError)
+			return
+		}
 		if strings.Contains(string(body), "99999") {
 			http.Error(w, "(99999, 1) is outside the 1440x900 screen", http.StatusBadRequest)
 			return

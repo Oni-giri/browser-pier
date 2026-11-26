@@ -281,6 +281,21 @@ func (c *Call) End(ok bool) {
 	c.endLocked(ok)
 }
 
+// Unrun records that the call, though admitted, did nothing (the browser
+// said so: a type that failed before any key was pressed), so End gives
+// its receipt back as for a call never admitted, and the same id can be
+// sent again (PROJ-195).
+func (c *Call) Unrun() {
+	if c == nil || c.m == nil {
+		return
+	}
+	c.m.mu.Lock()
+	defer c.m.mu.Unlock()
+	if !c.ended {
+		c.admitted = false
+	}
+}
+
 // EndPanicked ends a call whose handler panicked: interrupted if it was
 // admitted.
 func (c *Call) EndPanicked() {
