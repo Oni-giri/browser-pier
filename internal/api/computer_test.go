@@ -119,6 +119,8 @@ func TestComputerOpen(t *testing.T) {
 		`{"action": "open", "url": " HTTP://Example.com/x ", "pace": "instant"}`: `/input/open {"url":"http://Example.com/x","pace":"instant"}`,
 		// A space in the query reaches the browser encoded, as navigate sends it.
 		`{"action": "open", "url": "https://example.com/?q=a b"}`: `/input/open {"url":"https://example.com/?q=a%20b"}`,
+		// So is anything past ASCII, as UTF-8.
+		`{"action": "open", "url": "https://example.com/?q=café"}`: `/input/open {"url":"https://example.com/?q=caf%C3%A9"}`,
 	} {
 		if code, _, raw := f.computer(s.ID, body); code != http.StatusNoContent {
 			t.Fatalf("%s: %d %s", body, code, raw)

@@ -185,3 +185,25 @@ func TestOpenAtEveryScreenSize(t *testing.T) {
 		_ = exec.Command("docker", "rm", "-f", "browserpier-"+name).Run()
 	}
 }
+
+// TestOpenSendsAQueryPastASCII: an address whose query has characters past
+// ASCII reaches the site with them, as UTF-8, at either pace. They are
+// percent-encoded before they are typed (weburl.Check), since xdotool's
+// typing can drop such a character on its way into Chromium.
+func TestOpenSendsAQueryPastASCII(t *testing.T) {
+	a := newRealAPI(t)
+	ks := browsertest.NewKeySite(t, browsertest.SiteHost(t))
+	name, s := openSession(t, a, 1280, 800)
+	for _, pace := range []string{"instant", "human"} {
+		n := "café-日本-" + pace
+		ks.Arrived(n, "")
+		// Written as a person would write it, not escaped.
+		if code, msg := a.open(s.ID, ks.URL+"/arrived?n="+n, pace); code != http.StatusNoContent {
+			t.Fatalf("%s: open: %d %s", pace, code, msg)
+		}
+		if _, ok := ks.WaitRun(n, 10*time.Second, func(r browsertest.KeyRun) bool { return r.Arrived }); !ok {
+			t.Fatalf("%s: the site never saw n=%s", pace, n)
+		}
+	}
+	noClientAttached(t, a, name)
+}

@@ -74,7 +74,7 @@ func TestOpenChecksTheURL(t *testing.T) {
 		"  http://example.com/a b?q=1#top  ":  "http://example.com/a%20b?q=1#top",
 		"https://example.com/?q=hello world":  "https://example.com/?q=hello%20world",
 		"https://example.com/--sync exec x":   "https://example.com/--sync%20exec%20x",
-		"https://bücher.example/straße?x=é":   "https://b%C3%BCcher.example/stra%C3%9Fe?x=é",
+		"https://bücher.example/straße?x=é":   "https://b%C3%BCcher.example/stra%C3%9Fe?x=%C3%A9",
 		"https://ex ample.com/":               "https://ex%E2%80%A8ample.com/",
 		"HTTPS://Example.COM:8443/path?a=b&c": "https://Example.COM:8443/path?a=b&c",
 	} {

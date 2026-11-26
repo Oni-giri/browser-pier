@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
-	"unicode"
+	"unicode/utf8"
 )
 
 // MaxLen caps an address, before it is normalised.
@@ -17,8 +17,8 @@ const MaxLen = 8192
 
 // Check refuses what pages must not be sent to: any scheme but http and
 // https, and URLs carrying a user name or password. It returns the URL as
-// Go writes it back (net/url), with spaces in its query percent-encoded
-// too, which is what is opened.
+// Go writes it back (net/url), with spaces and anything past ASCII in its
+// query percent-encoded too, which is what is opened.
 func Check(raw string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	switch {
@@ -33,25 +33,27 @@ func Check(raw string) (string, error) {
 	case len(raw) > MaxLen:
 		return "", errors.New("url: too long")
 	}
-	// Go escapes a space in the path and the fragment but keeps the
-	// query as written; a browser sends it as %20, so do that here too:
-	// the open action types the URL, where a space would end it.
-	u.RawQuery = escapeSpaces(u.RawQuery)
+	// Go escapes a space and anything past ASCII in the path and the
+	// fragment but keeps the query as written; a browser sends them as
+	// UTF-8 bytes, %20 and %C3%A9, so do that here too: the open action
+	// types the URL, where a space would end it, and xdotool's typing can
+	// drop a character past ASCII (é, say) on its way into Chromium.
+	u.RawQuery = escapeQuery(u.RawQuery)
 	return u.String(), nil
 }
 
-// escapeSpaces percent-encodes every space character (Unicode's) in s.
-func escapeSpaces(s string) string {
-	if !strings.ContainsFunc(s, unicode.IsSpace) {
+// escapeQuery percent-encodes each byte of every space and every
+// character past ASCII in s, as UTF-8. What is already escaped, and the
+// delimiters (&, =, +…), stay as they are.
+func escapeQuery(s string) string {
+	if !strings.ContainsFunc(s, func(r rune) bool { return r == ' ' || r >= utf8.RuneSelf }) {
 		return s
 	}
 	var b strings.Builder
-	for _, r := range s {
-		if !unicode.IsSpace(r) {
-			b.WriteRune(r)
-			continue
-		}
-		for _, c := range []byte(string(r)) {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c != ' ' && c < utf8.RuneSelf {
+			b.WriteByte(c)
+		} else {
 			fmt.Fprintf(&b, "%%%02X", c)
 		}
 	}
