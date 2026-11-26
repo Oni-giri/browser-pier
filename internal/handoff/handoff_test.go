@@ -374,6 +374,34 @@ func TestLinkOnlyAndSignIn(t *testing.T) {
 	if p := g.do(browser(), "GET", "/h/"+token, nil, nil); p.code != http.StatusSeeOther || p.location != "/login?next=%2Fh%2F"+token {
 		t.Fatalf("full sign-in without a session: %d to %q", p.code, p.location)
 	}
+
+	// With two-step sign-in on (PROJ-162), the password alone doesn't
+	// open a Full sign-in link; the code does, and the browser lands on it.
+	secret := auth.NewTOTPSecret()
+	if _, _, err := g.admin.EnableTwoStep(context.Background(), secret, auth.TOTPCode(secret, time.Now()), ""); err != nil {
+		t.Fatal(err)
+	}
+	phone = browser()
+	if p := g.do(phone, "GET", "/h/"+token, nil, nil); p.code != http.StatusSeeOther || p.location != "/login?next=%2Fh%2F"+token {
+		t.Fatalf("full sign-in, two-step on, fresh browser: %d to %q", p.code, p.location)
+	}
+	if p := g.do(phone, "POST", "/login", url.Values{"password": {"the-admin-password"}, "next": {"/h/" + token}}, nil); p.code != http.StatusSeeOther || p.location != "/login/code" {
+		t.Fatalf("password step: %d to %q", p.code, p.location)
+	}
+	if p := g.do(phone, "GET", "/h/"+token, nil, nil); p.code != http.StatusSeeOther || p.location != "/login?next=%2Fh%2F"+token {
+		t.Fatalf("the password alone opened a Full sign-in link: %d to %q", p.code, p.location)
+	}
+	code := auth.TOTPCode(secret, time.Now().Add(30*time.Second)) // the confirming code's step is used
+	if p := g.do(phone, "POST", "/login/code", url.Values{"code": {code}}, nil); p.code != http.StatusSeeOther || p.location != "/h/"+token {
+		t.Fatalf("code step: %d to %q", p.code, p.location)
+	}
+	p := g.do(phone, "GET", "/h/"+token, nil, nil)
+	for i := 0; p.code == http.StatusSeeOther && p.location == "/h/"+token && i < 3; i++ {
+		p = g.do(phone, "GET", "/h/"+token, nil, nil)
+	}
+	if p.code != http.StatusOK || !strings.Contains(p.body, "Done, hand back") {
+		t.Fatalf("after the code, the link: %d to %q", p.code, p.location)
+	}
 }
 
 func TestPlainHTTPFromOutsideAsksForNothing(t *testing.T) {

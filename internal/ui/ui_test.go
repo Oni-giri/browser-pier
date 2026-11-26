@@ -57,6 +57,7 @@ type fixture struct {
 	notify  *notify.Notifier
 	rt      *sessionstest.FakeRuntime
 	app     *UI
+	cookie  string // the signed-in admin session's
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -137,6 +138,7 @@ func newFixture(t *testing.T) *fixture {
 	jar, _ := cookiejar.New(nil)
 	u, _ := url.Parse(f.srv.URL)
 	jar.SetCookies(u, []*http.Cookie{{Name: auth.CookieName, Value: cookie, Path: "/"}})
+	f.cookie = cookie
 	f.client = &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	return f
 }

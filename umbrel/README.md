@@ -27,6 +27,7 @@
 ## Testing an install
 
 - **Sign-in:** the app opens on Umbrel's login, then BrowserPier's: sign in with the password under BrowserPier → Info.
+- **Two-step sign-in:** BrowserPier's own (Settings → Admin account) works here too, off by default. Umbrel's login already fronts the UI, and umbrelOS has optional two-factor authentication of its own (umbrelOS Settings), which is the first one to turn on. If you turn BrowserPier's on and lose the phone and the recovery codes, reset it over SSH with `docker exec yakitori-browserpier_web_1 browserpier 2fa reset`. The app password under Info doesn't reset it: it only resets the password.
 - **Live views:** a browser's live view plays over the LAN (`http://umbrel.local:7436`) and over Tailscale (the Umbrel's 100.x address).
 - **Agents:** a token from the Agents page works on `/api`, `/cdp` and `/mcp` without an Umbrel login. A handoff link opens on a phone.
 - **Notifications:** Umbrel sets no `BROWSERPIER_PUBLIC_URL`, so links in webhook messages (Settings → Notifications) are built on **Address for links**: set it to how you open BrowserPier from your phone, such as `http://umbrel.local:7436` or the Umbrel's Tailscale address on port 7436. Left empty, messages carry no link and say to open BrowserPier. A plain `http://` webhook works only on the local network or Tailscale (Home Assistant on the same Umbrel, say).

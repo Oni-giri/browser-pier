@@ -58,6 +58,13 @@ func main() {
 		}
 		return
 	}
+	if flag.Arg(0) == "2fa" {
+		if err := twoFACommand(flag.Args()[1:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "browserpier 2fa:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if flag.Arg(0) == "token" {
 		if err := tokenCommand(flag.Args()[1:], os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "browserpier token:", err)
