@@ -266,11 +266,13 @@ func (s *Service) tellRequested(h Handoff, token string) bool {
 		link = token
 	}
 	return s.notify.HandoffRequested(notifyInfo(h), link, func() bool {
+		// Get, not the row's status alone: a handoff whose time is up or
+		// whose browser stopped stays pending until something looks, and
+		// its link is no use. Get ends it, as the sweep would.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		var st Status
-		err := s.db.QueryRowContext(ctx, `SELECT status FROM handoffs WHERE id = ?`, h.ID).Scan(&st)
-		return err == nil && st == Pending
+		cur, err := s.Get(ctx, h.ID)
+		return err == nil && cur.Status == Pending
 	})
 }
 

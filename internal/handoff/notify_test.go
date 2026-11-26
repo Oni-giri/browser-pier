@@ -316,3 +316,70 @@ func TestAStuckWebhookHoldsNothingUp(t *testing.T) {
 		t.Errorf("ending it took %s", d)
 	}
 }
+
+// TestADeadHandoffIsntSent: a handoff.requested still queued when its
+// browser stops or its time runs out isn't sent, though nothing swept
+// the handoff meanwhile; an expiry tells handoff.expired instead.
+func TestADeadHandoffIsntSent(t *testing.T) {
+	ctx := context.Background()
+	for name, kill := range map[string]func(f *fixture, h Handoff){
+		"stopped": func(f *fixture, h Handoff) {
+			if _, err := f.m.Stop(ctx, h.SessionID); err != nil {
+				f.t.Fatal(err)
+			}
+		},
+		"expired": func(f *fixture, _ Handoff) {
+			later := time.Now().Add(Lifetime + time.Second)
+			f.svc.now = func() time.Time { return later }
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var mu sync.Mutex
+			var events []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var b struct{ Event string }
+				_ = json.NewDecoder(r.Body).Decode(&b)
+				mu.Lock()
+				events = append(events, b.Event)
+				mu.Unlock()
+			}))
+			defer srv.Close()
+			f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
+			_, n := f.tell("https://pier.example.com", srv.URL+"/hook")
+			h, _ := f.open("") // queued; no worker runs yet
+			kill(f, h)
+			var st Status
+			if err := f.svc.db.QueryRowContext(ctx, `SELECT status FROM handoffs WHERE id = ?`, h.ID).Scan(&st); err != nil || st != Pending {
+				t.Fatalf("the row is %s before delivery, %v; the test needs it still pending", st, err)
+			}
+			runCtx, cancel := context.WithCancel(ctx)
+			done := make(chan struct{})
+			go func() { n.Run(runCtx); close(done) }()
+			defer func() { cancel(); <-done }()
+			deadline := time.Now().Add(10 * time.Second)
+			for {
+				if err := f.svc.db.QueryRowContext(ctx, `SELECT status FROM handoffs WHERE id = ?`, h.ID).Scan(&st); err == nil && st.Final() {
+					break
+				}
+				mu.Lock()
+				posted := len(events) > 0
+				mu.Unlock()
+				if posted {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("the worker neither sent the event nor ended the handoff")
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			time.Sleep(300 * time.Millisecond)
+			mu.Lock()
+			defer mu.Unlock()
+			for _, e := range events {
+				if e == string(notify.HandoffRequested) {
+					t.Errorf("a dead handoff's link was sent: %v", events)
+				}
+			}
+		})
+	}
+}
