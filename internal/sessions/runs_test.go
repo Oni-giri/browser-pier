@@ -716,3 +716,73 @@ func TestRecentCallsHoldActionsOnly(t *testing.T) {
 		t.Fatalf("recent calls %+v", got)
 	}
 }
+
+// A scrub can make an entry longer (a four-character secret becomes
+// "<hidden>"): a run within its 64 KiB live keeps, once scrubbed, its
+// newest entries that still fit, how it ended among them.
+func TestAKeptRunFitsOnceScrubbed(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	const short = "qzx4"
+	what := strings.Repeat(short+" ", 60) // 300 bytes, 540 once scrubbed, shown cut to 400
+	last := 0
+	for ; ; last++ {
+		f.m.Note(s.ID, "claude", fmt.Sprintf("%03d ", last)+what)
+		f.m.mu.Lock()
+		l := f.m.findLocked(s.ID)
+		full := l.activityBytes+entrySize(Activity{Agent: "claude", What: "000 " + what}) > maxActivityBytes
+		f.m.mu.Unlock()
+		if full {
+			break
+		}
+	}
+	if err := f.m.RegisterSecret(s.ID, short); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.m.Stop(context.Background(), s.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.m.mu.Lock()
+	kr := f.m.kept["google"][0]
+	f.m.mu.Unlock()
+	size := 0
+	for _, a := range kr.Entries {
+		size += entrySize(a)
+	}
+	if size > maxActivityBytes || kr.bytes != size {
+		t.Fatalf("kept %d entries of %d bytes (counted %d)", len(kr.Entries), size, kr.bytes)
+	}
+	if kr.Entries[0].What != "Stopped from the app" || !strings.HasPrefix(kr.Entries[1].What, fmt.Sprintf("%03d <hidden>", last)) || strings.Contains(kr.Entries[1].What, short) {
+		t.Fatalf("newest kept: %q, %q", kr.Entries[0].What, kr.Entries[1].What)
+	}
+}
+
+// Reading a profile's runs expires its own only: the side column reads
+// them every few seconds. Adding a run expires every profile's.
+func TestReadingRunsExpiresOnlyTheProfiles(t *testing.T) {
+	f := newFixture(t)
+	advance := f.clock()
+	f.m.mu.Lock()
+	for _, p := range []string{"a", "b"} {
+		f.m.keepLocked(p, &keptRun{Run: Run{SessionID: p, Ended: f.m.now()}})
+	}
+	f.m.mu.Unlock()
+	advance(keptFor)
+	if _, ok := f.m.LastRun("a"); ok {
+		t.Fatal("an expired last run")
+	}
+	f.m.mu.Lock()
+	_, a := f.m.kept["a"]
+	_, b := f.m.kept["b"]
+	f.m.mu.Unlock()
+	if a || !b {
+		t.Fatalf("after reading a: a kept %t, b kept %t", a, b)
+	}
+	f.m.mu.Lock()
+	f.m.keepLocked("c", &keptRun{Run: Run{SessionID: "c", Ended: f.m.now()}})
+	_, b = f.m.kept["b"]
+	f.m.mu.Unlock()
+	if b {
+		t.Fatal("adding a run left b's expired one")
+	}
+}

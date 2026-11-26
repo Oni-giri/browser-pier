@@ -179,13 +179,20 @@ func (m *Manager) keepRunLocked(l *live, s Session, why StopReason, inHelp bool,
 	r := &keptRun{Run: Run{
 		SessionID: s.ID, Mode: s.Mode, Started: s.CreatedAt, Ended: now,
 		End: why.end, EndText: why.String(), StartedBy: l.startedBy, FromApp: l.fromApp,
-		Entries: make([]Activity, len(l.activity)),
+		Entries: make([]Activity, 0, len(l.activity)),
 	}}
-	for i, a := range l.activity {
-		a = shown(sc, a)
+	// The newest entries that still fit in maxActivityBytes once
+	// scrubbed: a scrub can make an entry longer (a short secret becomes
+	// "<hidden>"). The newest, how it ended, always does.
+	for i := len(l.activity) - 1; i >= 0; i-- {
+		a := shown(sc, l.activity[i])
 		a.TokenID, a.Tool, a.CallID = "", "", ""
-		r.Entries[len(r.Entries)-1-i] = a
-		r.bytes += entrySize(a)
+		if n := entrySize(a); r.bytes+n <= maxActivityBytes || len(r.Entries) == 0 {
+			r.Entries = append(r.Entries, a)
+			r.bytes += n
+			continue
+		}
+		break
 	}
 	l.activity, l.activityBytes = nil, 0
 	m.keepLocked(s.Profile, r)
@@ -233,15 +240,28 @@ func (m *Manager) dropOldestLocked(profile string) {
 	}
 }
 
-// expireLocked drops the runs that ended keptFor ago or more.
+// expireLocked drops the runs that ended keptFor ago or more, of every
+// profile: when a run is added, so the bound on all kept runs counts
+// only live ones.
 func (m *Manager) expireLocked(now time.Time) {
-	for p, runs := range m.kept {
-		runs = slices.DeleteFunc(runs, func(r *keptRun) bool { return now.Sub(r.Ended) >= keptFor })
-		if len(runs) == 0 {
-			delete(m.kept, p)
-		} else {
-			m.kept[p] = runs
-		}
+	for p := range m.kept {
+		m.expireProfileLocked(p, now)
+	}
+}
+
+// expireProfileLocked drops profile's runs that ended keptFor ago or
+// more: when its runs are read, which the side column does every few
+// seconds, so only its own are looked at.
+func (m *Manager) expireProfileLocked(profile string, now time.Time) {
+	runs, ok := m.kept[profile]
+	if !ok {
+		return
+	}
+	runs = slices.DeleteFunc(runs, func(r *keptRun) bool { return now.Sub(r.Ended) >= keptFor })
+	if len(runs) == 0 {
+		delete(m.kept, profile)
+	} else {
+		m.kept[profile] = runs
 	}
 }
 
@@ -250,7 +270,7 @@ func (m *Manager) expireLocked(now time.Time) {
 func (m *Manager) LastRun(profile string) (Run, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.expireLocked(m.now())
+	m.expireProfileLocked(profile, m.now())
 	runs := m.kept[profile]
 	if len(runs) == 0 {
 		return Run{}, false
@@ -266,7 +286,7 @@ func (m *Manager) LastRun(profile string) (Run, bool) {
 func (m *Manager) Runs(profile string) []Run {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.expireLocked(m.now())
+	m.expireProfileLocked(profile, m.now())
 	runs := m.kept[profile]
 	out := make([]Run, len(runs))
 	for i, r := range runs {
