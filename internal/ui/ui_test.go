@@ -20,7 +20,9 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/db"
+	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/handoff"
+	"github.com/Oni-giri/browser-pier/internal/picker"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/recording"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
@@ -39,8 +41,15 @@ type fixture struct {
 	settings   *settings.Store
 	srv        *httptest.Server
 	client     *http.Client
-	ram        int
-	free       int64 // what the host has available, for HostFree
+	files      *files.Store
+	picker     *picker.Picker
+	// choosers is the browser's file chooser portal (chooser_test.go).
+	choosers *fakeChooser
+	// holder is the signed-in client's holder of control (PROJ-184).
+	holder string
+	admin  *auth.Admin
+	ram    int
+	free   int64 // what the host has available, for HostFree
 	// emptied counts the browser's clipboard emptyings (PROJ-194).
 	emptied atomic.Int32
 	rt      *sessionstest.FakeRuntime
@@ -79,6 +88,8 @@ func newFixture(t *testing.T) *fixture {
 		emptied.Add(1)
 		w.WriteHeader(http.StatusNoContent)
 	})
+	choosers := &fakeChooser{open: `[]`}
+	choosers.register(ctl)
 	rt.Control = ctl
 	m, err := sessions.NewManager(d, rt, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)
 	if err != nil {
@@ -94,11 +105,13 @@ func newFixture(t *testing.T) *fixture {
 	}
 	tokens := auth.NewTokens(d)
 	web := auth.NewWeb(admin, tokens, log, auth.WebOptions{CookieSecure: "auto"})
-	f := &fixture{t: t, m: m, handoffs: handoff.New(d, m, log), web: web, tokens: tokens, settings: settings.New(d), rt: rt}
+	fs := files.New(m.Layout().FilesDir, 1<<20, os.Getuid(), os.Getgid()) // a 1 MiB cap
+	f := &fixture{t: t, m: m, handoffs: handoff.New(d, m, log), web: web, tokens: tokens, settings: settings.New(d), files: fs, choosers: choosers, rt: rt,
+		picker: picker.New(m, fs, log)}
 	emptied = &f.emptied
 	f.recordings = recording.NewStore(filepath.Join(dir, "recordings"), log)
 	app := New(m, web, f.handoffs, f.settings, log, Options{HostMemory: 16 << 30, HostFree: func() int64 { return f.free }, SetRAMLimit: func(p int) { f.ram = p },
-		Recordings: f.recordings})
+		Recordings: f.recordings, Picker: f.picker})
 	f.app = app
 	mux := http.NewServeMux()
 	web.Register(mux)
@@ -110,6 +123,7 @@ func newFixture(t *testing.T) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	f.holder, f.admin = sessions.AdminHolder, admin
 	jar, _ := cookiejar.New(nil)
 	u, _ := url.Parse(f.srv.URL)
 	jar.SetCookies(u, []*http.Cookie{{Name: auth.CookieName, Value: cookie, Path: "/"}})
@@ -495,7 +509,7 @@ func TestHandBackFormEmptiesTheClipboard(t *testing.T) {
 	ctx := context.Background()
 	f.profile("google")
 	s, _, _ := f.m.Start(ctx, "google", "")
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, f.holder); err != nil {
 		t.Fatal(err)
 	}
 	if r := f.post("/profiles/google/handback", url.Values{}); r.code != http.StatusSeeOther {
@@ -507,7 +521,7 @@ func TestHandBackFormEmptiesTheClipboard(t *testing.T) {
 	if _, _, err := f.handoffs.Create(ctx, s.ID, "research-bot", handoff.SensitiveInput, "Enter the 2FA code", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, f.holder); err != nil {
 		t.Fatal(err)
 	}
 	if r := f.post("/profiles/google/handback", url.Values{"status": {"done"}}); r.code != http.StatusSeeOther {

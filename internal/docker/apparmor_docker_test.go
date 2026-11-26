@@ -35,8 +35,9 @@ func TestCheckSandbox(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The image carries the check, and says so.
-	c.plan = appArmorPlan{try: []string{""}}
+	// The image carries the check, and says so. The plan allows every
+	// option checked below, so the create guard lets each through.
+	c.plan = appArmorPlan{try: []string{optBrowserPier, "", optUnconfined}}
 	if ok, why := c.checkable(ctx, false); !ok {
 		t.Fatalf("the browser image isn't checkable: %q", why)
 	}
@@ -72,6 +73,7 @@ func TestCheckSandbox(t *testing.T) {
 		slices.Contains(info.Info.SecurityOptions, "name=rootless") {
 		t.Skip("this daemon applies no AppArmor profile")
 	}
+	c.plan = appArmorPlan{fixed: "apparmor=browserpier-test-not-loaded"}
 	v, why := c.checkSandbox(ctx, "apparmor=browserpier-test-not-loaded")
 	if v != fails || why == "" {
 		t.Fatalf("a profile that isn't loaded: %v, why %q", v, why)

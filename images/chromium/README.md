@@ -1,6 +1,6 @@
 # Browser image
 
-`ghcr.io/oni-giri/browser-pier-chromium`: headful Chromium on Xvfb with a minimal desktop (JWM and a taskbar, `jwmrc`), xdotool for OS-level input and GStreamer sidecars that stream the display as H.264, live and, for session recordings, as fragmented MP4. See SPEC.md §3 for why it's built this way.
+`ghcr.io/oni-giri/browser-pier-chromium`: headful Chromium on Xvfb with a minimal desktop (JWM and a taskbar, `jwmrc`), xdotool for OS-level input, GStreamer sidecars that stream the display as H.264, live and, for session recordings, as fragmented MP4, and a private session bus (Debian's `dbus-daemon`) on which the entrypoint answers Chromium's file choosers as a desktop portal would (`entrypoint/portal.go`, with `github.com/godbus/dbus/v5`, BSD-2-Clause; see `NOTICE`), so no file dialog shows: an agent or the person in control answers each chooser from the profile's uploads. A browser whose bus or portal can't start exits rather than fall back to Chromium's own dialog (PROJ-183). No `xdg-desktop-portal` or other portal is installed; the build fails if one is. See SPEC.md §3 for why it's built this way.
 
 ```sh
 make image-chromium   # build from the repo root
@@ -36,6 +36,7 @@ Settings, all optional:
 | `BROWSERPIER_GEOIP_URL` | none | Endpoint to look up the exit location (`country_iso`, `time_zone`); empty for no lookup. |
 | `BROWSERPIER_GEO_COUNTRY`, `BROWSERPIER_GEO_TZ` | none | The location the profile ran with last time; the zone is kept while the country is the same. |
 | `BROWSERPIER_TZ_OVERRIDE`, `BROWSERPIER_LOCALE_OVERRIDE` | none | The profile's manual time zone and language; they win. |
+| `BROWSERPIER_CHOOSER_TIMEOUT` | `5m` | How long a page's file chooser waits for an answer before it is cancelled (1 s to 1 h). The orchestrator doesn't set it; tests shorten it. |
 | `BROWSERPIER_MOUNT_CHECK` | none | When set, both `/profile` and the control socket's folder must hold a `.browserpier-mount` file with this value, or the entrypoint exits 1 before touching the profile. The orchestrator sets it so a wrong host path can't open an empty profile. |
 
 The container exits 0 only after a graceful stop: Chromium closed through CDP's `Browser.close` in time, so the profile is safely on disk. It exits 1 if Chromium crashed, failed to start, had to be killed, or had to be stopped with SIGTERM because CDP didn't answer (which can lose the last few seconds of cookie writes); the last log line says which.
@@ -66,6 +67,8 @@ HTTP over the Unix socket:
 | `POST /input/release` | Lets go of any key or button the live view still holds. |
 | `GET /geo` | The location the browser runs with: country, time zone, locale, Accept-Language list, and where they came from. |
 | `GET /proxy/stats` | Bytes sent and received through the proxy, when there is one. |
+| `GET /chooser` | The page's open file choosers: `{"choosers": [{"id": "c3", "multiple": false, "accept": ["*.pdf"], "age_ms": 1200}]}`. 503, saying why, when the portal is off or couldn't start. |
+| `POST /chooser/{id}` | `{"files": ["name", …]}` (bare names in `/files/uploads`, each checked with `lstat`; at most 10, one unless `multiple`) or `{"cancel": true}`: 204, or 404 for an id that isn't open, 400 for a bad name, 422 for a missing file or too many. |
 | `GET /stream` | The display as an H.264 Annex-B byte stream (constrained baseline, 30 fps, keyframe every 2 s), one reader at a time (409 otherwise). The encoder runs only while it's read. |
 | `GET /record` | The display as fragmented MP4 to keep (PROJ-23): at most 5 fps, 3/4 of the screen, H.264 High at constant quality, one keyframe at the start, a fragment about every frame. A pipeline of its own, one reader at a time (409 otherwise), run only while it's read; the live stream is unchanged. |
 

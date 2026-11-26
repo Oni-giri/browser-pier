@@ -149,17 +149,35 @@ func run(log *slog.Logger) error {
 		return err
 	}
 
+	// The session bus and the file chooser portal come up before
+	// Chromium, which looks for the portal once, as it starts. Without
+	// them the browser doesn't start: Chromium would show its GTK dialog,
+	// which lets whoever drives it hand a page any file the browser can
+	// read, the profile's cookies included (PROJ-183), and it aborts when
+	// its bus goes anyway.
+	bus, portal, err := startChooser(ctx, log, cfg)
+	if err != nil {
+		return err
+	}
+	defer bus.stop()
+	defer portal.close()
+
 	chromium := exec.Command(chromiumBinary, chromiumArgs(cfg, smallShm())...)
-	chromium.Env = append(append(os.Environ(), "DISPLAY="+display), where.env()...)
-	fatal, err := watchFatal(chromium)
+	chromium.Env = chromiumEnv(os.Environ(), where.env(), bus)
+	fatal, err := watchFatal(chromium, func(msg string) { log.Warn(msg) })
 	if err != nil {
 		return fmt.Errorf("start Chromium: %w", err)
 	}
 	browser, err := spawn(chromium)
-	fatal.started()
+	pid := 0
+	if err == nil {
+		pid = chromium.Process.Pid
+	}
+	fatal.started(pid)
 	if err != nil {
 		return fmt.Errorf("start Chromium: %w", err)
 	}
+	portal.setBrowser(browser.pid)
 	cdp := &http.Client{Timeout: time.Second}
 	if err := waitFor(ctx, browser, 30*time.Second, func() bool {
 		resp, err := cdp.Get("http://" + cdpAddr + "/json/version")
@@ -169,13 +187,19 @@ func run(log *slog.Logger) error {
 		_ = resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
 	}); err != nil {
-		_ = closeChromium(browser, cdpAddr, cfg.StopTimeout)
-		return fmt.Errorf("chromium: %w%s", err, fatal.reason(true))
+		ended, exited := time.Now(), false
+		select {
+		case <-browser.done:
+			exited = true
+		default:
+		}
+		reason := giveUp(fatal, ended, exited, func() { _ = stopBrowser(browser, cdpAddr, cfg.StopTimeout, portal, bus) })
+		return fmt.Errorf("chromium: %w%s", err, reason)
 	}
 
 	ln, err := listenControl(cfg.ControlSocket)
 	if err != nil {
-		_ = closeChromium(browser, cdpAddr, cfg.StopTimeout)
+		_ = stopBrowser(browser, cdpAddr, cfg.StopTimeout, portal, bus)
 		return err
 	}
 	defer func() { _ = os.Remove(cfg.ControlSocket) }()
@@ -184,22 +208,26 @@ func run(log *slog.Logger) error {
 			&streamer{command: func() *exec.Cmd { return exec.Command("gst-launch-1.0", streamArgs()...) }},
 			&streamer{command: func() *exec.Cmd { return exec.Command("gst-launch-1.0", recordArgs(cfg.Width, cfg.Height)...) },
 				contentType: "video/mp4", wait: 2 * time.Second},
-			newVisual(cfg.Width, cfg.Height), fwd, where),
+			newVisual(cfg.Width, cfg.Height), fwd, where, portal, "the file chooser portal isn't running in this browser"),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() { _ = srv.Serve(ln) }()
 	log.Info("ready", "screen", fmt.Sprintf("%dx%d", cfg.Width, cfg.Height), "control_socket", cfg.ControlSocket)
 
-	select {
-	case <-browser.done:
+	if !waitEnd(ctx, log, browser, bus) {
+		ended := time.Now()
 		_ = srv.Close()
-		return fmt.Errorf("chromium exited on its own: %s%s", describe(browser.status), fatal.reason(false))
-	case <-ctx.Done():
+		portal.browserExited()
+		why := ""
+		if busGone(bus) {
+			why = " (the session bus had exited, and Chromium aborts without it)"
+		}
+		return fmt.Errorf("chromium exited on its own: %s%s%s", describe(browser.status), why, fatal.reason(false, ended, true))
 	}
 
 	log.Info("stopping: closing Chromium", "timeout", cfg.StopTimeout)
 	_ = srv.Close()
-	if err := closeChromium(browser, cdpAddr, cfg.StopTimeout); err != nil {
+	if err := stopBrowser(browser, cdpAddr, cfg.StopTimeout, portal, bus); err != nil {
 		return err
 	}
 	log.Info("Chromium closed", "status", describe(browser.status))
@@ -324,6 +352,7 @@ func closeChromium(p *process, cdp string, timeout time.Duration) error {
 // process is a child started through the reaper.
 type process struct {
 	cmd    *exec.Cmd
+	pid    int
 	done   chan struct{}
 	status syscall.WaitStatus // valid once done is closed
 }
@@ -342,11 +371,11 @@ func spawn(cmd *exec.Cmd) (*process, error) {
 	if !out || !errOut {
 		return nil, errors.New("spawn: output must go to a file")
 	}
-	exited, err := procs.start(cmd)
+	exited, pid, err := procs.startPid(cmd)
 	if err != nil {
 		return nil, err
 	}
-	p := &process{cmd: cmd, done: make(chan struct{})}
+	p := &process{cmd: cmd, pid: pid, done: make(chan struct{})}
 	go func() {
 		p.status = <-exited
 		close(p.done)

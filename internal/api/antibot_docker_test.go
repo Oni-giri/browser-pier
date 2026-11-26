@@ -125,8 +125,19 @@ func looksLikeChrome(t *testing.T, s browsertest.Signals) {
 	if s.NotificationPermission == "denied" && s.PermissionQuery == "prompt" {
 		t.Error("notification permissions disagree, as in headless Chrome")
 	}
+	// WebGL renders on llvmpipe, a renderer GPU-less Linux desktops have,
+	// not SwiftShader, which pages count as a headless sign (PROJ-148).
 	if s.WebGLRenderer == "" {
 		t.Errorf("no WebGL: %s", s.WebGLVendor)
+	}
+	if s.WebGL2Renderer == "" {
+		t.Error("no WebGL2")
+	}
+	for _, r := range []string{s.WebGLVendor, s.WebGLRenderer, s.WebGL2Renderer} {
+		if strings.Contains(strings.ToLower(r), "swiftshader") {
+			t.Errorf("WebGL says SwiftShader: %s / %s", s.WebGLVendor, s.WebGLRenderer)
+			break
+		}
 	}
 	// Intl takes Chromium's interface language, which is just "de".
 	if len(s.Languages) == 0 || s.Languages[0] != "de-DE" || !strings.HasPrefix(s.IntlLocale, "de") || s.TimeZone != "Europe/Berlin" {

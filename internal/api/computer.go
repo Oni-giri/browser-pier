@@ -218,6 +218,9 @@ func (a *API) done(w http.ResponseWriter, r *http.Request, s sessions.Session, c
 // after the screenshot is taken, so that a download notice gets the
 // screenshot's time to see a download start.
 func (a *API) doneWith(w http.ResponseWriter, r *http.Request, s sessions.Session, c computerRequest, before func()) {
+	before = func(set func()) func() {
+		return func() { set(); a.setChooserNotice(w, r, s) }
+	}(before)
 	if !c.Screenshot {
 		before()
 		w.WriteHeader(http.StatusNoContent)
