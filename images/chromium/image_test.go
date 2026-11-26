@@ -120,8 +120,14 @@ func startBrowser(t *testing.T, image, volume string, env ...string) *browser {
 		t.Fatal(err)
 	}
 	name := fmt.Sprintf("bp-test-%d", time.Now().UnixNano())
+	// The orchestrator's own confinement (internal/docker's browserConfig):
+	// its seccomp profile, no new privileges, every capability dropped but
+	// the one the sandbox uses, so what these tests see of the sandbox
+	// doesn't depend on the runtime's defaults.
 	run := append([]string{"run", "-d", "--name", name,
-		"--security-opt", "seccomp=" + seccomp},
+		"--security-opt", "seccomp=" + seccomp,
+		"--security-opt", "no-new-privileges",
+		"--cap-drop", "ALL", "--cap-add", "SYS_CHROOT"},
 		appArmor(t, image, seccomp)...)
 	run = append(run,
 		"--shm-size=1g",
@@ -306,12 +312,17 @@ func TestLoginSurvivesImageUpgrade(t *testing.T) {
 	if code := b.stop(); code != "0" {
 		t.Fatalf("exit code after stop = %s, want 0\n%s", code, b.logs())
 	}
+	if before == nil {
+		t.Fatalf("no WebGL on %s: the old profile has no renderer state to carry over", old)
+	}
+	// The old renderer left shader caches for the new one to find: looked
+	// at before the new browser starts, which would create the folder itself.
+	if out := docker(t, "run", "--rm", "--network", "none", "-v", vol+":/profile:ro", "--entrypoint", "sh", image,
+		"-c", "find /profile/GPUCache /profile/Default/GPUCache -type f 2>/dev/null | head -n 1"); out == "" {
+		t.Fatal("no GPUCache files in the old profile: the test isn't checking what it should")
+	}
 
 	b = startBrowser(t, image, vol)
-	// The old renderer's shader caches are there for the new one to find.
-	if out := docker(t, "exec", b.name, "sh", "-c", "ls -d /profile/GPUCache /profile/Default/GPUCache 2>/dev/null || true"); out == "" {
-		t.Error("no GPUCache folder in the old profile: the test isn't checking what it should")
-	}
 	p = b.page()
 	if got := s.Account(t, p); got != token {
 		t.Fatalf("on the new image the site saw session %q, want %q", got, token)
@@ -323,12 +334,16 @@ func TestLoginSurvivesImageUpgrade(t *testing.T) {
 		t.Fatalf("exit code after stop = %s, want 0\n%s", code, b.logs())
 	}
 	checkGPUProcess(t, b.logs())
-	if after["webgl"] == nil || after["webgl2"] == nil {
-		t.Fatalf("no WebGL on the new image: %v", after)
+	for _, kind := range []string{"webgl", "webgl2"} {
+		w := after[kind]
+		if w == nil {
+			t.Fatalf("no %s on the new image: %v", kind, after)
+		}
+		if !strings.Contains(w.Renderer, "llvmpipe") || w.Pixel != triangleRGBA {
+			t.Errorf("%s on the new image: renderer %q, pixel %s, want llvmpipe drawing %s", kind, w.Renderer, w.Pixel, triangleRGBA)
+		}
 	}
-	if before != nil {
-		t.Logf("renderer on %s: %s / %s", old, before.Vendor, before.Renderer)
-	}
+	t.Logf("renderer on %s: %s / %s", old, before.Vendor, before.Renderer)
 	t.Logf("renderer on %s: %s / %s", image, after["webgl"].Vendor, after["webgl"].Renderer)
 }
 
@@ -577,13 +592,14 @@ func TestBrowserEnvironment(t *testing.T) {
 			time.Sleep(200 * time.Millisecond)
 			text, _ = p.Eval(deepText).(string)
 		}
-		line := func(name string) string {
+		row := func(name string) (string, bool) {
 			m := regexp.MustCompile(`(?m)^\s*\*?\s*` + regexp.QuoteMeta(name) + `\s*:\s*(.*?)\s*$`).FindStringSubmatch(text)
 			if m == nil {
-				return ""
+				return "", false
 			}
-			return m[1]
+			return m[1], true
 		}
+		line := func(name string) string { v, _ := row(name); return v }
 		// With software compositing Chromium says "Hardware accelerated but
 		// at reduced performance"; blocked, it says "Disabled" or "Software
 		// only, hardware acceleration unavailable".
@@ -593,7 +609,7 @@ func TestBrowserEnvironment(t *testing.T) {
 		// Chromium 156's report has no WebGL2 row (WebGL's covers both);
 		// the webgl subtest checks a webgl2 context draws. If a WebGL2 row
 		// comes back, it must say the same.
-		if w := line("WebGL2"); strings.Contains(text, "WebGL2:") && !strings.HasPrefix(w, "Hardware accelerated") {
+		if w, ok := row("WebGL2"); ok && !strings.HasPrefix(w, "Hardware accelerated") {
 			t.Errorf("chrome://gpu says WebGL2: %q", w)
 		}
 		if g := line("GL implementation parts"); g != "(gl=egl-angle,angle=opengl)" {
