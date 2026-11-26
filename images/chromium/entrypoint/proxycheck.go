@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"sync/atomic"
 	"time"
@@ -79,6 +80,13 @@ func proxyCheck(ctx context.Context, proxyFile, geoURL string) checkResult {
 	if err != nil {
 		return checkResult{Reason: checkReason(err, tunnel.Load())}
 	}
+	// The address is the endpoint's text: only a plain IP goes out, in
+	// its canonical form, and anything else is an unusable answer.
+	addr, err := netip.ParseAddr(ip)
+	if err != nil || addr.Zone() != "" {
+		return checkResult{Reason: checkLookup}
+	}
+	ip = addr.String()
 	locale, accept := localeFor(country)
 	return checkResult{OK: true, IP: ip, Country: country, TimeZone: tz, Locale: locale, Accept: accept,
 		MS: max(1, took.Milliseconds())}

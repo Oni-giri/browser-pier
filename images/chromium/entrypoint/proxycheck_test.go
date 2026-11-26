@@ -42,6 +42,10 @@ func geoEndpoint(t *testing.T) (port string) {
 			case <-time.After(3 * time.Second):
 			}
 			_, _ = io.WriteString(w, `{"ip":"198.51.100.23","country_iso":"DE","time_zone":"Europe/Berlin"}`)
+		case "/badip":
+			_, _ = io.WriteString(w, `{"ip":"<b>not an address</b>","country_iso":"DE","time_zone":"Europe/Berlin"}`)
+		case "/zoneip":
+			_, _ = io.WriteString(w, `{"ip":"fe80::1%eth0","country_iso":"DE","time_zone":"Europe/Berlin"}`)
 		case "/local":
 			_, _ = io.WriteString(w, `{"ip":"198.51.100.23","country_iso":"DE","time_zone":"Local"}`)
 		default:
@@ -257,6 +261,8 @@ func TestProxyCheckReasons(t *testing.T) {
 		{"endpoint not JSON", "http://" + creds + httpUp.Addr, geo + "/notjson", checkLookup},
 		{"endpoint without a country", "http://" + creds + httpUp.Addr, geo + "/nocountry", checkLookup},
 		{"endpoint with time zone Local", "http://" + creds + httpUp.Addr, geo + "/local", checkLookup},
+		{"endpoint gives no address", "http://" + creds + httpUp.Addr, geo + "/badip", checkLookup},
+		{"endpoint gives an address with a zone", "http://" + creds + httpUp.Addr, geo + "/zoneip", checkLookup},
 		{"tunnel opens, endpoint too slow", "http://" + creds + httpUp.Addr, geo + "/slow", checkLookup},
 		{"tunnel opens over socks5, endpoint too slow", "socks5://" + creds + socksUp.Addr, geo + "/slow", checkLookup},
 	}
