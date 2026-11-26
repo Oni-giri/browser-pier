@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -846,22 +847,69 @@ func TestTheLogHoldsNoSecret(t *testing.T) {
 	_, _ = f.n.SendTest(context.Background())
 }
 
+// deadFirst makes 10.255.255.1 an address that drops packets: a dial to
+// it waits for its deadline and counts the wait. Every other address is
+// dialled for real.
+func deadFirst(f *fixture) *atomic.Int64 {
+	var waited atomic.Int64
+	direct := netDial(true)
+	f.n.dialAddr = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if strings.HasPrefix(addr, "10.255.255.1:") {
+			start := time.Now()
+			<-ctx.Done()
+			waited.Store(int64(time.Since(start)))
+			return nil, ctx.Err()
+		}
+		return direct(ctx, network, addr)
+	}
+	return &waited
+}
+
 // TestADeadAddressDoesntUseTheWholeTime: of a host's addresses, one that
 // drops packets gets only its share of the POST's time, and the next is
-// still tried. (10.255.255.1 is routed nowhere here; where it fails at
-// once, the test passes without showing the split.)
+// still tried.
 func TestADeadAddressDoesntUseTheWholeTime(t *testing.T) {
 	rc := newReceiver(t)
 	_, port, _ := strings.Cut(strings.TrimPrefix(rc.URL, "http://"), ":")
 	f := newNotifier(t, Options{Lookup: stubLookup(map[string]string{"hooks.lan": "10.255.255.1,127.0.0.1"})})
 	f.set("http://hooks.lan:" + port + "/x")
-	f.n.timeout = 5 * time.Second
+	f.n.timeout, f.n.minShare = 2*time.Second, 100*time.Millisecond
+	waited := deadFirst(f)
 	start := time.Now()
 	status, err := f.n.SendTest(context.Background())
 	if err != nil || status != 200 {
 		t.Fatalf("SendTest = %d, %v after %s", status, err, time.Since(start))
 	}
-	if d := time.Since(start); d > 4*time.Second {
-		t.Errorf("took %s", d)
+	if w := time.Duration(waited.Load()); w < 800*time.Millisecond || w > 1200*time.Millisecond {
+		t.Errorf("the dead address had %s, want half of 2s", w)
+	}
+}
+
+// TestTheLookupCountsInTheTime: time spent resolving the host comes out
+// of the POST's time before the addresses share it, so a slow lookup
+// still leaves the second address its turn.
+func TestTheLookupCountsInTheTime(t *testing.T) {
+	rc := newReceiver(t)
+	_, port, _ := strings.Cut(strings.TrimPrefix(rc.URL, "http://"), ":")
+	table := stubLookup(map[string]string{"hooks.lan": "10.255.255.1,127.0.0.1"})
+	slow := func(ctx context.Context, host string) ([]netip.Addr, error) {
+		select {
+		case <-time.After(1200 * time.Millisecond):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return table(ctx, host)
+	}
+	f := newNotifier(t, Options{Lookup: slow})
+	f.set("http://hooks.lan:" + port + "/x")
+	f.n.timeout, f.n.minShare = 2*time.Second, 100*time.Millisecond
+	waited := deadFirst(f)
+	start := time.Now()
+	status, err := f.n.SendTest(context.Background())
+	if err != nil || status != 200 {
+		t.Fatalf("SendTest = %d, %v after %s (the dead address had %s)", status, err, time.Since(start), time.Duration(waited.Load()))
+	}
+	if w := time.Duration(waited.Load()); w > 600*time.Millisecond {
+		t.Errorf("the dead address had %s of the 800ms left", w)
 	}
 }

@@ -119,36 +119,58 @@ func checkURL(ctx context.Context, lookup Lookup, raw string) error {
 	return nil
 }
 
-// dialer connects to a webhook. The address rules are checked on the
+// dialFunc connects to one address.
+type dialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+
+// netDial connects to one address, checking the address rules on the
 // address actually dialled: a name can change what it resolves to between
-// saving and sending. No proxy: the check must see the real address.
-// budget is the time a connection may take in all, split between the
-// host's addresses: net/http dials with a context that may carry no
-// deadline of its own.
-func dialer(lookup Lookup, plain bool, budget func() time.Duration) func(ctx context.Context, network, addr string) (net.Conn, error) {
+// saving and sending.
+func netDial(plain bool) dialFunc {
+	d := &net.Dialer{Control: func(_, address string, _ syscall.RawConn) error {
+		ap, err := netip.ParseAddrPort(address)
+		if err != nil {
+			return errAddress
+		}
+		return allowed(ap.Addr(), plain)
+	}}
+	return d.DialContext
+}
+
+// dialPlan is how a webhook connection is made: budget is the time it may
+// take in all, the lookup included; each of the host's addresses gets its
+// share of what is left, at least minShare while that much is left; dial
+// connects to one address.
+type dialPlan struct {
+	budget   time.Duration
+	minShare time.Duration
+	dial     dialFunc
+}
+
+// minDialShare is the least time an address gets before the next is
+// tried, while that much time is left.
+const minDialShare = 2 * time.Second
+
+// dialer connects to a webhook. No proxy: the address check must see the
+// real address. net/http dials with a context that may carry no deadline
+// of its own, so the plan's budget is set before the lookup: time spent
+// resolving is time the addresses don't get.
+func dialer(lookup Lookup, plain bool, plan func() dialPlan) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(addr)
 		if err != nil {
 			return nil, err
 		}
+		p := plan()
+		ctx, cancel := context.WithTimeout(ctx, p.budget) // an earlier deadline stays
+		defer cancel()
 		addrs, err := resolve(ctx, lookup, host, plain)
 		if err != nil {
 			return nil, err
 		}
-		d := net.Dialer{Control: func(_, address string, _ syscall.RawConn) error {
-			ap, err := netip.ParseAddrPort(address)
-			if err != nil {
-				return errAddress
-			}
-			return allowed(ap.Addr(), plain)
-		}}
-		deadline, ok := ctx.Deadline()
-		if !ok {
-			deadline = time.Now().Add(budget())
-		}
+		deadline, _ := ctx.Deadline()
 		var last error
 		for i, a := range addrs {
-			c, err := dialOne(ctx, &d, network, net.JoinHostPort(a.String(), port), deadline, len(addrs)-i)
+			c, err := dialOne(ctx, p, network, net.JoinHostPort(a.String(), port), deadline, len(addrs)-i)
 			if err == nil {
 				return c, nil
 			}
@@ -161,18 +183,17 @@ func dialer(lookup Lookup, plain bool, budget func() time.Duration) func(ctx con
 	}
 }
 
-// minDialShare is the least time an address gets before the next is tried.
-const minDialShare = 2 * time.Second
-
 // dialOne dials one of a host's addresses with its share of the time left,
 // so an address that drops packets silently (often the IPv6 one) doesn't
-// use the whole POST's time and the next is still tried.
-func dialOne(ctx context.Context, d *net.Dialer, network, addr string, deadline time.Time, left int) (net.Conn, error) {
-	share := time.Until(deadline)
+// use the whole POST's time and the next is still tried. A share is never
+// more than the time left.
+func dialOne(ctx context.Context, p dialPlan, network, addr string, deadline time.Time, left int) (net.Conn, error) {
+	remaining := time.Until(deadline)
+	share := remaining
 	if left > 1 {
-		share = max(share/time.Duration(left), minDialShare)
+		share = min(max(remaining/time.Duration(left), p.minShare), remaining)
 	}
 	ctx, cancel := context.WithTimeout(ctx, share)
 	defer cancel()
-	return d.DialContext(ctx, network, addr)
+	return p.dial(ctx, network, addr)
 }

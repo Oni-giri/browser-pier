@@ -103,6 +103,10 @@ type Notifier struct {
 	newID   func() string
 	timeout time.Duration
 	retries []time.Duration
+	// minShare is minDialShare; dialAddr, if set, connects to one
+	// address instead of the real dialler (tests).
+	minShare time.Duration
+	dialAddr dialFunc
 
 	saveMu sync.Mutex // one change of the settings at a time
 	mu     sync.Mutex
@@ -127,7 +131,8 @@ func New(ctx context.Context, db *sql.DB, log *slog.Logger, o Options) (*Notifie
 		}
 	}
 	n := &Notifier{db: db, log: log, o: o, lookup: o.Lookup, queue: make(chan delivery, QueueSize),
-		now: time.Now, newID: newID, timeout: Timeout, retries: retries, cfg: cfg, flood: map[string][]time.Time{}}
+		now: time.Now, newID: newID, timeout: Timeout, retries: retries, minShare: minDialShare,
+		cfg: cfg, flood: map[string][]time.Time{}}
 	if n.lookup == nil {
 		n.lookup = systemLookup
 	}
@@ -136,10 +141,18 @@ func New(ctx context.Context, db *sql.DB, log *slog.Logger, o Options) (*Notifie
 }
 
 func (n *Notifier) client(plain bool) *http.Client {
+	direct := netDial(plain)
+	plan := func() dialPlan {
+		p := dialPlan{budget: n.timeout, minShare: n.minShare, dial: direct}
+		if n.dialAddr != nil {
+			p.dial = n.dialAddr
+		}
+		return p
+	}
 	return &http.Client{
 		Transport: &http.Transport{
 			Proxy:             nil, // never HTTP_PROXY: the address check must see the real address
-			DialContext:       dialer(n.lookup, plain, func() time.Duration { return n.timeout }),
+			DialContext:       dialer(n.lookup, plain, plan),
 			DisableKeepAlives: true,
 		},
 		// Redirects aren't followed: a 3xx is final.
