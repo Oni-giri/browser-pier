@@ -74,6 +74,9 @@ const SignatureHeader = "BrowserPier-Signature"
 // ErrNoWebhook is Send test with no webhook saved.
 var ErrNoWebhook = errors.New("no webhook is set")
 
+// ErrBusy is Send test while Workers POSTs are already under way.
+var ErrBusy = errors.New("the webhook is busy sending events")
+
 // Options are what the notifier needs from the server's configuration.
 type Options struct {
 	// PublicURL is BROWSERPIER_PUBLIC_URL; when set, links are built on it
@@ -103,6 +106,9 @@ type Notifier struct {
 	newID   func() string
 	timeout time.Duration
 	retries []time.Duration
+	// slots holds one token per POST under way, events' and Send test's
+	// alike: never more than Workers at once.
+	slots chan struct{}
 	// minShare is minDialShare; dialAddr, if set, connects to one
 	// address instead of the real dialler (tests).
 	minShare time.Duration
@@ -131,7 +137,7 @@ func New(ctx context.Context, db *sql.DB, log *slog.Logger, o Options) (*Notifie
 		}
 	}
 	n := &Notifier{db: db, log: log, o: o, lookup: o.Lookup, queue: make(chan delivery, QueueSize),
-		now: time.Now, newID: newID, timeout: Timeout, retries: retries, minShare: minDialShare,
+		now: time.Now, newID: newID, timeout: Timeout, retries: retries, slots: make(chan struct{}, Workers), minShare: minDialShare,
 		cfg: cfg, flood: map[string][]time.Time{}}
 	if n.lookup == nil {
 		n.lookup = systemLookup
@@ -287,8 +293,7 @@ func (n *Notifier) giveFloodSlot(profile string) {
 }
 
 // deliver sends one event: a network error, a timeout or a 5xx is tried
-// again after 2 s and after 10 s; anything else is final. Before each try
-// it checks the webhook is the same and, for a handoff, that it is open.
+// again after 2 s and after 10 s; anything else is final.
 func (n *Notifier) deliver(ctx context.Context, d delivery) {
 	for try := 1; try <= 1+len(n.retries); try++ {
 		if try > 1 {
@@ -300,39 +305,49 @@ func (n *Notifier) deliver(ctx context.Context, d delivery) {
 			case <-t.C:
 			}
 		}
-		if ctx.Err() != nil {
-			return // shutting down: what is left is dropped, quietly
-		}
-		cfg, gen := n.current()
-		if gen != d.gen || cfg.URL == "" {
-			n.log.Info("webhook event not sent: the webhook changed or was removed", "event", d.kind, "id", d.id, "profile", d.profile, "try", try)
-			return
-		}
-		// Before every try, the first included: an event that waited in
-		// the queue behind a slow webhook may come out after its handoff
-		// ended, and a dead link helps nobody.
-		if d.live != nil && !d.live() {
-			n.log.Info("webhook event not sent: the handoff has ended", "event", d.kind, "id", d.id, "profile", d.profile, "try", try)
-			return
-		}
-		status, err := n.post(ctx, cfg, d.body)
-		host := hostOf(cfg.URL)
-		switch {
-		case err == nil && status >= 200 && status < 300:
-			n.log.Info("webhook event delivered", "event", d.kind, "id", d.id, "profile", d.profile, "host", host, "status", status, "try", try)
-			return
-		case err == nil && (status < 500 || status > 599):
-			n.log.Warn("webhook refused the event", "event", d.kind, "id", d.id, "profile", d.profile, "host", host, "status", status, "try", try)
-			return
-		case err == nil:
-			n.log.Warn("webhook failed", "event", d.kind, "id", d.id, "profile", d.profile, "host", host, "status", status, "try", try)
-		default:
-			n.log.Warn("webhook unreachable", "event", d.kind, "id", d.id, "profile", d.profile, "host", host, "err", err.Error(), "try", try)
-		}
-		if ctx.Err() != nil {
-			return
+		if ctx.Err() != nil || n.attempt(ctx, d, try) {
+			return // shutting down, what is left is dropped quietly; or final
 		}
 	}
+}
+
+// attempt makes one try of a delivery and reports whether it was final.
+// It takes a POST slot first, then checks the webhook is the same and,
+// for a handoff, that it is open: a slot can take a while to free up.
+func (n *Notifier) attempt(ctx context.Context, d delivery, try int) bool {
+	select {
+	case n.slots <- struct{}{}:
+	case <-ctx.Done():
+		return true
+	}
+	defer func() { <-n.slots }()
+	cfg, gen := n.current()
+	if gen != d.gen || cfg.URL == "" {
+		n.log.Info("webhook event not sent: the webhook changed or was removed", "event", d.kind, "id", d.id, "profile", d.profile, "try", try)
+		return true
+	}
+	// Before every try, the first included: an event that waited in the
+	// queue behind a slow webhook may come out after its handoff ended,
+	// and a dead link helps nobody.
+	if d.live != nil && !d.live() {
+		n.log.Info("webhook event not sent: the handoff has ended", "event", d.kind, "id", d.id, "profile", d.profile, "try", try)
+		return true
+	}
+	status, err := n.post(ctx, cfg, d.body)
+	host := hostOf(cfg.URL)
+	switch {
+	case err == nil && status >= 200 && status < 300:
+		n.log.Info("webhook event delivered", "event", d.kind, "id", d.id, "profile", d.profile, "host", host, "status", status, "try", try)
+		return true
+	case err == nil && (status < 500 || status > 599):
+		n.log.Warn("webhook refused the event", "event", d.kind, "id", d.id, "profile", d.profile, "host", host, "status", status, "try", try)
+		return true
+	case err == nil:
+		n.log.Warn("webhook failed", "event", d.kind, "id", d.id, "profile", d.profile, "host", host, "status", status, "try", try)
+	default:
+		n.log.Warn("webhook unreachable", "event", d.kind, "id", d.id, "profile", d.profile, "host", host, "err", err.Error(), "try", try)
+	}
+	return false
 }
 
 // post sends one signed POST and returns the answer's status; its body
@@ -366,11 +381,19 @@ func (n *Notifier) post(ctx context.Context, cfg config, body []byte) (int, erro
 }
 
 // SendTest posts a test event once, with no retry, and returns the
-// receiver's status or a short error.
+// receiver's status or a short error. It shares the events' POST slots
+// and doesn't wait for one: with Workers POSTs under way it is ErrBusy.
 func (n *Notifier) SendTest(ctx context.Context) (int, error) {
 	cfg, _ := n.current()
 	if cfg.URL == "" {
 		return 0, ErrNoWebhook
+	}
+	select {
+	case n.slots <- struct{}{}:
+		defer func() { <-n.slots }()
+	default:
+		n.log.Warn("webhook test not sent: the webhook is busy", "host", hostOf(cfg.URL))
+		return 0, ErrBusy
 	}
 	p := testPayload()
 	p.ID, p.Event, p.Time = n.newID(), Test, n.now().UTC().Format(time.RFC3339)

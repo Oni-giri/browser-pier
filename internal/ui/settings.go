@@ -419,6 +419,8 @@ func (u *UI) testNotify(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, notify.ErrNoWebhook):
 		done(w, r, "/settings#notify", "No webhook is set. Save a URL first", true)
+	case errors.Is(err, notify.ErrBusy):
+		done(w, r, "/settings#notify", "The webhook is busy sending events. Try again in a moment", true)
 	case err != nil:
 		done(w, r, "/settings#notify", "The test didn't arrive: "+err.Error(), true)
 	case status < 200 || status > 299:

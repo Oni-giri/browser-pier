@@ -913,3 +913,71 @@ func TestTheLookupCountsInTheTime(t *testing.T) {
 		t.Errorf("the dead address had %s of the 800ms left", w)
 	}
 }
+
+// TestSendTestSharesTheWorkersSlots: Send test is one of the 4 POSTs under
+// way at most: with every worker in a POST it is refused at once, and
+// tests sent together don't pass 4 either.
+func TestSendTestSharesTheWorkersSlots(t *testing.T) {
+	f := newNotifier(t, Options{})
+	release := make(chan struct{})
+	rc := newReceiver(t)
+	rc.hook = func(int, http.ResponseWriter, *http.Request) bool { <-release; return false }
+	f.set(rc.URL + "/x")
+	f.n.timeout = time.Minute
+	f.run()
+	for range Workers {
+		f.n.HandoffExpired(testHandoff)
+	}
+	for range Workers {
+		select {
+		case <-rc.arrived:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the workers' POSTs didn't arrive")
+		}
+	}
+	start := time.Now()
+	if _, err := f.n.SendTest(context.Background()); !errors.Is(err, ErrBusy) {
+		t.Errorf("Send test with every worker busy: %v", err)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("Send test waited %s", d)
+	}
+	close(release)
+	time.Sleep(200 * time.Millisecond)
+	if n := len(rc.posts()); n != Workers {
+		t.Fatalf("%d POSTs, want %d", n, Workers)
+	}
+
+	// Tests sent together: at most 4 under way, the rest busy.
+	g := newNotifier(t, Options{})
+	hold := make(chan struct{})
+	rc2 := newReceiver(t)
+	rc2.hook = func(int, http.ResponseWriter, *http.Request) bool { <-hold; return false }
+	g.set(rc2.URL + "/x")
+	g.n.timeout = time.Minute
+	var wg sync.WaitGroup
+	var busy atomic.Int32
+	for range Workers + 3 {
+		wg.Go(func() {
+			if _, err := g.n.SendTest(context.Background()); errors.Is(err, ErrBusy) {
+				busy.Add(1)
+			}
+		})
+	}
+	for range Workers {
+		select {
+		case <-rc2.arrived:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the tests' POSTs didn't arrive")
+		}
+	}
+	time.Sleep(200 * time.Millisecond)
+	if n := len(rc2.posts()); n != Workers {
+		t.Errorf("%d tests under way, want %d", n, Workers)
+	}
+	close(hold)
+	wg.Wait()
+	if busy.Load() != 3 {
+		t.Errorf("%d tests refused as busy, want 3", busy.Load())
+	}
+}
