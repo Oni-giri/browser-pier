@@ -181,6 +181,12 @@ type live struct {
 	// stops counts the stops begun, failed ones included: a Take control
 	// that waited across one gives up (TakeControlGen).
 	stops uint64
+	// takeCtx is for the person's operations admitted under the takeover
+	// in progress (HumanInput): a child of opCtx, cancelled the moment
+	// its hand-back begins, so nothing admitted for it can reach the
+	// browser once the clipboard is being emptied.
+	takeCtx    context.Context
+	takeCancel context.CancelFunc
 	// conns are the agents' open connections to the browser.
 	conns map[*conn]struct{}
 	// lastActivity is when an agent or person last used the browser.
@@ -955,6 +961,7 @@ func (m *Manager) end(l *live, lastLog string, final func(*Session)) {
 	if m.live[s.Profile] == l {
 		delete(m.live, s.Profile)
 	}
+	m.inputsDone.Broadcast() // a hand-back waiting on this session's input
 	m.secrets.Forget(s.ID)
 	l.disconnectLocked()
 	l.cancelAllLocked(ErrStopping)

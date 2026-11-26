@@ -883,3 +883,96 @@ func TestHandBackWarningsKeepTheBrowsersWordsOut(t *testing.T) {
 		t.Errorf("want the lift and the emptying logged by status:\n%s", out)
 	}
 }
+
+// An operation the person's live view admitted (HumanInput) and that
+// paused before sending anything can't reach the browser once their
+// control has begun to end: its context ends with the hand-back's start.
+// Agents aren't let in until it has returned, and nothing it sends lands
+// after (or before) the clipboard is emptied (PROJ-196).
+func TestAdmittedInputCantOutliveTheHandBack(t *testing.T) {
+	f := newFixture(t)
+	var mu sync.Mutex
+	var calls []string
+	note := func(what string) http.HandlerFunc {
+		return func(w http.ResponseWriter, _ *http.Request) {
+			mu.Lock()
+			calls = append(calls, what)
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	mux.HandleFunc("POST /input/clipboard", note("set"))
+	mux.HandleFunc("POST /input/release", note("lift"))
+	mux.HandleFunc("DELETE /input/clipboard", note("empty"))
+	f.rt.Control = mux
+	s := f.start(f.m)
+	gen, err := f.m.TakeControlGen(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A clipboard set, admitted, then held up before it posts.
+	ctx, done, err := f.m.HumanInput(s.ID, gen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resume := make(chan struct{})
+	var resumeOnce sync.Once
+	goOn := func() { resumeOnce.Do(func() { close(resume) }) }
+	defer goOn()
+	sent := make(chan error, 1)
+	go func() {
+		defer done()
+		<-resume
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://control/input/clipboard", strings.NewReader(`{"text":"a secret"}`))
+		resp, err := controlClient(f.m.layout.ControlSocket("google")).Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+		sent <- err
+	}()
+	released := make(chan struct{})
+	go func() { f.m.ReleaseControl(s.ID); close(released) }()
+	for {
+		f.m.mu.Lock()
+		releasing := f.m.findLocked(s.ID).releasing
+		f.m.mu.Unlock()
+		if releasing {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if _, done, err := f.m.AgentInput(context.Background(), s.ID); !errors.Is(err, ErrHumanDriving) {
+		if err == nil {
+			done()
+		}
+		t.Fatalf("agent input while the admitted input is still alive = %v", err)
+	}
+	select {
+	case <-released:
+		t.Fatal("handed back with the admitted input still alive")
+	default:
+	}
+	goOn() // it goes on
+	if err := <-sent; err == nil {
+		t.Error("the admitted input reached the browser after the hand-back began")
+	}
+	select {
+	case <-released:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the hand-back never finished")
+	}
+	mu.Lock()
+	got := strings.Join(calls, " ")
+	mu.Unlock()
+	if got != "lift empty" {
+		t.Errorf("the browser got %q, want only the hand-back's lift and emptying", got)
+	}
+	if _, done, err := f.m.AgentInput(context.Background(), s.ID); err != nil {
+		t.Fatalf("agent input after = %v", err)
+	} else {
+		done()
+	}
+}

@@ -132,6 +132,7 @@ func (m *Manager) TakeControlGen(id string) (gen uint64, err error) {
 	l.generation++
 	l.humanGen = l.generation
 	gen = l.generation
+	l.takeCtx, l.takeCancel = context.WithCancel(l.opCtx)
 	l.lastActivity = now
 	if breakOff {
 		// New agent input and page calls are refused from now on
@@ -189,6 +190,7 @@ func (m *Manager) untakeLocked(l *live, gen uint64) {
 		return
 	}
 	l.human = false
+	l.takeCancel()
 	if m.live[l.sess.Profile] == l {
 		m.regateLocked(l)
 	}
@@ -207,9 +209,11 @@ var ErrNotInControl = errors.New("you don't have control of this browser")
 // ReleaseControl waits for input under way, so none lands (text put on
 // the clipboard, say) after it has emptied the clipboard.
 //
-// Send the input with ctx: it ends as the session does, and the session
-// lets go of its profile only once done is called, so the input can't
-// reach the profile's next browser, which listens on the same socket.
+// Do all of it with ctx, from admission on: it ends the moment the
+// takeover's hand-back begins (or the session ends), so whatever the
+// operation hasn't sent by then never reaches the browser. The hand-back
+// lets agents in, and the session lets go of its profile, only once done
+// is called.
 func (m *Manager) HumanInput(id string, gen uint64) (ctx context.Context, done func(), err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -219,7 +223,7 @@ func (m *Manager) HumanInput(id string, gen uint64) (ctx context.Context, done f
 	}
 	l.lastActivity = m.now()
 	l.humanInputs++
-	return l.opCtx, sync.OnceFunc(func() {
+	return l.takeCtx, sync.OnceFunc(func() {
 		m.mu.Lock()
 		l.humanInputs--
 		m.inputsDone.Broadcast()
@@ -312,8 +316,26 @@ func (m *Manager) releaseLocked(l *live, id string) {
 		return
 	}
 	l.releasing = true
-	if !m.waitBoundedLocked(inputWait, func() bool { return l.humanInputs > 0 }) {
-		m.log.Warn("a person's control ended with their input still under way after "+inputWait.String()+"; handing back all the same", "session", id)
+	// What the person's live view still has under way breaks off now: it
+	// can't reach the browser any more, and returns at once. It is waited
+	// for all the same, before anything else, so none is left alive
+	// once agents are let in.
+	l.takeCancel()
+	if !m.waitBoundedLocked(inputWait, func() bool { return l.humanInputs > 0 && m.findLocked(id) == l }) {
+		// Something admitted never said done. Rather than hand the
+		// browser back with it alive, the session ends: its end waits
+		// (with its own backstop) and lets go of the profile.
+		m.log.Error("a person's input was still under way "+inputWait.String()+" after their control began to end; stopping the browser rather than handing it back", "session", id)
+		m.spawn(func() {
+			ctx, cancel := context.WithTimeout(m.ctx, stopTimeout+time.Minute)
+			defer cancel()
+			if _, err := m.Stop(ctx, id); err != nil {
+				m.log.Error("stopping the browser", "session", id, "err", err)
+			}
+		})
+		for l.humanInputs > 0 && m.findLocked(id) == l {
+			m.inputsDone.Wait()
+		}
 	}
 	profile := l.sess.Profile
 	// Let go of whatever key or button the person still holds, so whoever
@@ -365,9 +387,11 @@ func settle(ctx context.Context) bool {
 	}
 }
 
-// inputWait bounds how long a hand-back waits for the person's input
-// under way: each has its own deadline well within it (controlWait).
-const inputWait = 30 * time.Second
+// inputWait is how long a hand-back waits for the person's input under
+// way, already cancelled, before it gives up on handing back and stops
+// the browser instead. A cancelled call returns at once: only one that
+// never says done (a bug) gets there.
+const inputWait = time.Minute
 
 // emptyClipboard empties a running browser's clipboard, a person's
 // control ending (PROJ-194). A failure is logged without what the
