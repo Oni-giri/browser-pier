@@ -59,6 +59,9 @@ type keyboardMap struct {
 
 func readKeyboardMap(kb keyboard) (keyboardMap, error) {
 	first, count := kb.keycodes()
+	if first < 8 || count < 1 || int(first)+count > 256 {
+		return keyboardMap{}, fmt.Errorf("the X server has keycodes %d to %d", first, int(first)+count-1)
+	}
 	perKey, syms, err := kb.mapping(first, count)
 	if err != nil {
 		return keyboardMap{}, err
@@ -97,18 +100,14 @@ func (m keyboardMap) has(sym uint32) bool {
 	return false
 }
 
-// spare lists the keycodes with no keysyms that no modifier uses. In the
-// image's map there are 19: evdev's codes (plus 8) of keys the US layout
-// doesn't bind. Chromium puts a character typed on one into the page as
-// text; the keydown, if there is one, has key "\x00" and an international
-// or input-method key's code (IntlRo, IntlYen, Lang5) or none, or is
-// "Process" (229), so the key itself does nothing. The Docker test
-// TestVisualTypesNonASCII checks that.
+// spare lists the keycodes with no keysyms that no modifier uses and
+// that Chromium reads as no key that acts (quietKeycode). In the image's
+// map that is 16 of the 19 unbound keycodes.
 func (m keyboardMap) spare() []byte {
 	var out []byte
 	for i := range m.count() {
 		k := m.first + byte(i)
-		if m.mods[k] {
+		if m.mods[k] || !quietKeycode(k) {
 			continue
 		}
 		if !slices.ContainsFunc(m.key(k), func(s uint32) bool { return s != 0 }) {
@@ -116,6 +115,39 @@ func (m keyboardMap) spare() []byte {
 		}
 	}
 	return out
+}
+
+// quietKeycode reports whether a keycode is one Chromium reads as no key
+// that acts, whatever character it types. Chromium gives a key event the
+// DOM code its table has for the keycode, and, when the keysym has no key
+// code of its own (as a Unicode one hasn't), the US layout's key code for
+// it, from a table of keycodes below 136. An unbound key can still be an
+// F-key there (197 is F19, 202 F24, in the image's map), so a binding on
+// it would press F19. The quiet ones: below 136, the few that are no key
+// (8, 103, 120) or an input-method or international key (93 Lang5,
+// 97 IntlRo, 132 IntlYen); from 136 up, every keycode that Chromium's
+// table doesn't name. Source: Chromium's
+// ui/events/keycodes/dom/dom_code_data.inc (blob 3c5ef403df15) and
+// keyboard_code_conversion_x.cc (kHardwareKeycodeMap, blob eae62840c180),
+// main of 2026-11-26; TestVisualTypesNonASCII checks the page sees none.
+func quietKeycode(k byte) bool {
+	if k < 136 {
+		return k == 8 || k == 93 || k == 97 || k == 103 || k == 120 || k == 132
+	}
+	return !chromiumKeys[k]
+}
+
+// chromiumKeys are the keycodes from 136 up that dom_code_data.inc names:
+// browser, media, launch, editing and power keys, F13 to F24.
+var chromiumKeys = map[byte]bool{}
+
+func init() {
+	for _, k := range []byte{136, 137, 139, 140, 141, 142, 143, 144, 145, 146, 148, 150, 151, 152, 158, 160,
+		163, 164, 166, 167, 169, 171, 172, 173, 174, 175, 176, 177, 179, 180, 181, 182, 187, 188, 189, 190,
+		191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 209, 212, 214, 215, 216, 217, 218, 225,
+		232, 233, 235, 236, 237, 238, 239, 240, 241, 242, 243, 252} {
+		chromiumKeys[k] = true
+	}
 }
 
 // runeKeysym is the X keysym that types r: Latin-1's own below U+0100,
@@ -210,6 +242,7 @@ type keyRun struct {
 // binding is spare keys bound to keysyms; restore puts them back.
 type binding struct {
 	kb     keyboard
+	open   func() (keyboard, error)
 	perKey int
 	runs   []keyRun
 }
@@ -218,12 +251,14 @@ type binding struct {
 // is needed, and an upper-case letter isn't taken for its lower case),
 // then reads them back: a refused change shows as an error there, and
 // the reply proves the server has the new map before any key is pressed.
-func bind(kb keyboard, m keyboardMap, keys []byte, syms []uint32) (*binding, error) {
+// open opens a new connection, which restore uses: after an X error, kb's
+// may be out of step.
+func bind(kb keyboard, open func() (keyboard, error), m keyboardMap, keys []byte, syms []uint32) (*binding, error) {
 	if len(syms) > len(keys) {
 		return nil, errNoSpareKeys
 	}
 	perKey := m.perKey
-	b := &binding{kb: kb, perKey: perKey}
+	b := &binding{kb: kb, open: open, perKey: perKey}
 	for i, sym := range syms {
 		k := keys[i]
 		after := make([]uint32, perKey)
@@ -245,23 +280,23 @@ func bind(kb keyboard, m keyboardMap, keys []byte, syms []uint32) (*binding, err
 			return nil, errors.Join(err, b.restore())
 		}
 	}
-	if err := b.check(func(r keyRun) []uint32 { return r.after }); err != nil {
+	if err := check(kb, perKey, b.runs, func(r keyRun) []uint32 { return r.after }); err != nil {
 		return nil, errors.Join(err, b.restore())
 	}
 	return b, nil
 }
 
-// check reads every run back and compares each key's first two keysyms,
-// which type, with want's. (The server fills in the rest: XKB copies them
-// to the second group, say.)
-func (b *binding) check(want func(keyRun) []uint32) error {
-	for _, r := range b.runs {
-		perKey, got, err := b.kb.mapping(r.first, len(r.after)/b.perKey)
+// check reads runs back and compares each key's first two keysyms, which
+// type, with want's. (The server fills in the rest: XKB copies them to
+// the second group, say.)
+func check(kb keyboard, perKey int, runs []keyRun, want func(keyRun) []uint32) error {
+	for _, r := range runs {
+		got, err := mappingOf(kb, perKey, r)
 		if err != nil {
 			return err
 		}
 		w := want(r)
-		if perKey != b.perKey || len(got) != len(w) {
+		if len(got) != len(w) {
 			return fmt.Errorf("the keyboard map changed shape at keycode %d", r.first)
 		}
 		for i := 0; i < len(w); i += perKey {
@@ -273,16 +308,32 @@ func (b *binding) check(want func(keyRun) []uint32) error {
 	return nil
 }
 
-// restore puts the keys back as they were, and reads them back.
-func (b *binding) restore() error {
-	var errs []error
-	for _, r := range b.runs {
-		errs = append(errs, b.kb.change(r.first, b.perKey, r.before))
+func mappingOf(kb keyboard, perKey int, r keyRun) ([]uint32, error) {
+	n, got, err := kb.mapping(r.first, len(r.after)/perKey)
+	if err == nil && n != perKey {
+		err = fmt.Errorf("the keyboard map changed shape at keycode %d", r.first)
 	}
-	if err := errors.Join(errs...); err != nil {
+	return got, err
+}
+
+// restore puts the keys back as they were, over a new connection, and
+// reads them back.
+func (b *binding) restore() error { return restoreRuns(b.open, b.perKey, b.runs) }
+
+// restoreRuns puts runs' keys back as they were before, over a new
+// connection, and reads them back.
+func restoreRuns(open func() (keyboard, error), perKey int, runs []keyRun) error {
+	kb, err := open()
+	if err != nil {
 		return err
 	}
-	return b.check(func(r keyRun) []uint32 { return r.before })
+	defer func() { _ = kb.Close() }()
+	for _, r := range runs {
+		if err := kb.change(r.first, perKey, r.before); err != nil {
+			return err
+		}
+	}
+	return check(kb, perKey, runs, func(r keyRun) []uint32 { return r.before })
 }
 
 // xKeyboard is a minimal X11 client over the display's Unix socket: the
@@ -293,6 +344,13 @@ func (b *binding) restore() error {
 type xKeyboard struct {
 	conn           net.Conn
 	minKey, maxKey byte
+	// seq is the last request's sequence number, which the server's
+	// replies and errors carry (its low 16 bits).
+	seq uint16
+	// err, once set, is why the connection can't be trusted any more: an
+	// X error (for this request or an earlier one, ChangeKeyboardMapping
+	// having no reply) or a broken exchange. Every later call returns it.
+	err error
 }
 
 // xTimeout bounds one exchange with the X server.
@@ -335,8 +393,8 @@ func (x *xKeyboard) setup() error {
 			return errors.New("the X server's setup reply is short")
 		}
 		x.minKey, x.maxKey = body[26], body[27]
-		if x.maxKey < x.minKey {
-			return errors.New("the X server has no keycodes")
+		if x.minKey < 8 || x.maxKey < x.minKey {
+			return fmt.Errorf("the X server has keycodes %d to %d", x.minKey, x.maxKey)
 		}
 		return nil
 	case 0:
@@ -347,56 +405,99 @@ func (x *xKeyboard) setup() error {
 
 func (x *xKeyboard) Close() error { return x.conn.Close() }
 
-func (x *xKeyboard) keycodes() (byte, int) { return x.minKey, int(x.maxKey-x.minKey) + 1 }
+func (x *xKeyboard) keycodes() (byte, int) { return x.minKey, int(x.maxKey) - int(x.minKey) + 1 }
 
-// send writes one request; with reply, it returns the reply, skipping
-// events (every client gets MappingNotify) and failing on an X error,
-// which comes before the reply to any later request.
-func (x *xKeyboard) send(req []byte, reply bool) ([]byte, error) {
+// fail marks the connection as untrustworthy, keeping the first reason.
+func (x *xKeyboard) fail(err error) error {
+	if x.err == nil {
+		x.err = err
+	}
+	return x.err
+}
+
+// send writes one request and returns its sequence number.
+func (x *xKeyboard) send(req []byte) (uint16, error) {
+	if x.err != nil {
+		return 0, x.err
+	}
 	_ = x.conn.SetDeadline(time.Now().Add(xTimeout))
 	if _, err := x.conn.Write(req); err != nil {
-		return nil, err
+		return 0, x.fail(err)
 	}
-	for reply {
+	x.seq++
+	return x.seq, nil
+}
+
+// await reads until the reply to request seq, skipping events (every
+// client gets MappingNotify) and any stale reply. An X error, for seq or
+// for an earlier request, fails it and every later call; one for an
+// earlier request is read past, so the stream stays in step.
+func (x *xKeyboard) await(seq uint16) ([]byte, error) {
+	for {
 		b := make([]byte, 32)
 		if _, err := io.ReadFull(x.conn, b); err != nil {
-			return nil, err
+			return nil, x.fail(err)
 		}
+		got := xOrder.Uint16(b[2:4])
 		switch b[0] {
 		case 0:
-			return nil, fmt.Errorf("the X server sent error %d for request %d", b[1], b[10])
+			err := x.fail(fmt.Errorf("the X server sent error %d for request %d", b[1], b[10]))
+			if got == seq {
+				return nil, err
+			}
 		case 1:
 			n := xOrder.Uint32(b[4:8])
 			if n > 1<<16 {
-				return nil, fmt.Errorf("the X server sent a %d-word reply", n)
+				return nil, x.fail(fmt.Errorf("the X server sent a %d-word reply", n))
 			}
 			more := make([]byte, int(n)*4)
 			if _, err := io.ReadFull(x.conn, more); err != nil {
-				return nil, err
+				return nil, x.fail(err)
+			}
+			if got != seq {
+				continue // a stale reply
+			}
+			if x.err != nil {
+				return nil, x.err
 			}
 			return append(b, more...), nil
 		case 35, 35 | 0x80:
 			// A GenericEvent, longer than 32 bytes; none is selected,
 			// but skipping one keeps the stream in step.
-			if _, err := io.CopyN(io.Discard, x.conn, int64(xOrder.Uint32(b[4:8]))*4); err != nil {
-				return nil, err
+			n := xOrder.Uint32(b[4:8])
+			if n > 1<<16 {
+				return nil, x.fail(fmt.Errorf("the X server sent a %d-word event", n))
+			}
+			if _, err := io.CopyN(io.Discard, x.conn, int64(n)*4); err != nil {
+				return nil, x.fail(err)
 			}
 		}
 	}
-	return nil, nil
+}
+
+// call sends a request and returns its reply.
+func (x *xKeyboard) call(req []byte) ([]byte, error) {
+	seq, err := x.send(req)
+	if err != nil {
+		return nil, err
+	}
+	return x.await(seq)
 }
 
 func (x *xKeyboard) mapping(first byte, count int) (int, []uint32, error) {
-	if count < 1 || int(first)+count > 256 {
+	if first < 8 || count < 1 || count > 248 || int(first)+count > 256 {
 		return 0, nil, fmt.Errorf("keycodes %d to %d: out of range", first, int(first)+count-1)
 	}
 	// GetKeyboardMapping (101).
-	b, err := x.send([]byte{101, 0, 2, 0, first, byte(count), 0, 0}, true) //nolint:gosec // count is checked above
+	b, err := x.call([]byte{101, 0, 2, 0, first, byte(count), 0, 0}) //nolint:gosec // count is checked above
 	if err != nil {
 		return 0, nil, err
 	}
 	perKey := int(b[1])
-	syms := make([]uint32, (len(b)-32)/4)
+	if perKey < 1 || len(b)-32 != 4*count*perKey {
+		return 0, nil, x.fail(fmt.Errorf("the X server sent %d bytes of keysyms for %d keys of %d", len(b)-32, count, perKey))
+	}
+	syms := make([]uint32, count*perKey)
 	for i := range syms {
 		syms[i] = xOrder.Uint32(b[32+4*i:])
 	}
@@ -405,13 +506,16 @@ func (x *xKeyboard) mapping(first byte, count int) (int, []uint32, error) {
 
 func (x *xKeyboard) modifiers() ([]byte, error) {
 	// GetModifierMapping (119): 8 modifiers of b[1] keycodes each.
-	b, err := x.send([]byte{119, 0, 1, 0}, true)
+	b, err := x.call([]byte{119, 0, 1, 0})
 	if err != nil {
 		return nil, err
 	}
-	n := min(8*int(b[1]), len(b)-32)
+	n := 8 * int(b[1])
+	if len(b)-32 != n {
+		return nil, x.fail(fmt.Errorf("the X server sent %d bytes of modifier keys, want %d", len(b)-32, n))
+	}
 	var out []byte
-	for _, k := range b[32 : 32+n] {
+	for _, k := range b[32:] {
 		if k != 0 {
 			out = append(out, k)
 		}
@@ -421,17 +525,18 @@ func (x *xKeyboard) modifiers() ([]byte, error) {
 
 func (x *xKeyboard) change(first byte, perKey int, syms []uint32) error {
 	n := len(syms) / max(perKey, 1)
-	if perKey < 1 || perKey > 255 || n < 1 || n*perKey != len(syms) || int(first)+n > 256 {
+	if first < 8 || perKey < 1 || perKey > 255 || n < 1 || n*perKey != len(syms) || int(first)+n > 256 {
 		return fmt.Errorf("%d keysyms, %d a key, from keycode %d: not whole keys in range", len(syms), perKey, first)
 	}
-	// ChangeKeyboardMapping (100), which has no reply.
+	// ChangeKeyboardMapping (100), which has no reply: an error comes
+	// before the reply to a later request (await).
 	req := make([]byte, 8, 8+4*len(syms))
 	req[0], req[1] = 100, byte(n)                  //nolint:gosec // n and perKey are checked above
 	xOrder.PutUint16(req[2:], uint16(2+len(syms))) //nolint:gosec // at most 248 keys of 255 keysyms
 	req[4], req[5] = first, byte(perKey)
-	for _, s := range syms {
-		req = xOrder.AppendUint32(req, s)
+	for _, sym := range syms {
+		req = xOrder.AppendUint32(req, sym)
 	}
-	_, err := x.send(req, false)
+	_, err := x.send(req)
 	return err
 }

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"time"
 )
 
 // liveInput feeds a person's mouse and keyboard from the live view to the
@@ -37,7 +38,7 @@ type ioWriteCloser = io.WriteCloser
 func startXdotool() (ioWriteCloser, error) {
 	cmd := exec.Command("xdotool", "-")
 	cmd.Env = append(os.Environ(), "DISPLAY="+display)
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = withheld("xdotool")
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -46,8 +47,40 @@ func startXdotool() (ioWriteCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	go func() { <-exited }()
-	return in, nil
+	done := make(chan struct{})
+	go func() { <-exited; close(done) }()
+	return xdotoolStdin{in, done, cmd.Process}, nil
+}
+
+// xdotoolStdin is the live xdotool's input. Closing it waits until
+// xdotool has run every command written and exited (killing it after
+// 2 s), so drain can tell nothing written is still queued.
+type xdotoolStdin struct {
+	io.WriteCloser
+	exited <-chan struct{}
+	proc   *os.Process
+}
+
+func (x xdotoolStdin) Close() error {
+	err := x.WriteCloser.Close()
+	select {
+	case <-x.exited:
+	case <-time.After(2 * time.Second):
+		_ = x.proc.Kill()
+		<-x.exited
+	}
+	return err
+}
+
+// drain returns once xdotool has run every command sent so far, with
+// li.mu held: it ends the xdotool process, and the next event starts a
+// new one. Typing with a binding (typeMapped) drains first, so a queued
+// key of the person's can't bind a keycode of its own meanwhile.
+func (li *liveInput) drain() {
+	if li.stdin != nil {
+		_ = li.stdin.Close()
+		li.stdin = nil
+	}
 }
 
 // event is one input from a viewer.

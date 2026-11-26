@@ -49,6 +49,11 @@ type visual struct {
 	keyboard func(context.Context) (keyboard, error)
 	settle   time.Duration
 	log      *slog.Logger
+	// leftover is keys a type bound and couldn't put back (with mu
+	// held): the next type puts them back first. The entrypoint lives as
+	// long as the display, so memory is enough.
+	leftover       []keyRun
+	leftoverPerKey int
 }
 
 // maxTypeLen caps one type action; at human pace, which takes about a
@@ -462,6 +467,12 @@ func (v *visual) typeText(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	text := []rune(t.Text)
+	if i := slices.Index(text, utf8.RuneError); i >= 0 {
+		// It stands for what didn't decode (an unpaired surrogate in the
+		// JSON, say), not for a character anyone meant.
+		http.Error(w, fmt.Sprintf("text: character %d is U+FFFD, which stands for invalid input; it isn't typed", i+1), http.StatusBadRequest)
+		return
+	}
 	if i := untypeable(text); i > 0 {
 		// xdotool would leave it out without a word.
 		http.Error(w, fmt.Sprintf("text: character %d is a control character, which no key types; only \\n and \\r (Return) and \\t (Tab) are typed", i), http.StatusBadRequest)
@@ -486,69 +497,96 @@ func (v *visual) typeText(w http.ResponseWriter, r *http.Request) {
 // (keymap.go): it binds them all to spare keys, waits for Chromium to
 // take the new map, presses every character's key at the pace asked for,
 // waits again, and puts the map back. Text with more such characters than
-// there are spare keys is typed in stretches, each bound in turn. A
-// character that can't be bound fails the call before anything is typed;
-// a failure later fails it too, never with part of the text left out.
+// there are spare keys is typed in stretches, each bound in turn. Its
+// errors say whether anything may have been typed: a failure before the
+// first key (no spare key, the map refused) leaves the field as it was,
+// so the call can be retried; one after it may have left part of the
+// text, or all of it, typed.
 func (v *visual) typeMapped(w http.ResponseWriter, r *http.Request, text []rune, now bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.live != nil {
 		// The live view's xdotool reads the map when it starts and binds
-		// keys of its own on the fly: neither while this one is changed.
+		// keys of its own on the fly: neither while this one is changed,
+		// nor a key the person sent before that it hasn't run yet.
 		v.live.mu.Lock()
 		defer v.live.mu.Unlock()
+		v.live.drain()
 	}
 	ctx := r.Context()
-	fail := func(err error) {
-		http.Error(w, "typing failed: "+err.Error(), http.StatusInternalServerError)
+	before := func(err error) {
+		http.Error(w, "typing failed before anything was typed, so it can be retried: "+err.Error(), http.StatusInternalServerError)
+	}
+	open := func() (keyboard, error) { return v.keyboard(context.WithoutCancel(ctx)) }
+	if len(v.leftover) > 0 {
+		if err := restoreRuns(open, v.leftoverPerKey, v.leftover); err != nil {
+			before(fmt.Errorf("keys an earlier type bound can't be put back: %w", err))
+			return
+		}
+		v.leftover = nil
 	}
 	kb, err := v.keyboard(ctx)
 	if err != nil {
-		fail(fmt.Errorf("couldn't open the keyboard map: %w", err))
+		before(fmt.Errorf("couldn't open the keyboard map: %w", err))
 		return
 	}
 	defer func() { _ = kb.Close() }()
 	m, err := readKeyboardMap(kb)
 	if err != nil {
-		fail(fmt.Errorf("couldn't read the keyboard map: %w", err))
+		before(fmt.Errorf("couldn't read the keyboard map: %w", err))
 		return
 	}
 	spare := m.spare()
 	batches, err := planKeys(text, m.has, len(spare))
 	if err != nil {
-		fail(err)
+		before(err)
 		return
 	}
-	for _, b := range batches {
-		var bound *binding
-		if len(b.bind) > 0 {
-			if bound, err = bind(kb, m, spare, b.bind); err != nil {
-				fail(fmt.Errorf("couldn't bind %d characters to keys: %w", len(b.bind), err))
-				return
-			}
-			err = sleep(ctx, v.settle)
-		}
+	for i, b := range batches {
+		pressed, err := v.typeBatch(ctx, kb, open, m, spare, b, now)
 		if err == nil {
-			cmds := instantKeys(b.text)
-			if !now {
-				cmds = v.humanType(string(b.text))
-			}
-			err = v.runAll(ctx, cmds)
+			continue
 		}
-		if bound != nil {
-			// Chromium reads the last keys with this map, not the next.
-			time.Sleep(v.settle)
-			if rerr := bound.restore(); rerr != nil {
-				// What was typed was typed; the keys stay bound.
-				v.log.Warn("couldn't put the keyboard map back", "keys", len(b.bind), "err", rerr)
-			}
+		if i == 0 && !pressed {
+			before(err)
+		} else {
+			http.Error(w, "typing failed after part of the text, or all of it, may have been typed; look at the field before typing again: "+err.Error(), http.StatusInternalServerError)
 		}
-		if err != nil {
-			http.Error(w, "input failed: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// typeBatch types one stretch: binds its keys, waits, presses them, waits
+// and puts the map back, even if typing fails or panics. pressed says
+// whether any key may have been pressed. Keys it can't put back are left
+// for the next type (v.leftover), and fail this one.
+func (v *visual) typeBatch(ctx context.Context, kb keyboard, open func() (keyboard, error), m keyboardMap, spare []byte, b keyBatch, now bool) (pressed bool, err error) {
+	if len(b.bind) > 0 {
+		bound, berr := bind(kb, open, m, spare, b.bind)
+		if berr != nil {
+			return false, fmt.Errorf("couldn't bind %d characters to keys: %w", len(b.bind), berr)
+		}
+		defer func() {
+			if pressed {
+				// Chromium reads the last keys with this map, not the next.
+				time.Sleep(v.settle)
+			}
+			if rerr := bound.restore(); rerr != nil {
+				v.leftover, v.leftoverPerKey = append(v.leftover, bound.runs...), bound.perKey
+				v.log.Warn("couldn't put the keyboard map back", "keys", len(b.bind), "err", rerr)
+				err = errors.Join(err, fmt.Errorf("couldn't put the keyboard map back: %w", rerr))
+			}
+		}()
+		if serr := sleep(ctx, v.settle); serr != nil {
+			return false, serr
+		}
+	}
+	cmds := instantKeys(b.text)
+	if !now {
+		cmds = v.humanType(string(b.text))
+	}
+	return true, v.runAll(ctx, cmds)
 }
 
 // sleep waits for d, or until ctx ends.
@@ -907,6 +945,9 @@ func runTo(ctx context.Context, stdout bool, name string, args ...string) ([]byt
 		cmd.ExtraFiles = []*os.File{pw}
 	}
 	cmd.Stderr = os.Stderr
+	if name == "xdotool" {
+		cmd.Stderr = withheld(name)
+	}
 	exited, err := procs.start(cmd)
 	_ = pw.Close()
 	if err != nil {
@@ -926,6 +967,15 @@ func runTo(ctx context.Context, stdout bool, name string, args ...string) ([]byt
 		return nil, fmt.Errorf("%s: %s", name, describe(ws))
 	}
 	return out, readErr
+}
+
+// withheld stands in for xdotool's stderr, which can name a typed key
+// ("U00E9"): the log says how much it wrote, never what.
+type withheld string
+
+func (w withheld) Write(p []byte) (int, error) {
+	_, _ = fmt.Fprintf(os.Stderr, "%s: %d bytes on stderr, withheld: they can name typed keys\n", string(w), len(p))
+	return len(p), nil
 }
 
 // maxOutput caps what runCommand reads from a command, a screenshot say.
