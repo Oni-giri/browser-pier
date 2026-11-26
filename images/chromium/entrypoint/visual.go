@@ -589,9 +589,24 @@ func (v *visual) restoreLeftover(ctx context.Context) error {
 func (v *visual) typeKeys(w http.ResponseWriter, r *http.Request, build func() []xcmd) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if err := v.restoreLeftover(r.Context()); err != nil {
-		http.Error(w, "typing failed before anything was typed, so it can be retried: "+err.Error(), http.StatusInternalServerError)
-		return
+	if len(v.leftover) > 0 {
+		// Changing the map, as typeMapped does: with the live view's
+		// lock, once its xdotool has run what it was sent. Without
+		// leftover keys, ASCII typing changes no map and drains nothing.
+		err := func() error {
+			if v.live != nil {
+				v.live.mu.Lock()
+				defer v.live.mu.Unlock()
+				if err := v.live.drain(); err != nil {
+					return err
+				}
+			}
+			return v.restoreLeftover(r.Context())
+		}()
+		if err != nil {
+			http.Error(w, "typing failed before anything was typed, so it can be retried: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	if err := v.runAll(r.Context(), build()); err != nil {
 		http.Error(w, "input failed: "+err.Error(), http.StatusInternalServerError)

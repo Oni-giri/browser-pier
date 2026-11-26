@@ -27,11 +27,12 @@ type fakeKeyboard struct {
 	syms       []uint32
 	mods       []byte
 	openErr    error
-	changeErr  error // every change fails
-	restoreErr error // every change to NoSymbol (a restore) fails
-	bindErr    error // every other change fails
-	bindsLeft  int   // with bindErr: this many other changes succeed first
-	ignore     bool  // changes are accepted and do nothing
+	changeErr  error  // every change fails
+	restoreErr error  // every change to NoSymbol (a restore) fails
+	bindErr    error  // every other change fails
+	bindsLeft  int    // with bindErr: this many other changes succeed first
+	onChange   func() // called on each change
+	ignore     bool   // changes are accepted and do nothing
 	opened     int
 	closed     int
 }
@@ -73,6 +74,9 @@ func (f *fakeKeyboard) modifiers() ([]byte, error) { return f.mods, nil }
 
 func (f *fakeKeyboard) change(first byte, perKey int, syms []uint32) error {
 	f.log("change", strconv.Itoa(int(first)), strconv.Itoa(len(syms)/perKey), fmt.Sprintf("%x", syms[0]))
+	if f.onChange != nil {
+		f.onChange()
+	}
 	if f.changeErr != nil {
 		return f.changeErr
 	}
@@ -888,5 +892,33 @@ func TestTypeMappedLetsGoOfLiveKeysAfterAKill(t *testing.T) {
 	serveVisual(v, http.MethodPost, "/input/type", `{"text": "é", "pace": "instant"}`)
 	if got := events(*calls); got[0] != "keymap open" || !v.live.held["kShift_L"] || v.live.held["kControl_L"] {
 		t.Fatalf("clean: %q, held %v", got, v.live.held)
+	}
+}
+
+// An ASCII type that puts leftover keys back does it as typeMapped
+// changes the map: with the live view's lock, once its xdotool has run
+// what it was sent. With nothing to put back, it drains nothing.
+func TestASCIITypeDrainsTheLiveViewOnlyToRestore(t *testing.T) {
+	v, _, f := keymapVisual(t, 8)
+	x := &closingXdotool{}
+	v.live.start = func() (ioWriteCloser, error) { return x, nil }
+	post(v.live.events, `[{"t":"keydown","k":"a"},{"t":"keyup","k":"a"}]`)
+	serveVisual(v, http.MethodPost, "/input/type", `{"text": "abc", "pace": "instant"}`)
+	if x.closed != 0 || v.live.stdin == nil {
+		t.Fatalf("an ASCII type with nothing to put back drained the live view (%d)", x.closed)
+	}
+	v.leftover, v.leftoverPerKey = []keyRun{{first: 8, before: []uint32{0, 0, 0, 0}, after: []uint32{0xe9, 0xe9, 0xe9, 0xe9}}}, fakePerKey
+	copy(f.key(8), []uint32{0xe9, 0xe9, 0xe9, 0xe9})
+	f.onChange = func() {
+		if v.live.stdin != nil {
+			t.Error("the map changed with the live view's xdotool running")
+		}
+		if v.live.mu.TryLock() {
+			v.live.mu.Unlock()
+			t.Error("the map changed with the live view's lock free")
+		}
+	}
+	if rec := serveVisual(v, http.MethodPost, "/input/type", `{"text": "abc", "pace": "instant"}`); rec.Code != http.StatusNoContent || x.closed != 1 || f.key(8)[0] != 0 {
+		t.Fatalf("restore: %d %s, closed %d, key 8 %x", rec.Code, rec.Body, x.closed, f.key(8))
 	}
 }
