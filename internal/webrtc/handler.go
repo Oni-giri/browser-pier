@@ -417,7 +417,8 @@ const controlWait = 10 * time.Second
 // keyboard map lacks, stretches of as many bound keys as the map has
 // spare (13 with the image's layout data) that each take about 0.55 s
 // (PROJ-195). 60 ms a character covers text where every character is a
-// new one.
+// new one; TestTypeWaitFitsTheText checks it against keyplan.Estimate,
+// the browser's own plan.
 func typeWait(text string) time.Duration {
 	return controlWait + time.Duration(utf8.RuneCountInString(text))*60*time.Millisecond
 }

@@ -20,6 +20,7 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/db"
+	"github.com/Oni-giri/browser-pier/internal/keyplan"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/sessions/sessionstest"
@@ -127,6 +128,20 @@ func TestTypeWaitFitsTheText(t *testing.T) {
 	}
 	if got := typeWait(strings.Repeat("字", 2000)); got != 130*time.Second {
 		t.Fatalf("2,000 characters: %s", got)
+	}
+	// Against the browser's own plan (keyplan.Estimate), the worst texts
+	// still leave 9 s for the rest: every stretch's 13 characters all new
+	// (2,000 different CJK characters, 154 stretches), or 14 letters
+	// over and over (153).
+	var cjk strings.Builder
+	for i := range 2000 {
+		cjk.WriteRune(rune(0x4e00 + i))
+	}
+	for _, text := range []string{cjk.String(), strings.Repeat("абвгдежзийклмн", 142) + "абвгдежзийкл", "é", strings.Repeat("a", 2000)} {
+		est, n := keyplan.Estimate(text, false)
+		if got := typeWait(text); got < est+9*time.Second {
+			t.Errorf("%d characters, %d stretches: %s for an estimate of %s", len([]rune(text)), n, got, est)
+		}
 	}
 }
 
