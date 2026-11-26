@@ -130,6 +130,6 @@ Every container BrowserPier creates passes the create guard (`internal/docker/gu
 2. Then change the builder (`browserConfig`, `browserCreateOptions` or `sandboxCheckOptions`).
 3. Then the tests: a row in `TestGuardRefusesEachWidening` for each way the new value could be wrong, and the golden bodies in `internal/docker/testdata` (`go test ./internal/docker -run TestCreateBodiesAreUnchanged -update-golden`), whose diff shows the change.
 
-A new kind of container is a new `createKind` and a new case in `checkCreate`, written by hand. A new Docker operation (an exec, a network, a copy) is a deliberate edit of the list in `TestDockerOperationsAreAClosedSet`. Only `internal/docker` may import the Docker SDK.
+A new kind of container is a new `createKind` and a new case in `checkCreate`, written by hand. A new Docker operation (an exec, a network, a copy) is a deliberate edit of the list in `TestDockerOperationsAreAClosedSet`. Only `internal/docker` may import the Docker SDK, with two exceptions the test names: `internal/docker/memusage`, which uses the SDK's stats types and is handed `ContainerStats` alone, never the client, and the memory measure test in `images/chromium`.
 
 CI lints, tests and builds every push and pull request. It publishes both images to ghcr.io from `main` (tag `edge`) and from `v*` tags, which also make the GitHub release. See [RELEASING.md](RELEASING.md).

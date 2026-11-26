@@ -13,10 +13,16 @@ import (
 	"github.com/moby/moby/client"
 )
 
+// Stats is the one Docker call Read makes: a client's ContainerStats.
+// Read is handed that method, never the client, so the client's other
+// calls stay in internal/docker, whose set of Docker operations is closed
+// and tested (TestDockerOperationsAreAClosedSet).
+type Stats func(ctx context.Context, id string, opts client.ContainerStatsOptions) (client.ContainerStatsResult, error)
+
 // Read is how much memory the container uses now, counted as docker stats
 // does: usage less the page cache the kernel can drop.
-func Read(ctx context.Context, api *client.Client, id string) (int64, error) {
-	res, err := api.ContainerStats(ctx, id, client.ContainerStatsOptions{})
+func Read(ctx context.Context, stats Stats, id string) (int64, error) {
+	res, err := stats(ctx, id, client.ContainerStatsOptions{})
 	if err != nil {
 		return 0, err
 	}

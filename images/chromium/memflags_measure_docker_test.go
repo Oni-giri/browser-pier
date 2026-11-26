@@ -80,7 +80,7 @@ func TestMeasureMemoryFlags(t *testing.T) {
 	memMiB := func(b *browser) int64 {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		n, err := memusage.Read(ctx, api, b.name)
+		n, err := memusage.Read(ctx, api.ContainerStats, b.name)
 		if err != nil {
 			t.Fatal(err)
 		}

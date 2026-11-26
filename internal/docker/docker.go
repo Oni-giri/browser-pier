@@ -509,5 +509,5 @@ func User(uid, gid int) string { return strconv.Itoa(uid) + ":" + strconv.Itoa(g
 // MemoryUsage is how much memory the container uses now, counted as
 // docker stats does: usage less the page cache the kernel can drop.
 func (c *Client) MemoryUsage(ctx context.Context, id string) (int64, error) {
-	return memusage.Read(ctx, c.api, id)
+	return memusage.Read(ctx, c.api.ContainerStats, id)
 }
