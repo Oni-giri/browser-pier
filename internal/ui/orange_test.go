@@ -12,7 +12,7 @@ import (
 
 // Orange means a person is needed (DESIGN.md), and nothing else: the
 // Needs-you status, the header chip, the emphasis card, the warm light, the
-// handoff page's reason and the live view's "Needs help". These tests list
+// handoff page's reason and the live view's needs-help pill. These tests list
 // the places that may be warm, so a caution, a notice or a missing setting
 // that reaches for orange fails here, whatever its class is called.
 
@@ -32,43 +32,48 @@ var (
 		".dot-text.help", ".dot-text.help::before",
 		".rows>li.help", ".table tr.help td",
 		".card.help", ".cell.emph,.card.emph",
-		"#who.help::before",
+		"#who.help", "#who.help::before",
 		".log li.attention", ".log li.attention::before",
 	}
 
 	// The classes those rules hang on.
 	warmClasses = []string{"help", "emph", "attention", "has-help", "chip-help"}
 
-	// Where the markup may use a warm class, word for word. Paths are
+	// Where the markup may use a warm class, word for word (lit) or, where
+	// the words may change but the state may not, as a pattern. Paths are
 	// relative to this package; templates/ and static/ are embedded.
-	warmMarkup = map[string][]string{
+	warmMarkup = map[string][]*regexp.Regexp{
 		"templates/layout.html": {
-			`<body{{if .Help.Count}} class="has-help"{{end}}>`,
-			`<a class="chip-help" href="{{.Link}}">{{.Count}} {{plural .Count "needs" "need"}} you</a>`,
+			lit(`<body{{if .Help.Count}} class="has-help"{{end}}>`),
+			lit(`<a class="chip-help" href="{{.Link}}">{{.Count}} {{plural .Count "needs" "need"}} you</a>`),
 		},
 		"templates/overview.html": {
-			`<section class="cell emph span-8" aria-label="{{.Name}} needs you">`,
-			`<span class="pill help">Needs you</span>`,
-			`<li{{if eq .Status.Key "help"}} class="help"{{end}}>`,
+			lit(`<section class="cell emph span-8" aria-label="{{.Name}} needs you">`),
+			lit(`<span class="pill help">Needs you</span>`),
+			lit(`<li{{if eq .Status.Key "help"}} class="help"{{end}}>`),
 		},
 		"templates/parts.html": {
-			`<article class="card{{if eq .Status.Key "help"}} help{{if .Emph}} emph{{end}}{{end}}" id="card-{{.Name}}">`,
-			`<tr{{if eq .Status.Key "help"}} class="help"{{end}}>`,
+			lit(`<article class="card{{if eq .Status.Key "help"}} help{{if .Emph}} emph{{end}}{{end}}" id="card-{{.Name}}">`),
+			lit(`<tr{{if eq .Status.Key "help"}} class="help"{{end}}>`),
 		},
 		"templates/profile.html": {
-			`<li{{if .Attention}} class="attention"{{end}}>`,
+			lit(`<li{{if .Attention}} class="attention"{{end}}>`),
 		},
 		"../handoff/handoff.html": {
-			`<span class="pill help plain">{{.Reason}}</span>`,
+			lit(`<span class="pill help plain">{{.Reason}}</span>`),
 		},
 		"static/app.js": {
-			`document.body.classList.toggle("has-help", !!$(".chip-help", e.target))`,
+			lit(`document.body.classList.toggle("has-help", !!$(".chip-help", e.target))`),
 		},
 		"../webrtc/live.js": {
-			`label = "Needs help"; cls = "help";`,
+			// The live view's pill while the browser needs help, whatever its
+			// label says (PROJ-198 may reword it): only that state is orange.
+			regexp.MustCompile(`else if \(s === "needs_help"\) \{ label = "[^"]*"; cls = "help"; \}`),
 		},
 	}
 )
+
+func lit(s string) *regexp.Regexp { return regexp.MustCompile(regexp.QuoteMeta(s)) }
 
 type cssRule struct{ at, sel, decl string }
 
@@ -168,6 +173,8 @@ var (
 	jsString  = regexp.MustCompile("\"([^\"\\\\\n]*)\"|'([^'\\\\\n]*)'|`([^`]*)`")
 	selectorS = regexp.MustCompile(`[\s.#,>+~:()\[\]]+`)
 	styleAttr = regexp.MustCompile(`style="[^"]*"`)
+	// A JS comment on a line of its own: prose, which may quote a label.
+	jsComment = regexp.MustCompile(`(?m)^\s*//.*$`)
 )
 
 func readMarkup(t *testing.T, name string) string {
@@ -194,12 +201,13 @@ func TestWarmMarkupOnlyWhereSomeoneIsNeeded(t *testing.T) {
 	for _, name := range files {
 		src := readMarkup(t, name)
 		for _, ok := range warmMarkup[name] {
-			if !strings.Contains(src, ok) {
+			if !ok.MatchString(src) {
 				t.Errorf("%s: no longer has %s: update warmMarkup", name, ok)
 			}
-			src = strings.ReplaceAll(src, ok, "")
+			src = ok.ReplaceAllLiteralString(src, "")
 		}
 		if strings.HasSuffix(name, ".js") {
+			src = jsComment.ReplaceAllLiteralString(src, "")
 			for _, m := range jsString.FindAllStringSubmatch(src, -1) {
 				s := m[1] + m[2] + m[3]
 				for _, w := range selectorS.Split(s, -1) {
