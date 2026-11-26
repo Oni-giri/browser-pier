@@ -176,6 +176,13 @@ func TestRealBrowserClipboardBox(t *testing.T) {
 	if r := next("control"); r["on"] != false {
 		t.Fatalf("release: %v", r)
 	}
+	// The hand-back goes on by itself: agents have the browser once it
+	// is over.
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if got, _ := m.Live(name); !got.HumanControl {
+			break
+		}
+	}
 	// The browser has fenced the person's takeover (PROJ-196): anything
 	// of theirs still on its way is refused, with 409.
 	if _, err := v.do(context.Background(), http.MethodPost, "/input/clipboard", []byte(`{"text":"late"}`), http.StatusNoContent, controlWait); err == nil || !strings.Contains(err.Error(), "ended") {
