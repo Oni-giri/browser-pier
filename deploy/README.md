@@ -267,7 +267,7 @@ A JSON POST of a few hundred bytes, made only of BrowserPier's own words and typ
 
 ### Delivery
 
-Each POST has 10 seconds, connecting included. 2xx is delivered. A network error, a timeout or a 5xx is tried again after 2 s and after 10 s, unless the webhook was changed or removed meanwhile, or, for `handoff.requested`, the handoff has ended. Anything else is final: 3xx (redirects aren't followed) and 4xx, 429 included. The answer's body isn't read. At most 4 POSTs are under way and 64 wait; past that, events are dropped and logged. The queue is in memory: what waits when BrowserPier restarts is lost. **Send test** sends once, with no retry, and shows the status.
+Each POST has 10 seconds, looking up the host and connecting included. 2xx is delivered. A network error, a timeout or a 5xx is tried again after 2 s and after 10 s. Before every try, the first included, the event is dropped if the webhook was changed or removed meanwhile, or, for `handoff.requested`, if the handoff has ended, its 15 minutes are up or its browser stopped. Anything else is final: 3xx (redirects aren't followed) and 4xx, 429 included. The answer's body isn't read. At most 4 POSTs are under way, **Send test** included, and 64 events wait; past that, events are dropped and logged. The queue is in memory: what waits when BrowserPier restarts is lost. **Send test** sends once, with no retry, and shows the status; with 4 POSTs already under way it doesn't wait and says the webhook is busy.
 
 The log names the event, its `id`, the profile, the webhook's host and the status: never the URL's path, the secret, the signature or the body.
 
