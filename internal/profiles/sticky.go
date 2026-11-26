@@ -84,8 +84,11 @@ func replaceInUserinfo(raw, old, repl string) string {
 	return raw[:start] + strings.ReplaceAll(rest[:at], old, repl) + rest[at:]
 }
 
-// sampleSticky fills a template when checking it: a token like any other.
-const sampleSticky = "a0b1c2d3"
+// sampleSticky fills a template when checking it: a token like any other,
+// but starting with a letter that isn't a hex digit, so a stray % just
+// before {sticky} (%{sticky}, %A{sticky}) is refused, as a real token
+// starting with g to z would make it fail at the browser's start.
+const sampleSticky = "z0b1c2d3"
 
 // maxSOCKS5Credential is the longest user name or password a SOCKS5
 // proxy takes, in bytes (RFC 1929), which the browser's forwarder would

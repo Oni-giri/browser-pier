@@ -43,6 +43,9 @@ func TestValidProxyRefusesBadTemplates(t *testing.T) {
 		"colon in user":     "http://a%3A{sticky}:pw@proxy.example:8080",
 		"colon, https":      "https://a%3Ab:pw@proxy.example:8443",
 		"no host, template": "http://user-{sticky}:pw@:8080",
+		"% before it":       "http://u:%{sticky}@proxy.example:8080",
+		"%A before it":      "http://u-%A{sticky}:pw@proxy.example:8080",
+		"% in the password": "socks5://u:pw%{sticky}@proxy.example:1080",
 	} {
 		if err := validProxy(proxy); err == nil {
 			t.Errorf("%s: validProxy(%q) accepted it", name, proxy)
