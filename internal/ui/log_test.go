@@ -2,12 +2,17 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Oni-giri/browser-pier/internal/recording"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
@@ -154,4 +159,44 @@ func TestSideShowsFiftyEntries(t *testing.T) {
 	}
 	want(t, r, http.StatusOK, "All entries →")
 	t.Logf("side fragment: %d bytes", len(r.body))
+}
+
+// While the live session's recording covers an entry, the entry links to
+// its moment in the player, on the side column and the log page (PROJ-23);
+// a kept run's entries don't.
+func TestLogEntriesLinkToTheRecording(t *testing.T) {
+	f := newFixture(t)
+	f.profile("google")
+	s, _, err := f.m.Start(context.Background(), "google", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.m.Note(s.ID, "claude", "Clicked at 1, 2")
+	dir := filepath.Join(f.m.Layout().DataDir, "recordings", "google", s.ID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().Add(-time.Minute)
+	ix := recording.Index{Profile: "google", Session: s.ID,
+		Segments: []recording.Segment{{File: "000001.mp4", Start: at, End: at.Add(2 * time.Hour)}}}
+	b, _ := json.Marshal(ix)
+	for name, body := range map[string]string{"index.json": string(b), "000001.mp4": "ftypMP4-one"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.recordings.Reconcile([]string{"google"}); err != nil {
+		t.Fatal(err)
+	}
+	link := "/profiles/google/recordings/" + s.ID + "?t="
+	want(t, f.get("/profiles/google/side"), http.StatusOK, link, "Play the recording from here")
+	want(t, f.get("/profiles/google/log"), http.StatusOK, link, "Play the recording from here")
+	if _, err := f.m.StopFor(context.Background(), s.ID, sessions.StopFromApp); err != nil {
+		t.Fatal(err)
+	}
+	r := f.get("/profiles/google/log")
+	want(t, r, http.StatusOK, "Clicked at 1, 2")
+	if strings.Contains(r.body, link) {
+		t.Fatal("a kept run's entry links to the player")
+	}
 }
