@@ -147,6 +147,15 @@ func (r *suggestRig) opened(tp typed) bool {
 	return false
 }
 
+// uris lists reqs' request URIs, for a message.
+func uris(reqs []seen) []string {
+	out := make([]string, 0, len(reqs))
+	for _, s := range reqs {
+		out = append(out, s.uri)
+	}
+	return out
+}
+
 // since lists the requests to host from t on.
 func (r *suggestRig) since(host string, from time.Time) []seen {
 	r.mu.Lock()
@@ -275,7 +284,7 @@ func TestTypedAddressReachesNoSuggestService(t *testing.T) {
 				t.Logf("%s %s: refused, so nothing reached them: %v", pace, text, tp.refused)
 			}
 			if !r.opened(tp) {
-				t.Errorf("%s %s: the address never opened as typed; site.test got %v after Return", pace, text, r.since("site.test", tp.enter))
+				t.Errorf("%s %s: the address never opened as typed; site.test got %v after Return", pace, text, uris(r.since("site.test", tp.enter)))
 			}
 		}
 	}
@@ -295,7 +304,7 @@ func TestTypedAddressReachesNoSuggestService(t *testing.T) {
 			}
 		}
 		if !d.opened(tp) {
-			t.Errorf("%s %s: the address never opened as typed, so the typing may not have reached the address bar; site.test got %v after Return", pace, text, d.since("site.test", tp.enter))
+			t.Errorf("%s %s: the address never opened as typed, so the typing may not have reached the address bar; site.test got %v after Return", pace, text, uris(d.since("site.test", tp.enter)))
 		}
 	}
 

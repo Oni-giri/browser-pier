@@ -52,7 +52,7 @@ func TestMeasureSuggest(t *testing.T) {
 		case r.opened(tp):
 			return "opened"
 		}
-		t.Errorf("%q: the address didn't open as typed, so this trial's counts mean nothing; site.test got %v", tp.text, r.since("site.test", tp.enter))
+		t.Errorf("%q: the address didn't open as typed, so this trial's counts mean nothing; site.test got %v", tp.text, uris(r.since("site.test", tp.enter)))
 		return "NOT OPENED"
 	}
 	report := func(r *suggestRig, pace string, tp typed, secret string) {
