@@ -22,8 +22,8 @@ import (
 
 // What PROJ-191 checks: an address typed into the address bar, as Visual
 // mode's `key ctrl+l` and `type` and a person in the live view type one,
-// mustn't reach the search engine's suggest service on its way. (PROJ-164's
-// open types into the same address bar, so the same holds for it.)
+// mustn't reach the search engine's suggest service on its way, nor an
+// address PROJ-164's open action types into the same address bar.
 //
 // The rig makes the suggest service one the test can read. A test policy
 // file, mounted next to the image's own, makes the default search engine
@@ -208,6 +208,26 @@ func (r *suggestRig) open(t *testing.T, text, pace string) typed {
 	return tp
 }
 
+// openAction opens text with the open action (PROJ-164), which clicks
+// the address bar, types the address and presses Delete and Return in one
+// call; Return is somewhere in it, so only requests before the call count
+// as early, and opened looks from its start.
+func (r *suggestRig) openAction(t *testing.T, text, pace string) typed {
+	t.Helper()
+	nTargets, nRefused := len(r.up.Targets()), len(r.up.Refused())
+	tp := typed{text: text, start: time.Now()}
+	tp.enter = tp.start
+	r.b.inputWithin(t, "/input/open", fmt.Sprintf(`{"url": %q, "pace": %q}`, text, pace), 30*time.Second)
+	time.Sleep(2 * time.Second)
+	for _, s := range r.since("suggest.test", tp.start) {
+		if strings.HasPrefix(s.uri, "/suggest") {
+			tp.suggests = append(tp.suggests, s)
+		}
+	}
+	tp.targets, tp.refused = r.up.Targets()[nTargets:], r.up.Refused()[nRefused:]
+	return tp
+}
+
 // leaked is the longest start of secret that any of reqs carried.
 func leaked(reqs []seen, secret string) string {
 	for n := len(secret); n > 0; n-- {
@@ -285,6 +305,25 @@ func TestTypedAddressReachesNoSuggestService(t *testing.T) {
 			}
 			if !r.opened(tp) {
 				t.Errorf("%s %s: the address never opened as typed; site.test got %v after Return", pace, text, uris(r.since("site.test", tp.enter)))
+			}
+		}
+		// The open action types into the same address bar. It takes only
+		// http and https addresses.
+		for i, form := range forms[:2] {
+			secret := fmt.Sprintf("Zq%dx%dOp", i, time.Now().UnixNano()%1e6)
+			text := fmt.Sprintf(form, secret)
+			tp := r.openAction(t, text, pace)
+			if len(tp.suggests) != 0 {
+				t.Errorf("open %s %s: %d suggest requests, carrying %q", pace, text, len(tp.suggests), leaked(tp.suggests, secret))
+			}
+			if got := leaked(r.since("suggest.test", tp.start), secret); got != "" {
+				t.Errorf("open %s %s: the search engine got %q of the secret", pace, text, got)
+			}
+			if other := otherHosts(tp.targets, "site.test"); len(other) != 0 {
+				t.Errorf("open %s %s: the browser reached %v as well as the address's own host", pace, text, other)
+			}
+			if !r.opened(tp) {
+				t.Errorf("open %s %s: the address never opened as typed; site.test got %v", pace, text, uris(r.since("site.test", tp.start)))
 			}
 		}
 	}

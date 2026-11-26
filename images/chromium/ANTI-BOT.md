@@ -311,7 +311,7 @@ PROJ-151 left a residual: behind a page whose key handler takes more than about 
 
 **Residuals, accepted:**
 - **Delete before Return.** It drops an inline completion the address bar may have added after the typed text (the cause of the two autocomplete losses in PROJ-151's table). A person seldom presses it, but the key goes to the address bar, which no page sees.
-- **The address goes in at 12 ms a key**, faster than anyone types, at both paces. No page sees those keys, only the address bar; the search engine's suggest service may see what is typed (PROJ-191).
+- **The address goes in at 12 ms a key**, faster than anyone types, at both paces. No page sees those keys, only the address bar; nor does the search engine's suggest service, since the image turns suggestions off (PROJ-191, below): without that, an `open` of an `http://` address sent its path to it, token included.
 - **The layout is Chromium 156's.** The address bar's place is computed (y = 63, the middle of x = 121 to width − 85), not found on the screen. On another Chromium `open` refuses (409) rather than click blind, and `TestOpenAtEveryScreenSize` fails until it is measured again.
 - **A window that opens between a look and the run after it.** Each look at the screen and the xdotool run it allows are separate: a pop-up opening in those few milliseconds would still take the press (the click, Delete or Return) or up to 64 characters of the address; the next look stops the rest. The pauses all come before a look, never between a look and its press, so this window stays a few milliseconds.
 
@@ -328,7 +328,7 @@ With suggestions on (Chromium's default), the address bar sent the default searc
 | `site.test/login/SECRET` | 3 / 27–28 | all of it |
 | With the image's own engine, `http://site.test/reset/SECRET` | 4–5 / 35–38 attempts to connect to `duckduckgo.com` (counted at the proxy), over three runs | (TLS: not readable) |
 
-The image now sets `SearchSuggestEnabled: false`. In the same runs, typing sent the suggestion service no request before Return, and the browser asked for no `duckduckgo.com` while an address was typed (`TestTypedAddressReachesNoSuggestService` checks both, and that the address then opens exactly as typed). A word still goes to the engine as a search once Return is pressed; the test checks that too, which also shows its search engine is in effect.
+The image now sets `SearchSuggestEnabled: false`. In the same runs, typing sent the suggestion service no request before Return, and the browser asked for no `duckduckgo.com` while an address was typed (`TestTypedAddressReachesNoSuggestService` checks both, and that the address then opens exactly as typed). The test also opens the two `http://` addresses with PROJ-164's `open` action, which types into the same address bar: without the policy it sent 3–4 suggest requests at either pace, the path's token included, and with it none (2026-11-26). A word still goes to the engine as a search once Return is pressed; the test checks that too, which also shows its search engine is in effect.
 
 What can see it:
 - **A person**, in the live view or a handoff: the address bar's drop-down no longer offers the engine's completions. History and bookmarks still do. The setting shows on `chrome://policy`, next to the image's other policies, and Chromium already says it's managed.
