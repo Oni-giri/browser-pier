@@ -91,7 +91,10 @@ func TestNewCompactsTheEmbeddedSeccompProfile(t *testing.T) {
 		t.Fatal("New must refuse an empty instance ID")
 	}
 	// What the create guard refuses, New refuses (PROJ-159).
-	for _, user := range []string{"", "0:0", "00:1000", "chrome:chrome", "1000"} {
+	// Each part a 32-bit number, as the guard has it (item 2 of the Codex
+	// review): ten digits fit the pattern but may not fit.
+	for _, user := range []string{"", "0:0", "00:1000", "chrome:chrome", "1000",
+		"1000:4294967296", "4294967296:1000", "9999999999:1000", "1000:9999999999"} {
 		if _, err := New(Options{Image: "img", Instance: "i1", User: user}); err == nil {
 			t.Errorf("New took the user %q", user)
 		}
@@ -100,6 +103,14 @@ func TestNewCompactsTheEmbeddedSeccompProfile(t *testing.T) {
 		if _, err := New(Options{Image: "img", Instance: "i1", User: "1000:1000", UsernsMode: userns}); err == nil {
 			t.Errorf("New took the user namespace mode %q", userns)
 		}
+	}
+	for _, user := range []string{"1000:1000", "4294967295:4294967295", "1:0"} {
+		c, err := New(Options{Image: "img", Instance: "i1", User: user})
+		if err != nil {
+			t.Errorf("%q: %v", user, err)
+			continue
+		}
+		_ = c.Close()
 	}
 	for _, userns := range []string{"", "keep-id", "keep-id:uid=1000,gid=1000"} {
 		c, err := New(Options{Image: "img", Instance: "i1", User: "1000:1000", UsernsMode: userns})

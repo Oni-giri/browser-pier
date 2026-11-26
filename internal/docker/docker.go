@@ -156,8 +156,8 @@ func New(o Options) (*Client, error) {
 	}
 	// What the create guard would refuse at every browser start, refused
 	// now instead.
-	if m := guardUserRE.FindStringSubmatch(o.User); m == nil || strings.TrimLeft(m[1], "0") == "" {
-		return nil, fmt.Errorf("the browsers' user must be a numeric uid:gid other than root, got %q", o.User)
+	if p := userProblem(o.User); p != "" {
+		return nil, fmt.Errorf("the browsers' user must be a numeric uid:gid other than root, each part below 2^32; %q %s", o.User, p)
 	}
 	if !guardUsernsRE.MatchString(o.UsernsMode) {
 		return nil, fmt.Errorf("the user namespace mode must be unset or keep-id, got %q", o.UsernsMode)

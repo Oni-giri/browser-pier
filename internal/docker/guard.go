@@ -103,6 +103,24 @@ var (
 	guardUsernsRE = regexp.MustCompile(`^(?:keep-id(?::[a-z]+=[0-9]+(?:,[a-z]+=[0-9]+)*)?)?$`)
 )
 
+// userProblem says what is wrong with s as the browsers' uid:gid, or ""
+// if nothing: numeric, each part a 32-bit number, the uid not root. New
+// and the guard both use it, so New refuses what every create would.
+func userProblem(s string) string {
+	m := guardUserRE.FindStringSubmatch(s)
+	if m == nil {
+		return "isn't a numeric uid:gid"
+	}
+	uid, err := strconv.ParseUint(m[1], 10, 32)
+	if err != nil || uid == 0 {
+		return "is root or out of range"
+	}
+	if _, err := strconv.ParseUint(m[2], 10, 32); err != nil {
+		return "is out of range"
+	}
+	return ""
+}
+
 // The environment variables a browser container may get, and the ones it
 // must. A new one for the entrypoint needs its name here.
 var (
@@ -325,16 +343,8 @@ func (g guard) unset(prefix string, v reflect.Value) error {
 }
 
 func (g guard) user(want, got string) error {
-	m := guardUserRE.FindStringSubmatch(got)
-	if m == nil {
-		return g.refuse("Config.User", "isn't a numeric uid:gid")
-	}
-	uid, err := strconv.ParseUint(m[1], 10, 32)
-	if err != nil || uid == 0 {
-		return g.refuse("Config.User", "is root or out of range")
-	}
-	if _, err := strconv.ParseUint(m[2], 10, 32); err != nil {
-		return g.refuse("Config.User", "is out of range")
+	if p := userProblem(got); p != "" {
+		return g.refuse("Config.User", p)
 	}
 	if got != want {
 		return g.refuse("Config.User", "isn't the browsers' user")
