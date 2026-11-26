@@ -87,7 +87,7 @@ func TestProxyTestResolvesTheMask(t *testing.T) {
 
 	// Edit: the mask stands for the profile's own proxy.
 	r := f.testProxy(url.Values{"proxy": {masked}, "profile": {"bank"}, "form": {"edit"}})
-	want(t, r, http.StatusOK, "Works.", "198.51.100.23", "Europe/Berlin", "312 ms", "Nothing was saved.")
+	want(t, r, http.StatusOK, "Works.", "198.51.100.23", "Europe/Berlin", "312 ms", "The proxy and this result weren’t saved.")
 	// Another profile's mask is its own, never this one's.
 	f.testProxy(url.Values{"proxy": {maskProxy("http://pier:0ther-pw@proxy.example:8080")}, "profile": {"other"}, "form": {"edit"}})
 	// A new URL is tested as typed.
