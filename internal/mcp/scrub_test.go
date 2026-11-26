@@ -31,6 +31,7 @@ var toolArgs = map[string]map[string]any{
 	"click":            {"session_id": "s1", "x": 1, "y": 1},
 	"type_text":        {"session_id": "s1", "text": "hi"},
 	"press_keys":       {"session_id": "s1", "keys": "Return"},
+	"open_url":         {"session_id": "s1", "url": "https://example.com/"},
 	"scroll":           {"session_id": "s1", "x": 1, "y": 1, "down": 1},
 	"drag":             {"session_id": "s1", "from_x": 1, "from_y": 1, "to_x": 2, "to_y": 2},
 	"wait":             {"session_id": "s1", "seconds": 0},

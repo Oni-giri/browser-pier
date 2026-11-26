@@ -59,7 +59,8 @@ const (
 // before it would keep the dialog, which can hand a page any file in the
 // container (PROJ-183); 8 adds the entrypoint's /input/live-type, which
 // the live view's Type button calls, so a person's typing doesn't wait
-// for an agent's shortcut gap (PROJ-151).
+// for an agent's shortcut gap (PROJ-151), and /input/open, which the open
+// action calls (PROJ-164): a browser from before either answers them 404.
 const Spec = "8"
 
 const (

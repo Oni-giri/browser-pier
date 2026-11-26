@@ -9,6 +9,7 @@ COPY go.mod go.sum* ./
 RUN go mod download
 COPY internal/motion ./internal/motion
 COPY internal/domainset ./internal/domainset
+COPY internal/weburl ./internal/weburl
 COPY images/chromium/entrypoint ./images/chromium/entrypoint
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w" -o /out/entrypoint ./images/chromium/entrypoint
@@ -79,6 +80,13 @@ RUN for el in ximagesrc videoconvert videoscale x264enc mp4mux fdsink; do gst-in
  && for feature in BackForwardCache; do \
       LC_ALL=C grep -qaxF -- "$feature" /tmp/strings || { echo "chromium binary lacks the feature $feature"; exit 1; }; done \
  && rm /tmp/strings
+
+# The installed Chromium's version, for the open action: the address bar's
+# place is measured for one major version (entrypoint/open.go), and open
+# refuses on any other.
+RUN mkdir -p /etc/browserpier \
+ && dpkg-query -W -f '${Version}\n' chromium > /etc/browserpier/chromium-version \
+ && grep -Eq '^([0-9]+:)?[0-9]+\.' /etc/browserpier/chromium-version
 
 # WebGL renders on Mesa's llvmpipe (PROJ-148): ANGLE loads libGL.so.1, the
 # Mesa GLX vendor library, and the gallium driver that holds llvmpipe and

@@ -49,6 +49,9 @@ type browser struct {
 	// nothing and is recorded as "wait cut short".
 	shortcutGap time.Duration
 	shortcutAt  time.Time
+	// exempts are the hosts let past the ad and tracker list
+	// (/proxy/exempt), in order.
+	exempts []string
 	// choosers is what GET /chooser answers (JSON), "" for none open;
 	// noPortal makes it 503. chosen records each POST /chooser/{id}.
 	choosers string
@@ -181,9 +184,17 @@ func (b *browser) handler() http.Handler {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
-	for _, p := range []string{"click", "type", "scroll", "key", "drag"} {
+	for _, p := range []string{"click", "type", "scroll", "key", "drag", "open"} {
 		mux.HandleFunc("POST /input/"+p, input)
 	}
+	mux.HandleFunc("POST /proxy/exempt", func(w http.ResponseWriter, r *http.Request) {
+		var e struct{ Host string }
+		_ = json.NewDecoder(r.Body).Decode(&e)
+		b.mu.Lock()
+		b.exempts = append(b.exempts, e.Host)
+		b.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("GET /chooser", func(w http.ResponseWriter, _ *http.Request) {
 		b.mu.Lock()
 		defer b.mu.Unlock()

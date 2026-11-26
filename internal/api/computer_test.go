@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -106,6 +107,99 @@ func TestComputerForwardsInput(t *testing.T) {
 	// The browser's own refusal comes back as it is.
 	if code, _, raw := f.computer(s.ID, `{"action": "scroll", "x": 99999, "y": 1, "dy": 1}`); code != http.StatusBadRequest || !strings.Contains(string(raw), "outside") {
 		t.Fatalf("off screen: %d %s", code, raw)
+	}
+}
+
+// TestComputerOpen: open sends the browser the address as navigate would
+// open it, and refuses what navigate refuses, before the browser sees it
+// (PROJ-164). The log names its origin only.
+func TestComputerOpen(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.all, "google", "visual")
+	for body, want := range map[string]string{
+		`{"action": "open", "url": "https://example.com/a b?q=1"}`:               `/input/open {"url":"https://example.com/a%20b?q=1"}`,
+		`{"action": "open", "url": " HTTP://Example.com/x ", "pace": "instant"}`: `/input/open {"url":"http://Example.com/x","pace":"instant"}`,
+		// A space in the query reaches the browser encoded, as navigate sends it.
+		`{"action": "open", "url": "https://example.com/?q=a b"}`: `/input/open {"url":"https://example.com/?q=a%20b"}`,
+		// So is anything past ASCII, as UTF-8.
+		`{"action": "open", "url": "https://example.com/?q=café"}`: `/input/open {"url":"https://example.com/?q=caf%C3%A9"}`,
+	} {
+		if code, _, raw := f.computer(s.ID, body); code != http.StatusNoContent {
+			t.Fatalf("%s: %d %s", body, code, raw)
+		}
+		if got := f.lastInput(); got != want {
+			t.Errorf("%s: forwarded %s, want %s", body, got, want)
+		}
+	}
+	f.b.mu.Lock()
+	sent := len(f.b.inputs)
+	f.b.mu.Unlock()
+	for body, want := range map[string]string{
+		`{"action": "open"}`: "url: ",
+		`{"action": "open", "url": "javascript:alert(1)"}`:                                   "only http and https",
+		`{"action": "open", "url": "file:///etc/passwd"}`:                                    "only http and https",
+		`{"action": "open", "url": "https://me:pw@example.com/"}`:                            "user name or password",
+		`{"action": "open", "url": "https:///x"}`:                                            "no host",
+		`{"action": "open", "url": "https://example.com/", "pace": 1}`:                       "",
+		`{"action": "open", "url": "https://example.com/` + strings.Repeat("a", 8200) + `"}`: "too long",
+	} {
+		code, _, raw := f.computer(s.ID, body)
+		if code != http.StatusBadRequest || !strings.Contains(string(raw), want) {
+			t.Errorf("%.60s: %d %s", body, code, raw)
+		}
+	}
+	f.b.mu.Lock()
+	if len(f.b.inputs) != sent {
+		t.Errorf("refused addresses reached the browser: %q", f.b.inputs[sent:])
+	}
+	f.b.mu.Unlock()
+	got := strings.Join(f.whats(s.ID), "\n")
+	if !strings.Contains(got, "claude: Opened https://example.com in the address bar") || strings.Contains(got, "/a") || strings.Contains(got, "q=1") {
+		t.Fatalf("activity:\n%s", got)
+	}
+}
+
+// An open while a person has the browser is refused before anything
+// reaches it: not even the ad-list exemption for its host, which would
+// change what the person's browser blocks (PROJ-164). Once the agent may
+// act, an open that the browser refuses (the address bar covered) has
+// still exempted its host, as navigate does.
+func TestComputerOpenWhileAPersonDrives(t *testing.T) {
+	f := newFixture(t)
+	f.m.SetBlocklist(func() []byte { return []byte("# browserpier domain set 1\nads.example.com\n") })
+	s := f.start(f.all, "google", "visual")
+	if !s.BlockAds {
+		t.Fatal("the session doesn't block ads")
+	}
+	exempts := func() []string {
+		f.b.mu.Lock()
+		defer f.b.mu.Unlock()
+		return slices.Clone(f.b.exempts)
+	}
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, raw := f.computer(s.ID, `{"action": "open", "url": "https://tracker.example/"}`); code != http.StatusConflict {
+		t.Fatalf("open while a person drives: %d %s", code, raw)
+	}
+	if got := exempts(); len(got) != 0 || f.lastInput() != "" {
+		t.Fatalf("while a person drives: exempted %q, sent %q", got, f.lastInput())
+	}
+	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := f.computer(s.ID, `{"action": "open", "url": "https://tracker.example/"}`); code != http.StatusConflict || len(exempts()) != 0 {
+		t.Fatalf("open during a handoff: %d, exempted %q", code, exempts())
+	}
+	if _, err := f.m.SetNeedsHelp(s.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	f.m.ReleaseControl(s.ID)
+	if code, _, raw := f.computer(s.ID, `{"action": "open", "url": "https://tracker.example/"}`); code != http.StatusNoContent {
+		t.Fatalf("open: %d %s", code, raw)
+	}
+	if got := exempts(); !slices.Equal(got, []string{"tracker.example"}) {
+		t.Fatalf("exempted %q", got)
 	}
 }
 

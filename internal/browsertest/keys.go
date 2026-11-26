@@ -147,6 +147,19 @@ func (s *KeySite) handler() http.Handler {
 iframe { display: block; border: 0; width: 100%; height: calc(100% - 24px); }</style>
 `+content+keysScript)
 	})
+	mux.HandleFunc("GET /dialog", func(w http.ResponseWriter, r *http.Request) {
+		// A click anywhere opens what kind asks for, as a page's own
+		// button would: a pop-up window over the whole browser window, or
+		// an alert.
+		open := "alert('A dialog')"
+		if r.URL.Query().Get("kind") == "popup" {
+			open = "window.open('about:blank', 'p', 'popup,left=0,top=0,width=' + screen.availWidth + ',height=' + screen.availHeight)"
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, `<!doctype html><title>Dialog</title>
+<style>html, body { margin: 0; height: 100%; } button { width: 100%; height: 100%; font-size: 32px; }</style>
+<button onclick="`+open+`">Open it</button>`)
+	})
 	mux.HandleFunc("POST /keys/report", func(w http.ResponseWriter, r *http.Request) {
 		var rep struct {
 			Seq    int        `json:"seq"`
@@ -211,6 +224,12 @@ func (s *KeySite) run(n string) *KeyRun {
 // focus is "field" (an autofocused field) or "body".
 func (s *KeySite) Keys(n string, slow int, focus string) string {
 	return fmt.Sprintf("%s/keys?n=%s&slow=%d&focus=%s", s.URL, url.QueryEscape(n), slow, url.QueryEscape(focus))
+}
+
+// Dialog is a page a click on which opens kind: "popup", a pop-up window
+// as big as the browser's, or "alert".
+func (s *KeySite) Dialog(kind string) string {
+	return fmt.Sprintf("%s/dialog?kind=%s", s.URL, url.QueryEscape(kind))
 }
 
 // Loading is a /keys page u that the site takes ms milliseconds (at

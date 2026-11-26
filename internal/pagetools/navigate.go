@@ -9,11 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/net/idna"
-
 	"github.com/Oni-giri/browser-pier/internal/cdp"
 	"github.com/Oni-giri/browser-pier/internal/fence"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
+	"github.com/Oni-giri/browser-pier/internal/weburl"
 )
 
 // navigateTimeout is how long navigate waits for the page to load,
@@ -42,23 +41,15 @@ type NavigateIn struct {
 	Action string `json:"action,omitempty"`
 }
 
-// checkURL refuses what pages must not be sent to: any scheme but http
-// and https, and URLs carrying a user name or password.
+// checkURL refuses what pages must not be sent to (weburl.Check: any
+// scheme but http and https, and URLs carrying a user name or password),
+// as a 400.
 func checkURL(raw string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	switch {
-	case err != nil:
-		return "", &Error{Status: 400, Msg: "url: not a URL"}
-	case u.Scheme != "http" && u.Scheme != "https":
-		return "", &Error{Status: 400, Msg: "url: only http and https URLs can be opened"}
-	case u.User != nil:
-		return "", &Error{Status: 400, Msg: "url: URLs with a user name or password (user:pass@) aren't opened; sign in on the page"}
-	case u.Host == "":
-		return "", &Error{Status: 400, Msg: "url: no host"}
-	case len(raw) > 8192:
-		return "", &Error{Status: 400, Msg: "url: too long"}
+	u, err := weburl.Check(raw)
+	if err != nil {
+		return "", &Error{Status: 400, Msg: err.Error()}
 	}
-	return u.String(), nil
+	return u, nil
 }
 
 // Navigate opens a URL in the active tab, or goes back, forward or
@@ -191,15 +182,7 @@ func (t *Tools) openingDirectly(ctx context.Context, s sessions.Session, raw str
 	if !s.BlockAds {
 		return
 	}
-	u, err := url.Parse(raw)
-	if err != nil {
-		return
-	}
-	host := u.Hostname()
-	if a, err := idna.Lookup.ToASCII(host); err == nil {
-		host = a
-	}
-	if err := t.m.ExemptHost(ctx, s.ID, host); err != nil {
+	if err := t.m.ExemptURL(ctx, s.ID, raw); err != nil {
 		t.log.Debug("couldn't exempt a host from the ad and tracker list", "session", s.ID, "err", err)
 	}
 }

@@ -677,6 +677,14 @@ func takeDownloadWait(body []byte) ([]byte, *int, error) {
 // act runs one input action through the control socket and logs it, or
 // writes why it didn't run.
 func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, path string, body []byte) bool {
+	return a.actAfter(w, r, s, path, body, nil)
+}
+
+// actAfter is act, with first run once the agent has the input and before
+// the action is sent, under the input's context: what the action needs
+// done first (open's ad-list exemption) happens only if the agent may act,
+// not while a person has the browser (PROJ-164).
+func (a *API) actAfter(w http.ResponseWriter, r *http.Request, s sessions.Session, path string, body []byte, first func(ctx context.Context)) bool {
 	tok, _ := auth.TokenFromContext(r.Context())
 	ctx, done, err := a.m.AgentInput(r.Context(), s.ID, tok.ID)
 	if errors.Is(err, sessions.ErrInputBusy) {
@@ -707,6 +715,9 @@ func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, pa
 			a.internal(w, "checking the token", err) // fails closed
 		}
 		return false
+	}
+	if first != nil {
+		first(ctx)
 	}
 	resp, err := a.control(ctx, s.Profile, http.MethodPost, path, body)
 	if err != nil {
@@ -761,6 +772,15 @@ func describeInput(path string, body []byte) string {
 		var d struct{ From, To struct{ X, Y int } }
 		_ = json.Unmarshal(body, &d)
 		return fmt.Sprintf("Dragged from %d, %d to %d, %d", d.From.X, d.From.Y, d.To.X, d.To.Y)
+	case "/input/open":
+		// As navigate logs it: the origin, not the path or query, which
+		// may carry a one-time link's token.
+		var o struct{ URL string }
+		_ = json.Unmarshal(body, &o)
+		if u, err := url.Parse(o.URL); err == nil && u.Host != "" {
+			return "Opened " + u.Scheme + "://" + u.Host + " in the address bar"
+		}
+		return "Opened an address in the address bar"
 	}
 	if path == "/input/type" {
 		var t struct{ Text string }

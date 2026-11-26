@@ -35,6 +35,12 @@ func TestKeySiteServesRecordsAndReports(t *testing.T) {
 		}
 	}
 
+	if page := get(s.Dialog("popup")); !strings.Contains(page, "window.open('about:blank'") {
+		t.Errorf("the pop-up page:\n%s", page)
+	}
+	if page := get(s.Dialog("alert")); !strings.Contains(page, "alert(") || strings.Contains(page, "window.open") {
+		t.Errorf("the alert page:\n%s", page)
+	}
 	if page := get(s.Keys("1", 400, "field")); !strings.Contains(page, `id="f"`) || !strings.Contains(page, "autofocus") || !strings.Contains(page, "addEventListener('keydown'") {
 		t.Errorf("focus=field: no autofocused field or no key listener:\n%s", page)
 	}

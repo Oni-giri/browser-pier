@@ -131,10 +131,10 @@ New MCP servers usually load in a new session. If the browserpier tools (`list_p
 
 Once connected, the server tells you how to use its tools. Which ones depend on the browser's mode, which `start_browser` reports:
 
-- **Visual mode** (sites with heavy anti-bot measures): `screenshot` to see the screen, then `click`, `type_text`, `press_keys`, `scroll`, `drag`, `wait` and `zoom`, with coordinates in the screenshot's pixels.
+- **Visual mode** (sites with heavy anti-bot measures): `screenshot` to see the screen, then `click`, `type_text`, `press_keys`, `scroll`, `drag`, `wait` and `zoom`, with coordinates in the screenshot's pixels, and `open_url` to open an address (rather than `ctrl+l` and typing it, which a busy page can get in the way of).
 - **API mode**: `snapshot` to read the page as text, with refs like `a7e12` for its controls, `find` to search it, `act` to click, fill, type, press, select, check, hover or upload by ref, or by a target like `role=button[name="Save"]` or `text=Save` with no snapshot first (put the file in first with `upload_file`), `wait_for`, `navigate` and `tabs` (sign-in popups open in a new tab), and `page_content` to read a whole page as Markdown, its main text only (`readability`, the fewest tokens) or a PDF. Or connect your own CDP client to the `cdp_url`.
 - **Both:** `request_handoff`, `wait_for_handoff`, `cancel_handoff`, `list_files`, `upload_file`, `choose_files`, `stop_browser`, and `page_content` with `screenshot`. A page's file chooser shows no dialog: when one is open, the action's answer ends with `a file chooser is open (c3)`, and `choose_files` answers it with files you put in with `upload_file`, or cancels it.
-- **Actions that must not happen twice** (a click on Pay, a form sent, a message): pass a new `call_id` of your own to `click`, `type_text`, `press_keys`, `scroll`, `drag`, `act`, `navigate` or `tabs`. If the answer is lost, send the same call again with the same `call_id`: it won't run twice, and the answer says how the first one went. Or ask `call_status`; `session_status` lists your recent calls.
+- **Actions that must not happen twice** (a click on Pay, a form sent, a message): pass a new `call_id` of your own to `click`, `type_text`, `press_keys`, `open_url`, `scroll`, `drag`, `act`, `navigate` or `tabs`. If the answer is lost, send the same call again with the same `call_id`: it won't run twice, and the answer says how the first one went. Or ask `call_status`; `session_status` lists your recent calls.
 - **Ads and trackers** are usually blocked. If a page misses something it needs (a video player, a sign-in widget), call `start_browser` again with `allow_ads`; that turns blocking off for this session only.
 
 ## 4. No MCP? Use the REST API
@@ -150,7 +150,7 @@ curl -s -X POST {{.Base}}/api/sessions -H "$H" -d '{"profile": "NAME", "mode": "
 # see the screen (a PNG), then act; coordinates are in that screenshot's pixels
 curl -s {{.Base}}/api/sessions/ID/screenshot -H "$H" -o screen.png
 curl -s -X POST {{.Base}}/api/sessions/ID/computer -H "$H" -d '{"action": "click", "x": 640, "y": 360, "screenshot": true}' -o screen.png
-#   other actions: type {"text"}, key {"keys": "ctrl+l"}, scroll {"x", "y", "dy"}, drag {"from", "to"}, wait {"ms"}, zoom {"x", "y", "w", "h"}
+#   other actions: open {"url"} (opens an address through the address bar), type {"text"}, key {"keys": "ctrl+a"}, scroll {"x", "y", "dy"}, drag {"from", "to"}, wait {"ms"}, zoom {"x", "y", "w", "h"}
 # a person is needed (sign-in, 2FA, CAPTCHA, payment): send them a link, then wait for them
 curl -s -X POST {{.Base}}/api/sessions/ID/handoff -H "$H" -d '{"reason": "sensitive_input", "detail": "Enter the 2FA code"}'
 #   with "until_url": "example.com/account" it also ends by itself once a tab navigates there (origin and path only)

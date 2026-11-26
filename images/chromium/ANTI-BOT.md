@@ -288,6 +288,33 @@ Two runs in all (`slow=50` with a 25 ms gap, and the frame at `slow=0`) didn't a
 
 Not built, as the ticket rules out: anything over CDP to learn that the browser handled a key. The X display can't tell either: Chromium's toolbar and page are one X window, so `xdotool getwindowfocus` named the same window (4194306, the tab's title) with the page focused and right after `ctrl+l`. The gap changes no event a page sees: the same keys, the next ones only later, as a person's are.
 
+## Opening an address with a click (PROJ-164)
+
+PROJ-151 left a residual: behind a page whose key handler takes more than about 100 ms a key, text typed after `ctrl+l` still goes to the page. Its measurement also found that a click on the address bar moves the focus without asking the page. Visual mode now has an `open {url}` action (MCP `open_url`): a click in the middle of the address bar, `ctrl+a`, the address typed, Delete, Return, all through xdotool at the action's pace (SPEC §8). Before clicking, the container reads the X window tree (`entrypoint/xwin.go`, read-only, no CDP) and refuses if anything but Chromium's tabbed window shows at that point.
+
+**2026-11-18, Chromium 156.0.8078.79** (`localhost/bp-proj164-chromium:open`), on the same shared 6-CPU VM, through the orchestrator's `/computer` (`TestOpenBehindABusyPage`, `TestOpenWithSomethingInTheWay`, `TestOpenAtEveryScreenSize` in `internal/api`, in `make test-docker`):
+
+| Shape | Lost | Notes |
+|---|---|---|
+| `open`, instant pace, `slow=400`, a focused field | **0 of 20** | the page saw no key and its field stayed empty; about 0.9 s a call for a 60-character address |
+| `open`, human pace, `slow=400` | **0 of 3** | the same; 15–16 s a call with the address typed at a typist's pace (before the review; now it goes in at 12 ms a key, see below) |
+| `ctrl+l`, `type`, Return through `/computer`, instant pace, `slow=400` (the same test with the old calls) | **lost at once** | the page took 17 keys and its field had `http://host.d` |
+| `open` at 640×480 and 1920×1080, `slow=400`, each pace | 0 of 2 each | the address bar is where the entrypoint computes it |
+| A page's `alert()` open | opens | the dialog is drawn inside the window, below the toolbar; opening dismisses it |
+| A pop-up window the size of the browser window, over it | **refused** (409) | geometry can't tell it from the browser window; its `WM_WINDOW_ROLE` (`pop-up`, not `browser`) does |
+| Full screen (F11), with its "press F11 to exit" bubble over the address bar and after it has gone | **refused** (409) | the window fills the whole screen, taskbar included |
+| A context menu over the address bar (by hand, with the X tree reader) | refused | an override-redirect window |
+
+**What a page can see.** Nothing of the address: the keys go to the browser's own address bar, never to the page. Before that, at human pace, the pointer glides from wherever it was to the toolbar, so the page sees it move and leave the viewport, then loses the focus (`blur`), as when a person reaches for the address bar; at instant pace it sees no move, only the blur. The new page loads with the focus (`document.hasFocus()` true). `TestVisualModeLooksLikeAPerson` now opens its detector page both ways, with `open` at human pace and with `ctrl+l`: nothing automated either way, and the page focused both times. One difference showed in that run: opened with `open`, the page's first script saw its real window size (1440×868); opened with `ctrl+l` it saw 0×0, the signal PROJ-65 is about. One run each, so this isn't a finding yet.
+
+**After the code review** (same day): the address now goes in at 12 ms a key at either pace (only the glide, the pause and the held button and keys are a hand's), since no page sees those keys and a person often pastes an address; a human-paced open takes about 2 s instead of 15. The last look comes after the hand's pause, just before the press. After the click, which window has the keyboard is read before every 64 characters and before Delete and Return, and the open stops if it changed. After the Codex review (2026-11-26) the look before each of Delete and Return comes after the pause before that key, not ahead of it, so a window that takes the keyboard during a pause gets neither key. It refuses on a Chromium other than 156, whose address bar hasn't been measured. Checked by hand with the window-tree reader: a tab's hover card over the address bar (the pointer resting on a tab) and the address bar's own suggestions are drawn inside the browser window, not as windows of their own; neither stops `open`, and an instant open through a hover card reached the address bar.
+
+**Residuals, accepted:**
+- **Delete before Return.** It drops an inline completion the address bar may have added after the typed text (the cause of the two autocomplete losses in PROJ-151's table). A person seldom presses it, but the key goes to the address bar, which no page sees.
+- **The address goes in at 12 ms a key**, faster than anyone types, at both paces. No page sees those keys, only the address bar; the search engine's suggest service may see what is typed (PROJ-191).
+- **The layout is Chromium 156's.** The address bar's place is computed (y = 63, the middle of x = 121 to width − 85), not found on the screen. On another Chromium `open` refuses (409) rather than click blind, and `TestOpenAtEveryScreenSize` fails until it is measured again.
+- **A window that opens between a look and the run after it.** Each look at the screen and the xdotool run it allows are separate: a pop-up opening in those few milliseconds would still take the press (the click, Delete or Return) or up to 64 characters of the address; the next look stops the rest. The pauses all come before a look, never between a look and its press, so this window stays a few milliseconds.
+
 ## Fixed along the way
 
 - **`Intl` contradicted the browser's languages.** The image had only Chromium's `en-US` interface, so whatever `LANGUAGE` said, `Intl` reported `en-US` while `navigator.languages` and Accept-Language followed the exit location (`fr-FR`). The image now installs `chromium-l10n` (about 120 MB), and its build fails if the locales are missing. `Intl` now follows the interface language: `de` for a German exit, as Chromium on a German Linux desktop reports.

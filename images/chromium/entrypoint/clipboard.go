@@ -197,7 +197,7 @@ func (v *visual) paste(w http.ResponseWriter, r *http.Request) {
 	// The person's paste neither waits for an agent's shortcut gap nor
 	// arms it (PROJ-151), as the live view's other input.
 	v.perform(w, r, personAction, func(func() hand) []xcmd {
-		return []xcmd{{[]string{"key", "--clearmodifiers", "ctrl+v"}, []string{"keyup", "ctrl+v"}}}
+		return []xcmd{{args: []string{"key", "--clearmodifiers", "ctrl+v"}, release: []string{"keyup", "ctrl+v"}}}
 	})
 }
 

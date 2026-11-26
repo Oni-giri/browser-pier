@@ -40,8 +40,12 @@ func TestPageToolsAreAPIModeOnly(t *testing.T) {
 		}
 	}
 	// PROJ-151: what an agent must do itself after a shortcut.
-	if !strings.Contains(desc["press_keys"], "look at the screen before you type") {
+	if !strings.Contains(desc["press_keys"], "look at the screen before you type") || !strings.Contains(desc["press_keys"], "use open_url") {
 		t.Errorf("press_keys: %q", desc["press_keys"])
+	}
+	// PROJ-164: when to open a URL with open_url rather than ctrl+l.
+	if !strings.Contains(desc["open_url"], "rather than press_keys ctrl+l") || !strings.Contains(desc["open_url"], "full screen") {
+		t.Errorf("open_url: %q", desc["open_url"])
 	}
 	// The fixture's browsers start in Visual mode: the API answers 409.
 	call(t, cs, "start_browser", map[string]any{"profile": "google"})
