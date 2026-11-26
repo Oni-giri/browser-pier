@@ -138,7 +138,7 @@
       status = await r.json();
       if (typeof status.record === "boolean") records = status.record;
     } catch (_) { /* keep the last status */ }
-    if (control && !status.human_control) { control = false; keyboard = false; }
+    if (control && !status.human_control) { control = false; keyboard = false; closeChooser(); }
     render();
   }
 
@@ -164,7 +164,7 @@
         control = m.on; keyboard = control && !touch;
         status.human_control = m.on; // until the next poll says otherwise
         if (keyboard) video.focus();
-        render(); poll();
+        render(); poll(); pollChooser();
       }
       if (/^clipboard/.test(m.type)) clipAnswer(m);
       if (m.type === "error") { say(m.msg); poll(); }
@@ -193,6 +193,119 @@
     offerAnswered = true;
     if (answer.control) { control = true; keyboard = !touch; status.human_control = true; }
     render();
+    if (answer.control) pollChooser();
+  }
+
+  // A page's file chooser (PROJ-181). While you have control, a page that
+  // asks for a file shows this modal: the server renders it, its names
+  // escaped, and answers the chooser with what you pick or upload. Nothing
+  // else of the page is shown, and no CDP is involved.
+  const chooserURL = root.dataset.chooser;
+  const chooserBox = document.getElementById("chooser");
+  let chooserShown = "", chooserBusy = false;
+  function closeChooser() {
+    chooserShown = "";
+    if (chooserBox && chooserBox.open) chooserBox.close();
+  }
+  async function pollChooser() {
+    if (!chooserURL || !chooserBox || chooserBusy) return;
+    if (!control) { closeChooser(); return; }
+    let r;
+    try { r = await fetch(chooserURL, { cache: "no-store" }); } catch (_) { return; }
+    if (r.status === 204 || r.status === 409 || r.status === 403) { closeChooser(); return; }
+    if (r.status !== 200 || !control || chooserBusy) return;
+    const t = document.createElement("template");
+    t.innerHTML = await r.text();
+    const form = t.content.querySelector("form.chooser");
+    if (!form) return;
+    // The same chooser stays as it is, with what you've picked; only the
+    // time it has left is new.
+    if (chooserBox.open && form.dataset.id === chooserShown) {
+      const note = chooserBox.querySelector(".chooser-note"), fresh = form.querySelector(".chooser-note");
+      if (note && fresh) note.textContent = fresh.textContent;
+      return;
+    }
+    chooserShown = form.dataset.id;
+    chooserBox.replaceChildren(form);
+    wireChooser(form);
+    if (!chooserBox.open) {
+      if (keyboard) lift(); // nothing stays held while the modal is up
+      chooserBox.showModal();
+    }
+  }
+  function wireChooser(form) {
+    const id = form.dataset.id;
+    const choose = form.querySelector("[type=submit]");
+    const err = form.querySelector(".chooser-error");
+    const progress = form.querySelector(".chooser-progress");
+    const device = form.querySelector("[data-device]");
+    const picked = () => [...form.querySelectorAll("input[name=file]:checked")].map((i) => i.value);
+    const sync = () => {
+      const n = picked().length;
+      choose.disabled = chooserBusy || n === 0;
+      choose.textContent = n > 1 ? `Choose ${n} files` : "Choose";
+    };
+    const busy = (on) => {
+      chooserBusy = on;
+      form.querySelectorAll("button, input").forEach((b) => { b.disabled = on; });
+      if (!on) sync();
+    };
+    const fail = (msg) => { err.textContent = msg; err.hidden = false; };
+    // done handles the server's answer to a choice, a cancel or an upload.
+    const done = (status, text) => {
+      if (status >= 200 && status < 300) { closeChooser(); return; }
+      if (status === 409) { closeChooser(); say(text || "That file chooser closed."); return; }
+      fail(text || "Couldn't answer the page's chooser. Try again.");
+    };
+    async function post(body) {
+      busy(true); err.hidden = true;
+      try {
+        const r = await fetch(chooserURL, { method: "POST", body });
+        done(r.status, (await r.text()).trim());
+      } catch (_) { fail("Couldn't reach BrowserPier. Try again."); }
+      busy(false);
+    }
+    form.addEventListener("change", (e) => { if (e.target.name === "file") sync(); });
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const body = new URLSearchParams({ id });
+      picked().forEach((n) => body.append("file", n));
+      post(body);
+    });
+    form.querySelector("[data-cancel]").onclick = () => post(new URLSearchParams({ id, cancel: "1" }));
+    form.querySelector("[data-upload]").onclick = () => device.click();
+    device.onchange = () => {
+      const f = device.files[0];
+      if (!f) return;
+      const body = new FormData();
+      body.append("id", id);
+      body.append("file", f, f.name);
+      const mb = (n) => (n / 1e6).toFixed(n < 1e7 ? 1 : 0) + " MB";
+      const text = progress.querySelector(".chooser-progress-text");
+      const bar = progress.querySelector(".chooser-bar > span");
+      text.textContent = `Uploading ${f.name}…`;
+      bar.style.width = "0";
+      progress.hidden = false;
+      busy(true); err.hidden = true;
+      // XMLHttpRequest, for the upload's progress.
+      const x = new XMLHttpRequest();
+      x.open("POST", chooserURL + "/upload");
+      x.upload.onprogress = (e) => {
+        if (!e.lengthComputable) return;
+        bar.style.width = Math.round(100 * e.loaded / e.total) + "%";
+        text.textContent = `Uploading ${f.name}… ${mb(e.loaded)} of ${mb(e.total)}`;
+      };
+      const end = () => { progress.hidden = true; device.value = ""; busy(false); };
+      x.onload = () => { end(); done(x.status, x.responseText.trim()); };
+      x.onerror = () => { end(); fail("The upload didn't get through. Try again."); };
+      x.send(body);
+    };
+    sync();
+  }
+  if (chooserBox) {
+    // Esc doesn't close it: the page waits for an answer, so Cancel is.
+    chooserBox.addEventListener("cancel", (e) => e.preventDefault());
+    setInterval(pollChooser, 1000);
   }
 
   for (const b of takeBtns) b.onclick = () => send({ type: control ? "release" : "take" });
@@ -363,12 +476,15 @@
   function lift() { flush(); send({ type: "lift" }); held.clear(); }
   // releaseKeys gives the keyboard back to this page.
   function releaseKeys() { lift(); keyboard = false; render(); }
+  // While the file chooser's modal is up, keys are the modal's.
+  const modalUp = () => chooserBox && chooserBox.open;
   // Keys held in the browser, by the physical key, with the keysym sent:
   // a key's keyup can name another keysym than its keydown (Shift let go
   // first: "A" down, "a" up), and must let go of what went down.
   const held = new Map();
   const modifier = (e) => ["Shift", "Control", "Alt", "AltGraph", "Meta", "CapsLock"].includes(e.key);
   addEventListener("keydown", (e) => {
+    if (modalUp()) return;
     // The fixed full screen has no browser Esc of its own: Esc leaves it,
     // and releases the keyboard if it was captured.
     // In the clipboard box, keys stay on this page; Esc closes it.
@@ -406,7 +522,7 @@
     // the keysym it went down as.
     if (held.has(code)) { push({ t: "keyup", k: held.get(code) }); held.delete(code); }
     // In the box, the key is the page's (Space presses its buttons).
-    if (keyboard && !(clipBox && clipBox.contains(e.target))) e.preventDefault();
+    if (keyboard && !modalUp() && !(clipBox && clipBox.contains(e.target))) e.preventDefault();
   });
   addEventListener("blur", () => { if (control) lift(); });
   // A field of this page (the handoff's note) or anything in the clipboard

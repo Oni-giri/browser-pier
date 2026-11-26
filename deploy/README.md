@@ -77,6 +77,7 @@ Browser containers publish no ports. They're reached only through BrowserPier, b
 
 BrowserPier starts browsers through `/var/run/docker.sock`, and **anything that can use the Docker socket controls the host**. A flaw in BrowserPier could therefore become a way into the server. What limits that:
 - BrowserPier starts containers only from its own browser image. Browsers run without capabilities beyond what Chromium's sandbox needs, with no-new-privileges, seccomp, and no published ports.
+- Right before each container is created, BrowserPier checks its whole definition against a fixed list of what its containers may get, and refuses anything else (a device, another folder, a host namespace, a published port). That catches mistakes in BrowserPier itself; it doesn't contain a BrowserPier that has been taken over, which holds the socket anyway. A refusal fails the browser's start with an error naming the setting: please report it.
 - The orchestrator image is distroless and runs as your user, not root.
 
 Still:
@@ -230,7 +231,7 @@ Leave `BROWSERPIER_LISTEN` and `BROWSERPIER_WEBRTC_PORT` alone with this compose
 | `BROWSERPIER_BROWSER_IMAGE` | this release's | The browser image. Only BrowserPier's own. |
 | `BROWSERPIER_DATA_DIR` | `/data` | The database and one folder per profile, inside the container. Keep the `./data:/data` mount. |
 | `BROWSERPIER_HOST_DATA_DIR` | detected | The data folder's path on the host, if detection fails. |
-| `BROWSERPIER_USERNS_MODE` | unset | `keep-id` under rootless Podman. |
+| `BROWSERPIER_USERNS_MODE` | unset | `keep-id` under rootless Podman (or `keep-id:uid=…,gid=…`; keep-id's options are `uid`, `gid` and `size`, each at most once, as numbers). Nothing else is accepted: BrowserPier refuses to start with any other value, `host` included. |
 | `BROWSERPIER_BROWSER_APPARMOR` | unset | The browser containers' AppArmor profile. Unset, BrowserPier picks one: see [AppArmor](#apparmor). Set, that profile is used as it is, unchecked: `browserpier`, `unconfined`, or one of your own. A named profile that isn't loaded makes every browser fail to start, with an error saying so. |
 | `BROWSERPIER_STOP_BROWSERS_ON_EXIT` | `false` | `true` stops every browser when BrowserPier stops. Otherwise they keep running through an update. |
 
