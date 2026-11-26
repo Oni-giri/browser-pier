@@ -139,6 +139,8 @@ type Manager struct {
 	inputsDone *sync.Cond
 	// onEnd is called with a session's ID once it has ended (OnEnd).
 	onEnd []func(id string)
+	// onFailed is called with each session that failed, and how (OnFailed).
+	onFailed []func(s Session, how EndReason)
 	// secrets are the values BrowserPier typed into each live session's
 	// page, by session ID (RegisterSecret); in memory only. Its lock
 	// nests inside mu.
@@ -300,6 +302,17 @@ func (m *Manager) OnEnd(f func(id string)) {
 	m.onEnd = append(m.onEnd, f)
 }
 
+// OnFailed registers f to be called, without the manager's lock, with each
+// session that fails and how: one of the failed EndReasons (EndReason.
+// Failed), in fixed words, never its error or its container's log, which a
+// page can write to. A start cut short by BrowserPier shutting down ends
+// with EndShutdown, so it isn't one. f must not wait.
+func (m *Manager) OnFailed(f func(s Session, how EndReason)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onFailed = append(m.onFailed, f)
+}
+
 // Close stops tracking sessions. Browsers keep running; Reconcile picks them
 // up on the next start, so restarting the orchestrator doesn't log anyone out.
 func (m *Manager) Close() {
@@ -412,7 +425,7 @@ func (m *Manager) StartWith(ctx context.Context, profile string, opts StartOptio
 		if !m.spawn(func() { m.launch(l, p) }) {
 			m.end(l, "", func(s *Session) StopReason {
 				s.State, s.Error = Failed, "BrowserPier was shutting down"
-				return endStartFailed
+				return stopShutdown // not a failure: no webhook is told
 			})
 			return Session{}, false, ErrClosed
 		}
@@ -855,13 +868,21 @@ func capRunes(s string, n int) string {
 	return s
 }
 
-// abort fails a session whose container never got going.
+// abort fails a session whose container never got going. With
+// BrowserPier shutting down, which cancels whatever the start was
+// waiting on, it is no failure to tell anyone of.
 func (m *Manager) abort(l *live, cid, reason string) {
 	lastLog := ""
 	if cid != "" {
 		lastLog = m.cleanup(cid)
 	}
+	closing := m.ctx.Err() != nil
 	m.end(l, lastLog, func(s *Session) StopReason {
+		if closing {
+			// Ended with BrowserPier, not a failure: no webhook is told.
+			s.State, s.Error = Failed, "BrowserPier was shutting down: "+reason
+			return stopShutdown
+		}
 		s.State, s.Error = Failed, reason
 		return endStartFailed
 	})
@@ -1021,12 +1042,18 @@ func (m *Manager) end(l *live, lastLog string, final func(*Session) StopReason) 
 		l.recTimer.Stop()
 		l.recTimer = nil
 	}
+	failed := slices.Clone(m.onFailed)
 	m.mu.Unlock()
 	if m.rec != nil {
 		m.rec.End(s.ID)
 	}
 	for _, f := range hooks {
 		f(s.ID)
+	}
+	if s.State == Failed && why.Reason().Failed() {
+		for _, f := range failed {
+			f(s, why.Reason())
+		}
 	}
 	if s.State == Failed {
 		m.log.Warn("session failed", "session", s.ID, "profile", s.Profile, "err", s.Error, "last_log", s.LastLog)

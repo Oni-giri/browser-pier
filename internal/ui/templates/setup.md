@@ -171,7 +171,7 @@ curl -s -X POST {{.Base}}/api/sessions/ID/act -H "$H" -H "Idempotency-Key: pay-o
 curl -s -X DELETE {{.Base}}/api/sessions/ID -H "$H"
 ```
 
-Handoff reasons: `sensitive_input`, `captcha`, `file_upload`, `review`, `manual_step`. If you know the address where the person's part ends (the account page after a sign-in), pass it as `until_url`, so you aren't left waiting when they stop there without tapping Done.
+Handoff reasons: `sensitive_input`, `captcha`, `file_upload`, `review`, `manual_step`. If you know the address where the person's part ends (the account page after a sign-in), pass it as `until_url`, so you aren't left waiting when they stop there without tapping Done. If the handoff's answer says `notified: true`, the admin's webhook was told too: still pass the link on if you can, but if you can't reach anyone, wait for them rather than cancelling.
 
 ## Rules
 

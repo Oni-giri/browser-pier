@@ -7,6 +7,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"image/png"
@@ -46,6 +47,8 @@ type agent struct {
 	token string
 	m     *sessions.Manager
 	ho    *handoff.Service
+	web   *auth.Web
+	db    *sql.DB
 }
 
 func (a agent) do(method, path, body string, out any) int {
@@ -169,7 +172,7 @@ func newRealAPIEnv(t *testing.T, env ...string) agent {
 	hw.Register(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return agent{t: t, base: srv.URL, token: secret, m: m, ho: handoffs}
+	return agent{t: t, base: srv.URL, token: secret, m: m, ho: handoffs, web: web, db: d}
 }
 
 // allowLocalNetwork lets the profile's pages reach the test sites, on the

@@ -49,10 +49,10 @@ const (
 	// EndStopped: a stop begun by the BrowserPier before a restart, whose
 	// reason went with it.
 	EndStopped EndReason = "stopped"
-	// Failures, named as PROJ-157's webhooks name them (sessions.Failure
-	// on its branch): one set for both once they meet.
+	// Failures (Failed): the webhook's browser.failed categories too
+	// (OnFailed, internal/notify).
 	EndCrashed     EndReason = "crashed"       // the browser exited by itself
-	EndUnclean     EndReason = "unclean_close" // it didn't close cleanly when stopped (PROJ-157's name)
+	EndUnclean     EndReason = "unclean_close" // it didn't close cleanly when stopped
 	EndLost        EndReason = "lost"          // its container was lost track of
 	EndStartFailed EndReason = "start_failed"  // it never got to Running
 )
