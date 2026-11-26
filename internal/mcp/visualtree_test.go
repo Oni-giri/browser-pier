@@ -53,6 +53,23 @@ func TestVisualSnapshotAndClickByRef(t *testing.T) {
 	if len(clicks) != 1 || !strings.Contains(clicks[0], `"x":120`) || !strings.Contains(clicks[0], `"y":210`) || strings.Contains(clicks[0], "ref") {
 		t.Fatalf("the browser was asked to click %v", clicks)
 	}
+	// With a call_id (PROJ-156): it runs once, and a repeat says so.
+	byID := map[string]any{"session_id": s.ID, "ref": ref[1], "call_id": "go-1"}
+	if res, out := call(t, cs, "click", byID); res.IsError || !strings.Contains(out, "Clicked "+ref[1]) {
+		t.Fatalf("click by ref with a call_id: %s", out)
+	}
+	if res, out := call(t, cs, "click", byID); res.IsError || !strings.Contains(out, "ran already") {
+		t.Fatalf("click by ref with a call_id, again: %s", out)
+	}
+	f.mu.Lock()
+	n := len(f.clicks)
+	f.mu.Unlock()
+	if n != 2 {
+		t.Fatalf("the browser clicked %d times, want 2", n)
+	}
+	if res, out := call(t, cs, "call_status", map[string]any{"session_id": s.ID, "call_id": "go-1"}); res.IsError || !strings.Contains(out, "Call go-1 (computer): ok.") {
+		t.Fatalf("call_status: %s", out)
+	}
 	for _, args := range []map[string]any{{"session_id": s.ID, "ref": ref[1], "x": 1, "y": 1}, {"session_id": s.ID}} {
 		res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "click", Arguments: args})
 		if err != nil {

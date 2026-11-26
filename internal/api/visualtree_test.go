@@ -412,3 +412,65 @@ func TestClickByRefAfterAHandBack(t *testing.T) {
 		}
 	}
 }
+
+// TestAClickByRefTakesACallID (PROJ-150 with PROJ-156): a click by ref,
+// on /click and on /computer, runs once under a call id, and a repeat is
+// answered from its receipt. The element's lookup doesn't admit the call:
+// a click refused after it (a person had the browser) gives its id back.
+func TestAClickByRefTakesACallID(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.all, "google", "visual")
+	f.setTree(loginTree(onScreen), nodeAt(615, 167, onScreen, ""))
+	for _, endpoint := range []string{"click", "computer"} {
+		body := func(ref string) string {
+			if endpoint == "click" {
+				return `{"ref": "` + ref + `"}`
+			}
+			return `{"action": "click", "ref": "` + ref + `"}`
+		}
+		_, snap := f.vsnapshot(f.all, s.ID, "")
+		btn := refNamed(t, snap, `button "Sign in"`)
+		id := "ref-" + endpoint
+		before := f.inputCount()
+		r := f.send(f.srv, f.all, s.ID, endpoint, id, body(btn))
+		if r.code != http.StatusOK || r.replayed || !strings.Contains(r.body.Text, "Clicked "+btn) {
+			t.Fatalf("%s by ref with a call id: %d %s", endpoint, r.code, r.raw)
+		}
+		if n := f.inputCount(); n != before+1 {
+			t.Fatalf("%s: %d inputs", endpoint, n-before)
+		}
+		checkReplay(t, endpoint+" by ref again", f.send(f.srv, f.all, s.ID, endpoint, id, body(btn)), "ok")
+		if n := f.inputCount(); n != before+1 {
+			t.Fatalf("%s: the repeat clicked again (%d inputs)", endpoint, n-before)
+		}
+		if st := f.receipt(f.all, s.ID, id); st != "ok" {
+			t.Fatalf("%s: receipt %q", endpoint, st)
+		}
+
+		// Refused after the lookup: the id comes back.
+		id2 := "ref-handed-back-" + endpoint
+		f.api.afterLocate = func() {
+			if err := takeControlSoon(f.m, s.ID); err != nil {
+				t.Error(err)
+			}
+			f.m.ReleaseControl(s.ID)
+		}
+		r = f.send(f.srv, f.all, s.ID, endpoint, id2, body(btn))
+		f.api.afterLocate = nil
+		if r.code != http.StatusConflict || r.replayed || !strings.Contains(r.raw, "visual_snapshot") {
+			t.Fatalf("%s by ref across a hand-back: %d %s", endpoint, r.code, r.raw)
+		}
+		if st := f.receipt(f.all, s.ID, id2); st != "" {
+			t.Fatalf("%s: a click refused after its lookup kept its receipt: %s", endpoint, st)
+		}
+		_, snap = f.vsnapshot(f.all, s.ID, "")
+		fresh := refNamed(t, snap, `button "Sign in"`)
+		before = f.inputCount()
+		if r := f.send(f.srv, f.all, s.ID, endpoint, id2, body(fresh)); r.code != http.StatusOK || r.replayed {
+			t.Fatalf("%s: the id given back: %d %s", endpoint, r.code, r.raw)
+		}
+		if n := f.inputCount(); n != before+1 {
+			t.Fatalf("%s: the id given back clicked %d times", endpoint, n-before)
+		}
+	}
+}
