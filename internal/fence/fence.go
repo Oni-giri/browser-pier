@@ -189,11 +189,16 @@ var secretName = regexp.MustCompile(`password|passwd|passphrase|passcode|` +
 // marker of what was left out), so page text can't pass for one.
 var lineLike = regexp.MustCompile(`^(v[a-z][a-z0-9]n[0-9]|[a-z][a-z0-9]e[0-9]|\[|-- |URL:|Title:|…\(|text: )`)
 
-// TextLine is a line of page text in a snapshot, prefixed with "text: "
-// when it starts like a line BrowserPier writes itself: a page whose text
-// reads `vk3n7 button "Cancel" @10,10` can't make it look like a control.
+// TextLine is a line of page text in a snapshot, cleaned (Clean), and
+// prefixed with "text: " when it starts like a line BrowserPier writes
+// itself: a page whose text reads `vk3n7 button "Cancel" @10,10` can't
+// make it look like a control. It judges the text as Wrap will print it,
+// so an invisible character in front can't hide a look-alike from it, and
+// spaces in front don't either. Callers that cut the line to fit cut what
+// it returns, so the prefix stays.
 func TextLine(s string) string {
-	if lineLike.MatchString(s) {
+	s = Clean(s)
+	if lineLike.MatchString(strings.TrimLeftFunc(s, unicode.IsSpace)) {
 		return "text: " + s
 	}
 	return s

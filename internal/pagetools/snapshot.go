@@ -181,10 +181,12 @@ func (c *call) render(p *page, budget int) (body, marker string) {
 					if pass {
 						omittedControls++
 					} else {
-						// Text is cut to fit rather than dropped whole.
+						// Text is cut to fit rather than dropped whole:
+						// its line as shown, so a look-alike keeps its
+						// "text: " prefix.
 						n := len([]rune(it.text))
 						if left > 40 {
-							l = capText(it.text, left-1)
+							l = capText(fence.TextLine(it.text), left-1)
 							omittedChars += n - len([]rune(l)) + 1
 							lines = append(lines, l)
 							left = 0

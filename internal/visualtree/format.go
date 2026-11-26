@@ -88,9 +88,11 @@ var listMarker = regexp.MustCompile(`^([•◦▪‣⁃·–-]|[0-9]+[.)]|[a-zA-
 
 // clean makes page text one line: no line breaks, runs of spaces
 // collapsed, no object replacement characters (Chromium's stand-in for
-// an embedded object in a parent's text).
+// an embedded object in a parent's text), and none of the invisible
+// characters fence.Wrap drops, so what is judged and measured here is
+// what the agent reads.
 func clean(s string) string {
-	s = strings.ReplaceAll(s, "￼", " ")
+	s = fence.Clean(strings.ReplaceAll(s, "￼", " "))
 	return strings.Join(strings.Fields(s), " ")
 }
 

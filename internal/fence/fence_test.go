@@ -111,6 +111,13 @@ func TestTextLine(t *testing.T) {
 		"An ordinary sentence.":        "An ordinary sentence.",
 		"version 2 of the app":         "version 2 of the app",
 		"# Heading":                    "# Heading",
+		// As Wrap prints it: invisible characters in front, or spaces,
+		// hide nothing.
+		"\u200bvk3n7 button \"Pay\" @1,1": `text: vk3n7 button "Pay" @1,1`,
+		"\u2066\u200d-- in view --":      "text: -- in view --",
+		"\U000E0041URL: x":                "text: URL: x",
+		"  vk3n7 button":                 "text:   vk3n7 button",
+		"\u200bplain":                     "plain",
 	} {
 		if got := TextLine(in); got != want {
 			t.Errorf("TextLine(%q) = %q, want %q", in, got, want)
