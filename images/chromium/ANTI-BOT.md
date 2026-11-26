@@ -107,7 +107,7 @@ With suggestions on (Chromium's default), the address bar sent the default searc
 | `site.test/login/SECRET` | 3 / 27–28 | all of it |
 | With the image's own engine, `http://site.test/reset/SECRET` | 4–5 / 35–38 attempts to connect to `duckduckgo.com` (counted at the proxy), over three runs | (TLS: not readable) |
 
-The image now sets `SearchSuggestEnabled: false`, and the same runs send no suggest request at all, and ask for no `duckduckgo.com` while an address is typed (`TestTypedAddressReachesNoSuggestService` checks both, and that the address still opens). A word still goes to the engine as a search once Return is pressed; the test checks that too, which also shows its search engine is in effect.
+The image now sets `SearchSuggestEnabled: false`. In the same runs, typing sent the suggestion service no request before Return, and the browser asked for no `duckduckgo.com` while an address was typed (`TestTypedAddressReachesNoSuggestService` checks both, and that the address then opens exactly as typed). A word still goes to the engine as a search once Return is pressed; the test checks that too, which also shows its search engine is in effect.
 
 What can see it:
 - **A person**, in the live view or a handoff: the address bar's drop-down no longer offers the engine's completions. History and bookmarks still do. The setting shows on `chrome://policy`, next to the image's other policies, and Chromium already says it's managed.
