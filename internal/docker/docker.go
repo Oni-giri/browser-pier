@@ -54,8 +54,11 @@ const (
 // entrypoint's /input/clipboard and /input/paste, which the orchestrator
 // calls to empty the clipboard when a person's control ends (PROJ-194);
 // 6 adds the entrypoint's /record pipeline, which the recorder reads
-// (PROJ-23).
-const Spec = "6"
+// (PROJ-23); 7 runs Visual-mode browsers with the accessibility bus and
+// the entrypoint's /tree reader, and tells the container its mode
+// (BROWSERPIER_MODE), which visual_snapshot and click by ref rely on
+// (PROJ-150).
+const Spec = "7"
 
 const (
 	// StopTimeout is how long a browser container gets to stop before Docker
