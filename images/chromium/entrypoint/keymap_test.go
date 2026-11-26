@@ -923,3 +923,71 @@ func TestASCIITypeDrainsTheLiveViewOnlyToRestore(t *testing.T) {
 		t.Fatalf("restore: %d %s, closed %d, key 8 %x", rec.Code, rec.Body, x.closed, f.key(8))
 	}
 }
+
+// Typing characters the keyboard map lacks waits out an agent's shortcut
+// gap, as ASCII typing does (PROJ-151): ctrl+l, then "éxample.com". The
+// live view's Type button doesn't wait for it, and types such characters
+// too (PROJ-195).
+func TestKeymapTypingAndTheShortcutGap(t *testing.T) {
+	for _, pace := range []string{"instant", "human"} {
+		c := newClockedVisual()
+		var kcalls []call
+		c.keymap = newFakeKeyboard(&kcalls, 8).open
+		key := c.do(t, http.MethodPost, "/input/key", `{"keys": "ctrl+l", "pace": "`+pace+`"}`)
+		ended := key + xdotoolTakes
+		typed := c.do(t, http.MethodPost, "/input/type", `{"text": "éxample.com", "pace": "`+pace+`"}`)
+		if typed < ended+shortcutGap {
+			t.Errorf("%s: the text started %v after the key call ended, want at least %v", pace, typed-ended, shortcutGap)
+		}
+		if len(c.slept) != 1 || c.slept[0] != shortcutGap {
+			t.Errorf("%s: slept %v, want one %v", pace, c.slept, shortcutGap)
+		}
+		if !slices.ContainsFunc(kcalls, func(cl call) bool { return strings.Join(cl.args, " ") == "change 8 1 e9" }) {
+			t.Errorf("%s: é wasn't bound: %v", pace, kcalls)
+		}
+	}
+	c := newClockedVisual()
+	var kcalls []call
+	c.keymap = newFakeKeyboard(&kcalls, 8).open
+	c.do(t, http.MethodPost, "/input/key", `{"keys": "ctrl+l", "pace": "instant"}`)
+	n := len(c.calls)
+	c.do(t, http.MethodPost, "/input/live-type", `{"text": "héllo"}`)
+	if len(c.slept) != 0 {
+		t.Fatalf("the person's text waited %v", c.slept)
+	}
+	if got := strings.Join(c.calls[n].args, " "); got != "key --clearmodifiers --delay 12 -- h U00E9 l l o" {
+		t.Fatalf("the person's text typed with %q", got)
+	}
+	for _, body := range []string{`{"text": "hi\u001b"}`, `{"text": "hi\ud800"}`} {
+		if rec := serveVisual(c.visual, http.MethodPost, "/input/live-type", body); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: %d", body, rec.Code)
+		}
+	}
+}
+
+// A cancelled request (a handoff) breaks off an exchange with a stalled X
+// server at once, rather than after keymapTimeout, with the input locks
+// held. Here the server takes the setup and never answers.
+func TestKeymapConnectionEndsWithItsRequest(t *testing.T) {
+	path := t.TempDir() + "/X0"
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() {
+		c, err := ln.Accept()
+		if err == nil {
+			_, _ = io.Copy(io.Discard, c) // reads, never answers
+		}
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+	start := time.Now()
+	if _, err := dialKeyboardAt(ctx, path); err == nil {
+		t.Fatal("a server that never answered set up")
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("the cancel took %s", d)
+	}
+}

@@ -383,8 +383,13 @@ const keymapTimeout = 5 * time.Second
 var xOrder = binary.LittleEndian
 
 func dialKeyboard(ctx context.Context) (keymapConn, error) {
+	return dialKeyboardAt(ctx, "/tmp/.X11-unix/X"+display[1:])
+}
+
+// dialKeyboardAt is dialKeyboard on a socket path.
+func dialKeyboardAt(ctx context.Context, path string) (keymapConn, error) {
 	var d net.Dialer
-	conn, err := d.DialContext(ctx, "unix", "/tmp/.X11-unix/X"+display[1:])
+	conn, err := d.DialContext(ctx, "unix", path)
 	if err != nil {
 		return nil, err
 	}
