@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -176,7 +177,12 @@ func TestRecordSessionsIsOffForExistingProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := len(migrations) - 1
+	// The database as it was just before the record_sessions migration,
+	// wherever later migrations put it in the list.
+	before := slices.IndexFunc(migrations, func(q string) bool { return strings.Contains(q, "record_sessions") })
+	if before < 0 {
+		t.Fatal("no record_sessions migration")
+	}
 	for i, q := range migrations[:before] {
 		if _, err := d.ExecContext(ctx, q); err != nil {
 			t.Fatalf("migration %d: %v", i+1, err)
