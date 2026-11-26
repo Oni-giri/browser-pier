@@ -169,9 +169,11 @@ func (s *Tokens) Get(ctx context.Context, id string) (Token, error) {
 	return t, err
 }
 
-// List returns every token, oldest first.
+// List returns every token, oldest first. Tokens made in the same
+// millisecond keep the order they were made in: ids are random, so the
+// tie goes to SQLite's rowid, which grows with each insert.
 func (s *Tokens) List(ctx context.Context) ([]Token, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM agent_tokens ORDER BY created_at, id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM agent_tokens ORDER BY created_at, rowid`)
 	if err != nil {
 		return nil, err
 	}
