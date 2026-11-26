@@ -27,6 +27,7 @@ var callIDTools = map[string]map[string]any{
 	"click":      {"session_id": "s1", "x": 1, "y": 1, "screenshot": true},
 	"type_text":  {"session_id": "s1", "text": "hi", "screenshot": true},
 	"press_keys": {"session_id": "s1", "keys": "Return", "screenshot": true},
+	"open_url":   {"session_id": "s1", "url": "https://example.com/", "screenshot": true},
 	"scroll":     {"session_id": "s1", "x": 1, "y": 1, "down": 1, "screenshot": true},
 	"drag":       {"session_id": "s1", "from_x": 1, "from_y": 1, "to_x": 2, "to_y": 2, "screenshot": true},
 	"act":        {"session_id": "s1", "steps": []map[string]any{{"action": "click", "ref": "a1"}}},

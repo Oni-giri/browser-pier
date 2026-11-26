@@ -404,6 +404,8 @@ type openArgs struct {
 	Pace       string `json:"pace,omitempty" jsonschema:"human (default): moves, aims and types like a hand, so it takes longer; instant: at once"`
 	// DownloadWaitMS is a pointer, so 0 (don't wait) differs from unset.
 	DownloadWaitMS *int `json:"download_wait_ms,omitempty" jsonschema:"if the URL is a file: how long to wait for its download to finish, in ms; default 3000, 0 not to wait, at most 30000"`
+	// CallID is passed on as the API's Idempotency-Key (PROJ-156).
+	CallID *string `json:"call_id,omitempty" jsonschema:"optional: a new id of yours (1 to 64 letters, digits, - or _) for an action that must not happen twice; if its answer is lost, send the same call again with the same call_id and it won't run twice, or ask call_status how it went"`
 }
 
 // openURL opens an address through the address bar (PROJ-164).
@@ -418,7 +420,7 @@ func (s *Server) openURL(ctx context.Context, req *sdk.CallToolRequest, in openA
 			return nil, nil, err
 		}
 	}
-	return s.act(ctx, req.Extra, in.SessionID, nil, sc, map[string]any{"action": "open", "url": in.URL, "pace": in.Pace, "download_wait_ms": in.DownloadWaitMS}, in.Screenshot,
+	return s.act(ctx, req.Extra, in.SessionID, in.CallID, sc, map[string]any{"action": "open", "url": in.URL, "pace": in.Pace, "download_wait_ms": in.DownloadWaitMS}, in.Screenshot,
 		"Opened it in the address bar; the page may still be loading.")
 }
 

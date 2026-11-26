@@ -185,6 +185,7 @@ var visualCalls = [][2]string{
 	{"computer", `{"action": "key", "keys": "Return"}`},
 	{"computer", `{"action": "scroll", "x": 1, "y": 2, "dy": 3}`},
 	{"computer", `{"action": "drag", "from": {"x": 1, "y": 2}, "to": {"x": 3, "y": 4}}`},
+	{"computer", `{"action": "open", "url": "https://example.com/"}`},
 	{"computer", `{"action": "click", "x": 10, "y": 20, "screenshot": true}`},
 }
 
@@ -747,7 +748,7 @@ func TestEveryRouteGivesARefusedIDBack(t *testing.T) {
 	visual := []route{
 		{"click", `{"x": 1, "y": 2}`, []string{`{"x": "1", "y": 2}`, `{"x": 1, "y": 2, "button": "side"}`, `{"x": 1, "y": 2, "pace": "slow"}`, `{"x": 1, "y": 2, "nope": 1}`}},
 		{"type", `{"text": "hi"}`, []string{`{"text": 42}`, `{"text": ""}`, `{}`, `{"text": "hi", "pace": "slow"}`}},
-		{"computer", `{"action": "click", "x": 1, "y": 2}`, []string{`{"action": "click", "x": "1", "y": 2}`, `{"action": "type", "text": ""}`, `{"action": "click", "x": 1, "y": 2, "button": "side"}`}},
+		{"computer", `{"action": "click", "x": 1, "y": 2}`, []string{`{"action": "click", "x": "1", "y": 2}`, `{"action": "type", "text": ""}`, `{"action": "click", "x": 1, "y": 2, "button": "side"}`, `{"action": "open", "url": "ftp://example.com/"}`}},
 	}
 	page := []route{
 		{"act", `{"steps": [{"action": "press", "keys": "Enter"}]}`, []string{`{"steps": "press"}`}},
