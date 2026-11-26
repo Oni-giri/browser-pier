@@ -55,11 +55,11 @@ func profileDir(t *testing.T) string {
 func TestRoundTrip(t *testing.T) {
 	src := profileDir(t)
 	var buf bytes.Buffer
-	m := Manifest{Version: "test", ExportedAt: time.Now(), Profile: Profile{Name: "google", DefaultMode: "visual", Width: 1440, Height: 900, Proxy: "http://u:p@proxy:1"}}
+	m := Manifest{Version: "test", ExportedAt: time.Now(), Profile: Profile{Name: "google", DefaultMode: "visual", Width: 1440, Height: 900, Proxy: "http://u-{sticky}:p@proxy:1", StickyToken: "k3y9x2m1"}}
 	if err := Export(&buf, src, m, pass); err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(buf.Bytes(), []byte("session=abc")) || bytes.Contains(buf.Bytes(), []byte("u:p@proxy")) {
+	if bytes.Contains(buf.Bytes(), []byte("session=abc")) || bytes.Contains(buf.Bytes(), []byte("p@proxy")) || bytes.Contains(buf.Bytes(), []byte("k3y9x2m1")) {
 		t.Fatal("the archive isn't encrypted")
 	}
 	dest := filepath.Join(t.TempDir(), "imported")
@@ -317,5 +317,33 @@ func TestImportRefusesDeepPaths(t *testing.T) {
 	_, err := Import(crafted(t, []tar.Header{{Name: deep, Typeflag: tar.TypeDir, Mode: 0o700}}, nil), pass, filepath.Join(t.TempDir(), "x"), DefaultLimits)
 	if err == nil || time.Since(start) > 3*time.Second || len(err.Error()) > 200 {
 		t.Fatalf("deep path: %v after %s", err, time.Since(start))
+	}
+}
+
+// TestImportAnArchiveWithoutAStickyToken: an archive from before
+// PROJ-153 has a proxy but no sticky_token; it still imports, with none.
+func TestImportAnArchiveWithoutAStickyToken(t *testing.T) {
+	old := []byte(`{"format": 1, "browserpier_version": "1.0.0", "exported_at": "2026-01-02T03:04:05Z",
+		"profile": {"name": "google", "default_mode": "visual", "auto_stop_minutes": 15, "width": 1440, "height": 900,
+		"proxy": "http://u:p@proxy:1", "handoff_policy": "pin"}}`)
+	var buf bytes.Buffer
+	r, _ := age.NewScryptRecipient(pass)
+	r.SetWorkFactor(10)
+	enc, _ := age.Encrypt(&buf, r)
+	gz := gzip.NewWriter(enc)
+	tw := tar.NewWriter(gz)
+	if err := tw.WriteHeader(&tar.Header{Name: "manifest.json", Mode: 0o600, Size: int64(len(old)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = tw.Write(old)
+	_ = tw.Close()
+	_ = gz.Close()
+	_ = enc.Close()
+	got, err := Import(&buf, pass, filepath.Join(t.TempDir(), "x"), DefaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Profile.Proxy != "http://u:p@proxy:1" || got.Profile.StickyToken != "" {
+		t.Fatalf("profile %+v", got.Profile)
 	}
 }

@@ -22,8 +22,8 @@ var (
 	linkAttrRE     = regexp.MustCompile(`(?i)(?:href|src|action|hx-post|hx-get)="([^"]*)"|url\(([^)]*)\)`)
 )
 
-// shownSecret reads the secret off the scan dialog, as a person would type it.
-func shownSecret(t *testing.T, body string) []byte {
+// shownTOTPSecret reads the secret off the scan dialog, as a person would type it.
+func shownTOTPSecret(t *testing.T, body string) []byte {
 	t.Helper()
 	m := shownSecretRE.FindStringSubmatch(body)
 	if m == nil {
@@ -41,7 +41,7 @@ func (f *fixture) turnOn() ([]byte, []string) {
 	f.t.Helper()
 	r := f.post("/settings/two-step/on", url.Values{"current": {"the-admin-password"}}, "HX-Request", "true")
 	want(f.t, r, http.StatusOK, "<svg", "Scan this with your authenticator app")
-	secret := shownSecret(f.t, r.body)
+	secret := shownTOTPSecret(f.t, r.body)
 	r = f.post("/settings/two-step/confirm", url.Values{"code": {auth.TOTPCode(secret, time.Now())}}, "HX-Request", "true")
 	want(f.t, r, http.StatusOK, "Save your recovery codes")
 	codes := recoveryCodeRE.FindAllString(r.body, -1)
@@ -65,7 +65,7 @@ func TestTwoStepInSettings(t *testing.T) {
 	if r.header.Get("Cache-Control") != "no-store" {
 		t.Fatalf("the secret's dialog is cacheable: %q", r.header.Get("Cache-Control"))
 	}
-	secret := shownSecret(t, r.body)
+	secret := shownTOTPSecret(t, r.body)
 	enc := auth.EncodeTOTPSecret(secret)
 	for _, m := range linkAttrRE.FindAllString(r.body, -1) {
 		if strings.Contains(strings.ReplaceAll(m, " ", ""), enc[:8]) || strings.Contains(m, "otpauth") {
@@ -137,7 +137,7 @@ func TestReplacingTheAppInSettings(t *testing.T) {
 	secret, codes := f.turnOn()
 	r := f.post("/settings/two-step/manage", url.Values{"action": {"replace"}, "current": {"the-admin-password"}, "code": {codes[0]}}, "HX-Request", "true")
 	want(t, r, http.StatusOK, "<svg", "Use this app", "The old app stops working")
-	next := shownSecret(t, r.body)
+	next := shownTOTPSecret(t, r.body)
 	if string(next) == string(secret) {
 		t.Fatal("the same secret again")
 	}
@@ -164,7 +164,7 @@ func TestTwoStepDraftBelongsToItsSession(t *testing.T) {
 	f.app.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
 	r := f.post("/settings/two-step/on", url.Values{"current": {"the-admin-password"}}, "HX-Request", "true")
 	want(t, r, http.StatusOK, "<svg")
-	secret := shownSecret(t, r.body)
+	secret := shownTOTPSecret(t, r.body)
 
 	// Another signed-in browser can't confirm this session's secret.
 	other, _, err := f.web.Admin().NewSession(ctx, false, "other")

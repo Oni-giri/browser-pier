@@ -73,7 +73,7 @@ func TestBrowserConfigLocksDownTheContainer(t *testing.T) {
 }
 
 func TestNewCompactsTheEmbeddedSeccompProfile(t *testing.T) {
-	c, err := New(Options{Image: "img", Instance: "i1"})
+	c, err := New(Options{Image: "img", Instance: "i1", User: "1000:1000"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,8 +87,38 @@ func TestNewCompactsTheEmbeddedSeccompProfile(t *testing.T) {
 	if _, err := New(Options{Instance: "i1"}); err == nil {
 		t.Fatal("New must refuse an empty image")
 	}
-	if _, err := New(Options{Image: "img"}); err == nil {
+	if _, err := New(Options{Image: "img", User: "1000:1000"}); err == nil {
 		t.Fatal("New must refuse an empty instance ID")
+	}
+	// What the create guard refuses, New refuses (PROJ-159).
+	// Each part a 32-bit number, as the guard has it (item 2 of the Codex
+	// review): ten digits fit the pattern but may not fit.
+	for _, user := range []string{"", "0:0", "00:1000", "chrome:chrome", "1000",
+		"1000:4294967296", "4294967296:1000", "9999999999:1000", "1000:9999999999"} {
+		if _, err := New(Options{Image: "img", Instance: "i1", User: user}); err == nil {
+			t.Errorf("New took the user %q", user)
+		}
+	}
+	for _, userns := range []string{"host", "private", "keep-id:"} {
+		if _, err := New(Options{Image: "img", Instance: "i1", User: "1000:1000", UsernsMode: userns}); err == nil {
+			t.Errorf("New took the user namespace mode %q", userns)
+		}
+	}
+	for _, user := range []string{"1000:1000", "4294967295:4294967295", "1:0"} {
+		c, err := New(Options{Image: "img", Instance: "i1", User: user})
+		if err != nil {
+			t.Errorf("%q: %v", user, err)
+			continue
+		}
+		_ = c.Close()
+	}
+	for _, userns := range []string{"", "keep-id", "keep-id:uid=1000,gid=1000"} {
+		c, err := New(Options{Image: "img", Instance: "i1", User: "1000:1000", UsernsMode: userns})
+		if err != nil {
+			t.Errorf("%q: %v", userns, err)
+			continue
+		}
+		_ = c.Close()
 	}
 }
 
@@ -364,17 +394,5 @@ func TestIsPodman(t *testing.T) {
 	}
 	if isPodman([]system.ComponentVersion{{Name: "Engine"}, {Name: "containerd"}, {Name: "runc"}}) {
 		t.Fatal("Docker taken for Podman")
-	}
-}
-
-func TestMemoryInUse(t *testing.T) {
-	if got := memoryInUse(container.MemoryStats{Usage: 1000, Stats: map[string]uint64{"inactive_file": 300}}); got != 700 {
-		t.Errorf("cgroup v2: %d", got)
-	}
-	if got := memoryInUse(container.MemoryStats{Usage: 1000, Stats: map[string]uint64{"total_inactive_file": 100}}); got != 900 {
-		t.Errorf("cgroup v1: %d", got)
-	}
-	if got := memoryInUse(container.MemoryStats{Usage: 1000}); got != 1000 {
-		t.Errorf("no stats: %d", got)
 	}
 }

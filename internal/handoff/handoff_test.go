@@ -24,6 +24,8 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/cdp/cdptest"
 	"github.com/Oni-giri/browser-pier/internal/db"
+	"github.com/Oni-giri/browser-pier/internal/files"
+	"github.com/Oni-giri/browser-pier/internal/picker"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/sessions/sessionstest"
@@ -44,6 +46,10 @@ type fixture struct {
 	// emptied counts the browser's clipboard emptyings, with whether a
 	// person still had control as each happened (PROJ-194).
 	emptied *clipRecord
+	// choosers is the browsers' file choosers (chooser_test.go), files
+	// the profiles' files, with a 1 MiB cap.
+	choosers *fakeChoosers
+	files    *files.Store
 }
 
 type clipRecord struct {
@@ -88,6 +94,8 @@ func newFixture(t *testing.T, policy profiles.HandoffPolicy, opts auth.WebOption
 		emptied.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	})
+	choosers := &fakeChoosers{}
+	choosers.register(mux)
 	// No CDP: what the handoff reads of the browser, it reads over HTTP.
 	b := cdptest.New(func(m cdptest.Message) (any, error) {
 		return nil, cdptest.Error{Message: "not in the fake: " + m.Method}
@@ -123,12 +131,15 @@ func newFixture(t *testing.T, policy profiles.HandoffPolicy, opts auth.WebOption
 	t.Cleanup(func() { _ = relay.Close() })
 	hmux := http.NewServeMux()
 	web.Register(hmux)
-	NewWeb(svc, web, webrtc.NewHandler(relay, m, web, log), m, log).Register(hmux)
+	fs := files.New(m.Layout().FilesDir, 1<<20, os.Getuid(), os.Getgid())
+	hw := NewWeb(svc, web, webrtc.NewHandler(relay, m, web, log), m, log)
+	hw.SetPicker(picker.New(m, fs, log))
+	hw.Register(hmux)
 	// As in production, form posts from other origins are refused.
 	srv := httptest.NewServer(new(http.CrossOriginProtection).Handler(hmux))
 	t.Cleanup(srv.Close)
 	t.Cleanup(svc.Close)
-	return &fixture{t: t, m: m, svc: svc, admin: admin, srv: srv, cdp: b, tabs: tabs, emptied: emptied}
+	return &fixture{t: t, m: m, svc: svc, admin: admin, srv: srv, cdp: b, tabs: tabs, emptied: emptied, choosers: choosers, files: fs}
 }
 
 func (f *fixture) running() sessions.Session {
@@ -946,7 +957,7 @@ func TestHandoffEndEmptiesTheClipboard(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t, profiles.PolicyLink, auth.WebOptions{})
 			h, _ := f.open("")
-			if err := f.m.TakeControl(h.SessionID); err != nil {
+			if err := f.m.TakeControl(h.SessionID, sessions.HandoffHolder(h.ID)); err != nil {
 				t.Fatal(err)
 			}
 			end(f, h)

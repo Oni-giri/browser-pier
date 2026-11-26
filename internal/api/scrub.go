@@ -19,15 +19,20 @@ type Router interface {
 // agentRoute is one of the agent API's routes: the token check, then the
 // handler, with everything it writes scrubbed of the secrets BrowserPier
 // typed into the token's browsers (PROJ-125) as the last step before it
-// leaves. Every route but the CDP proxy is one, and only agent makes
-// them; TestEveryRouteIsScrubbed checks the routes.
-type agentRoute struct{ h http.Handler }
+// leaves. Every route but the CDP proxy is one, and only agent and
+// agentCall make them; TestEveryRouteIsScrubbed checks the routes.
+type agentRoute struct {
+	h http.Handler
+	// tool names a route that takes a call id (agentCall, PROJ-156);
+	// "" for one that refuses it.
+	tool string
+}
 
 func (r agentRoute) ServeHTTP(w http.ResponseWriter, req *http.Request) { r.h.ServeHTTP(w, req) }
 
-// agent makes an agent route of h.
+// agent makes an agent route of h, which takes no call id.
 func (a *API) agent(h http.HandlerFunc) http.Handler {
-	return agentRoute{a.web.RequireToken(a.scrubbing(h))}
+	return agentRoute{h: a.web.RequireToken(a.scrubbing(a.refusingCallID(h)))}
 }
 
 // scrubbing runs h with a writer that scrubs its answer. The secrets are

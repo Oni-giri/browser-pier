@@ -10,7 +10,7 @@
   <form id="defaults" method="post" action="/settings" data-track data-busy="Saving…"></form>
   <div class="bento">
     <section class="cell span-6" aria-labelledby="pin-title">
-      <div class="cell-head"><h2 class="cell-title big" id="pin-title">Handoff PIN</h2>{{if .PINChangedAt.IsZero}}<span class="pill help">Not set</span>{{else}}<span class="pill running">Set · changed {{ago .PINChangedAt}}</span>{{end}}</div>
+      <div class="cell-head"><h2 class="cell-title big" id="pin-title">Handoff PIN</h2>{{if .PINChangedAt.IsZero}}<span class="pill">Not set</span>{{else}}<span class="pill running">Set · changed {{ago .PINChangedAt}}</span>{{end}}</div>
       <p class="small" style="margin:0 0 14px;color:var(--ink-2)">Asked on your phone before a handoff link opens a browser. Agents never see it. Five wrong tries cancel the link.</p>
       {{if and .Error (eq .ErrorFor "pin")}}<p class="errors" role="alert">{{.Error}}</p>{{end}}
       <details{{if or (eq .ErrorFor "pin") .PINChangedAt.IsZero}} open{{end}} class="reveal">
@@ -55,9 +55,15 @@
     <section class="cell span-7" aria-labelledby="proxy-title">
       <h2 class="cell-title big" id="proxy-title" style="margin:0">Default proxy</h2>
       <p class="small" style="margin:2px 0 14px;color:var(--ink-2)">Used by new profiles unless they set their own. Leave empty to use this server’s connection.</p>
-      <label class="sr-only" for="proxy">Proxy URL</label>
-      <input class="input mono" id="proxy" name="proxy" value="{{.Proxy}}" form="defaults" placeholder="socks5://user:pass@host:port" autocomplete="off" spellcheck="false">
-      <ul class="checks" style="margin:14px 0 0"><li>Time zone and language follow the proxy’s location</li></ul>
+      <div data-proxy>
+        <label class="sr-only" for="proxy">Proxy URL</label>
+        <div class="proxy-row">
+          <input class="input mono" id="proxy" name="proxy" value="{{.Proxy}}" form="defaults" placeholder="socks5://user:pass@host:port" autocomplete="off" spellcheck="false">
+          <button class="btn" type="button" data-proxy-test="settings"{{if not .Proxy}} disabled{{end}}>Test</button>
+        </div>
+        <div class="proxy-result" data-proxy-result aria-live="polite" hidden></div>
+      </div>
+      <ul class="checks" style="margin:14px 0 0"><li>Time zone and language follow the proxy’s location</li><li><code>{sticky}</code> in the user name or password becomes a code of each profile’s own, so each profile keeps its own exit IP</li></ul>
       <div class="field" style="margin:18px 0 0">
         <input type="hidden" name="block_ads_field" value="1" form="defaults">
         <label class="check"><input type="checkbox" name="block_ads" value="1" form="defaults"{{if .DefaultBlockAds}} checked{{end}}> Block ads and trackers in new profiles</label>
@@ -87,6 +93,47 @@
         <label class="field"><span class="label">Space for all recordings</span><span class="prefix suffix"><input name="rec_cap_mb" type="number" min="64" max="1048576" value="{{.RecordingCapMiB}}" form="defaults" class="num" style="width:100%"><span>MB</span></span><span class="hint">Using {{gb .RecordingsUsed}} now. 1 GB is always left free on the disk; when either limit is reached, the profile holding the most gives up its oldest recording first.</span></label>
       </div>
     </section>
+    {{with .Notify}}
+    <section class="cell span-12" id="notify" aria-labelledby="notify-title">
+      <div class="cell-head" style="align-items:flex-start">
+        <div><h2 class="cell-title big" id="notify-title" style="margin:0">Notifications</h2>
+        <p class="small" style="margin:2px 0 0;color:var(--ink-2)">Tell a webhook when an agent needs you: Slack, Discord or your own endpoint. For agents with no chat to pass the link through. Agents can’t see or change it.</p></div>
+        {{if .Set}}<span class="pill running">Set</span>{{else}}<span class="pill">Not set</span>{{end}}
+      </div>
+      {{if and $.Data.Error (eq $.Data.ErrorFor "notify")}}<p class="errors" role="alert" style="margin-top:14px">{{$.Data.Error}}</p>{{end}}
+      {{with $.Data.NewSecret}}
+      <div class="field" style="margin:14px 0 0">
+        <span class="label">Signing secret</span>
+        <div class="secret"><code>{{.}}</code><button class="btn small" type="button" data-copy="{{.}}" data-copied="Secret copied">Copy</button></div>
+        <span class="hint">Copy it now: you won’t see it again. Your endpoint checks the <code>BrowserPier-Signature</code> header with it. Slack and Discord don’t need it.</span>
+      </div>
+      {{end}}
+      <form method="post" action="/settings/notify" style="margin-top:14px" data-busy="Saving…">
+        <div class="two">
+          <label class="field" style="margin:0"><span class="label">Webhook URL</span><input class="input mono" name="url" value="{{.Masked}}" placeholder="https://hooks.slack.com/services/…" autocomplete="off" spellcheck="false" maxlength="2048"><span class="hint">https://, or http:// on your own network. Shown as its host once saved: the rest is a password.</span></label>
+          <label class="field" style="margin:0"><span class="label">Address for links</span>{{if .PublicURL}}<input class="input mono" value="{{.PublicURL}}" disabled><span class="hint">Set by <code>BROWSERPIER_PUBLIC_URL</code>.</span>{{else}}<input class="input mono" name="link_base" value="{{.LinkBase}}" placeholder="https://pier.example.com" autocomplete="off" spellcheck="false"><span class="hint">How you open BrowserPier, for the links in messages. Empty: messages say to open BrowserPier.</span>{{end}}</label>
+        </div>
+        <fieldset class="field" style="margin:16px 0 0;border:0;padding:0">
+          <legend class="label" style="padding:0">Send when</legend>
+          {{range $.Data.NotifyEvents}}<label class="check" style="min-height:32px"><input type="checkbox" name="event" value="{{.Kind}}"{{if .On}} checked{{end}}> {{.Label}}</label>{{end}}
+          <span class="hint">Messages name the profile and the reason, never what the agent or the page wrote. The handoff link is sent only for Link + PIN and Full sign-in; One tap profiles get their page’s address, which needs you signed in.</span>
+        </fieldset>
+        <div class="actions" style="margin-top:16px">
+          <button class="btn primary" type="submit">Save</button>
+          {{if .Set}}
+          <button class="btn" type="submit" form="notify-test">Send test</button>
+          <button class="btn" type="submit" form="notify-secret">Regenerate secret</button>
+          <button class="btn danger-text" type="submit" form="notify-remove">Remove</button>
+          {{end}}
+        </div>
+      </form>
+      {{if .Set}}
+      <form id="notify-test" method="post" action="/settings/notify/test" data-busy="Sending…"></form>
+      <form id="notify-secret" method="post" action="/settings/notify/secret" data-busy="Making…"></form>
+      <form id="notify-remove" method="post" action="/settings/notify/remove" data-busy="Removing…"></form>
+      {{end}}
+    </section>
+    {{end}}
 
     <section class="cell span-12 appearance" aria-labelledby="look-title">
       <div><h2 class="cell-title big" id="look-title" style="margin:0">Appearance</h2>

@@ -61,7 +61,7 @@ func TestPersonsInputNeverReachesARecordedPage(t *testing.T) {
 	posts := 0
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok\n") })
-	for _, path := range []string{"POST /input/events", "POST /input/type"} {
+	for _, path := range []string{"POST /input/events", "POST /input/live-type"} {
 		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
 			mu.Lock()
 			posts++
@@ -94,7 +94,7 @@ func TestPersonsInputNeverReachesARecordedPage(t *testing.T) {
 	sessID = s.ID
 	mu.Unlock()
 	h := NewHandler(nil, m, nil, log)
-	v := &viewer{h: h, session: s.ID, sock: m.Layout().ControlSocket("google")}
+	v := &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: m.Layout().ControlSocket("google")}
 	input := []byte(`{"type": "input", "events": [{"t": "keydown", "k": "a"}, {"t": "keyup", "k": "a"}]}`)
 	text := []byte(`{"type": "text", "text": "hunter2"}`)
 	reply := func(string) {}

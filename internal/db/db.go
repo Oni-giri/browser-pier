@@ -143,6 +143,10 @@ var migrations = []string{
 	// turns it on.
 	`ALTER TABLE profiles ADD COLUMN record_sessions INTEGER NOT NULL DEFAULT 0;`,
 
+	// What {sticky} becomes in a profile's proxy (PROJ-153): empty for
+	// the profiles that exist, which get one the first time they need it.
+	`ALTER TABLE profiles ADD COLUMN sticky_token TEXT NOT NULL DEFAULT '';`,
+
 	// The admin's two-step recovery codes (PROJ-162), by their SHA-256:
 	// 80 random bits each, so a slow hash would add nothing. Each row goes
 	// when its code is used.

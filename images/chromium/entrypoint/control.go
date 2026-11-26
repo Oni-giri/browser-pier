@@ -22,6 +22,7 @@ import (
 //	GET /record    the display as a fragmented MP4 made to be kept, one reader at a time
 //	GET /screenshot, POST /input/{click,type,scroll,key,drag}   Visual mode (see visual.go)
 //	POST /input/events, POST /input/release   the live view's mouse and keyboard (live.go)
+//	POST /input/live-type          {"text"}: the live view's Type button, at once (visual.go)
 //	GET /input/clipboard           the clipboard's text, for the live view's clipboard box (clipboard.go)
 //	POST /input/clipboard          {"text"}: hold the text on the clipboard until replaced or emptied
 //	POST /input/paste              {"text"}: the same, then Ctrl+V
@@ -29,7 +30,8 @@ import (
 //	GET /geo           the location the browser runs with
 //	GET /proxy/stats   bytes through the upstream proxy, connections refused, and blocked for the ad list
 //	POST /proxy/blocking/off, POST /proxy/exempt   the ad list's controls (block.go)
-func newControlHandler(cdp string, stream, record http.Handler, vis *visual, fwd *forwarder, where geo) http.Handler {
+//	GET /chooser, POST /chooser/{id}   the page's file choosers (portal.go)
+func newControlHandler(cdp string, stream, record http.Handler, vis *visual, fwd *forwarder, where geo, portal *portal, portalOff string) http.Handler {
 	target := &url.URL{Scheme: "http", Host: cdp}
 	relay := &httputil.ReverseProxy{Rewrite: func(pr *httputil.ProxyRequest) {
 		// SetURL also sets Host to the loopback address, which Chromium requires.
@@ -53,6 +55,7 @@ func newControlHandler(cdp string, stream, record http.Handler, vis *visual, fwd
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(where)
 	})
+	registerChooser(mux, portal, portalOff)
 	if fwd != nil {
 		mux.HandleFunc("GET /proxy/stats", fwd.stats)
 		if fwd.block != nil {

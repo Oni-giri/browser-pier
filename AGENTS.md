@@ -24,7 +24,7 @@ If the Atlassian MCP is connected:
 - One running session per profile. A second request attaches to the existing one.
 - Agents can **raise** a handoff's security level but never lower it. Handoff links are single-use, last 15 minutes and give control of one browser only.
 - Every piece of page-derived text returned to an agent goes through the untrusted-content fence (`internal/fence`).
-- Tokens, the PIN and the admin password are hashed at rest and never logged.
+- Tokens, the PIN and the admin password are hashed at rest and never logged. The exception is the webhook secret (and its URL), which must stay usable: stored as it is, like proxy passwords, and never logged.
 - The orchestrator only starts containers from BrowserPier's own browser image.
 
 ## Conventions

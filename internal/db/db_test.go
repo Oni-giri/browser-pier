@@ -97,6 +97,17 @@ func TestOpenKeepsOddCharactersInThePath(t *testing.T) {
 	}
 }
 
+// migrationsBefore returns the number of migrations before the first that holds
+// what, so a test can build a database from before it.
+func migrationsBefore(t *testing.T, what string) int {
+	t.Helper()
+	i := slices.IndexFunc(migrations, func(m string) bool { return strings.Contains(m, what) })
+	if i < 0 {
+		t.Fatalf("no migration holds %q", what)
+	}
+	return i
+}
+
 // TestIconColumnsReachExistingProfiles: a database from before profile
 // icons (PROJ-44) keeps its profiles, which get no site and the default icon.
 func TestIconColumnsReachExistingProfiles(t *testing.T) {
@@ -106,7 +117,7 @@ func TestIconColumnsReachExistingProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := len(migrations) - 1
+	before := migrationsBefore(t, "ADD COLUMN icon_glyph")
 	for i, q := range migrations[:before] {
 		if _, err := d.ExecContext(ctx, q); err != nil {
 			t.Fatalf("migration %d: %v", i+1, err)
@@ -141,7 +152,7 @@ func TestBlockAdsIsOffForExistingProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := len(migrations) - 1
+	before := migrationsBefore(t, "ADD COLUMN block_ads")
 	for i, q := range migrations[:before] {
 		if _, err := d.ExecContext(ctx, q); err != nil {
 			t.Fatalf("migration %d: %v", i+1, err)
@@ -177,12 +188,7 @@ func TestRecordSessionsIsOffForExistingProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The database as it was just before the record_sessions migration,
-	// wherever later migrations put it in the list.
-	before := slices.IndexFunc(migrations, func(q string) bool { return strings.Contains(q, "record_sessions") })
-	if before < 0 {
-		t.Fatal("no record_sessions migration")
-	}
+	before := migrationsBefore(t, "ADD COLUMN record_sessions")
 	for i, q := range migrations[:before] {
 		if _, err := d.ExecContext(ctx, q); err != nil {
 			t.Fatalf("migration %d: %v", i+1, err)
@@ -203,5 +209,41 @@ func TestRecordSessionsIsOffForExistingProfiles(t *testing.T) {
 	var on bool
 	if err := d.QueryRowContext(ctx, `SELECT record_sessions FROM profiles WHERE name = 'google'`).Scan(&on); err != nil || on {
 		t.Fatalf("existing profile: record_sessions %v, %v; want off", on, err)
+	}
+}
+
+// TestStickyTokenIsEmptyForExistingProfiles: profiles from before
+// PROJ-153 keep everything and have no sticky token yet; they get one the
+// first time they need it (profiles.Store.StickyToken).
+func TestStickyTokenIsEmptyForExistingProfiles(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "test.db")
+	d, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := migrationsBefore(t, "ADD COLUMN sticky_token")
+	for i, q := range migrations[:before] {
+		if _, err := d.ExecContext(ctx, q); err != nil {
+			t.Fatalf("migration %d: %v", i+1, err)
+		}
+	}
+	if _, err := d.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", before)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.ExecContext(ctx, `INSERT INTO profiles (name, default_mode, auto_stop_minutes, screen_width, screen_height, proxy, handoff_policy, created_at, updated_at) VALUES ('google', 'visual', 15, 1440, 900, 'http://u-{sticky}:p@proxy.example:8080', 'pin', 0, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = d.Close()
+
+	d, err = Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = d.Close() }()
+	var proxy, token string
+	if err := d.QueryRowContext(ctx, `SELECT proxy, sticky_token FROM profiles WHERE name = 'google'`).Scan(&proxy, &token); err != nil ||
+		proxy != "http://u-{sticky}:p@proxy.example:8080" || token != "" {
+		t.Fatalf("after migrating: proxy %q, token %q, %v", proxy, token, err)
 	}
 }

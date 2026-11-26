@@ -23,7 +23,7 @@ func (m *Manager) StopAll(ctx context.Context) error {
 	errs := make([]error, len(ids))
 	for i, id := range ids {
 		wg.Go(func() {
-			_, errs[i] = m.Stop(ctx, id)
+			_, errs[i] = m.StopFor(ctx, id, stopShutdown)
 		})
 	}
 	wg.Wait()
