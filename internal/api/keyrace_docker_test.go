@@ -208,3 +208,26 @@ func TestTextAfterShortcutOnARestartedBrowser(t *testing.T) {
 	}
 	noClientAttached(t, a, name)
 }
+
+// The live view's Type button reaches the page through the container's
+// /input/live-type, the person's route, which no agent's gap holds back
+// (the unit tests in the entrypoint check the timing).
+func TestLiveTypeReachesThePage(t *testing.T) {
+	a := newRealAPI(t)
+	ks := browsertest.NewKeySite(t, browsertest.SiteHost(t))
+	name, s := keyRaceSession(t, a)
+	openWithCare(t, a, s.ID, ks, ks.Keys("v0", 0, "field"), "v0")
+	control := browsertest.ControlClient(a.m.Layout().ControlSocket(name))
+	resp, err := control.Post("http://control/input/live-type", "application/json", strings.NewReader(`{"text": "hello"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("live-type: %d", resp.StatusCode)
+	}
+	if r, ok := ks.WaitRun("v0", 5*time.Second, func(r browsertest.KeyRun) bool { return r.Value == "hello" }); !ok {
+		t.Fatalf("the field has %q, want hello", r.Value)
+	}
+	noClientAttached(t, a, name)
+}
