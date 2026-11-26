@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/Oni-giri/browser-pier/internal/motion"
@@ -156,17 +157,49 @@ func (o *opening) clear(ctx context.Context) error {
 
 // still checks, after the click, that the browser window clicked still
 // has the keyboard: a window that opened meanwhile (a pop-up, a file
-// chooser) would get the rest of the address and Return.
-func (o *opening) still(typed, of int) func(ctx context.Context) error {
+// chooser) would get the rest of the address and Return. done says how
+// far the open got, for the refusal.
+func (o *opening) still(done string) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
 		l, err := o.v.look(ctx, o.at.X, o.at.Y)
 		if err != nil {
 			return err
 		}
 		if l.Focus == 0 || l.Focus != o.browser {
-			return refusal(fmt.Sprintf("another window took the keyboard while the address was being typed (%d of its %d characters typed, Return not pressed): take a screenshot", typed, of))
+			return refusal("another window took the keyboard while the address was being typed (" + done + ", Return not pressed): take a screenshot")
 		}
 		return nil
+	}
+}
+
+// typedOf says how much of the address was typed, for still.
+func typedOf(typed, of int) string {
+	return fmt.Sprintf("%d of its %d characters typed", typed, of)
+}
+
+// pause waits d between runs, or until the request ends: a pause in Go
+// rather than in an xdotool run, so the keyboard can be looked at after
+// it, just before the next press.
+func (o *opening) pause(d time.Duration) func(ctx context.Context) error {
+	return func(ctx context.Context) error { return o.v.sleep(ctx, d) }
+}
+
+// enter is the end of an open, at either pace: a pause for the address
+// bar's suggestions, Delete (which drops a completion the address bar
+// added after the text), a pause, Return. Each press comes right after a
+// look at the keyboard (still), which follows the pause before it, so a
+// window that takes the keyboard during a pause gets neither key; one that
+// takes it in the few milliseconds between a look and its press still
+// gets that press. press makes a key's run.
+func (o *opening) enter(of int, suggest, between time.Duration, press func(key string) []string) []xcmd {
+	all := typedOf(of, of)
+	return []xcmd{
+		{check: o.pause(suggest)},
+		{check: o.still(all)},
+		{args: press("Delete"), release: []string{"keyup", "Delete"}},
+		{check: o.pause(between)},
+		{check: o.still(all + ", Delete pressed")},
+		{args: press("Return"), release: []string{"keyup", "Return"}},
 	}
 }
 
@@ -202,22 +235,21 @@ const openChunk = 64
 // sees these keys or their rhythm, they go to the address bar, and a
 // person pastes an address as often as they type it (but a paste would
 // overwrite the profile's clipboard). Before each run, the keyboard is
-// looked at (still); once more after the last.
+// looked at (still); enter looks again after the last.
 func (o *opening) typeAddress(u string) []xcmd {
 	runes := []rune(u)
 	var cmds []xcmd
 	for i := 0; i < len(runes); i += openChunk {
-		cmds = append(cmds, xcmd{check: o.still(i, len(runes))},
+		cmds = append(cmds, xcmd{check: o.still(typedOf(i, len(runes)))},
 			xcmd{args: []string{"type", "--clearmodifiers", "--delay", "12", "--", string(runes[i:min(i+openChunk, len(runes))])}})
 	}
-	return append(cmds, xcmd{check: o.still(len(runes), len(runes))})
+	return cmds
 }
 
 // instantOpen is the open action at instant pace: the pointer moves to
 // the address bar, which is looked at once it is there; the click and
-// select all; the address; a pause for the address bar's suggestions,
-// then Delete, which drops a completion the address bar added after the
-// text, and Return.
+// select all; the address; then Delete and Return (enter), 100 ms after
+// the address and 50 ms apart.
 func (o *opening) instantOpen(u string) []xcmd {
 	x, y := strconv.Itoa(o.at.X), strconv.Itoa(o.at.Y)
 	cmds := []xcmd{
@@ -228,15 +260,16 @@ func (o *opening) instantOpen(u string) []xcmd {
 			release: []string{"mouseup", "1", "keyup", "ctrl+a"}},
 	}
 	cmds = append(cmds, o.typeAddress(u)...)
-	return append(cmds, xcmd{args: []string{"sleep", "0.1", "key", "--clearmodifiers", "--delay", "50", "--", "Delete", "Return"},
-		release: []string{"keyup", "Delete", "Return"}})
+	return append(cmds, o.enter(len([]rune(u)), 100*time.Millisecond, 50*time.Millisecond, func(key string) []string {
+		return []string{"key", "--clearmodifiers", "--", key}
+	})...)
 }
 
 // humanOpen is the open action at human pace: the pointer glides to the
 // address bar and pauses there as a hand does; the address bar is looked
 // at again only then, just before the press; the button and ctrl+a are
 // held; the address goes in as at instant pace (typeAddress); Delete and
-// Return are held, with a hand's pauses between.
+// Return are held, after a hand's pauses (enter).
 func (o *opening) humanOpen(from hand, size motion.Size, u string) []xcmd {
 	v := o.v
 	first := &opening{v: v, at: o.at} // the middle, before the pointer moves
@@ -251,9 +284,9 @@ func (o *opening) humanOpen(from hand, size motion.Size, u string) []xcmd {
 		"sleep", secs(max(v.mot.JitterDuration(0.25, 0.08), shortcutGap))}
 	cmds = append(cmds, xcmd{args: press, release: []string{"mouseup", "1", "keyup", "ctrl+a"}})
 	cmds = append(cmds, o.typeAddress(u)...)
-	enter := []string{"sleep", secs(v.mot.JitterDuration(0.3, 0.1)), "keydown", "Delete", "sleep", secs(v.mot.KeyHold()), "keyup", "Delete",
-		"sleep", secs(v.mot.JitterDuration(0.2, 0.06)), "keydown", "Return", "sleep", secs(v.mot.KeyHold()), "keyup", "Return"}
-	return append(cmds, xcmd{args: enter, release: []string{"keyup", "Delete", "Return"}})
+	return append(cmds, o.enter(len([]rune(u)), v.mot.JitterDuration(0.3, 0.1), v.mot.JitterDuration(0.2, 0.06), func(key string) []string {
+		return []string{"keydown", key, "sleep", secs(v.mot.KeyHold()), "keyup", key}
+	})...)
 }
 
 func (v *visual) open(w http.ResponseWriter, r *http.Request) {

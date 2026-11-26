@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // browserID is the browser window's client in these tests.
@@ -31,6 +32,7 @@ func openVisual(looks ...screenLook) (*visual, *[]call, *[]point) {
 		looked = append(looked, point{x, y})
 		return looks[min(len(looked), len(looks))-1], nil
 	}
+	v.sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
 	return v, calls, &looked
 }
 
@@ -169,8 +171,9 @@ func TestOpenTypesTheURLAsText(t *testing.T) {
 			t.Errorf("%s: typed %q, want %q", pace, text.String(), u)
 		}
 		want := (len(u) + openChunk - 1) / openChunk
-		// Two looks before the press, one before each run and one after.
-		if runs != want || len(*looked) != 2+want+1 {
+		// Two looks before the press, one before each run, and one before
+		// each of Delete and Return.
+		if runs != want || len(*looked) != 2+want+2 {
 			t.Errorf("%s: %d runs (want %d), %d looks", pace, runs, want, len(*looked))
 		}
 	}
@@ -189,12 +192,13 @@ func TestInstantOpenClicksSelectsTypesAndEnters(t *testing.T) {
 		"mousemove 658 63 sleep 0.05",
 		"click 1 sleep 0.05 key --clearmodifiers -- ctrl+a sleep 0.150",
 		"type --clearmodifiers --delay 12 -- https://example.com/",
-		"sleep 0.1 key --clearmodifiers --delay 50 -- Delete Return",
+		"key --clearmodifiers -- Delete",
+		"key --clearmodifiers -- Return",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("runs:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	if !slices.Equal(*looked, []point{{658, 63}, {658, 63}, {658, 63}, {658, 63}}) {
+	if !slices.Equal(*looked, []point{{658, 63}, {658, 63}, {658, 63}, {658, 63}, {658, 63}}) {
 		t.Fatalf("looked at %v", *looked)
 	}
 }
@@ -349,6 +353,71 @@ func TestOpenStopsTypingWhenAnotherWindowTakesTheKeyboard(t *testing.T) {
 	v, _, _ := openVisual(atRest, atRest, screenLook{theBrowser, 0})
 	if rec := serveVisual(v, http.MethodPost, "/input/open", `{"url": "https://example.com/", "pace": "instant"}`); rec.Code != http.StatusConflict {
 		t.Fatalf("no focus: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// TestOpenLooksRightBeforeDeleteAndReturn: the pause before Delete, and
+// the one between Delete and Return, come before a look at the keyboard,
+// and each key is pressed right after its look. A window that takes the
+// keyboard during either pause gets no key: after Delete, no Return.
+func TestOpenLooksRightBeforeDeleteAndReturn(t *testing.T) {
+	stolen := screenLook{theBrowser, 0x500001}
+	for _, pace := range []string{"instant", "human"} {
+		v, _, _ := openVisual(atRest)
+		var order []string
+		look := v.look
+		v.look = func(ctx context.Context, x, y int) (screenLook, error) {
+			order = append(order, "look")
+			return look(ctx, x, y)
+		}
+		v.sleep = func(ctx context.Context, _ time.Duration) error {
+			order = append(order, "pause")
+			return ctx.Err()
+		}
+		run := v.run
+		v.run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			if k := slices.IndexFunc(args, func(a string) bool { return a == "Delete" || a == "Return" }); k >= 0 {
+				order = append(order, args[k])
+			} else {
+				order = append(order, args[0])
+			}
+			return run(ctx, name, args...)
+		}
+		if rec := serveVisual(v, http.MethodPost, "/input/open", `{"url": "https://example.com/", "pace": "`+pace+`"}`); rec.Code != http.StatusNoContent {
+			t.Fatalf("%s: open: %d %s", pace, rec.Code, rec.Body)
+		}
+		if tail := order[len(order)-6:]; !slices.Equal(tail, []string{"pause", "look", "Delete", "pause", "look", "Return"}) {
+			t.Fatalf("%s: the open ends %v (all: %v)", pace, tail, order)
+		}
+		// The window takes the keyboard after Delete: Return isn't pressed.
+		// Looks: two before the press, one before the address, one
+		// before Delete; the one before Return finds the keyboard gone.
+		v, calls, _ := openVisual(atRest, atRest, atRest, atRest, stolen)
+		rec := serveVisual(v, http.MethodPost, "/input/open", `{"url": "https://example.com/", "pace": "`+pace+`"}`)
+		if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "Delete pressed, Return not pressed") {
+			t.Fatalf("%s: %d %s", pace, rec.Code, rec.Body)
+		}
+		deleted := false
+		for _, c := range *calls {
+			a := strings.Join(c.args, " ")
+			if strings.Contains(a, "Return") {
+				t.Fatalf("%s: pressed %q after the keyboard went", pace, a)
+			}
+			deleted = deleted || strings.Contains(a, "Delete")
+		}
+		if !deleted {
+			t.Fatalf("%s: Delete wasn't pressed: %v", pace, *calls)
+		}
+		// Taken during the pause before Delete: neither key.
+		v, calls, _ = openVisual(atRest, atRest, atRest, stolen)
+		if rec := serveVisual(v, http.MethodPost, "/input/open", `{"url": "https://example.com/", "pace": "`+pace+`"}`); rec.Code != http.StatusConflict {
+			t.Fatalf("%s: %d %s", pace, rec.Code, rec.Body)
+		}
+		for _, c := range *calls {
+			if a := strings.Join(c.args, " "); strings.Contains(a, "Delete") || strings.Contains(a, "Return") {
+				t.Fatalf("%s: pressed %q after the keyboard went", pace, a)
+			}
+		}
 	}
 }
 
