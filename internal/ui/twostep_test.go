@@ -109,7 +109,7 @@ func TestTwoStepInSettings(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	want(t, f.get("/settings"), http.StatusOK, "Only 2 recovery codes left.", `warn-text">2<`)
+	want(t, f.get("/settings"), http.StatusOK, "Only 2 recovery codes left.", `num low">2<`)
 
 	// New recovery codes need the password and a code; shown once.
 	r = f.post("/settings/two-step/manage", url.Values{"action": {"codes"}, "current": {"the-admin-password"}, "code": {nextCode(secret)}}, "HX-Request", "true")

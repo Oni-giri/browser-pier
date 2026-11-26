@@ -541,7 +541,7 @@ details.run>.log{padding:4px 0 6px}
 .recovery-codes li{padding:3px 0;-webkit-user-select:all;user-select:all;font-variant-numeric:tabular-nums}
 @media (max-width:480px){.recovery-codes{columns:1}}
 .dlg-foot.wrap{flex-wrap:wrap}
-.warn-text{color:var(--orange-text);font-weight:500}
+.num.low{font-weight:500}
 .kv{list-style:none;margin:0;padding:0}
 .kv li{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--line-soft)}
 .kv li>.muted{min-width:0;overflow-wrap:anywhere;text-align:right}

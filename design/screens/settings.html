@@ -162,7 +162,7 @@ input[type=range]:focus{box-shadow:none!important}
           <div style="min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid #EEF2F7"><dt style="font-size: 14px; color: #475569">This device</dt><dd style="margin: 0"><a href="login.html" style="min-height: 32px; display: flex; align-items: center; padding: 0 12px; border-radius: 8px; box-shadow: 0 0 0 1px #E2E8F0; font-size: 13px; font-weight: 500; text-decoration: none">Sign out</a></dd></div>
         </dl>
         <sc-if value="{{codesLow}}" hint-placeholder-val="{{false}}">
-          <p style="margin: 0; padding: 10px 12px; border-radius: 8px; background: #FFF1EB; color: #C2410C; font-size: 13px">Only {{codesLeft}} recovery codes left. Make new ones under Manage, in case you lose your phone.</p>
+          <p style="margin: 0; padding: 10px 12px; border-radius: 8px; background: #F1F5F9; color: #475569; font-size: 13px">Only {{codesLeft}} recovery codes left. Make new ones under Manage, in case you lose your phone.</p>
         </sc-if>
       </section>
 
@@ -345,7 +345,7 @@ class Component extends DCLogic {
       tsButton: s.twoStep === 'on' ? 'Manage' : 'Turn on',
       codesLeft: s.codesLeft,
       codesLow: s.twoStep === 'on' && s.codesLeft <= 2,
-      codesColor: s.codesLeft <= 2 ? '#C2410C' : 'inherit',
+      codesColor: 'inherit',
       codesWeight: s.codesLeft <= 2 ? '500' : '400',
       tsOpen: !!s.ts, tsPassword: s.ts === 'password', tsScan: s.ts === 'scan', tsCodes: s.ts === 'codes', tsManage: s.ts === 'manage',
       openTwoStep: () => this.setState({ ts: s.twoStep === 'on' ? 'manage' : 'password' }),

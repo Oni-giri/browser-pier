@@ -77,12 +77,12 @@
       <ul class="kv">
         <li><span>Password</span>{{if .PasswordEnv}}<span class="small muted">Set by BROWSERPIER_ADMIN_PASSWORD</span>{{else}}<button class="btn small" type="button" data-dialog="password-dialog">Change</button>{{end}}</li>
         <li><span>Two-step sign-in</span>{{if .TwoStepErr}}<span class="pill failed">Can’t be read</span>{{else if .TwoStep.On}}<span class="pill running">On{{if not .TwoStep.Since.IsZero}} since {{.TwoStep.Since.Local.Format "2 Jan 2006"}}{{end}}</span><button class="btn small" type="button" data-dialog="twostep-dialog">Manage</button>{{else}}<span class="pill">Off</span><button class="btn small" type="button" data-dialog="twostep-dialog">Turn on</button>{{end}}</li>
-        {{if .TwoStep.On}}<li><span>Recovery codes left</span><span class="num{{if le .TwoStep.CodesLeft 2}} warn-text{{end}}">{{.TwoStep.CodesLeft}}</span></li>{{end}}
+        {{if .TwoStep.On}}<li><span>Recovery codes left</span><span class="num{{if le .TwoStep.CodesLeft 2}} low{{end}}">{{.TwoStep.CodesLeft}}</span></li>{{end}}
         <li><span>Signed-in devices</span><span class="num">{{.Devices}}</span><form method="post" action="/settings/sign-out-others"><button class="btn small danger-text" type="submit"{{if le .Devices 1}} disabled{{end}}>Sign out others</button></form></li>
         <li><span>This device</span><form method="post" action="/logout"><button class="btn small" type="submit">Sign out</button></form></li>
       </ul>
-      {{if .TwoStepErr}}<p class="notice warn" style="margin:12px 0 0">The two-step state can’t be read, so sign-ins are refused. Reset it from the server with <code>browserpier 2fa reset</code>.</p>
-      {{else if and .TwoStep.On (le .TwoStep.CodesLeft 2)}}<p class="notice warn" style="margin:12px 0 0">{{if eq .TwoStep.CodesLeft 0}}No recovery codes left.{{else}}Only {{.TwoStep.CodesLeft}} recovery {{plural .TwoStep.CodesLeft "code" "codes"}} left.{{end}} Make new ones under Manage, in case you lose your phone.</p>{{end}}
+      {{if .TwoStepErr}}<p class="errors" role="alert" style="margin:12px 0 0">The two-step state can’t be read, so sign-ins are refused. Reset it from the server with <code>browserpier 2fa reset</code>.</p>
+      {{else if and .TwoStep.On (le .TwoStep.CodesLeft 2)}}<p class="notice" style="margin:12px 0 0">{{if eq .TwoStep.CodesLeft 0}}No recovery codes left.{{else}}Only {{.TwoStep.CodesLeft}} recovery {{plural .TwoStep.CodesLeft "code" "codes"}} left.{{end}} Make new ones under Manage, in case you lose your phone.</p>{{end}}
     </section>
 
     <section class="cell span-12" aria-labelledby="rec-title">
