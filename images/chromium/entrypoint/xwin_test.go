@@ -241,7 +241,8 @@ func TestXSetupRefused(t *testing.T) {
 }
 
 // scripted serves one setup, then answers the first request with reply
-// (and closes, or with stall, never answers).
+// (and closes, or with stall, never answers, until the test's cleanup
+// closes the pipe).
 func scripted(t *testing.T, reply []byte, stall bool) *xconn {
 	t.Helper()
 	cli, srv := net.Pipe()
@@ -259,7 +260,9 @@ func scripted(t *testing.T, reply []byte, stall bool) *xconn {
 		}
 		_, _ = io.CopyN(io.Discard, srv, int64(le.Uint16(h[2:4]))*4-4)
 		if stall {
-			select {}
+			// Until the cleanup closes the pipe, so the goroutine ends.
+			_, _ = io.Copy(io.Discard, srv)
+			return
 		}
 		_, _ = srv.Write(reply)
 		_ = srv.Close()
