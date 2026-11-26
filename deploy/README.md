@@ -183,6 +183,26 @@ The TURN server must reach this server on 7438 UDP, where it relays to. Anyone B
 
 Add `?ice=relay` to a live view's address (`https://pier.example.com/profiles/google?ice=relay`), or to a handoff link's once it's open (after the PIN), and reload. That page connects only through TURN: if the video plays, TURN works. Without it, a viewer connects directly where it can and through TURN only where it must.
 
+## Upstream proxies
+
+Pages can leave through an upstream proxy, such as a residential one: set it per profile under Advanced, or as the default for new profiles in Settings. It's a URL with the scheme, credentials, host and port, and nothing else:
+
+```
+http://user:password@proxy.example.net:8080      # also https:// and socks5://
+```
+
+Percent-encode a reserved character in the user name or password (`@` is `%40`, `:` is `%3A`). For `socks5://` each may be at most 255 bytes, and an `http`/`https` user name can't hold a colon. Time zone and language follow where the proxy exits.
+
+**One exit per profile: `{sticky}`.** Many providers keep a client on one exit IP while it sends the same session code, in the user name or the password. Write `{sticky}` where the code goes and each profile fills in a code of its own (8 lowercase letters and digits), kept until you choose **New exit IP** in its ⋯ menu. So one default proxy in Settings gives every profile its own exit, instead of all sharing one. For example, with IPRoyal, whose session code goes in the password and must be 8 characters:
+
+```
+http://USERNAME:PASSWORD_country-de_session-{sticky}_lifetime-30m@geo.iproyal.com:12321
+```
+
+Oxylabs takes it in the user name: `http://customer-USERNAME-cc-DE-sessid-{sticky}-sesstime-1440:PASSWORD@pr.oxylabs.io:7777`. Check your provider's current documentation for its syntax.
+
+How long an exit is kept is the provider's choice, not BrowserPier's: often minutes unless the URL asks for longer (by default Oxylabs ends a session after 10 minutes, or after 60 seconds without a request; `sesstime` asks for up to 24 hours), and a session moves to another IP when its exit goes offline. So `{sticky}` asks for a stable exit; it can't guarantee one. While the country stays the same, a profile keeps its time zone anyway.
+
 ## Settings
 
 Set in `.env` and passed through by `docker-compose.yml`. Add any other variable from this list to its `environment:`. An empty value means unset.

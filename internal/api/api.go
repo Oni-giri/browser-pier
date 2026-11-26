@@ -152,15 +152,17 @@ func (a *API) profileOut(p profiles.Profile) profileJSON {
 	return out
 }
 
+// redactProxy shows a profile's proxy without its password: a template
+// stays a template, its {sticky} never filled in.
 func redactProxy(raw string) string {
 	if raw == "" {
 		return ""
 	}
-	u, err := url.Parse(raw)
+	out, err := profiles.FormatProxy(raw, (*url.URL).Redacted)
 	if err != nil {
 		return "(set)"
 	}
-	return u.Redacted()
+	return out
 }
 
 func (a *API) listProfiles(w http.ResponseWriter, r *http.Request) {

@@ -62,6 +62,7 @@
         <label class="field"><span class="label">Proxy <span class="muted" style="font-weight:400">· optional</span></span>
           <input class="input mono" name="proxy" value="{{.Proxy}}" placeholder="socks5://user:pass@host:port" autocomplete="off" spellcheck="false">
           <span class="hint">HTTP, HTTPS or SOCKS5. Time zone and language follow the proxy's location.</span>
+          <span class="hint"><code>{sticky}</code> in the user name or password becomes a code of this profile's own, so it keeps its own exit IP where the provider offers sticky sessions.</span>
         </label>
         <div class="field">
           <label class="check"><input type="checkbox" name="local_network" value="1"{{if .Profile.LocalNetwork}} checked{{end}}> Let pages reach the local network</label>

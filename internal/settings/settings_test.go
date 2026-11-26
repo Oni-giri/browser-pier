@@ -106,3 +106,34 @@ func TestRecordingLimits(t *testing.T) {
 		t.Fatalf("saved limits %+v", again.RecordingLimits())
 	}
 }
+
+// TestStickyDefaultProxy: a default proxy holding {sticky} saves, and
+// every profile made from it keeps the template and gets a token of its
+// own, so each has its own exit.
+func TestStickyDefaultProxy(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	set := Settings{DefaultPolicy: profiles.PolicyPIN, DefaultAutoStop: 15 * time.Minute, DefaultProxy: "http://pier-{sticky}:pw@proxy.example:8080"}
+	if err := s.Save(ctx, set); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(ctx)
+	if err != nil || got.DefaultProxy != set.DefaultProxy {
+		t.Fatalf("saved %q, got %q, %v", set.DefaultProxy, got.DefaultProxy, err)
+	}
+	ps := profiles.NewStore(s.db)
+	var made []profiles.Profile
+	for _, name := range []string{"bank", "shop"} {
+		p, err := ps.Create(ctx, got.NewProfile(name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		made = append(made, p)
+	}
+	if made[0].Proxy != set.DefaultProxy || made[1].Proxy != set.DefaultProxy {
+		t.Fatalf("the profiles' proxies are %q and %q, want the template", made[0].Proxy, made[1].Proxy)
+	}
+	if made[0].StickyToken == "" || made[0].StickyToken == made[1].StickyToken {
+		t.Fatalf("tokens %q and %q, want two different ones", made[0].StickyToken, made[1].StickyToken)
+	}
+}
