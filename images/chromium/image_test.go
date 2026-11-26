@@ -1195,24 +1195,25 @@ func TestA11yBusOnlyInVisualMode(t *testing.T) {
 			if got := strings.Contains(args, "--force-renderer-accessibility"); got != c.bus {
 				t.Errorf("--force-renderer-accessibility: %t, want %t", got, c.bus)
 			}
-			penv := docker(t, "exec", b.name, "sh", "-c", "tr '\\0' '\\n' < /proc/$(pgrep -o -f /usr/lib/chromium/chromium)/environ")
-			session, a11y := "", ""
-			for _, l := range strings.Split(penv, "\n") {
-				if v, ok := strings.CutPrefix(l, "DBUS_SESSION_BUS_ADDRESS="); ok {
-					session = v
-				}
-				if v, ok := strings.CutPrefix(l, "AT_SPI_BUS_ADDRESS="); ok {
-					a11y = v
-				}
+			// Who answers as an accessible application on the session bus:
+			// Chromium in Visual mode, nobody in API mode. (Chromium's own
+			// environment can't be read back: it rewrites that memory for
+			// its process title.)
+			apps := func() string {
+				return docker(t, "exec", b.name, "sh", "-c", `a=unix:path=/tmp/browserpier-bus-$(id -u)/bus
+					for n in $(dbus-send --bus=$a --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.ListNames | sed -n 's/.*string "\(:[^"]*\)".*/\1/p'); do
+					  dbus-send --bus=$a --print-reply --reply-timeout=2000 --dest=$n /org/a11y/atspi/accessible/root org.freedesktop.DBus.Properties.Get string:org.a11y.atspi.Accessible string:Name 2>/dev/null | sed -n 's/.*string "\(.*\)".*/app \1/p'
+					done; true`)
 			}
-			if session == "" {
-				t.Errorf("Chromium has no session bus:\n%s", penv)
+			got := apps()
+			for deadline := time.Now().Add(15 * time.Second); c.bus && !strings.Contains(got, "app Chromium") && time.Now().Before(deadline); got = apps() {
+				time.Sleep(500 * time.Millisecond)
 			}
-			if c.bus && a11y != session {
-				t.Errorf("accessibility bus %q, want the session bus %q", a11y, session)
+			if c.bus && !strings.Contains(got, "app Chromium") {
+				t.Errorf("Chromium isn't on the session bus as an accessible application: %q", got)
 			}
-			if !c.bus && (a11y != "" || strings.Contains(penv, "ACCESSIBILITY_ENABLED")) {
-				t.Errorf("API mode's Chromium has accessibility:\n%s", penv)
+			if !c.bus && got != "" {
+				t.Errorf("API mode has accessible applications on the session bus: %q", got)
 			}
 			resp, err := b.http.Get("http://control/tree")
 			if err != nil {
