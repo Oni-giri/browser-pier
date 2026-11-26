@@ -628,9 +628,19 @@ func TestBrowserEnvironment(t *testing.T) {
 			t.Errorf("chrome://gpu says the GPU process is Sandboxed: %q, want true", sb)
 		}
 		// Checked in /proc too, for every GPU process (one restarting
-		// would make two): no new privileges, and two seccomp filters, the
-		// container's and Chromium's GPU policy, as renderers have; with
-		// the container's alone it's 1.
+		// would make two): no new privileges, and more seccomp filters than
+		// the container's own (its entry process, pid 1, has just those):
+		// the container's and Chromium's GPU policy, as renderers have.
+		// Counted against pid 1, not a fixed 2, so a runtime that stacks
+		// filters of its own can't pass for Chromium's.
+		m := regexp.MustCompile(`(?m)^Seccomp_filters:\s*(\d+)`).FindStringSubmatch(docker(t, "exec", b.name, "cat", "/proc/1/status"))
+		if m == nil {
+			t.Fatal("no Seccomp_filters line in the entry process's /proc status")
+		}
+		base, _ := strconv.Atoi(m[1])
+		if base < 1 {
+			t.Errorf("the container's entry process has %d seccomp filters, want the container's own", base)
+		}
 		status := docker(t, "exec", b.name, "sh", "-c", `for d in /proc/[0-9]*; do
 			case $(tr '\0' ' ' < $d/cmdline 2>/dev/null) in /usr/lib/chromium/*--type=gpu-process*)
 				echo "pid ${d#/proc/}"; grep -aE '^(NoNewPrivs|Seccomp|Seccomp_filters):' $d/status;; esac; done`)
@@ -647,11 +657,11 @@ func TestBrowserEnvironment(t *testing.T) {
 				n, _ := strconv.Atoi(m[1])
 				return n
 			}
-			if field("NoNewPrivs") != 1 || field("Seccomp") != 2 || field("Seccomp_filters") < 2 {
-				t.Errorf("a GPU process isn't under the container's and Chromium's seccomp filters with no new privileges:\npid %s", proc)
+			if field("NoNewPrivs") != 1 || field("Seccomp") != 2 || field("Seccomp_filters") <= base {
+				t.Errorf("a GPU process isn't under Chromium's seccomp filter on top of the container's %d, with no new privileges:\npid %s", base, proc)
 			}
 		}
-		t.Logf("GPU process: %s", strings.Join(strings.Fields(status), " "))
+		t.Logf("GPU process: %s; the container's filters: %d", strings.Join(strings.Fields(status), " "), base)
 	})
 	// A canvas drawn with WebGL shows on the X display, which screenshots
 	// and the live stream read, and isn't black or empty there.
