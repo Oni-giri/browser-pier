@@ -141,6 +141,10 @@ type treeNode struct {
 	W      int32             `json:"w"`
 	H      int32             `json:"h"`
 	Attrs  map[string]string `json:"attrs,omitempty"`
+	// AttrsRead: Attrs is what the element has, not a read that failed.
+	// The orchestrator prints no value of a field whose attributes it
+	// couldn't judge (a secret is named by its id or name attribute).
+	AttrsRead bool `json:"attrs_read,omitempty"`
 	// Kids is how many children it has, read or not.
 	Kids int `json:"kids,omitempty"`
 }
@@ -825,15 +829,19 @@ func (r *treeReader) readNode(ctx context.Context, app string, path dbus.ObjectP
 			filled = c > 0
 		}
 		n.Filled = &filled
-		n.Attrs = r.attrs(ctx, app, path, limit)
+		n.Attrs, n.AttrsRead = r.attrs(ctx, app, path, limit)
 	case roleEntry, roleText, roleComboBox, roleSpinButton:
-		n.Attrs = r.attrs(ctx, app, path, limit)
+		n.Attrs, n.AttrsRead = r.attrs(ctx, app, path, limit)
 		var text string
 		if r.call(ctx, app, path, ifText+".GetText", []any{int32(0), i32(limit)}, &text) == nil {
 			n.Text = capBytes(text, limit)
 		}
+	case roleSlider:
+		// Like every role whose value the orchestrator prints, its secret
+		// check needs the input's name and id as much as a text field's.
+		n.Attrs, n.AttrsRead = r.attrs(ctx, app, path, limit)
 	case roleLandmark, roleDialog, roleForm:
-		n.Attrs = r.attrs(ctx, app, path, limit)
+		n.Attrs, n.AttrsRead = r.attrs(ctx, app, path, limit)
 	}
 	switch role {
 	case roleSlider, roleSpinButton, roleProgressBar:
@@ -846,11 +854,12 @@ func (r *treeReader) readNode(ctx context.Context, app string, path dbus.ObjectP
 	return n, kids, count, nil
 }
 
-// attrs reads the object attributes in attrKeys.
-func (r *treeReader) attrs(ctx context.Context, app string, path dbus.ObjectPath, limit int) map[string]string {
+// attrs reads the object attributes in attrKeys; ok is false when they
+// couldn't be read.
+func (r *treeReader) attrs(ctx context.Context, app string, path dbus.ObjectPath, limit int) (_ map[string]string, ok bool) {
 	var all map[string]string
 	if r.call(ctx, app, path, ifAccessible+".GetAttributes", nil, &all) != nil {
-		return nil
+		return nil, false
 	}
 	var out map[string]string
 	for _, k := range attrKeys {
@@ -861,7 +870,7 @@ func (r *treeReader) attrs(ctx context.Context, app string, path dbus.ObjectPath
 			out[k] = capBytes(v, min(limit, 200))
 		}
 	}
-	return out
+	return out, true
 }
 
 // output lists the nodes read in document order (depth first), each

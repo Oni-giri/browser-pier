@@ -26,6 +26,9 @@ type fakeObj struct {
 	text     string
 	attrs    map[string]string
 	docAttrs map[string]string
+	value    *float64
+	// noAttrs: GetAttributes fails.
+	noAttrs bool
 }
 
 // fakeBus answers the AT-SPI read methods for a tree of fakeObjs, and
@@ -109,6 +112,8 @@ func (f *fakeBus) call(ctx context.Context, dest string, path dbus.ObjectPath, m
 			return []any{dbus.MakeVariant([]any{f.app, dbus.ObjectPath(p)})}, nil
 		case iface == ifAccessible && prop == "ChildCount":
 			return []any{dbus.MakeVariant(int32(len(o.kids)))}, nil
+		case iface == ifValue && prop == "CurrentValue" && o.value != nil:
+			return []any{dbus.MakeVariant(*o.value)}, nil
 		case iface == ifText && prop == "CharacterCount":
 			return []any{dbus.MakeVariant(int32(len([]rune(o.text))))}, nil
 		}
@@ -134,6 +139,9 @@ func (f *fakeBus) call(ctx context.Context, dest string, path dbus.ObjectPath, m
 	case ifAccessible + ".GetState":
 		return []any{[]uint32{uint32(o.states), uint32(o.states >> 32)}}, nil
 	case ifAccessible + ".GetAttributes":
+		if o.noAttrs {
+			return nil, errors.New("no attributes")
+		}
 		return []any{o.attrs}, nil
 	case ifComponent + ".GetExtents":
 		return []any{[]any{o.ext.X, o.ext.Y, o.ext.W, o.ext.H}}, nil
@@ -503,5 +511,48 @@ func TestTreeReadsWhatIsOnScreenFirst(t *testing.T) {
 	}
 	if out.Cut != "nodes" || !links["Item 0"] || !links["Item 29"] {
 		t.Fatalf("200 nodes: cut %q, links %v", out.Cut, links)
+	}
+}
+
+// TestTreeSendsWhatJudgesASliderSecret: a slider's value is printed, so
+// the reader sends what the orchestrator's secret check needs, as for a
+// text field: its attributes, and whether they could be read at all.
+func TestTreeSendsWhatJudgesASliderSecret(t *testing.T) {
+	f := browserBus(t)
+	pin, vol := 4321.0, 3.0
+	f.add(p+"38", &fakeObj{role: roleSlider, name: "Level", states: show(), ext: extents{8, 200, 100, 22}, parent: p + "31", value: &pin,
+		attrs: map[string]string{"html-input-name": "pin", "id": "pin-dial", "tag": "input"}})
+	f.add(p+"39", &fakeObj{role: roleSlider, name: "Volume", states: show(), ext: extents{8, 230, 100, 22}, parent: p + "31", value: &vol, noAttrs: true})
+	r := newTestReader(f)
+	mux := http.NewServeMux()
+	r.register(mux)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/tree", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /tree: %d %s", rec.Code, rec.Body)
+	}
+	var out treeRead
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	var level, volume *treeNode
+	for i := range out.Nodes {
+		switch out.Nodes[i].ID {
+		case p + "38":
+			level = &out.Nodes[i]
+		case p + "39":
+			volume = &out.Nodes[i]
+		}
+	}
+	if level == nil || level.Value == nil || *level.Value != pin || !level.AttrsRead || level.Attrs["html-input-name"] != "pin" || level.Attrs["id"] != "pin-dial" {
+		t.Fatalf("slider %+v: want its value, its name and id attributes, and attrs_read", level)
+	}
+	if volume == nil || volume.AttrsRead || volume.Attrs != nil {
+		t.Fatalf("slider whose attributes failed %+v: want attrs_read false", volume)
+	}
+	// The JSON the orchestrator reads (internal/visualtree reads the same
+	// fields: TestReaderSliderJSON).
+	if body := rec.Body.String(); !strings.Contains(body, `"attrs":{"html-input-name":"pin","id":"pin-dial"},"attrs_read":true`) {
+		t.Fatalf("the slider's JSON: %s", body)
 	}
 }

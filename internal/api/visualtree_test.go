@@ -28,8 +28,8 @@ func loginTree(buttonStates uint64) string {
 	return fmt.Sprintf(`{"doc": {"app": ":1.0", "id": "/d/1", "url": "https://example.com/login", "title": "Sign in", "x": 0, "y": 87, "w": 1440, "h": 781},
 "screen_width": 1440, "screen_height": 900, "nodes": [
  {"id": "/n/1", "parent": -1, "depth": 1, "role": 110, "states": %[1]d, "x": 8, "y": 108, "w": 1424, "h": 81, "attrs": {"xml-roles": "main"}},
- {"id": "/n/2", "parent": 0, "depth": 2, "role": 79, "states": %[1]d, "name": "Email", "text": "ana@example.com", "x": 50, "y": 167, "w": 186, "h": 22},
- {"id": "/n/3", "parent": 0, "depth": 2, "role": 40, "states": %[1]d, "name": "Password", "text": "hunter2", "filled": true, "x": 304, "y": 167, "w": 186, "h": 22},
+ {"id": "/n/2", "parent": 0, "depth": 2, "role": 79, "states": %[1]d, "name": "Email", "text": "ana@example.com", "attrs_read": true, "x": 50, "y": 167, "w": 186, "h": 22},
+ {"id": "/n/3", "parent": 0, "depth": 2, "role": 40, "states": %[1]d, "name": "Password", "text": "hunter2", "filled": true, "attrs_read": true, "x": 304, "y": 167, "w": 186, "h": 22},
  {"id": "/n/4", "parent": 0, "depth": 2, "role": 43, "states": %[2]d, "name": "Sign in", "x": 615, "y": 167, "w": 58, "h": 22}
 ]}`, onScreen, buttonStates)
 }

@@ -61,7 +61,11 @@ type Node struct {
 	W      int               `json:"w"`
 	H      int               `json:"h"`
 	Attrs  map[string]string `json:"attrs"`
-	Kids   int               `json:"kids"`
+	// AttrsRead: the reader read the element's attributes, so Attrs is
+	// what it has. A field whose attributes weren't read can't be judged
+	// secret or not by its id or name, and prints no value.
+	AttrsRead bool `json:"attrs_read"`
+	Kids      int  `json:"kids"`
 }
 
 // NodeNow is the reader's GET /tree/node answer: one element read again.

@@ -41,6 +41,10 @@ func node(parent int, role uint32, states uint64, name string, x, y int) Node {
 	return Node{Parent: parent, Role: role, States: states, Name: name, X: x, Y: y, W: 40, H: 20}
 }
 
+// judged marks a node's attributes as read: the reader's answer for a
+// field it judged.
+func judged(n Node) Node { n.AttrsRead = true; return n }
+
 func renderAll(t *testing.T, tr *Tree, budget int, query string) (string, string) {
 	t.Helper()
 	r := newRefs()
@@ -141,18 +145,27 @@ func TestFormatSecrets(t *testing.T) {
 	yes, no := true, false
 	otp, qty := 492817.0, 3.0
 	tr := tree(
-		Node{Parent: -1, Role: rolePasswordText, States: shown, Name: "Password", Text: "hunter2", Filled: &yes, X: 1, Y: 100, W: 10, H: 10},
-		Node{Parent: -1, Role: rolePasswordText, States: shown, Name: "New password", Text: "•••••••", Filled: &no, X: 1, Y: 120, W: 10, H: 10},
-		Node{Parent: -1, Role: rolePasswordText, States: shown, Name: "Old password", Filled: &no, X: 1, Y: 140, W: 10, H: 10},
-		Node{Parent: -1, Role: roleEntry, States: shown, Name: "Verification code", Text: "492817", X: 1, Y: 160, W: 10, H: 10},
-		Node{Parent: -1, Role: roleEntry, States: shown, Name: "Code", Text: "123", Attrs: map[string]string{"html-input-name": "otp"}, X: 1, Y: 180, W: 10, H: 10},
-		Node{Parent: -1, Role: roleEntry, States: shown, Name: "CVC", Text: "321", X: 1, Y: 200, W: 10, H: 10},
-		Node{Parent: -1, Role: roleEntry, States: shown, Name: "Email", Text: "ana@example.com", X: 1, Y: 220, W: 10, H: 10},
+		Node{Parent: -1, Role: rolePasswordText, States: shown, Name: "Password", Text: "hunter2", Filled: &yes, AttrsRead: true, X: 1, Y: 100, W: 10, H: 10},
+		Node{Parent: -1, Role: rolePasswordText, States: shown, Name: "New password", Text: "•••••••", Filled: &no, AttrsRead: true, X: 1, Y: 120, W: 10, H: 10},
+		Node{Parent: -1, Role: rolePasswordText, States: shown, Name: "Old password", Filled: &no, AttrsRead: true, X: 1, Y: 140, W: 10, H: 10},
+		Node{Parent: -1, Role: roleEntry, States: shown, Name: "Verification code", Text: "492817", AttrsRead: true, X: 1, Y: 160, W: 10, H: 10},
+		Node{Parent: -1, Role: roleEntry, States: shown, Name: "Code", Text: "123", Attrs: map[string]string{"html-input-name": "otp"}, AttrsRead: true, X: 1, Y: 180, W: 10, H: 10},
+		Node{Parent: -1, Role: roleEntry, States: shown, Name: "CVC", Text: "321", AttrsRead: true, X: 1, Y: 200, W: 10, H: 10},
+		Node{Parent: -1, Role: roleEntry, States: shown, Name: "Email", Text: "ana@example.com", AttrsRead: true, X: 1, Y: 220, W: 10, H: 10},
 		// type=number fields are spin buttons: an OTP and a CVV, by name.
-		Node{Parent: -1, Role: roleSpinButton, States: shown, Name: "One-time code", Value: &otp, Text: "492817", Attrs: map[string]string{"html-input-name": "otp"}, X: 1, Y: 240, W: 10, H: 10},
-		Node{Parent: -1, Role: roleSpinButton, States: shown, Name: "Security", Text: "321", Attrs: map[string]string{"html-input-name": "cvv"}, X: 1, Y: 260, W: 10, H: 10},
-		Node{Parent: -1, Role: roleSpinButton, States: shown, Name: "PIN", X: 1, Y: 280, W: 10, H: 10},
-		Node{Parent: -1, Role: roleSpinButton, States: shown, Name: "Quantity", Value: &qty, X: 1, Y: 300, W: 10, H: 10},
+		Node{Parent: -1, Role: roleSpinButton, States: shown, Name: "One-time code", Value: &otp, Text: "492817", Attrs: map[string]string{"html-input-name": "otp"}, AttrsRead: true, X: 1, Y: 240, W: 10, H: 10},
+		Node{Parent: -1, Role: roleSpinButton, States: shown, Name: "Security", Text: "321", Attrs: map[string]string{"html-input-name": "cvv"}, AttrsRead: true, X: 1, Y: 260, W: 10, H: 10},
+		Node{Parent: -1, Role: roleSpinButton, States: shown, Name: "PIN", AttrsRead: true, X: 1, Y: 280, W: 10, H: 10},
+		Node{Parent: -1, Role: roleSpinButton, States: shown, Name: "Quantity", Value: &qty, AttrsRead: true, X: 1, Y: 300, W: 10, H: 10},
+		// A slider named neutrally, secret only by its HTML name or id.
+		Node{Parent: -1, Role: roleSlider, States: shown, Name: "Level", Value: &otp, Attrs: map[string]string{"html-input-name": "pin"}, AttrsRead: true, X: 1, Y: 320, W: 10, H: 10},
+		Node{Parent: -1, Role: roleSlider, States: shown, Name: "Dial", Value: &otp, Attrs: map[string]string{"id": "otp-dial"}, AttrsRead: true, X: 1, Y: 340, W: 10, H: 10},
+		Node{Parent: -1, Role: roleSlider, States: shown, Name: "Volume", Value: &qty, AttrsRead: true, X: 1, Y: 360, W: 10, H: 10},
+		// Fields whose attributes the reader couldn't read: nothing says
+		// they aren't secret, so they print no value (fail closed).
+		Node{Parent: -1, Role: roleSlider, States: shown, Name: "Unread slider", Value: &otp, X: 1, Y: 380, W: 10, H: 10},
+		Node{Parent: -1, Role: roleEntry, States: shown, Name: "Unread field", Text: "492817", X: 1, Y: 400, W: 10, H: 10},
+		Node{Parent: -1, Role: roleSpinButton, States: shown, Name: "Unread number", X: 1, Y: 420, W: 10, H: 10},
 	)
 	body, _ := renderAll(t, tr, 4000, "")
 	for _, leak := range []string{"hunter2", "•", "492817", "123", "321", "7"} {
@@ -162,7 +175,9 @@ func TestFormatSecrets(t *testing.T) {
 	}
 	for _, want := range []string{`textbox "Password" = [filled]`, `textbox "New password" = [filled]`, `textbox "Old password" = [empty]`,
 		`textbox "Verification code" = [filled]`, `textbox "Code" = [filled]`, `textbox "CVC" = [filled]`, `textbox "Email" = "ana@example.com"`,
-		`spinbutton "One-time code" = [filled]`, `spinbutton "Security" = [filled]`, `spinbutton "PIN" = [empty]`, `spinbutton "Quantity" = 3 @`} {
+		`spinbutton "One-time code" = [filled]`, `spinbutton "Security" = [filled]`, `spinbutton "PIN" = [empty]`, `spinbutton "Quantity" = 3 @`,
+		`slider "Level" = [filled]`, `slider "Dial" = [filled]`, `slider "Volume" = 3 @`,
+		`slider "Unread slider" = [filled]`, `textbox "Unread field" = [filled]`, `spinbutton "Unread number" = [empty]`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("no %q in\n%s", want, body)
 		}
@@ -246,33 +261,41 @@ func serveTree(t *testing.T, body string) string {
 
 func TestFormatLabelsAndText(t *testing.T) {
 	tr := tree(
-		node(-1, roleLabel, shown, "", 1, 100),                  // 0
-		node(0, roleStatic, shown, "Email", 1, 100),             // 1: echoes the field's name
-		node(-1, roleEntry, shown, "Email", 50, 100),            // 2
-		node(-1, roleHeading, shown, "Welcome", 1, 130),         // 3
-		node(3, roleStatic, shown, "Welcome", 1, 130),           // 4
-		node(-1, roleParagraph, shown, "", 1, 160),              // 5
-		node(5, roleStatic, shown, "Before ", 1, 160),           // 6
-		node(5, roleStatic, shown, "middle", 30, 160),           // 7
-		node(5, roleStatic, shown, " after.", 60, 160),          // 8
-		node(-1, rolePushButton, shown, "Go", 1, 190),           // 9
-		node(9, roleStatic, shown, "Go", 1, 190),                // 10: the button's own text
-		node(-1, roleList, shown, "", 1, 220),                   // 11
-		node(11, roleListItem, shown, "", 1, 220),               // 12
-		node(12, roleStatic, shown, "•", 1, 220),                // 13: a marker
-		node(12, roleStatic, shown, "First item", 10, 220),      // 14
-		node(-1, roleStatic, 1<<stateEnabled, "Hidden", 1, 250), // 15: not visible
-		node(-1, roleComboBox, shown, "Country", 1, 280),        // 16
-		node(16, roleMenu, 1<<stateEnabled, "", 1, 280),         // 17
+		node(-1, roleLabel, shown, "", 1, 100),                   // 0
+		node(0, roleStatic, shown, "Email", 1, 100),              // 1: echoes the field's name
+		judged(node(-1, roleEntry, shown, "Email", 50, 100)),     // 2
+		node(-1, roleHeading, shown, "Welcome", 1, 130),          // 3
+		node(3, roleStatic, shown, "Welcome", 1, 130),            // 4
+		node(-1, roleParagraph, shown, "", 1, 160),               // 5
+		node(5, roleStatic, shown, "Before ", 1, 160),            // 6
+		node(5, roleStatic, shown, "middle", 30, 160),            // 7
+		node(5, roleStatic, shown, " after.", 60, 160),           // 8
+		node(-1, rolePushButton, shown, "Go", 1, 190),            // 9
+		node(9, roleStatic, shown, "Go", 1, 190),                 // 10: the button's own text
+		node(-1, roleList, shown, "", 1, 220),                    // 11
+		node(11, roleListItem, shown, "", 1, 220),                // 12
+		node(12, roleStatic, shown, "•", 1, 220),                 // 13: a marker
+		node(12, roleStatic, shown, "First item", 10, 220),       // 14
+		node(-1, roleStatic, 1<<stateEnabled, "Hidden", 1, 250),  // 15: not visible
+		judged(node(-1, roleComboBox, shown, "Country", 1, 280)), // 16
+		node(16, roleMenu, 1<<stateEnabled, "", 1, 280),          // 17
 		node(17, roleMenuItem, 1<<stateEnabled|1<<stateSelected, "Latvia", 1, 280),
+		// A secret <select>: its selected option fills it, unprinted.
+		judged(Node{Parent: -1, Role: roleComboBox, States: shown, Name: "Card", Attrs: map[string]string{"html-input-name": "cvv"}, X: 1, Y: 310, W: 40, H: 20}), // 19
+		node(19, roleMenu, 1<<stateEnabled, "", 1, 310),
+		node(20, roleMenuItem, 1<<stateEnabled|1<<stateSelected, "731", 1, 310),
+		judged(Node{Parent: -1, Role: roleComboBox, States: shown, Name: "Card PIN", X: 1, Y: 340, W: 40, H: 20}), // 22
+		node(22, roleMenu, 1<<stateEnabled, "", 1, 340),
+		node(23, roleMenuItem, 1<<stateEnabled, "Pet's name", 1, 340),
 	)
 	body, _ := renderAll(t, tr, 4000, "")
-	for _, want := range []string{`textbox "Email"`, "# Welcome", "Before middle after.", `button "Go"`, "First item", `combobox "Country" = "Latvia"`} {
+	for _, want := range []string{`textbox "Email"`, "# Welcome", "Before middle after.", `button "Go"`, "First item", `combobox "Country" = "Latvia"`,
+		`combobox "Card" = [filled]`, `combobox "Card PIN" = [empty]`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("no %q in\n%s", want, body)
 		}
 	}
-	for _, not := range []string{"\nEmail\n", "\nGo\n", "•", "Hidden", `menuitem "Latvia"`} {
+	for _, not := range []string{"\nEmail\n", "\nGo\n", "•", "Hidden", `menuitem "Latvia"`, "731"} {
 		if strings.Contains(body+"\n", not) {
 			t.Errorf("%q in\n%s", not, body)
 		}
@@ -325,7 +348,7 @@ func TestReaderJSONMatchesTheEntrypoint(t *testing.T) {
 	}
 	for _, field := range []string{`json:"doc"`, `json:"screen_width"`, `json:"screen_height"`, `json:"nodes"`, `json:"cut,omitempty"`,
 		`json:"id"`, `json:"parent"`, `json:"depth"`, `json:"role"`, `json:"states"`, `json:"name,omitempty"`, `json:"text,omitempty"`,
-		`json:"filled,omitempty"`, `json:"value,omitempty"`, `json:"attrs,omitempty"`, `json:"stale"`, `json:"at,omitempty"`, `json:"contains,omitempty"`, `json:"url"`, `json:"title"`, `json:"app"`} {
+		`json:"filled,omitempty"`, `json:"value,omitempty"`, `json:"attrs,omitempty"`, `json:"attrs_read,omitempty"`, `json:"stale"`, `json:"at,omitempty"`, `json:"contains,omitempty"`, `json:"url"`, `json:"title"`, `json:"app"`} {
 		if !strings.Contains(string(raw), field) {
 			t.Errorf("the entrypoint has no %s", field)
 		}
@@ -333,5 +356,31 @@ func TestReaderJSONMatchesTheEntrypoint(t *testing.T) {
 	var n Node
 	if err := json.Unmarshal([]byte(`{"id": "/x", "role": 43, "filled": true}`), &n); err != nil || n.Filled == nil || !*n.Filled {
 		t.Fatalf("%+v %v", n, err)
+	}
+}
+
+// TestReaderSliderJSON: a slider secret only by its HTML name, as the
+// entrypoint's reader sends it (TestTreeSendsWhatJudgesASliderSecret),
+// prints [filled]; one whose attributes the reader couldn't read prints
+// no value either.
+func TestReaderSliderJSON(t *testing.T) {
+	raw := `{"doc": {"app": ":1.0", "id": "/d", "url": "https://example.com/", "title": "Dials", "x": 0, "y": 87, "w": 1440, "h": 781},
+"screen_width": 1440, "screen_height": 900, "nodes": [
+ {"id": "/n/1", "parent": -1, "depth": 1, "role": 51, "states": 1107296256, "name": "Level", "value": 4321, "x": 8, "y": 200, "w": 100, "h": 22, "attrs": {"html-input-name": "pin", "id": "pin-dial"}, "attrs_read": true},
+ {"id": "/n/2", "parent": -1, "depth": 1, "role": 51, "states": 1107296256, "name": "Volume", "value": 3, "x": 8, "y": 230, "w": 100, "h": 22},
+ {"id": "/n/3", "parent": -1, "depth": 1, "role": 51, "states": 1107296256, "name": "Bass", "value": 7, "x": 8, "y": 260, "w": 100, "h": 22, "attrs_read": true}
+]}`
+	var tr Tree
+	if err := json.Unmarshal([]byte(raw), &tr); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := renderAll(t, &tr, 4000, "")
+	for _, want := range []string{`slider "Level" = [filled]`, `slider "Volume" = [filled]`, `slider "Bass" = 7 `} {
+		if !strings.Contains(body, want) {
+			t.Errorf("no %q in\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "4321") {
+		t.Fatalf("the secret slider's value:\n%s", body)
 	}
 }

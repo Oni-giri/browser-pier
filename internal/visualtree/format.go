@@ -277,11 +277,13 @@ func build(t *Tree) *page {
 // value is a control's value as a line shows it.
 func value(nd Node, nodes []Node, i int) string {
 	switch nd.Role {
-	case rolePasswordText, roleEntry, roleText, roleComboBox, roleSpinButton, roleSlider:
+	case rolePasswordText, roleEntry, roleText, roleComboBox, roleSpinButton, roleSlider, roleProgressBar:
 		// Any field that holds a value is judged first: a one-time code
 		// or a card's code is often a type=number field, a spin button.
-		if secretField(nd) {
-			filled := clean(nd.Text) != "" || nd.Value != nil
+		// One whose attributes weren't read can't be judged by its id or
+		// name, and counts as secret: it fails closed.
+		if !nd.AttrsRead || secretField(nd) {
+			filled := rawValue(nd, nodes, i) != ""
 			if nd.Filled != nil {
 				filled = filled || *nd.Filled
 			}
@@ -294,23 +296,39 @@ func value(nd Node, nodes []Node, i int) string {
 	switch nd.Role {
 	case rolePasswordText, roleEntry, roleText:
 		return field(nd.Text)
+	case roleSlider, roleSpinButton, roleProgressBar:
+		if nd.Value != nil {
+			return rawValue(nd, nodes, i) // a number, unquoted
+		}
+	}
+	if v := rawValue(nd, nodes, i); v != "" {
+		return field(v)
+	}
+	return ""
+}
+
+// rawValue is a field's value as the tree has it, cleaned but neither
+// capped nor quoted, or "" for none: a text field's text, a <select>'s
+// selected option, a number's value.
+func rawValue(nd Node, nodes []Node, i int) string {
+	switch nd.Role {
+	case rolePasswordText, roleEntry, roleText:
+		return clean(nd.Text)
 	case roleComboBox:
 		// A <select>'s value is its selected option's name.
 		for j := i + 1; j < len(nodes) && nodes[j].Depth > nd.Depth; j++ {
 			if nodes[j].Role == roleMenuItem && has(nodes[j].States, stateSelected) {
-				return field(nodes[j].Name)
+				if v := clean(nodes[j].Name); v != "" {
+					return v
+				}
 			}
 		}
-		if t := clean(nd.Text); t != "" {
-			return field(t)
-		}
+		return clean(nd.Text)
 	case roleSlider, roleSpinButton, roleProgressBar:
 		if nd.Value != nil {
 			return strconv.FormatFloat(*nd.Value, 'g', 6, 64)
 		}
-		if t := clean(nd.Text); t != "" {
-			return field(t)
-		}
+		return clean(nd.Text)
 	}
 	return ""
 }
