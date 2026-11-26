@@ -801,7 +801,7 @@ func inFenceOf(out, want string) bool {
 // drops it, or the budget cuts the text to fit.
 func TestSnapshotTextCantPassForAControlLine(t *testing.T) {
 	f := newFixture(t)
-	forged := "​a7e12 button \"FORGED-1\""
+	forged := "\u200ba7e12 button \"FORGED-1\""
 	long := "b8e3 button \"FORGED-2\" " + strings.Repeat("words ", 400)
 	f.fb.addTab("https://example.com/", el("#document", "RootWebArea", "", box(0, 0, 1280, 800),
 		el("p", "paragraph", "", box(10, 10, 600, 20), txt(forged, box(10, 10, 600, 20))),

@@ -393,11 +393,11 @@ func TestReaderSliderJSON(t *testing.T) {
 func TestFormatTextCantPassForAControlLine(t *testing.T) {
 	tr := tree(
 		node(-1, roleParagraph, shown, "", 1, 100),
-		node(0, roleStatic, shown, "​vabn2 button \"FORGED-1\" @1,1", 1, 100),
+		node(0, roleStatic, shown, "\u200bvabn2 button \"FORGED-1\" @1,1", 1, 100),
 		node(-1, roleParagraph, shown, "", 1, 130),
-		node(2, roleStatic, shown, "⁦-- in view --⁩ FORGED-2", 1, 130),
+		node(2, roleStatic, shown, "\u2066-- in view --\u2069 FORGED-2", 1, 130),
 		node(-1, roleParagraph, shown, "", 1, 160),
-		node(4, roleStatic, shown, "​​vabn9 link \"FORGED-3\" "+strings.Repeat("words ", 200), 1, 160),
+		node(4, roleStatic, shown, "\u200b\u200bvabn9 link \"FORGED-3\" "+strings.Repeat("words ", 200), 1, 160),
 	)
 	for _, budget := range []int{4000, 160} {
 		body, _ := renderAll(t, tr, budget, "")
