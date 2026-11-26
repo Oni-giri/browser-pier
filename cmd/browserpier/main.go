@@ -30,6 +30,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/handoff"
 	"github.com/Oni-giri/browser-pier/internal/mcp"
+	"github.com/Oni-giri/browser-pier/internal/picker"
 	"github.com/Oni-giri/browser-pier/internal/recording"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/settings"
@@ -232,7 +233,11 @@ func run(log *slog.Logger) error {
 	defer handoffs.Close() // its until_url watches; the next start's sweep resumes them
 	go handoffs.Sweep(ctx, 15*time.Second)
 	agentAPI.SetHandoffs(handoffs)
+	// The person's answer to a page's file chooser, in the live view and
+	// on a handoff link (PROJ-181).
+	people := picker.New(mgr, fileStore, log)
 	app := ui.New(mgr, web, handoffs, prefs, log, ui.Options{
+		Picker:          people,
 		PublicURL:       cfg.PublicURL,
 		HostMemory:      total,
 		HostFree:        localFree(),
@@ -247,7 +252,9 @@ func run(log *slog.Logger) error {
 			}
 		},
 	})
-	err = serve(ctx, ln, newHandler(web, agentAPI, live, handoff.NewWeb(handoffs, web, live, mgr, log), app, log), log)
+	handoffWeb := handoff.NewWeb(handoffs, web, live, mgr, log)
+	handoffWeb.SetPicker(people)
+	err = serve(ctx, ln, newHandler(web, agentAPI, live, handoffWeb, app, log), log)
 	if cfg.StopBrowsersOnExit {
 		// After serve: no request can start another browser meanwhile.
 		stopBrowsers(mgr, log)
