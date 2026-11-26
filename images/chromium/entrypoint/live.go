@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,7 +11,9 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -23,13 +26,25 @@ type liveInput struct {
 	width, height int
 	start         func() (ioWriteCloser, error)
 
+	// runSync runs one xdotool command line in a process of its own, to
+	// its end.
+	runSync func(args ...string) error
+
 	mu    sync.Mutex
 	stdin io.WriteCloser
-	held  map[string]bool // keys and buttons down, to release on hand-back
+	// held is keys and buttons down, to release on hand-back: each stays
+	// until its release is known to have run. released is those whose
+	// release has been written to the running xdotool but may not have
+	// run yet; drain moves them out once that xdotool has exited cleanly.
+	held, released map[string]bool
 }
 
 func newLiveInput(width, height int) *liveInput {
-	return &liveInput{width: width, height: height, held: map[string]bool{}, start: startXdotool}
+	return &liveInput{width: width, height: height, held: map[string]bool{}, released: map[string]bool{}, start: startXdotool,
+		runSync: func(args ...string) error {
+			_, err := runCommand(context.Background(), "xdotool", args...)
+			return err
+		}}
 }
 
 // ioWriteCloser is xdotool's stdin.
@@ -38,7 +53,12 @@ type ioWriteCloser = io.WriteCloser
 func startXdotool() (ioWriteCloser, error) {
 	cmd := exec.Command("xdotool", "-")
 	cmd.Env = append(os.Environ(), "DISPLAY="+display)
-	cmd.Stderr = withheld("xdotool")
+	stderr, err := withheldStderr("xdotool")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = stderr.Close() }()
+	cmd.Stderr = stderr
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -47,27 +67,33 @@ func startXdotool() (ioWriteCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	done := make(chan struct{})
-	go func() { <-exited; close(done) }()
-	return xdotoolStdin{in, done, cmd.Process}, nil
+	x := &xdotoolStdin{WriteCloser: in, exited: make(chan struct{}), proc: cmd.Process}
+	go func() { x.status = <-exited; close(x.exited) }()
+	return x, nil
 }
 
 // xdotoolStdin is the live xdotool's input. Closing it waits until
 // xdotool has run every command written and exited (killing it after
-// 2 s), so drain can tell nothing written is still queued.
+// 2 s); it fails unless xdotool exited cleanly, so drain can tell
+// whether everything written has run.
 type xdotoolStdin struct {
 	io.WriteCloser
-	exited <-chan struct{}
+	exited chan struct{}
+	status syscall.WaitStatus // once exited is closed
 	proc   *os.Process
 }
 
-func (x xdotoolStdin) Close() error {
+func (x *xdotoolStdin) Close() error {
 	err := x.WriteCloser.Close()
 	select {
 	case <-x.exited:
 	case <-time.After(2 * time.Second):
 		_ = x.proc.Kill()
 		<-x.exited
+		return errors.New("xdotool was killed with commands still queued")
+	}
+	if !x.status.Exited() || x.status.ExitStatus() != 0 {
+		return fmt.Errorf("xdotool: %s", describe(x.status))
 	}
 	return err
 }
@@ -75,12 +101,56 @@ func (x xdotoolStdin) Close() error {
 // drain returns once xdotool has run every command sent so far, with
 // li.mu held: it ends the xdotool process, and the next event starts a
 // new one. Typing with a binding (typeMapped) drains first, so a queued
-// key of the person's can't bind a keycode of its own meanwhile.
-func (li *liveInput) drain() {
+// key of the person's can't bind a keycode of its own meanwhile. If
+// xdotool didn't exit cleanly, a release it was sent may not have run,
+// so everything held is let go by a new xdotool first; drain fails if
+// that fails.
+func (li *liveInput) drain() error {
+	clean := true
 	if li.stdin != nil {
-		_ = li.stdin.Close()
+		clean = li.stdin.Close() == nil
 		li.stdin = nil
 	}
+	if clean {
+		for h := range li.released {
+			delete(li.held, h)
+		}
+		clear(li.released)
+		return nil
+	}
+	var args []string
+	for _, l := range li.releaseLines(true) {
+		args = append(args, strings.Fields(l)...)
+	}
+	if len(args) > 0 {
+		if err := li.runSync(args...); err != nil {
+			return fmt.Errorf("couldn't let go of the live view's keys: %w", err)
+		}
+	}
+	clear(li.held)
+	clear(li.released)
+	return nil
+}
+
+// releaseLines is the commands that let go of what's held, sorted: all
+// of it, or only what has no release queued yet.
+func (li *liveInput) releaseLines(all bool) []string {
+	names := make([]string, 0, len(li.held))
+	for h := range li.held {
+		if all || !li.released[h] {
+			names = append(names, h)
+		}
+	}
+	sort.Strings(names)
+	var lines []string
+	for _, h := range names {
+		if h[0] == 'b' {
+			lines = append(lines, "mouseup "+h[1:])
+		} else {
+			lines = append(lines, "keyup "+h[1:])
+		}
+	}
+	return lines
 }
 
 // event is one input from a viewer.
@@ -151,9 +221,12 @@ func (li *liveInput) send(lines []string) error {
 		if err == nil {
 			return nil
 		}
-		// xdotool went away: start a new one and try again.
+		// xdotool went away: start a new one and try again. A release
+		// queued in the old one may not have run, so its key is held
+		// again until a release that has.
 		_ = li.stdin.Close()
 		li.stdin = nil
+		clear(li.released)
 	}
 	return errors.New("xdotool isn't taking input")
 }
@@ -179,15 +252,19 @@ func (li *liveInput) events(w http.ResponseWriter, r *http.Request) {
 	li.mu.Lock()
 	defer li.mu.Unlock()
 	for _, e := range evs {
+		h := "k" + e.K
+		if e.T == "down" || e.T == "up" {
+			h = "b" + strconv.Itoa(e.B)
+		}
 		switch e.T {
-		case "down":
-			li.held["b"+strconv.Itoa(e.B)] = true
-		case "up":
-			delete(li.held, "b"+strconv.Itoa(e.B))
-		case "keydown":
-			li.held["k"+e.K] = true
-		case "keyup":
-			delete(li.held, "k"+e.K)
+		case "down", "keydown":
+			li.held[h] = true
+			delete(li.released, h)
+		case "up", "keyup":
+			// Held until the release is known to have run (drain).
+			if li.held[h] {
+				li.released[h] = true
+			}
 		}
 	}
 	if err := li.send(all); err != nil {
@@ -202,20 +279,12 @@ func (li *liveInput) events(w http.ResponseWriter, r *http.Request) {
 func (li *liveInput) release(w http.ResponseWriter, _ *http.Request) {
 	li.mu.Lock()
 	defer li.mu.Unlock()
-	names := make([]string, 0, len(li.held))
+	// What already has a release queued needs none; everything stays
+	// held until its release is known to have run (drain).
+	lines := li.releaseLines(false)
 	for h := range li.held {
-		names = append(names, h)
+		li.released[h] = true
 	}
-	sort.Strings(names)
-	var lines []string
-	for _, h := range names {
-		if h[0] == 'b' {
-			lines = append(lines, "mouseup "+h[1:])
-		} else {
-			lines = append(lines, "keyup "+h[1:])
-		}
-	}
-	li.held = map[string]bool{}
 	if len(lines) > 0 {
 		if err := li.send(lines); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)

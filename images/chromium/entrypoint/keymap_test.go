@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"slices"
 	"strconv"
 	"strings"
@@ -29,6 +30,7 @@ type fakeKeyboard struct {
 	changeErr  error // every change fails
 	restoreErr error // every change to NoSymbol (a restore) fails
 	bindErr    error // every other change fails
+	bindsLeft  int   // with bindErr: this many other changes succeed first
 	ignore     bool  // changes are accepted and do nothing
 	opened     int
 	closed     int
@@ -78,7 +80,10 @@ func (f *fakeKeyboard) change(first byte, perKey int, syms []uint32) error {
 		return f.restoreErr
 	}
 	if f.bindErr != nil && syms[0] != 0 {
-		return f.bindErr
+		if f.bindsLeft == 0 {
+			return f.bindErr
+		}
+		f.bindsLeft--
 	}
 	if perKey != fakePerKey {
 		return fmt.Errorf("perKey %d", perKey)
@@ -139,14 +144,15 @@ func TestKeyboardMapSpareKeys(t *testing.T) {
 	if !m.has(0xe9) || m.has(0xea) {
 		t.Fatal("has")
 	}
-	for _, k := range []byte{8, 93, 97, 103, 120, 132, 149, 154, 168, 178, 183, 184, 219, 222, 230, 248} {
+	for _, k := range []byte{8, 93, 120, 149, 154, 168, 178, 183, 184, 219, 222, 230, 248} {
 		if !quietKeycode(k) {
 			t.Errorf("keycode %d isn't quiet", k)
 		}
 	}
-	// F13 to F24, the browser and media keys, and every key below 136
-	// but the six: none.
-	for _, k := range []byte{9, 23, 36, 94, 110, 119, 121, 124, 135, 166, 167, 172, 180, 181, 191, 197, 202, 217, 225, 252} {
+	// F13 to F24, the browser and media keys, the hardware fallback's
+	// punctuation and keypad keys (97, 103, 132), and every key below 136
+	// but the three: none.
+	for _, k := range []byte{9, 23, 36, 94, 97, 103, 110, 119, 121, 124, 132, 135, 166, 167, 172, 180, 181, 191, 197, 202, 212, 217, 225, 232, 252} {
 		if quietKeycode(k) {
 			t.Errorf("keycode %d is quiet", k)
 		}
@@ -747,19 +753,140 @@ type closingXdotool struct {
 
 func (c *closingXdotool) Close() error { c.closed++; return nil }
 
-// xdotool's stderr never reaches the log: only how much it wrote.
+// xdotool's stderr never reaches the log, only how much it wrote, and it
+// is an *os.File, as the reaper requires: a fake xdotool here writes a
+// typed key's name to it.
 func TestWithheldStderr(t *testing.T) {
-	r, w, err := os.Pipe()
-	if err != nil {
+	dir := t.TempDir()
+	script := "#!/bin/sh\necho \"(symbol) No such key name 'U00E9'. Ignoring it.\" >&2\n"
+	if err := os.WriteFile(dir+"/xdotool", []byte(script), 0o755); err != nil { //nolint:gosec // a test script
 		t.Fatal(err)
 	}
-	old := os.Stderr
-	os.Stderr = w
-	n, _ := withheld("xdotool").Write([]byte("(symbol) No such key name 'U00E9'. Ignoring it.\n"))
-	os.Stderr = old
-	_ = w.Close()
-	out, _ := io.ReadAll(r)
-	if n != 48 || strings.Contains(string(out), "U00E9") || !strings.Contains(string(out), "48 bytes") {
-		t.Fatalf("%d, %q", n, out)
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	logged := make(chan int64, 1)
+	old := withheldLog
+	withheldLog = func(_ string, n int64) { logged <- n }
+	defer func() { withheldLog = old }()
+	if _, err := runCommand(context.Background(), "xdotool", "keydown", "U00E9"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case n := <-logged:
+		if n != 48 {
+			t.Fatalf("%d bytes", n)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stderr pipe was never read to its end")
+	}
+}
+
+// The reaper refuses a command whose stdout or stderr isn't a file: no
+// one would wait for os/exec's copying.
+func TestReaperRefusesWriters(t *testing.T) {
+	cmd := exec.Command("true")
+	cmd.Stderr = &strings.Builder{}
+	if _, err := procs.start(cmd); err == nil {
+		t.Fatal("started with a strings.Builder for stderr")
+	}
+	cmd = exec.Command("true")
+	cmd.Stdout = io.Discard
+	if _, err := procs.start(cmd); err == nil {
+		t.Fatal("started with io.Discard for stdout")
+	}
+}
+
+// A bind that changed some keys, then failed, and couldn't put them back
+// leaves them for the next type to put back.
+func TestTypeMappedHalfFailedBind(t *testing.T) {
+	v, calls, f := keymapVisual(t, 8, 248)
+	f.bindErr, f.bindsLeft = errors.New("the X server sent error 11 for request 100"), 1
+	f.restoreErr = errors.New("the X server sent error 2 for request 100")
+	rec := serveVisual(v, http.MethodPost, "/input/type", `{"text": "éž", "pace": "instant"}`)
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "before anything was typed") ||
+		slices.ContainsFunc(*calls, func(c call) bool { return c.name == "xdotool" }) {
+		t.Fatalf("half-failed bind: %d %s", rec.Code, rec.Body)
+	}
+	if f.key(8)[0] != 0xe9 || len(v.leftover) != 2 {
+		t.Fatalf("key 8 %x, leftover %v", f.key(8), v.leftover)
+	}
+	f.bindErr, f.restoreErr = nil, nil
+	if rec := serveVisual(v, http.MethodPost, "/input/type", `{"text": "ž", "pace": "instant"}`); rec.Code != http.StatusNoContent || f.key(8)[0] != 0 || f.key(248)[0] != 0 || len(v.leftover) != 0 {
+		t.Fatalf("after: %d %s, keys %x %x", rec.Code, rec.Body, f.key(8), f.key(248))
+	}
+}
+
+// An ASCII type puts back keys an earlier type left bound before typing,
+// and fails before typing if it can't, at either pace.
+func TestASCIITypeRestoresLeftoverKeys(t *testing.T) {
+	for _, pace := range []string{"instant", "human"} {
+		v, calls, f := keymapVisual(t, 8)
+		f.restoreErr = errors.New("the X server sent error 2 for request 100")
+		serveVisual(v, http.MethodPost, "/input/type", `{"text": "é", "pace": "instant"}`)
+		*calls = nil
+		body := `{"text": "abc", "pace": "` + pace + `"}`
+		rec := serveVisual(v, http.MethodPost, "/input/type", body)
+		if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "before anything was typed") ||
+			slices.ContainsFunc(*calls, func(c call) bool { return c.name == "xdotool" }) {
+			t.Fatalf("%s, leftover stuck: %d %s %v", pace, rec.Code, rec.Body, *calls)
+		}
+		f.restoreErr = nil
+		*calls = nil
+		rec = serveVisual(v, http.MethodPost, "/input/type", body)
+		if got := events(*calls); rec.Code != http.StatusNoContent || len(got) < 3 || got[0] != "keymap open" || got[1] != "keymap change 8 1 0" || f.key(8)[0] != 0 {
+			t.Fatalf("%s: %d %s %q", pace, rec.Code, rec.Body, got)
+		}
+	}
+}
+
+// killedXdotool is a live xdotool that had to be killed with commands
+// still queued.
+type killedXdotool struct{ fakeXdotool }
+
+func (*killedXdotool) Close() error {
+	return errors.New("xdotool was killed with commands still queued")
+}
+
+// A live xdotool killed with a release still queued may not have run it:
+// before typing, everything held is let go by a new xdotool. One that
+// exited cleanly ran its releases, and they're done.
+func TestTypeMappedLetsGoOfLiveKeysAfterAKill(t *testing.T) {
+	v, calls, _ := keymapVisual(t, 8)
+	v.live.start = func() (ioWriteCloser, error) { return &killedXdotool{}, nil }
+	if rec := post(v.live.events, `[{"t":"keydown","k":"Control_L"},{"t":"down","b":1},{"t":"wheel","dy":3},{"t":"keyup","k":"Control_L"}]`); rec.Code != http.StatusNoContent {
+		t.Fatal(rec.Code)
+	}
+	if rec := serveVisual(v, http.MethodPost, "/input/type", `{"text": "é", "pace": "instant"}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("type: %d %s", rec.Code, rec.Body)
+	}
+	got := events(*calls)
+	if len(got) < 2 || got[0] != "xdotool mouseup" || strings.Join((*calls)[0].args, " ") != "mouseup 1 keyup Control_L" || got[1] != "keymap open" {
+		t.Fatalf("calls %q, first %v", got, (*calls)[0].args)
+	}
+	if len(v.live.held) != 0 {
+		t.Fatalf("still held: %v", v.live.held)
+	}
+
+	// The new xdotool can't run either: nothing is typed.
+	v, calls, _ = keymapVisual(t, 8)
+	v.live.start = func() (ioWriteCloser, error) { return &killedXdotool{}, nil }
+	v.run = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		*calls = append(*calls, call{name, args})
+		return nil, errors.New("xdotool: exit status 1")
+	}
+	post(v.live.events, `[{"t":"keydown","k":"Control_L"},{"t":"keyup","k":"Control_L"}]`)
+	rec := serveVisual(v, http.MethodPost, "/input/type", `{"text": "é", "pace": "instant"}`)
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "before anything was typed") || !strings.Contains(rec.Body.String(), "let go of the live view's keys") {
+		t.Fatalf("release failing: %d %s", rec.Code, rec.Body)
+	}
+
+	// Exited cleanly: its releases ran, so nothing is released again, and
+	// Shift, still down, stays held.
+	v, calls, _ = keymapVisual(t, 8)
+	x := &closingXdotool{}
+	v.live.start = func() (ioWriteCloser, error) { return x, nil }
+	post(v.live.events, `[{"t":"keydown","k":"Control_L"},{"t":"keyup","k":"Control_L"},{"t":"keydown","k":"Shift_L"}]`)
+	serveVisual(v, http.MethodPost, "/input/type", `{"text": "é", "pace": "instant"}`)
+	if got := events(*calls); got[0] != "keymap open" || !v.live.held["kShift_L"] || v.live.held["kControl_L"] {
+		t.Fatalf("clean: %q, held %v", got, v.live.held)
 	}
 }

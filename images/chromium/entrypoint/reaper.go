@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -44,6 +45,11 @@ func newReaper() *reaper {
 func (r *reaper) start(cmd *exec.Cmd) (<-chan syscall.WaitStatus, error) {
 	// Holding the lock across Start means reap can't collect the child
 	// before it is registered, even if it exits at once.
+	for _, out := range []io.Writer{cmd.Stdout, cmd.Stderr} {
+		if _, ok := out.(*os.File); out != nil && !ok {
+			return nil, errors.New("reaper: a command's stdout and stderr must be nil or *os.File")
+		}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := cmd.Start(); err != nil {

@@ -101,8 +101,9 @@ func (m keyboardMap) has(sym uint32) bool {
 }
 
 // spare lists the keycodes with no keysyms that no modifier uses and
-// that Chromium reads as no key that acts (quietKeycode). In the image's
-// map that is 16 of the 19 unbound keycodes.
+// that Chromium reads as no key that acts (quietKeycode). How many there
+// are depends on the XKB layout data the X server has: with the image's
+// (Debian's xkb-data, evdev, us), 13 of the 19 unbound keycodes.
 func (m keyboardMap) spare() []byte {
 	var out []byte
 	for i := range m.count() {
@@ -121,24 +122,30 @@ func (m keyboardMap) spare() []byte {
 // that acts, whatever character it types. Chromium gives a key event the
 // DOM code its table has for the keycode, and, when the keysym has no key
 // code of its own (as a Unicode one hasn't), the US layout's key code for
-// it, from a table of keycodes below 136. An unbound key can still be an
-// F-key there (197 is F19, 202 F24, in the image's map), so a binding on
-// it would press F19. The quiet ones: below 136, the few that are no key
-// (8, 103, 120) or an input-method or international key (93 Lang5,
-// 97 IntlRo, 132 IntlYen); from 136 up, every keycode that Chromium's
-// table doesn't name. Source: Chromium's
-// ui/events/keycodes/dom/dom_code_data.inc (blob 3c5ef403df15) and
-// keyboard_code_conversion_x.cc (kHardwareKeycodeMap, blob eae62840c180),
-// main of 2026-11-26; TestVisualTypesNonASCII checks the page sees none.
+// the keycode (DefaultKeyboardCodeFromHardwareKeycode: a table of
+// keycodes below 136, and from 136 a few browser keys). An unbound key
+// can still be an F-key there (197 is F19, 202 F24, in the image's map),
+// so a binding on it would press F19. Quiet means both say nothing, or an
+// input-method key: below 136, 8 (no DOM code, VKEY_UNKNOWN), 93 (Lang5,
+// VKEY_DBE_DBCSCHAR) and 120 (none, VKEY_UNSUPPORTED); not 97 (IntlRo,
+// VKEY_OEM_102), 132 (IntlYen, VKEY_OEM_5) or 103 (none, but
+// VKEY_SEPARATOR, the keypad's), whose key codes are a punctuation or a
+// keypad key's. From 136 up, every keycode that neither table names.
+// Source: Chromium's ui/events/keycodes/dom/dom_code_data.inc (blob
+// 3c5ef403df15) and keyboard_code_conversion_x.cc (kHardwareKeycodeMap
+// and DefaultKeyboardCodeFromHardwareKeycode, blob eae62840c180), main of
+// 2026-11-26; TestVisualTypesNonASCII checks the page sees no other key.
 func quietKeycode(k byte) bool {
 	if k < 136 {
-		return k == 8 || k == 93 || k == 97 || k == 103 || k == 120 || k == 132
+		return k == 8 || k == 93 || k == 120
 	}
 	return !chromiumKeys[k]
 }
 
-// chromiumKeys are the keycodes from 136 up that dom_code_data.inc names:
-// browser, media, launch, editing and power keys, F13 to F24.
+// chromiumKeys are the keycodes from 136 up that either table names:
+// browser, media, launch, editing and power keys, F13 to F24. (The
+// hardware fallback's own, 166, 167, 181, 212, 232 and 233, are among
+// dom_code_data.inc's.)
 var chromiumKeys = map[byte]bool{}
 
 func init() {
@@ -252,7 +259,8 @@ type binding struct {
 // then reads them back: a refused change shows as an error there, and
 // the reply proves the server has the new map before any key is pressed.
 // open opens a new connection, which restore uses: after an X error, kb's
-// may be out of step.
+// may be out of step. On an error, a non-nil binding is keys that may
+// still be bound.
 func bind(kb keyboard, open func() (keyboard, error), m keyboardMap, keys []byte, syms []uint32) (*binding, error) {
 	if len(syms) > len(keys) {
 		return nil, errNoSpareKeys
@@ -277,13 +285,23 @@ func bind(kb keyboard, open func() (keyboard, error), m keyboardMap, keys []byte
 	for i, r := range b.runs {
 		if err := kb.change(r.first, perKey, r.after); err != nil {
 			b.runs = b.runs[:i+1] // the last may be half done
-			return nil, errors.Join(err, b.restore())
+			return b.rollback(err)
 		}
 	}
 	if err := check(kb, perKey, b.runs, func(r keyRun) []uint32 { return r.after }); err != nil {
-		return nil, errors.Join(err, b.restore())
+		return b.rollback(err)
 	}
 	return b, nil
+}
+
+// rollback puts back what a failed bind may have changed. If that fails
+// too, it returns the binding along with the error, so the caller can
+// keep its keys for a later restore (v.leftover).
+func (b *binding) rollback(err error) (*binding, error) {
+	if rerr := b.restore(); rerr != nil {
+		return b, errors.Join(err, fmt.Errorf("couldn't put the keyboard map back: %w", rerr))
+	}
+	return nil, err
 }
 
 // check reads runs back and compares each key's first two keysyms, which

@@ -96,3 +96,25 @@ func TestLiveRestartsXdotool(t *testing.T) {
 		t.Fatalf("starts %d, sent %q", *starts, fresh.buf.String())
 	}
 }
+
+// A release written to xdotool keeps its key held until xdotool is known
+// to have run it (drain), and isn't written twice meanwhile.
+func TestLiveReleaseStaysHeldUntilItRan(t *testing.T) {
+	x := &fakeXdotool{}
+	li, _ := newTestLive(x)
+	post(li.events, `[{"t":"keydown","k":"Control_L"}]`)
+	post(li.release, "")
+	post(li.release, "")
+	if got := x.buf.String(); got != "keydown Control_L\nkeyup Control_L\n" {
+		t.Fatalf("sent %q", got)
+	}
+	if !li.held["kControl_L"] || !li.released["kControl_L"] {
+		t.Fatalf("held %v, released %v", li.held, li.released)
+	}
+	li.mu.Lock()
+	err := li.drain()
+	li.mu.Unlock()
+	if err != nil || len(li.held) != 0 || len(li.released) != 0 {
+		t.Fatalf("after a clean drain: %v, held %v, released %v", err, li.held, li.released)
+	}
+}

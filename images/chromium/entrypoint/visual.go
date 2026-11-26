@@ -65,8 +65,13 @@ const (
 )
 
 func newVisual(width, height int) *visual {
-	return &visual{width: width, height: height, run: runCommand, output: runStdout, mot: motion.NewRandom(), live: newLiveInput(width, height), clip: clipState{hold: holdClipboard, read: readSelection},
+	v := &visual{width: width, height: height, run: runCommand, output: runStdout, mot: motion.NewRandom(), live: newLiveInput(width, height), clip: clipState{hold: holdClipboard, read: readSelection},
 		keyboard: dialKeyboard, settle: keymapSettle, log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	v.live.runSync = func(args ...string) error {
+		_, err := v.run(context.Background(), "xdotool", args...)
+		return err
+	}
+	return v
 }
 
 func (v *visual) register(mux *http.ServeMux) {
@@ -487,9 +492,9 @@ func (v *visual) typeText(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		v.input(w, r, args)
+		v.typeKeys(w, r, func() []xcmd { return []xcmd{{args, nil}} })
 	default:
-		v.perform(w, r, func(func() hand) []xcmd { return v.humanType(t.Text) })
+		v.typeKeys(w, r, func() []xcmd { return v.humanType(t.Text) })
 	}
 }
 
@@ -511,19 +516,21 @@ func (v *visual) typeMapped(w http.ResponseWriter, r *http.Request, text []rune,
 		// nor a key the person sent before that it hasn't run yet.
 		v.live.mu.Lock()
 		defer v.live.mu.Unlock()
-		v.live.drain()
 	}
 	ctx := r.Context()
 	before := func(err error) {
 		http.Error(w, "typing failed before anything was typed, so it can be retried: "+err.Error(), http.StatusInternalServerError)
 	}
-	open := func() (keyboard, error) { return v.keyboard(context.WithoutCancel(ctx)) }
-	if len(v.leftover) > 0 {
-		if err := restoreRuns(open, v.leftoverPerKey, v.leftover); err != nil {
-			before(fmt.Errorf("keys an earlier type bound can't be put back: %w", err))
+	if v.live != nil {
+		if err := v.live.drain(); err != nil {
+			before(err)
 			return
 		}
-		v.leftover = nil
+	}
+	open := func() (keyboard, error) { return v.keyboard(context.WithoutCancel(ctx)) }
+	if err := v.restoreLeftover(ctx); err != nil {
+		before(err)
+		return
 	}
 	kb, err := v.keyboard(ctx)
 	if err != nil {
@@ -557,6 +564,42 @@ func (v *visual) typeMapped(w http.ResponseWriter, r *http.Request, text []rune,
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// keepLeftover remembers keys a binding couldn't put back, with v.mu
+// held, for the next type to put back first.
+func (v *visual) keepLeftover(b *binding) {
+	v.leftover, v.leftoverPerKey = append(v.leftover, b.runs...), b.perKey
+}
+
+// restoreLeftover puts back keys an earlier type couldn't, with v.mu
+// held. Every type does it before typing anything, and fails if it can't.
+func (v *visual) restoreLeftover(ctx context.Context) error {
+	if len(v.leftover) == 0 {
+		return nil
+	}
+	open := func() (keyboard, error) { return v.keyboard(context.WithoutCancel(ctx)) }
+	if err := restoreRuns(open, v.leftoverPerKey, v.leftover); err != nil {
+		return fmt.Errorf("keys an earlier type bound can't be put back: %w", err)
+	}
+	v.leftover = nil
+	return nil
+}
+
+// typeKeys types ASCII text with v.mu held, running build's commands as
+// perform does, once keys an earlier type left bound are put back.
+func (v *visual) typeKeys(w http.ResponseWriter, r *http.Request, build func() []xcmd) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if err := v.restoreLeftover(r.Context()); err != nil {
+		http.Error(w, "typing failed before anything was typed, so it can be retried: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := v.runAll(r.Context(), build()); err != nil {
+		http.Error(w, "input failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // typeBatch types one stretch: binds its keys, waits, presses them, waits
 // and puts the map back, even if typing fails or panics. pressed says
 // whether any key may have been pressed. Keys it can't put back are left
@@ -565,6 +608,9 @@ func (v *visual) typeBatch(ctx context.Context, kb keyboard, open func() (keyboa
 	if len(b.bind) > 0 {
 		bound, berr := bind(kb, open, m, spare, b.bind)
 		if berr != nil {
+			if bound != nil {
+				v.keepLeftover(bound)
+			}
 			return false, fmt.Errorf("couldn't bind %d characters to keys: %w", len(b.bind), berr)
 		}
 		defer func() {
@@ -573,7 +619,7 @@ func (v *visual) typeBatch(ctx context.Context, kb keyboard, open func() (keyboa
 				time.Sleep(v.settle)
 			}
 			if rerr := bound.restore(); rerr != nil {
-				v.leftover, v.leftoverPerKey = append(v.leftover, bound.runs...), bound.perKey
+				v.keepLeftover(bound)
 				v.log.Warn("couldn't put the keyboard map back", "keys", len(b.bind), "err", rerr)
 				err = errors.Join(err, fmt.Errorf("couldn't put the keyboard map back: %w", rerr))
 			}
@@ -946,7 +992,13 @@ func runTo(ctx context.Context, stdout bool, name string, args ...string) ([]byt
 	}
 	cmd.Stderr = os.Stderr
 	if name == "xdotool" {
-		cmd.Stderr = withheld(name)
+		stderr, err := withheldStderr(name)
+		if err != nil {
+			_ = pw.Close()
+			return nil, err
+		}
+		defer func() { _ = stderr.Close() }()
+		cmd.Stderr = stderr
 	}
 	exited, err := procs.start(cmd)
 	_ = pw.Close()
@@ -969,13 +1021,29 @@ func runTo(ctx context.Context, stdout bool, name string, args ...string) ([]byt
 	return out, readErr
 }
 
-// withheld stands in for xdotool's stderr, which can name a typed key
-// ("U00E9"): the log says how much it wrote, never what.
-type withheld string
+// withheldStderr is a pipe for xdotool's stderr, which can name a typed
+// key ("U00E9"): the log says how much it wrote, never what. It is an
+// *os.File, as the reaper needs (nothing in os/exec copies from it); the
+// caller closes it once the command has started, and the reading ends
+// when the command does.
+func withheldStderr(name string) (*os.File, error) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		n, _ := io.Copy(io.Discard, r)
+		_ = r.Close()
+		withheldLog(name, n)
+	}()
+	return w, nil
+}
 
-func (w withheld) Write(p []byte) (int, error) {
-	_, _ = fmt.Fprintf(os.Stderr, "%s: %d bytes on stderr, withheld: they can name typed keys\n", string(w), len(p))
-	return len(p), nil
+// withheldLog logs how much a command wrote to a withheld stderr.
+var withheldLog = func(name string, n int64) {
+	if n > 0 {
+		_, _ = fmt.Fprintf(os.Stderr, "%s: %d bytes on stderr, withheld: they can name typed keys\n", name, n)
+	}
 }
 
 // maxOutput caps what runCommand reads from a command, a screenshot say.
