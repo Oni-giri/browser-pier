@@ -71,7 +71,8 @@ RUN glvnd=$(ldconfig -p | sed -n 's/^\tlibGL\.so\.1 .*=> //p' | head -n 1) \
  && glx=$(ldconfig -p | sed -n 's/^\tlibGLX_mesa\.so\.0 .*=> //p' | head -n 1) \
  && gallium=$(ls /usr/lib/*/libgallium-*.so 2>/dev/null | head -n 1) \
  && for so in "$glvnd" "$glx" "$gallium"; do test -n "$so" || { echo "missing a GL library for llvmpipe"; exit 1; }; done \
- && if ldd "$glvnd" "$glx" "$gallium" | grep 'not found'; then echo "a GL library for llvmpipe can't load"; exit 1; fi \
+ && for so in "$glvnd" "$glx" "$gallium"; do out=$(ldd "$so") || { echo "ldd can't read $so"; exit 1; }; \
+      if echo "$out" | grep 'not found'; then echo "$so, a GL library for llvmpipe, can't load"; exit 1; fi; done \
  && if ! LC_ALL=C grep -qaF llvmpipe "$gallium"; then echo "$gallium has no llvmpipe"; exit 1; fi
 
 # Chromium runs as pier (uid 1000) by default. The orchestrator runs it as its
