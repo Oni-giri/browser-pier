@@ -498,8 +498,23 @@ func (v *viewer) releaseLocked() {
 		return
 	}
 	v.control = false
-	v.h.m.ReleaseControlGen(v.session, v.gen)
+	// The hand-back goes on by itself; the viewer waits for it a little
+	// (handBackReply), so that by the time its page hears control:false
+	// and asks the status, the browser no longer shows a person in
+	// control, as if someone else had it.
+	if done, _ := v.h.m.ReleaseControlGen(v.session, v.gen); done != nil {
+		t := time.NewTimer(handBackReply)
+		defer t.Stop()
+		select {
+		case <-done:
+		case <-t.C:
+		}
+	}
 }
+
+// handBackReply bounds how long a viewer waits for its own hand-back
+// before it tells its page control:false.
+const handBackReply = 2 * time.Second
 
 func (v *viewer) post(ctx context.Context, path string, body []byte) error {
 	_, err := v.do(ctx, http.MethodPost, path, body, http.StatusNoContent, controlWait)

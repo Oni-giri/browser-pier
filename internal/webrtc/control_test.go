@@ -18,6 +18,7 @@ import (
 	pion "github.com/pion/webrtc/v4"
 
 	"github.com/Oni-giri/browser-pier/internal/sessions"
+	"github.com/Oni-giri/browser-pier/internal/sessions/sessionstest"
 )
 
 // A live view whose control ended without it (a handoff ended, the
@@ -692,5 +693,29 @@ func TestOfferAnswersTheControlItHas(t *testing.T) {
 	}
 	if answer.Control {
 		t.Error("the offer answered control: true for control already handed back")
+	}
+}
+
+// A live view's Hand back answers control:false once the browser is
+// handed back (within a bound), so its page, asking the status at once,
+// doesn't see a person in control, as if someone else had it (PROJ-196).
+func TestHandBackAnswersOnceHandedBack(t *testing.T) {
+	slowLift := func(mux *http.ServeMux) {
+		mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+		mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, r *http.Request) {
+			time.Sleep(300 * time.Millisecond)
+			sessionstest.AnswerLift(w, r)
+		})
+	}
+	h, m, s := offerFixtureWith(t, slowLift, slog.New(slog.DiscardHandler))
+	k := newTalk(t, &viewer{h: h, session: s.ID, sock: m.Layout().ControlSocket("google")})
+	if r := k.send(`{"type":"take"}`); len(r) != 1 || r[0]["on"] != true {
+		t.Fatalf("take: %v", r)
+	}
+	if r := k.send(`{"type":"release"}`); len(r) != 1 || r[0]["on"] != false {
+		t.Fatalf("release: %v", r)
+	}
+	if got, _ := m.Live("google"); got.HumanControl {
+		t.Error("told control:false while the browser still shows a person in control")
 	}
 }

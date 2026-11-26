@@ -815,3 +815,25 @@ func between(s, from, to string) string {
 	}
 	return s[i : i+j]
 }
+
+// The profile page's Hand back, with a help request open, redirects once
+// the browser is handed back (within a bound), so the page it lands on
+// doesn't show the person still in control (PROJ-196).
+func TestHandBackFormRedirectsOnceHandedBack(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.profile("google")
+	s, _, _ := f.m.Start(ctx, "google", "")
+	if _, _, err := f.handoffs.Create(ctx, s.ID, "research-bot", handoff.SensitiveInput, "Enter the 2FA code", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.TakeControl(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.post("/profiles/google/handback", url.Values{"status": {"done"}}); r.code != http.StatusSeeOther {
+		t.Fatalf("hand back: %d", r.code)
+	}
+	if got, _ := f.m.Live("google"); got.HumanControl || got.State != sessions.Running {
+		t.Errorf("redirected with the browser %s, person in control %v", got.State, got.HumanControl)
+	}
+}
