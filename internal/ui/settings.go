@@ -338,6 +338,16 @@ func (u *UI) saveNotify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+	// An empty URL removes the webhook and its secret, so a form that
+	// can't be read, or one without the field, saves nothing.
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	if _, ok := r.PostForm["url"]; !ok {
+		http.Error(w, "bad form: no webhook URL field", http.StatusBadRequest)
+		return
+	}
 	c := notify.Change{URL: strings.TrimSpace(r.PostFormValue("url")), LinkBase: r.PostFormValue("link_base"), On: map[notify.Kind]bool{}}
 	for _, k := range r.PostForm["event"] {
 		c.On[notify.Kind(k)] = true

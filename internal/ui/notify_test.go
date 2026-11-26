@@ -208,3 +208,42 @@ func TestSendTestSaysWhatHappened(t *testing.T) {
 		t.Error("the error shows net/http's message")
 	}
 }
+
+// TestABadNotificationsFormKeepsTheWebhook: an empty URL removes the
+// webhook and its secret, so a form too big to read, one that isn't a
+// form, or one without the URL field is refused and changes nothing.
+func TestABadNotificationsFormKeepsTheWebhook(t *testing.T) {
+	f := newFixture(t)
+	h := newHook(t, http.StatusOK)
+	r := f.post("/settings/notify", url.Values{"url": {h.URL + "/x"}, "link_base": {"https://pier.lan"}, "event": {"handoff.requested", "browser.failed"}})
+	secret := shownSecret(r.body)
+	if secret == "" {
+		t.Fatalf("no secret shown: %d", r.code)
+	}
+	before := f.notify.View()
+	for name, body := range map[string]string{
+		"too big":   "url=&event=handoff.expired&pad=" + strings.Repeat("a", 20<<10),
+		"malformed": "url=&event=handoff.expired&x=%zz",
+		"no url":    "event=handoff.expired&link_base=",
+	} {
+		req, _ := http.NewRequest(http.MethodPost, f.srv.URL+"/settings/notify", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		resp, err := f.client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: %d, want 400", name, resp.StatusCode)
+		}
+		after := f.notify.View()
+		if !after.Set || after.Masked != before.Masked || after.LinkBase != before.LinkBase ||
+			!after.On[notify.HandoffRequested] || !after.On[notify.BrowserFailed] || after.On[notify.HandoffExpired] {
+			t.Errorf("%s changed the webhook: %+v, was %+v", name, after, before)
+		}
+	}
+	f.post("/settings/notify/test", nil)
+	if sig, body := h.last(); !signedWith(secret, sig, body) {
+		t.Error("the secret didn't survive")
+	}
+}
