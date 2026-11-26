@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -254,18 +255,29 @@ func newPionViewer(t *testing.T, labels ...string) *pionViewer {
 		t.Fatal(err)
 	}
 	pv := &pionViewer{pc: pc, dcs: map[string]*pion.DataChannel{}, opened: make(chan struct{})}
-	var wg sync.WaitGroup
+	// No goroutine waits for the channels: the last to open closes
+	// opened, and a viewer whose channels never open leaves nothing
+	// behind.
+	var left atomic.Int32
+	left.Store(int32(len(labels)))
+	if len(labels) == 0 {
+		close(pv.opened)
+	}
 	for _, label := range labels {
 		dc, err := pc.CreateDataChannel(label, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		wg.Add(1)
 		var once sync.Once
-		dc.OnOpen(func() { once.Do(wg.Done) })
+		dc.OnOpen(func() {
+			once.Do(func() {
+				if left.Add(-1) == 0 {
+					close(pv.opened)
+				}
+			})
+		})
 		pv.dcs[label] = dc
 	}
-	go func() { wg.Wait(); close(pv.opened) }()
 	sdp, err := pc.CreateOffer(nil)
 	if err != nil {
 		t.Fatal(err)

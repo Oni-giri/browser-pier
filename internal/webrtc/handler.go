@@ -159,6 +159,7 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 	vw := &viewer{h: h, session: s.ID, sock: h.m.Layout().ControlSocket(profile), allowed: o.Allowed, helpEpoch: o.HelpEpoch}
 	// A viewer promised control gets it or isn't connected: a page that
 	// thinks it drives while it only watches would send input into nothing.
+	var granted time.Time
 	if o.Control {
 		gen, err := vw.take()
 		if err != nil {
@@ -178,6 +179,7 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 			return
 		}
 		vw.control, vw.gen = true, gen
+		granted = time.Now()
 	}
 	control, gen := vw.control, vw.gen // read before the data channel can change them
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
@@ -211,10 +213,11 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 	}()
 	if control {
 		// Control from the start, but no input channel yet: if none
-		// opens (a video-only offer), the control ends, rather than stay
-		// with a page that can't use or hand it back.
+		// opens (a video-only offer, or one stuck negotiating) within
+		// inputOpenWait of control being granted, the control ends,
+		// rather than stay with a page that can't use or hand it back.
 		go func() {
-			t := time.NewTimer(inputOpenWait)
+			t := time.NewTimer(time.Until(granted.Add(inputOpenWait)))
 			defer t.Stop()
 			select {
 			case <-opened:
