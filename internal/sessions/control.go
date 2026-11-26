@@ -51,7 +51,8 @@ func (m *Manager) AgentInput(ctx context.Context, id, tokenID string) (context.C
 	now := m.now()
 	l.lastActivity, l.lastAgentInput = now, now
 	cctx, cancel := context.WithCancelCause(ctx)
-	in := &lease{cancel: cancel, started: now, call: CallFrom(ctx)}
+	// tokenID: DisconnectToken cancels it with ErrRevoked.
+	in := &lease{cancel: cancel, started: now, call: CallFrom(ctx), tokenID: tokenID}
 	if in.call != nil {
 		// Granted: the call is admitted (its receipt stays, PROJ-156).
 		in.call.admitLocked()
@@ -60,7 +61,6 @@ func (m *Manager) AgentInput(ctx context.Context, id, tokenID string) (context.C
 		l.inputs = map[*lease]struct{}{}
 	}
 	l.inputs[in] = struct{}{}
-	in.tokenID = tokenID // DisconnectToken cancels it with ErrRevoked
 	m.agentActedLocked(l)
 	return cctx, sync.OnceFunc(func() {
 		// Ended before done: a handoff, Take control, a stop or the
