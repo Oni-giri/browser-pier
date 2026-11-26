@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeKeyboard is an X server's keyboard map: keycodes 8 to 255, four
@@ -562,8 +563,15 @@ func TestXKeyboardSpeaksX(t *testing.T) {
 		t.Fatalf("the change's error: %v", err)
 	}
 	<-done
-	// From then on the connection is refused: restore uses a new one.
-	if _, err := x.modifiers(); err == nil || err.Error() != "the X server sent error 2 for request 100" {
+	// From then on the connection is refused, and nothing more is sent on
+	// it: restore uses a new one.
+	errc := make(chan error, 1)
+	go func() { _, err := x.modifiers(); errc <- err }()
+	_ = server.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if n, _ := server.Read(make([]byte, 4)); n != 0 {
+		t.Fatal("a request went out on a connection after an X error")
+	}
+	if err := <-errc; err == nil || err.Error() != "the X server sent error 2 for request 100" {
 		t.Fatalf("after an error: %v", err)
 	}
 	if err := x.change(8, 2, []uint32{1, 2, 3}); err == nil {
