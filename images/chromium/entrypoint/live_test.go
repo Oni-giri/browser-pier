@@ -34,12 +34,27 @@ func (f *fakeXdotool) proc() *xdo {
 	exited := make(chan struct{})
 	var once sync.Once
 	end := func() { once.Do(func() { close(exited) }) }
-	return &xdo{stdin: fakeStdin{f, end}, exited: exited, kill: func() {
+	killed := false
+	return &xdo{stdin: fakeStdin{f, end}, exited: exited, clean: func() bool { return !killed }, kill: func() {
 		f.mu.Lock()
 		f.broken = true
 		f.mu.Unlock()
+		killed = true
 		end()
 	}}
+}
+
+// syncInto runs synchronous xdotool command lines (runSync) as f would:
+// written to it at once, failing while it is broken.
+func syncInto(f *fakeXdotool) func(args ...string) error {
+	return func(args ...string) error {
+		var b strings.Builder
+		for i := 0; i+1 < len(args); i += 2 {
+			b.WriteString(args[i] + " " + args[i+1] + "\n")
+		}
+		_, err := f.Write([]byte(b.String()))
+		return err
+	}
 }
 
 type fakeStdin struct {
@@ -53,6 +68,7 @@ func (s fakeStdin) Close() error                { s.end(); return nil }
 func newTestLive(fakes ...*fakeXdotool) (*liveInput, *int) {
 	starts := 0
 	li := newLiveInput(1280, 800)
+	li.runSync = func(...string) error { return errors.New("no synchronous xdotool in this test") }
 	li.start = func() (*xdo, error) {
 		f := fakes[starts]
 		starts++
@@ -154,13 +170,26 @@ func TestLiveReleaseThatFailsStaysHeld(t *testing.T) {
 	if rec := post(li.release, ""); rec.Code != http.StatusNoContent || fresh.buf.String() != "mouseup 1\nkeyup Shift_L\n" {
 		t.Fatalf("the hand-back's lift: %d %q", rec.Code, fresh.buf.String())
 	}
-	// Ups that do get through are forgotten.
-	fresh.buf.Reset()
+	// Ups that do get through are forgotten, once xdotool has run them.
+	// Shift and button 1 are still held: the first try at their release
+	// went to an xdotool that failed, so it may not have run.
 	if rec := post(li.events, `[{"t":"keydown","k":"a"},{"t":"keyup","k":"a"}]`); rec.Code != http.StatusNoContent {
 		t.Fatalf("a key: %d", rec.Code)
 	}
-	fresh.buf.Reset()
-	if rec := post(li.release, ""); rec.Code != http.StatusNoContent || fresh.buf.String() != "" {
-		t.Fatalf("nothing held: %d %q", rec.Code, fresh.buf.String())
+	ran := &fakeXdotool{}
+	li.runSync = syncInto(ran)
+	lift := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/", nil)
+		req.Header.Set(fenceHeader, "1")
+		rec := httptest.NewRecorder()
+		li.release(rec, req)
+		return rec
+	}
+	if rec := lift(); rec.Code != http.StatusOK || ran.buf.String() != "mouseup 1\nkeyup Shift_L\n" {
+		t.Fatalf("the fenced lift: %d %q", rec.Code, ran.buf.String())
+	}
+	ran.buf.Reset()
+	if rec := lift(); rec.Code != http.StatusOK || ran.buf.String() != "" {
+		t.Fatalf("nothing held: %d %q", rec.Code, ran.buf.String())
 	}
 }

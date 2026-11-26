@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -145,12 +146,19 @@ func TestFenceWaitsForAnActionUnderWay(t *testing.T) {
 }
 
 // queuedX is an xdotool that runs its input slowly, a line every step,
-// as a busy display might: what is written is queued, not yet run. Its
-// runs share one log of what ran.
+// as a busy display might: what is written is queued, not yet run. With
+// stallAfter set, each run stops running anything after that many lines
+// (it never exits by itself then: drain must kill it), and with
+// capacity set, a write blocks once that many lines are queued (a full
+// pipe), until it is killed. Its runs share one log of what ran; its
+// synchronous runs (runSync) log there too.
 type queuedX struct {
-	mu   sync.Mutex
-	ran  []string
-	step time.Duration
+	mu         sync.Mutex
+	ran        []string
+	step       time.Duration
+	stallAfter int
+	capacity   int
+	syncFails  bool
 }
 
 func (q *queuedX) log() []string {
@@ -159,14 +167,39 @@ func (q *queuedX) log() []string {
 	return slices.Clone(q.ran)
 }
 
+func (q *queuedX) runSync(args ...string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.syncFails {
+		return errors.New("xdotool failed")
+	}
+	for i := 0; i+1 < len(args); i += 2 {
+		q.ran = append(q.ran, args[i]+" "+args[i+1])
+	}
+	return nil
+}
+
 func (q *queuedX) start() (*xdo, error) {
-	lines := make(chan string, 1024)
+	q.mu.Lock()
+	stallAfter, capacity := q.stallAfter, q.capacity
+	q.mu.Unlock()
+	size := 1024
+	if capacity > 0 {
+		size = capacity
+	}
+	lines := make(chan string, size)
 	exited := make(chan struct{})
 	killed := make(chan struct{})
 	var killOnce, closeOnce sync.Once
+	var wasKilled atomic.Bool
 	go func() {
 		defer close(exited)
+		n := 0
 		for l := range lines {
+			if stallAfter > 0 && n >= stallAfter {
+				<-killed // stalled: runs nothing more
+				return
+			}
 			select {
 			case <-killed:
 				return
@@ -175,23 +208,33 @@ func (q *queuedX) start() (*xdo, error) {
 			q.mu.Lock()
 			q.ran = append(q.ran, l)
 			q.mu.Unlock()
+			n++
+		}
+		if stallAfter > 0 && n >= stallAfter {
+			<-killed
 		}
 	}()
 	return &xdo{
-		stdin:  queuedStdin{lines: lines, close: func() { closeOnce.Do(func() { close(lines) }) }},
+		stdin:  queuedStdin{lines: lines, killed: killed, close: func() { closeOnce.Do(func() { close(lines) }) }},
 		exited: exited,
-		kill:   func() { killOnce.Do(func() { close(killed) }) },
+		clean:  func() bool { return !wasKilled.Load() },
+		kill:   func() { killOnce.Do(func() { wasKilled.Store(true); close(killed) }) },
 	}, nil
 }
 
 type queuedStdin struct {
-	lines chan string
-	close func()
+	lines  chan string
+	killed chan struct{}
+	close  func()
 }
 
 func (s queuedStdin) Write(p []byte) (int, error) {
 	for _, l := range strings.Split(strings.TrimSuffix(string(p), "\n"), "\n") {
-		s.lines <- l
+		select {
+		case s.lines <- l:
+		case <-s.killed:
+			return 0, errors.New("broken pipe")
+		}
 	}
 	return len(p), nil
 }
@@ -205,7 +248,7 @@ func (s queuedStdin) Close() error { s.close(); return nil }
 func TestFenceRunsQueuedInputFirst(t *testing.T) {
 	li, _ := newTestLive()
 	q := &queuedX{step: 10 * time.Millisecond}
-	li.start = q.start
+	li.start, li.runSync = q.start, q.runSync
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /input/events", li.events)
 	mux.HandleFunc("POST /input/release", li.release)
@@ -241,6 +284,7 @@ func TestStaleCleanupLeavesTheNextTakeoverAlone(t *testing.T) {
 	v, _ := newTestVisual(false)
 	x := &fakeXdotool{}
 	v.live.start = func() (*xdo, error) { return x.proc(), nil }
+	v.live.runSync = syncInto(x)
 	fx := newFakeX(v)
 	mux := http.NewServeMux()
 	v.register(mux)
@@ -346,5 +390,110 @@ func TestStalledXdotoolDoesntHoldTheFence(t *testing.T) {
 	case <-lifted:
 	case <-time.After(3 * time.Second):
 		t.Fatal("the lift is held by a stalled xdotool")
+	}
+}
+
+// liveRig serves a liveInput on a mux, with a queuedX for its xdotool.
+func liveRig(t *testing.T, q *queuedX) (*liveInput, *http.ServeMux) {
+	t.Helper()
+	was := []time.Duration{drainWait, writeWait}
+	drainWait, writeWait = 100*time.Millisecond, 100*time.Millisecond
+	t.Cleanup(func() { drainWait, writeWait = was[0], was[1] })
+	li, _ := newTestLive()
+	li.start, li.runSync = q.start, q.runSync
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /input/events", li.events)
+	mux.HandleFunc("POST /input/release", li.release)
+	return li, mux
+}
+
+func sendEvents(t *testing.T, mux http.Handler, takeoverN, body string) int {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/input/events", strings.NewReader(body))
+	req.Header.Set(takeoverHeader, takeoverN)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	return rec.Code
+}
+
+func liftFor(mux http.Handler, fence string) int {
+	req := httptest.NewRequest(http.MethodPost, "/input/release", nil)
+	req.Header.Set(fenceHeader, fence)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	return rec.Code
+}
+
+// releasedLast reports whether key's last line to run was its release.
+func releasedLast(ran []string, key string) bool {
+	for i := len(ran) - 1; i >= 0; i-- {
+		switch ran[i] {
+		case "keyup " + key, "mouseup " + key:
+			return true
+		case "keydown " + key, "mousedown " + key:
+			return false
+		}
+	}
+	return false
+}
+
+// A fenced lift answers 200 only once the keys its takeover held are
+// known to be up: if their synchronous release fails, it answers 500, the
+// keys still held, and the next try lets go of them (PROJ-196).
+func TestFencedLiftFailsUnlessTheKeysAreUp(t *testing.T) {
+	q := &queuedX{step: time.Millisecond}
+	_, mux := liveRig(t, q)
+	if code := sendEvents(t, mux, "3", `[{"t":"keydown","k":"Shift_L"}]`); code != http.StatusNoContent {
+		t.Fatalf("keydown: %d", code)
+	}
+	q.mu.Lock()
+	q.syncFails, q.stallAfter = true, 0 // the release's own xdotool fails
+	q.mu.Unlock()
+	if code := liftFor(mux, "3"); code != http.StatusInternalServerError {
+		t.Fatalf("a lift whose release didn't run answered %d", code)
+	}
+	q.mu.Lock()
+	q.syncFails = false
+	q.mu.Unlock()
+	if code := liftFor(mux, "3"); code != http.StatusOK || !releasedLast(q.log(), "Shift_L") {
+		t.Fatalf("the next try: %d, ran %q", code, q.log())
+	}
+}
+
+// A key-up written to xdotool that stalls before running it isn't taken
+// as run: the fenced lift's drain has to kill xdotool, so it lets go of
+// the key itself (PROJ-196).
+func TestQueuedKeyUpThatNeverRanIsLetGo(t *testing.T) {
+	q := &queuedX{step: time.Millisecond, stallAfter: 1} // runs the keydown, then stalls
+	_, mux := liveRig(t, q)
+	if code := sendEvents(t, mux, "3", `[{"t":"keydown","k":"Shift_L"},{"t":"keyup","k":"Shift_L"}]`); code != http.StatusNoContent {
+		t.Fatalf("events: %d", code)
+	}
+	if code := liftFor(mux, "3"); code != http.StatusOK || !releasedLast(q.log(), "Shift_L") {
+		t.Fatalf("the lift: %d, ran %q: Shift is still down", code, q.log())
+	}
+}
+
+// A key-up buffered in an xdotool that the write watchdog then kills (its
+// pipe full) isn't taken as run either: the key is held again, and the
+// fenced lift lets go of it (PROJ-196).
+func TestKeyUpLostToTheWatchdogIsLetGo(t *testing.T) {
+	q := &queuedX{step: time.Millisecond, stallAfter: 1, capacity: 2}
+	_, mux := liveRig(t, q)
+	if code := sendEvents(t, mux, "3", `[{"t":"keydown","k":"Control_L"}]`); code != http.StatusNoContent {
+		t.Fatalf("keydown: %d", code)
+	}
+	time.Sleep(20 * time.Millisecond) // it ran; xdotool now stalls
+	if code := sendEvents(t, mux, "3", `[{"t":"keyup","k":"Control_L"}]`); code != http.StatusNoContent {
+		t.Fatalf("keyup: %d", code)
+	}
+	q.mu.Lock()
+	q.stallAfter, q.capacity = 0, 0 // the next xdotool works
+	q.mu.Unlock()
+	// The pipe fills: the watchdog kills the stalled xdotool, and the
+	// moves go to a new one.
+	sendEvents(t, mux, "3", `[{"t":"move","x":1,"y":1},{"t":"move","x":2,"y":2},{"t":"move","x":3,"y":3}]`)
+	if code := liftFor(mux, "3"); code != http.StatusOK || !releasedLast(q.log(), "Control_L") {
+		t.Fatalf("the lift: %d, ran %q: Control is still down", code, q.log())
 	}
 }
