@@ -54,8 +54,10 @@ const (
 // entrypoint's /input/clipboard and /input/paste, which the orchestrator
 // calls to empty the clipboard when a person's control ends (PROJ-194);
 // 6 adds the entrypoint's /record pipeline, which the recorder reads
-// (PROJ-23).
-const Spec = "6"
+// (PROJ-23); 7 turns address-bar search suggestions off by managed
+// policy (PROJ-191): a browser from an older image would keep sending
+// what is typed into the address bar to the search engine.
+const Spec = "7"
 
 const (
 	// StopTimeout is how long a browser container gets to stop before Docker
