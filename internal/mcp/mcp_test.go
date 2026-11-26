@@ -392,6 +392,53 @@ func TestClickIsScaledToTheScreen(t *testing.T) {
 	}
 }
 
+// Text with many different characters the keyboard map lacks is typed
+// in stretches; a type_text that would take over 45 s is refused before
+// anything is typed (PROJ-207), and one just under it goes through.
+func TestSlowTypingThroughMCPIsRefused(t *testing.T) {
+	f := newFixture(t)
+	cs := f.connect(f.all, versions[0], nil)
+	s, _, _ := f.m.Start(context.Background(), "google", "")
+	try := func(text, pace string) (bool, string) {
+		t.Helper()
+		res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "type_text", Arguments: map[string]any{"session_id": s.ID, "text": text, "pace": pace}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.IsError, res.Content[0].(*sdk.TextContent).Text
+	}
+	cjk := func(n int) string {
+		var b strings.Builder
+		for i := range n {
+			b.WriteRune(rune(0x4e00 + i))
+		}
+		return b.String()
+	}
+	if isErr, out := try(cjk(2000), "instant"); !isErr || !strings.Contains(out, "2000 characters, 2000 different ones the keyboard lacks") || !strings.Contains(out, "split it across calls, or use fill") {
+		t.Errorf("2,000 CJK characters: %v %s", isErr, out)
+	}
+	// 800: 9.6 s of keys and 62 stretches, about 44 s.
+	if isErr, out := try(cjk(800), "instant"); isErr {
+		t.Errorf("800 CJK characters: %s", out)
+	}
+	// Human pace: 150 different ones, 37.5 s and 12 stretches, about 44 s.
+	if isErr, out := try(cjk(150), ""); isErr {
+		t.Errorf("150 CJK characters at human pace: %s", out)
+	}
+	// 2,000 ASCII characters, or one accent 2,000 times: as before.
+	if isErr, out := try(strings.Repeat("a", 2000), "instant"); isErr {
+		t.Errorf("2,000 ASCII characters: %s", out)
+	}
+	if isErr, out := try(strings.Repeat("é", 2000), "instant"); isErr {
+		t.Errorf("2,000 accents: %s", out)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.types) != 4 {
+		t.Fatalf("%d typed, want 4", len(f.types))
+	}
+}
+
 // Human-paced typing through MCP stops at 150 characters a call, so the
 // call ends (about 40 s) before a client's request timeout; instant pace,
 // and act's instant type steps, aren't held to it.
