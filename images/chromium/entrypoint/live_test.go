@@ -183,3 +183,18 @@ func TestLiveRetryKeepsTheBatchsReleases(t *testing.T) {
 		t.Fatalf("retry sent %q", got)
 	}
 }
+
+// A drain with no xdotool running counts nothing marked released as
+// done: whatever marked it, no xdotool can have run that release.
+func TestLiveDrainWithNothingRunningKeepsReleasesUnconfirmed(t *testing.T) {
+	li := newLiveInput(1280, 800)
+	li.held["kShift_L"], li.released["kShift_L"] = true, true
+	var synced []string
+	li.runSync = func(args ...string) error { synced = append(synced, strings.Join(args, " ")); return nil }
+	li.mu.Lock()
+	err := li.drain()
+	li.mu.Unlock()
+	if err != nil || len(synced) != 1 || synced[0] != "keyup Shift_L" {
+		t.Fatalf("drain: %v, synced %v", err, synced)
+	}
+}
