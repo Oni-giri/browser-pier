@@ -154,7 +154,7 @@ func openViewer(t *testing.T, a agent, profile string) *viewer {
 	<-gathered
 	body, _ := json.Marshal(map[string]string{"sdp": pc.LocalDescription().SDP})
 	rec := httptest.NewRecorder()
-	h.Offer(rec, httptest.NewRequest(http.MethodPost, "/live/"+profile+"/offer", strings.NewReader(string(body))), profile, webrtc.OfferOptions{})
+	h.Offer(rec, httptest.NewRequest(http.MethodPost, "/live/"+profile+"/offer", strings.NewReader(string(body))), profile, webrtc.OfferOptions{Holder: sessions.AdminHolder})
 	var ans struct{ SDP string }
 	raw, _ := io.ReadAll(rec.Body)
 	if rec.Code != http.StatusOK || json.Unmarshal(raw, &ans) != nil {
