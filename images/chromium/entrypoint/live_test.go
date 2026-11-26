@@ -120,3 +120,24 @@ func TestLiveKeysIgnoreTheShortcutGap(t *testing.T) {
 		t.Fatalf("a person's ctrl+l made the agent wait %v", c.slept)
 	}
 }
+
+// The clipboard box's paste is the person's input too: it doesn't wait for
+// an agent's shortcut gap, nor make the agent's next keys wait.
+func TestLivePasteIgnoresTheShortcutGap(t *testing.T) {
+	c := newClockedVisual()
+	newFakeX(c.visual)
+	c.do(t, http.MethodPost, "/input/key", `{"keys": "ctrl+l", "pace": "instant"}`)
+	if rec := serveVisual(c.visual, http.MethodPost, "/input/paste", `{"text":"x"}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("paste: %d %s", rec.Code, rec.Body)
+	}
+	if len(c.slept) != 0 {
+		t.Fatalf("the paste waited %v", c.slept)
+	}
+	// Past the agent's gap, a person's paste doesn't arm it again.
+	c.t = c.t.Add(time.Second)
+	serveVisual(c.visual, http.MethodPost, "/input/paste", `{"text":"y"}`)
+	c.do(t, http.MethodPost, "/input/type", `{"text": "x", "pace": "instant"}`)
+	if len(c.slept) != 0 {
+		t.Fatalf("the person's Ctrl+V made the agent wait %v", c.slept)
+	}
+}

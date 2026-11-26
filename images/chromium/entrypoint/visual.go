@@ -303,7 +303,7 @@ type xcmd struct{ args, release []string }
 type keyboard int
 
 const (
-	pointerAction  keyboard = iota // neither waits for the gap nor arms it
+	pointerAction  keyboard = iota // neither waits for the gap nor arms it: pointer actions, and the person's paste
 	keysAction                     // waits for the gap
 	shortcutAction                 // waits for the gap, and arms it again as it ends
 )

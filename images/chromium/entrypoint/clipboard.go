@@ -194,9 +194,9 @@ func (v *visual) paste(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Ctrl+V waits out the gap after a shortcut, as typing does, so a
-	// paste right after ctrl+l lands in the address bar (PROJ-151).
-	v.perform(w, r, keysAction, func(func() hand) []xcmd {
+	// The person's paste neither waits for an agent's shortcut gap nor
+	// arms it (PROJ-151), as the live view's other input.
+	v.perform(w, r, pointerAction, func(func() hand) []xcmd {
 		return []xcmd{{[]string{"key", "--clearmodifiers", "ctrl+v"}, []string{"keyup", "ctrl+v"}}}
 	})
 }
