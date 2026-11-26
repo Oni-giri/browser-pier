@@ -36,11 +36,14 @@ type liveInput struct {
 	// until its release is known to have run. released is those whose
 	// release has been written to the running xdotool but may not have
 	// run yet; drain moves them out once that xdotool has exited cleanly.
-	held, released map[string]bool
+	// lost is those whose release went to an xdotool that died before it
+	// was known to run it: the next xdotool gets it again before anything
+	// else, or drain runs it in one of its own.
+	held, released, lost map[string]bool
 }
 
 func newLiveInput(width, height int) *liveInput {
-	return &liveInput{width: width, height: height, held: map[string]bool{}, released: map[string]bool{}, start: startXdotool,
+	return &liveInput{width: width, height: height, held: map[string]bool{}, released: map[string]bool{}, lost: map[string]bool{}, start: startXdotool,
 		runSync: func(args ...string) error {
 			_, err := runCommand(context.Background(), "xdotool", args...)
 			return err
@@ -119,28 +122,53 @@ func (li *liveInput) drain() error {
 			delete(li.held, h)
 		}
 		clear(li.released)
+		// Releases a dead xdotool was sent and no xdotool has had since
+		// run here, in one of their own.
+		if len(li.lost) == 0 {
+			return nil
+		}
+		if err := li.runSync(releaseArgs(li.lost)...); err != nil {
+			return fmt.Errorf("couldn't let go of the live view's keys: %w", err)
+		}
+		for h := range li.lost {
+			delete(li.held, h)
+		}
+		clear(li.lost)
 		return nil
 	}
-	var args []string
-	for _, l := range li.releaseLines(true) {
-		args = append(args, strings.Fields(l)...)
-	}
-	if len(args) > 0 {
-		if err := li.runSync(args...); err != nil {
+	if len(li.held) > 0 {
+		if err := li.runSync(releaseArgs(li.held)...); err != nil {
 			return fmt.Errorf("couldn't let go of the live view's keys: %w", err)
 		}
 	}
 	clear(li.held)
 	clear(li.released)
+	clear(li.lost)
 	return nil
+}
+
+// releaseArgs is one xdotool command line letting go of a set of keys and
+// buttons, sorted.
+func releaseArgs(set map[string]bool) []string {
+	var args []string
+	for _, l := range releaseLinesOf(set, func(string) bool { return true }) {
+		args = append(args, strings.Fields(l)...)
+	}
+	return args
 }
 
 // releaseLines is the commands that let go of what's held, sorted: all
 // of it, or only what has no release queued yet.
 func (li *liveInput) releaseLines(all bool) []string {
-	names := make([]string, 0, len(li.held))
-	for h := range li.held {
-		if all || !li.released[h] {
+	return releaseLinesOf(li.held, func(h string) bool { return all || !li.released[h] })
+}
+
+// releaseLinesOf is the commands that let go of the keys and buttons of
+// set that keep says to, sorted.
+func releaseLinesOf(set map[string]bool, keep func(string) bool) []string {
+	names := make([]string, 0, len(set))
+	for h := range set {
+		if keep(h) {
 			names = append(names, h)
 		}
 	}
@@ -212,16 +240,28 @@ func (li *liveInput) lines(e event) ([]string, error) {
 func (li *liveInput) send(build func() []string) error {
 	for attempt := 0; attempt < 2; attempt++ {
 		if li.stdin == nil {
-			// A new xdotool has run nothing yet.
-			clear(li.released)
+			// A new xdotool has run nothing yet. A release written to the
+			// last one, if it died, may not have run.
+			li.loseReleased()
 			in, err := li.start()
 			if err != nil {
 				return err
 			}
 			li.stdin = in
 		}
+		// The lost releases first, so this xdotool runs them before
+		// anything else; marked released (tentatively, for build), and
+		// lost again if the write fails.
+		lines := releaseLinesOf(li.lost, func(h string) bool { return li.held[h] })
+		for h := range li.lost {
+			if li.held[h] {
+				li.released[h] = true
+			}
+		}
+		clear(li.lost)
+		lines = append(lines, build()...)
 		var err error
-		for _, l := range build() {
+		for _, l := range lines {
 			if _, err = io.WriteString(li.stdin, l+"\n"); err != nil {
 				break
 			}
@@ -230,13 +270,24 @@ func (li *liveInput) send(build func() []string) error {
 			return nil
 		}
 		// xdotool went away: start a new one and try again. A release
-		// queued in the old one may not have run, so its key is held
-		// again until a release that has.
+		// queued in the old one may not have run, so its key is lost
+		// until a release that has (the next start).
 		_ = li.stdin.Close()
 		li.stdin = nil
-		clear(li.released)
 	}
+	li.loseReleased()
 	return errors.New("xdotool isn't taking input")
+}
+
+// loseReleased marks the releases written to an xdotool that is gone as
+// lost: they may not have run. With li.mu held.
+func (li *liveInput) loseReleased() {
+	for h := range li.released {
+		if li.held[h] {
+			li.lost[h] = true
+		}
+	}
+	clear(li.released)
 }
 
 func (li *liveInput) events(w http.ResponseWriter, r *http.Request) {
@@ -274,6 +325,7 @@ func (li *liveInput) events(w http.ResponseWriter, r *http.Request) {
 			li.held[h] = true
 			if written {
 				delete(li.released, h)
+				delete(li.lost, h)
 			}
 		case "up", "keyup":
 			if written && li.held[h] {
@@ -290,7 +342,15 @@ func (li *liveInput) events(w http.ResponseWriter, r *http.Request) {
 
 // release lets go of every key and button still down, so a viewer who
 // disconnects mid-drag or mid-shortcut leaves nothing stuck.
-func (li *liveInput) release(w http.ResponseWriter, _ *http.Request) {
+//
+// With ?drain=1, as at a hand-back, it answers only once every release
+// has run: it drains (an xdotool that doesn't end cleanly is killed, and
+// what is held let go in one of its own), so agents' input after it,
+// which doesn't drain, never meets a held key. Without, as on the live
+// view's blur or Escape while the person still has control, it doesn't
+// wait: the person's next keys follow at once, and agents can't send
+// input until the hand-back, which drains.
+func (li *liveInput) release(w http.ResponseWriter, r *http.Request) {
 	li.mu.Lock()
 	defer li.mu.Unlock()
 	// What already has a release queued in the running xdotool needs
@@ -314,6 +374,12 @@ func (li *liveInput) release(w http.ResponseWriter, _ *http.Request) {
 		}
 		for h := range li.held {
 			li.released[h] = true
+		}
+	}
+	if r.URL.Query().Get("drain") == "1" {
+		if err := li.drain(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)

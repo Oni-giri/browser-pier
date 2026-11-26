@@ -207,7 +207,14 @@ func TestInputIsOnlyThisTurns(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		}
 	}
-	mux.HandleFunc("POST /input/release", record("release"))
+	rec := record("release")
+	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, r *http.Request) {
+		// The hand-back waits for the releases to run (PROJ-195).
+		if r.URL.RawQuery != "drain=1" {
+			t.Errorf("the hand-back's release: ?%s", r.URL.RawQuery)
+		}
+		rec(w, r)
+	})
 	mux.HandleFunc("DELETE /input/clipboard", record("empty"))
 	f.rt.Control = mux
 	s := f.start(f.m)

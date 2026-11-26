@@ -339,7 +339,9 @@ const clipboardSettle = 100 * time.Millisecond
 // liftLiveInput lets go of any key or button the live view's input still
 // holds in a running browser, a person's control ending.
 func (m *Manager) liftLiveInput(sessionID, profile string) {
-	if err := m.control(m.ctx, profile, http.MethodPost, "/input/release", nil, nil); err != nil {
+	// drain: answered once the releases have run, not only been queued
+	// (PROJ-195), so an agent's next click can't meet a held Ctrl.
+	if err := m.control(m.ctx, profile, http.MethodPost, "/input/release?drain=1", nil, nil); err != nil {
 		m.log.Warn("couldn't let go of the live view's keys as a person's control ended", "session", sessionID, "err", err)
 	}
 }

@@ -163,8 +163,8 @@ func TestLiveReleaseIsQueuedOnlyOnceWritten(t *testing.T) {
 }
 
 // A batch whose first write hits a dead xdotool and whose retry, in a new
-// one, goes through keeps its own releases queued; only the dead one's
-// are forgotten.
+// one, goes through keeps its own releases queued; the dead one's, which
+// may not have run, go to the new one first.
 func TestLiveRetryKeepsTheBatchsReleases(t *testing.T) {
 	dead, fresh := &fakeXdotool{}, &fakeXdotool{}
 	li, _ := newTestLive(dead, fresh)
@@ -178,10 +178,10 @@ func TestLiveRetryKeepsTheBatchsReleases(t *testing.T) {
 	if rec := post(li.events, `[{"t":"keyup","k":"Control_L"}]`); rec.Code != http.StatusNoContent {
 		t.Fatal(rec.Code)
 	}
-	if !li.released["kControl_L"] || li.released["ka"] || !li.held["ka"] {
-		t.Fatalf("held %v, released %v", li.held, li.released)
+	if !li.released["kControl_L"] || !li.released["ka"] || !li.held["ka"] || len(li.lost) != 0 {
+		t.Fatalf("held %v, released %v, lost %v", li.held, li.released, li.lost)
 	}
-	if got := fresh.buf.String(); got != "keyup Control_L\n" {
+	if got := fresh.buf.String(); got != "keyup a\nkeyup Control_L\n" {
 		t.Fatalf("retry sent %q", got)
 	}
 }
@@ -238,7 +238,7 @@ func TestLiveReleaseChecksTheXdotoolWithTheQueuedReleases(t *testing.T) {
 	if rec := post(li.release, ""); rec.Code != http.StatusNoContent {
 		t.Fatal(rec.Code)
 	}
-	if got := fresh.buf.String(); got != "keyup Control_L\n" {
+	if got := fresh.buf.String(); got != "keyup Control_L\nsleep 0\n" {
 		t.Fatalf("the new xdotool got %q", got)
 	}
 	// Alive, it gets only the no-op, and nothing is released twice.
@@ -324,5 +324,94 @@ func TestLiveTypeIgnoresTheShortcutGap(t *testing.T) {
 		if rec := serveVisual(c.visual, http.MethodPost, "/input/live-type", body); rec.Code != http.StatusBadRequest {
 			t.Errorf("%.40s: %d", body, rec.Code)
 		}
+	}
+}
+
+// A key-up written to an xdotool that died before running it is lost: the
+// next xdotool, started by any event (a mouse move), gets it first, and a
+// drain then finds nothing held.
+func TestLiveLostReleaseGoesToTheNextXdotool(t *testing.T) {
+	dead, fresh := &fakeXdotool{}, &fakeXdotool{}
+	li, _ := newTestLive(dead, fresh)
+	post(li.events, `[{"t":"keydown","k":"Control_L"},{"t":"keyup","k":"Control_L"}]`)
+	dead.mu.Lock()
+	dead.broken = true
+	dead.mu.Unlock()
+	if rec := post(li.events, `[{"t":"move","x":5,"y":5}]`); rec.Code != http.StatusNoContent {
+		t.Fatal(rec.Code)
+	}
+	if got := fresh.buf.String(); got != "keyup Control_L\nmousemove 5 5\n" {
+		t.Fatalf("the new xdotool got %q", got)
+	}
+	li.mu.Lock()
+	err := li.drain()
+	li.mu.Unlock()
+	if err != nil || len(li.held) != 0 || len(li.lost) != 0 {
+		t.Fatalf("drain: %v, held %v, lost %v", err, li.held, li.lost)
+	}
+}
+
+// If no new xdotool can start, the lost key-up waits; a drain then runs it
+// in an xdotool of its own instead of counting nothing as held.
+func TestLiveDrainRunsALostRelease(t *testing.T) {
+	li := newLiveInput(1280, 800)
+	dead := &fakeXdotool{}
+	li.start = func() (ioWriteCloser, error) { return dead, nil }
+	post(li.events, `[{"t":"keydown","k":"Control_L"},{"t":"keyup","k":"Control_L"}]`)
+	dead.mu.Lock()
+	dead.broken = true
+	dead.mu.Unlock()
+	li.start = func() (ioWriteCloser, error) { return nil, errors.New("too many open files") }
+	if rec := post(li.events, `[{"t":"move","x":5,"y":5}]`); rec.Code != http.StatusInternalServerError {
+		t.Fatal(rec.Code)
+	}
+	var synced []string
+	li.runSync = func(args ...string) error { synced = append(synced, strings.Join(args, " ")); return nil }
+	li.mu.Lock()
+	err := li.drain()
+	li.mu.Unlock()
+	if err != nil || len(synced) != 1 || synced[0] != "keyup Control_L" || len(li.held) != 0 {
+		t.Fatalf("drain: %v, synced %v, held %v", err, synced, li.held)
+	}
+}
+
+// At a hand-back (?drain=1) the release answers only once it has run: the
+// xdotool is ended; a wedged one is killed, and what is held let go in an
+// xdotool of its own, or the release fails. Without drain (blur, Escape),
+// it only queues.
+func TestLiveHandBackReleaseDrains(t *testing.T) {
+	x := &closingXdotool{}
+	li, _ := newTestLive()
+	li.start = func() (ioWriteCloser, error) { return x, nil }
+	post(li.events, `[{"t":"keydown","k":"Control_L"}]`)
+	if rec := post(li.release, ""); rec.Code != http.StatusNoContent || x.closed != 0 {
+		t.Fatalf("blur release: %d, closed %d", rec.Code, x.closed)
+	}
+	rec := httptest.NewRecorder()
+	li.release(rec, httptest.NewRequest(http.MethodPost, "/input/release?drain=1", nil))
+	if rec.Code != http.StatusNoContent || x.closed != 1 || len(li.held) != 0 {
+		t.Fatalf("hand-back: %d, closed %d, held %v", rec.Code, x.closed, li.held)
+	}
+
+	// Wedged: killed, then let go in its own xdotool.
+	li, _ = newTestLive()
+	li.start = func() (ioWriteCloser, error) { return &killedXdotool{}, nil }
+	var synced []string
+	li.runSync = func(args ...string) error { synced = append(synced, strings.Join(args, " ")); return nil }
+	post(li.events, `[{"t":"keydown","k":"Control_L"}]`)
+	rec = httptest.NewRecorder()
+	li.release(rec, httptest.NewRequest(http.MethodPost, "/input/release?drain=1", nil))
+	if rec.Code != http.StatusNoContent || len(synced) != 1 || synced[0] != "keyup Control_L" {
+		t.Fatalf("wedged hand-back: %d, synced %v", rec.Code, synced)
+	}
+	// And if that fails too, the hand-back is told.
+	li, _ = newTestLive()
+	li.start = func() (ioWriteCloser, error) { return &killedXdotool{}, nil }
+	li.runSync = func(...string) error { return errors.New("xdotool: exit status 1") }
+	post(li.events, `[{"t":"keydown","k":"Control_L"}]`)
+	rec = httptest.NewRecorder()
+	li.release(rec, httptest.NewRequest(http.MethodPost, "/input/release?drain=1", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("failed hand-back: %d", rec.Code)
 	}
 }
