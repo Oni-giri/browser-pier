@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 const shown = 1<<stateVisible | 1<<stateShowing | 1<<stateEnabled | 1<<stateSensitive
@@ -408,6 +409,23 @@ func TestFormatTextCantPassForAControlLine(t *testing.T) {
 		}
 		if !strings.Contains(out, "FORGED-3") {
 			t.Errorf("max_chars %d: the cut line is missing:\n%s", budget, out)
+		}
+	}
+}
+
+// TestFormatEscapedNamesKeepTheBudget: names of quotes and backslashes,
+// which escaping doubles, don't take a snapshot over max_chars.
+func TestFormatEscapedNamesKeepTheBudget(t *testing.T) {
+	var nodes []Node
+	for i := range 10 {
+		nodes = append(nodes, node(-1, rolePushButton, shown, strings.Repeat(`"\`, 40), 1, 100+i*30))
+	}
+	tr := tree(nodes...)
+	for _, budget := range []int{100, 150, 200, 400, 1000} {
+		body, _ := renderAll(t, tr, budget, "")
+		rest := body[len(header(build(tr))):]
+		if n := utf8.RuneCountInString(rest); n > budget+len("\n-- in view --\n") {
+			t.Errorf("max_chars %d gave %d characters:\n%s", budget, n, rest)
 		}
 	}
 }

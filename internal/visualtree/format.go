@@ -438,7 +438,8 @@ func estimate(it item) int {
 	if !it.control {
 		return utf8.RuneCountInString(it.text)
 	}
-	n := len(it.role) + utf8.RuneCountInString(capText(clean(it.name), maxField)) + utf8.RuneCountInString(it.value) + 32
+	// The name as the line quotes it: escaping can double it.
+	n := len(it.role) + utf8.RuneCountInString(field(it.name)) + utf8.RuneCountInString(it.value) + 32
 	for _, st := range it.states {
 		n += len(st) + 3
 	}
@@ -491,6 +492,13 @@ func render(p *page, budget int, query string, ref func(node int) string) (body,
 			return
 		}
 		l := line(it, ref)
+		if utf8.RuneCountInString(l)+1 > left {
+			// The estimate fell short (a ref longer than guessed): the
+			// line as rendered is what must fit.
+			full = true
+			count(it)
+			return
+		}
 		*lines = append(*lines, l)
 		left -= utf8.RuneCountInString(l) + 1
 	}
