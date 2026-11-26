@@ -58,7 +58,7 @@ make image        # the orchestrator image, ghcr.io/oni-giri/browser-pier
 
 Tests that need Docker sit behind the `docker` build tag, so `go test ./...` stays fast. `BROWSERPIER_TEST_RECORD=1` runs the API package's Docker tests with every session recorded (PROJ-23), to check recording changes nothing a page or an agent sees; `BROWSERPIER_MEASURE=1` runs `TestMeasureRecordingCost` in `internal/sessions`, which logs the recording pipeline's CPU, memory and bytes per hour (`BROWSERPIER_MEASURE_SECONDS`, default 60, per scene). Before calling a change done, run it for real: start a browser, sign in to a test site, stop it, start it again and check that the login survived.
 
-After a change to the browser image, set `BROWSERPIER_TEST_OLD_IMAGE` to the last released one (`ghcr.io/oni-giri/browser-pier-chromium:0.2.1`, say): `TestLoginSurvivesImageUpgrade` then checks a profile it made keeps its login on the new image. Measurements that aren't checks, such as `TestMeasureWebGLCost` (what WebGL's renderer costs, PROJ-148) and `TestMeasureWindowAtLoad`, also need the `measure` tag: `go test -tags 'docker measure' -run TestMeasureWebGLCost -v ./images/chromium/`.
+After a change to the browser image, set `BROWSERPIER_TEST_OLD_IMAGE` to the last released one (`ghcr.io/oni-giri/browser-pier-chromium:0.2.1`, say): `TestLoginSurvivesImageUpgrade` then checks a profile it made keeps its login on the new image. Measurements that aren't checks, such as `TestMeasureWebGLCost` (what WebGL's renderer costs, PROJ-148), `TestMeasureMemoryFlags` (what the back/forward cache and the spare renderer cost, PROJ-160; about 40 minutes, one browser holding a 200 MB page at a time) and `TestMeasureWindowAtLoad`, also need the `measure` tag: `go test -tags 'docker measure' -run TestMeasureWebGLCost -v ./images/chromium/`.
 
 ### On rootless Podman
 
@@ -130,6 +130,6 @@ Every container BrowserPier creates passes the create guard (`internal/docker/gu
 2. Then change the builder (`browserConfig`, `browserCreateOptions` or `sandboxCheckOptions`).
 3. Then the tests: a row in `TestGuardRefusesEachWidening` for each way the new value could be wrong, and the golden bodies in `internal/docker/testdata` (`go test ./internal/docker -run TestCreateBodiesAreUnchanged -update-golden`), whose diff shows the change.
 
-A new kind of container is a new `createKind` and a new case in `checkCreate`, written by hand. A new Docker operation (an exec, a network, a copy) is a deliberate edit of the list in `TestDockerOperationsAreAClosedSet`. Only `internal/docker` may import the Docker SDK.
+A new kind of container is a new `createKind` and a new case in `checkCreate`, written by hand. A new Docker operation (an exec, a network, a copy) is a deliberate edit of the list in `TestDockerOperationsAreAClosedSet`. Only `internal/docker` may import the Docker SDK, with two exceptions the test names: `internal/docker/memusage`, which uses the SDK's stats types and is handed `ContainerStats` alone, never the client, and the memory measure test in `images/chromium`.
 
 CI lints, tests and builds every push and pull request. It publishes both images to ghcr.io from `main` (tag `edge`) and from `v*` tags, which also make the GitHub release. See [RELEASING.md](RELEASING.md).

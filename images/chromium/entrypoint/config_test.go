@@ -132,6 +132,33 @@ func TestChromiumArgs(t *testing.T) {
 			t.Errorf("%s: the GPU sandbox failing must be fatal", a)
 		}
 	}
+	// One --disable-features, since Chromium reads only the last one, with
+	// every feature the image turns off (PROJ-160); none enabled. Memory
+	// isn't saved by weakening site isolation or the sandbox.
+	var disable []string
+	for _, a := range args {
+		if f, ok := strings.CutPrefix(a, "--disable-features="); ok {
+			disable = append(disable, f)
+		}
+		if strings.HasPrefix(a, "--enable-features") {
+			t.Errorf("must not pass %s", a)
+		}
+		for _, banned := range []string{"--renderer-process-limit", "--single-process", "--js-flags",
+			"--disable-site-isolation-trials", "--process-per-site"} {
+			if a == banned || strings.HasPrefix(a, banned+"=") {
+				t.Errorf("must not pass %s", a)
+			}
+		}
+		if strings.Contains(a, "IsolateOrigins") || strings.Contains(a, "site-per-process") || strings.Contains(a, "SitePerProcess") {
+			t.Errorf("must not pass %s: it weakens site isolation", a)
+		}
+	}
+	if len(disable) != 1 {
+		t.Fatalf("%d --disable-features switches, want exactly one: %q", len(disable), disable)
+	}
+	if got := strings.Split(disable[0], ","); !slices.Equal(got, []string{"BackForwardCache"}) {
+		t.Errorf("--disable-features=%s, want BackForwardCache", disable[0])
+	}
 	if slices.Contains(args, "--disable-dev-shm-usage") {
 		t.Error("--disable-dev-shm-usage without a small /dev/shm")
 	}

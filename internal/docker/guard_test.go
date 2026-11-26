@@ -839,7 +839,16 @@ func TestDockerOperationsAreAClosedSet(t *testing.T) {
 		t.Errorf("%s uses the Docker client other than to call it", pos)
 	}
 
-	// No other package imports the Docker SDK.
+	// No other package imports the Docker SDK, but for these, each named.
+	// memusage reads a container's memory for MemoryUsage and for the
+	// image's memory measure: it uses the SDK's types alone and is handed
+	// c.api.ContainerStats, counted above, never the client
+	// (TestMemusageMakesOnlyTheStatsCall). The measure, a test under the
+	// measure tag, makes its own client to read the same number.
+	sdkUsers := map[string]bool{
+		"internal/docker/memusage":                        true,
+		"images/chromium/memflags_measure_docker_test.go": true,
+	}
 	root := moduleRoot(t)
 	own, _ := filepath.Abs(".")
 	fset := token.NewFileSet()
@@ -854,6 +863,9 @@ func TestDockerOperationsAreAClosedSet(t *testing.T) {
 			return nil
 		}
 		if !strings.HasSuffix(path, ".go") || filepath.Dir(path) == own {
+			return nil
+		}
+		if rel, _ := filepath.Rel(root, path); sdkUsers[filepath.ToSlash(rel)] || sdkUsers[filepath.ToSlash(filepath.Dir(rel))] {
 			return nil
 		}
 		f, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
@@ -871,5 +883,51 @@ func TestDockerOperationsAreAClosedSet(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestMemusageMakesOnlyTheStatsCall: memusage, the one package beside this
+// one that imports the Docker SDK, uses its stats types alone, so the only
+// Docker call it can make is the ContainerStats it is handed.
+func TestMemusageMakesOnlyTheStatsCall(t *testing.T) {
+	allowedImports := []string{"github.com/moby/moby/client", "github.com/moby/moby/api/types/container"}
+	allowedClient := []string{"ContainerStatsOptions", "ContainerStatsResult"}
+	files, err := filepath.Glob(filepath.Join("memusage", "*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	parsed := 0
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed++
+		for _, imp := range f.Imports {
+			p, _ := strconv.Unquote(imp.Path.Value)
+			if (strings.HasPrefix(p, "github.com/moby/") || strings.HasPrefix(p, "github.com/docker/")) && !slices.Contains(allowedImports, p) {
+				t.Errorf("%s imports %s; memusage may use the client's stats types and the container types alone", name, p)
+			}
+			if imp.Name != nil && (p == "github.com/moby/moby/client") {
+				t.Errorf("%s renames the client package; this test looks for client.X", name)
+			}
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if x, ok := sel.X.(*ast.Ident); ok && x.Name == "client" && !slices.Contains(allowedClient, sel.Sel.Name) {
+				t.Errorf("%s uses client.%s; memusage may use only %v", fset.Position(sel.Pos()), sel.Sel.Name, allowedClient)
+			}
+			return true
+		})
+	}
+	if parsed == 0 {
+		t.Fatal("found no memusage files: the path is wrong")
 	}
 }

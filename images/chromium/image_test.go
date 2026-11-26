@@ -111,12 +111,11 @@ type browser struct {
 // startBrowser runs the image on volume; env adds KEY=VALUE settings.
 func startBrowser(t *testing.T, image, volume string, env ...string) *browser {
 	t.Helper()
-	return startBrowserEnv(t, image, volume, env...)
+	return startBrowserWith(t, image, volume, nil, env...)
 }
 
-// startBrowserEnv is startBrowser with more environment for the
-// container (KEY=value).
-func startBrowserEnv(t *testing.T, image, volume string, env ...string) *browser {
+// startBrowserWith is startBrowser with more `docker run` options, such as mounts.
+func startBrowserWith(t *testing.T, image, volume string, runArgs []string, env ...string) *browser {
 	t.Helper()
 	sockDir := t.TempDir()
 	if err := os.Chmod(sockDir, 0o777); err != nil { // the container's user creates the socket
@@ -146,6 +145,7 @@ func startBrowserEnv(t *testing.T, image, volume string, env ...string) *browser
 	for _, e := range env {
 		run = append(run, "-e", e)
 	}
+	run = append(run, runArgs...)
 	docker(t, append(run, image)...)
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
 
@@ -568,6 +568,30 @@ func TestBrowserEnvironment(t *testing.T) {
 			}
 		}
 		t.Logf("ICE candidates: %v", found)
+	})
+	t.Run("back", func(t *testing.T) {
+		// The back/forward cache is off (PROJ-160): Back to a page shows
+		// it again as a new document, not one kept whole in memory. Both
+		// pages are ones the cache would keep (no unload handler, no
+		// no-store, nothing left open).
+		shown := len(s.Shows("/back/a"))
+		p.Navigate(s.URL + "/back/a")
+		first := s.WaitShown(t, "/back/a", shown+1, 10*time.Second)
+		p.Navigate(s.URL + "/back/b")
+		p.Eval("history.back()")
+		again := s.WaitShown(t, "/back/a", shown+2, 30*time.Second)
+		t.Logf("Back to A: %+v", again)
+		if again.Persisted || again.Load == first.Load {
+			t.Fatalf("Back restored A from the back/forward cache (persisted %t, the same document %t); is BackForwardCache still enabled?", again.Persisted, again.Load == first.Load)
+		}
+		if again.Type != "back_forward" {
+			t.Errorf("Back's navigation type is %q, want back_forward", again.Type)
+		}
+		// What a page can read of it (ANTI-BOT.md, Signals that remain):
+		// Chromium gives no reasons at all, rather than none to give.
+		if again.Reasons != "null" {
+			t.Errorf("Back's notRestoredReasons: %s, want null", again.Reasons)
+		}
 	})
 	t.Run("window fills the screen above the taskbar", func(t *testing.T) {
 		// Visual-mode coordinates are screen coordinates, so the window must

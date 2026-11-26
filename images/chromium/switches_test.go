@@ -54,4 +54,33 @@ func TestSwitchListMatchesFlags(t *testing.T) {
 			t.Errorf("the Dockerfile's switch list checks --%s, which chromiumArgs no longer passes", sw)
 		}
 	}
+
+	// The features chromiumArgs turns off (disabledFeatures) and the
+	// Dockerfile's `for feature in …; do` list are the same (PROJ-160). The
+	// list names each as the binary stores it, which for some is "kName".
+	m = regexp.MustCompile(`(?s)for feature in (.*?); do`).FindSubmatch(dockerfile)
+	if m == nil {
+		t.Fatal("no `for feature in …; do` feature list in the Dockerfile")
+	}
+	var checked []string
+	for _, f := range strings.Fields(strings.ReplaceAll(string(m[1]), `\`, " ")) {
+		if len(f) > 1 && f[0] == 'k' && f[1] >= 'A' && f[1] <= 'Z' {
+			f = f[1:]
+		}
+		checked = append(checked, f)
+	}
+	list := regexp.MustCompile(`(?s)var disabledFeatures = \[\]string\{(.*?)\n}`).FindSubmatch(flags)
+	if list == nil {
+		t.Fatal("no disabledFeatures in flags.go")
+	}
+	var disabled []string
+	for _, f := range regexp.MustCompile(`(?m)^\s*"([A-Za-z0-9]+)",`).FindAllSubmatch(list[1], -1) {
+		disabled = append(disabled, string(f[1]))
+	}
+	if len(disabled) == 0 {
+		t.Fatal("found no feature in disabledFeatures; is the pattern stale?")
+	}
+	if !slices.Equal(checked, disabled) {
+		t.Errorf("the Dockerfile checks the features %v, chromiumArgs turns off %v", checked, disabled)
+	}
 }

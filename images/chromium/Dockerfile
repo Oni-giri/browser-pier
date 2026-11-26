@@ -58,6 +58,12 @@ RUN for t in xdg-desktop-portal xdg-desktop-portal-gtk xdg-desktop-portal-gnome 
 # relies on is missing. Chromium ignores unknown switches silently, so each
 # switch must appear in the binary as a whole NUL-terminated string, and each
 # switch chromiumArgs passes must be in this list (TestSwitchListMatchesFlags).
+# The same for each feature in its --disable-features (PROJ-160): an unknown
+# feature name is ignored too. Each is listed in the one form its name is
+# stored in: whole, or, for a feature declared with Chromium's newer
+# BASE_FEATURE that names it from its constant, as "kName" (the name is read
+# from its second character). That a string is there is necessary, not
+# sufficient: TestBrowserEnvironment/back checks the switch takes effect.
 # Chromium's interface languages (chromium-l10n): without them it runs in
 # en-US whatever LANGUAGE says, and Intl's locale contradicts
 # navigator.languages, which matches the exit location.
@@ -67,8 +73,11 @@ RUN for el in ximagesrc videoconvert videoscale x264enc mp4mux fdsink; do gst-in
  && tr '\0' '\n' < /usr/lib/chromium/chromium > /tmp/strings \
  && for sw in user-data-dir remote-debugging-port password-store disable-blink-features ignore-gpu-blocklist disable-gpu-compositing gpu-sandbox-failures-fatal \
                proxy-bypass-list webrtc-ip-handling-policy disable-component-update disable-background-networking no-first-run \
-               no-default-browser-check hide-crash-restore-bubble noerrdialogs window-position window-size disable-dev-shm-usage proxy-server host-resolver-rules; do \
+               no-default-browser-check hide-crash-restore-bubble noerrdialogs window-position window-size disable-dev-shm-usage proxy-server host-resolver-rules \
+               disable-features; do \
       LC_ALL=C grep -qaxF -- "$sw" /tmp/strings || { echo "chromium binary lacks --$sw"; exit 1; }; done \
+ && for feature in BackForwardCache; do \
+      LC_ALL=C grep -qaxF -- "$feature" /tmp/strings || { echo "chromium binary lacks the feature $feature"; exit 1; }; done \
  && rm /tmp/strings
 
 # WebGL renders on Mesa's llvmpipe (PROJ-148): ANGLE loads libGL.so.1, the

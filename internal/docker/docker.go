@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -26,6 +25,7 @@ import (
 	"github.com/moby/moby/client"
 
 	"github.com/Oni-giri/browser-pier/images/chromium"
+	"github.com/Oni-giri/browser-pier/internal/docker/memusage"
 )
 
 // Labels on every browser container.
@@ -509,25 +509,5 @@ func User(uid, gid int) string { return strconv.Itoa(uid) + ":" + strconv.Itoa(g
 // MemoryUsage is how much memory the container uses now, counted as
 // docker stats does: usage less the page cache the kernel can drop.
 func (c *Client) MemoryUsage(ctx context.Context, id string) (int64, error) {
-	res, err := c.api.ContainerStats(ctx, id, client.ContainerStatsOptions{})
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = res.Body.Close() }()
-	var s container.StatsResponse
-	if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&s); err != nil {
-		return 0, err
-	}
-	return memoryInUse(s.MemoryStats), nil
-}
-
-func memoryInUse(m container.MemoryStats) int64 {
-	used := m.Usage
-	// cgroup v2 calls it inactive_file, v1 total_inactive_file.
-	for _, k := range []string{"inactive_file", "total_inactive_file"} {
-		if v, ok := m.Stats[k]; ok && v < used {
-			return int64(used - v) //nolint:gosec // v < used
-		}
-	}
-	return int64(used) //nolint:gosec // memory sizes fit
+	return memusage.Read(ctx, c.api.ContainerStats, id)
 }
