@@ -78,11 +78,6 @@ func (m *Manager) testProxy(ctx context.Context, t ProxyTest) (docker.ProxyResul
 		}
 		proxy = profiles.FillSticky(proxy, tok)
 	}
-	if err := m.writeProxyTestFile(proxy); err != nil {
-		m.removeProxyTestDir()
-		return docker.ProxyResult{}, err
-	}
-
 	// Shutting down cuts the test short, and waits for its container to go.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -95,14 +90,17 @@ func (m *Manager) testProxy(ctx context.Context, t ProxyTest) (docker.ProxyResul
 	)
 	if !m.spawn(func() {
 		defer close(done)
-		// In here, so Close waits for the folder to go too.
+		// The file is written and removed in here, so Close waits for
+		// the whole of its life: no credentials outlive a shutdown.
 		defer m.removeProxyTestDir()
+		if err = m.writeProxyTestFile(proxy); err != nil {
+			return
+		}
 		res, err = m.rt.TestProxy(ctx, docker.ProxyTestSpec{
 			Dir:    filepath.Join(m.layout.HostDataDir, proxyTestDir),
 			GeoURL: m.geoURL,
 		})
 	}) {
-		m.removeProxyTestDir()
 		return docker.ProxyResult{}, ErrClosed
 	}
 	<-done

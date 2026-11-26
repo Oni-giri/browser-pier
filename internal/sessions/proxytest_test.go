@@ -193,6 +193,30 @@ func TestCloseCutsAProxyTestShort(t *testing.T) {
 	}
 }
 
+// TestProxyTestAfterClose: once the manager is closed, a test doesn't
+// run and writes nothing: the file is only ever written inside work that
+// Close waits for.
+func TestProxyTestAfterClose(t *testing.T) {
+	f, _ := proxyTestFixture(t)
+	marker := filepath.Join(f.dir, proxyTestDir, "marker")
+	if err := os.MkdirAll(filepath.Dir(marker), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(marker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.m.Close()
+	if _, err := f.m.TestProxy(context.Background(), ProxyTest{Proxy: "http://u:p@proxy.example:8080", For: "settings"}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("err = %v, want ErrClosed", err)
+	}
+	if len(f.rt.ProxyTests) != 0 {
+		t.Fatalf("a test ran after Close: %v", f.rt.ProxyTests)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatal("a test after Close touched the test's folder")
+	}
+}
+
 func TestReconcileRemovesALeftoverProxyTestFolder(t *testing.T) {
 	f, _ := proxyTestFixture(t)
 	dir := filepath.Join(f.dir, proxyTestDir)
