@@ -259,7 +259,6 @@ select.input{appearance:none;background-image:linear-gradient(45deg,transparent 
 .radio-card small{display:block;color:var(--ink-2);font-size:13px}
 .errors{margin:0 0 16px;padding:10px 12px;border-radius:8px;background:var(--red-tint);color:var(--red-text);font-size:13px}
 .notice{margin:0 0 16px;padding:10px 12px;border-radius:8px;background:var(--fill);color:var(--ink-2);font-size:13px}
-.notice.warn{background:var(--orange-tint);color:var(--orange-text)}
 .proxy-row{display:flex;gap:8px}.proxy-row>.input{flex:1;min-width:0}.proxy-row>.btn{flex:none}
 .proxy-result{margin-top:10px;font-size:13px}.proxy-result .hint{margin-top:4px}
 .proxy-ok{margin:0;color:var(--green-text);font-weight:500}
