@@ -478,6 +478,27 @@ func TestGuardKindsDontMix(t *testing.T) {
 	}
 }
 
+// The nit of the Codex review: an unknown kind is shown as "unknown", in
+// the error and the log, never as the string it was given.
+func TestUnknownKindIsntEchoed(t *testing.T) {
+	d := &createDaemon{}
+	c, logs := goldenClient(t, d, false, optBrowserPier)
+	const odd = "secret-s3cr3t"
+	_, err := c.create(context.Background(), createKind(odd), c.browserCreateOptions(optBrowserPier, goldenSpec()))
+	if !errors.Is(err, ErrOutsideEnvelope) || err.Error() != "refused to create the unknown container: the kind is unknown" {
+		t.Fatalf("create = %v", err)
+	}
+	if !strings.Contains(logs.String(), "kind=unknown") {
+		t.Fatalf("the log doesn't say kind=unknown:\n%s", logs)
+	}
+	if strings.Contains(logs.String(), odd) {
+		t.Fatalf("the log echoes the kind:\n%s", logs)
+	}
+	if creates, _ := d.counts(); creates != 0 {
+		t.Fatalf("%d creates reached the daemon", creates)
+	}
+}
+
 func TestGuardRefusesABrowserBeforeUseDataDir(t *testing.T) {
 	c := guardClient(t, false, appArmorPlan{})
 	o := c.browserCreateOptions("", goldenSpec())

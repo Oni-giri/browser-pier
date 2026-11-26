@@ -51,6 +51,16 @@ const (
 	kindSandboxCheck createKind = "sandbox-check"
 )
 
+// label is the kind as errors and logs show it: one of the constants, or
+// "unknown", never a string the guard didn't write.
+func (k createKind) label() string {
+	switch k {
+	case kindBrowser, kindSandboxCheck:
+		return string(k)
+	}
+	return "unknown"
+}
+
 // envelopeError names the kind and the field a body was refused for, never
 // a value: the seccomp profile is long, paths show the host's layout, and
 // a session's error is read by agents.
@@ -61,7 +71,7 @@ type envelopeError struct {
 }
 
 func (e *envelopeError) Error() string {
-	return fmt.Sprintf("refused to create the %s container: %s %s", e.kind, e.field, e.what)
+	return fmt.Sprintf("refused to create the %s container: %s %s", e.kind.label(), e.field, e.what)
 }
 
 func (e *envelopeError) Unwrap() error { return ErrOutsideEnvelope }
@@ -80,7 +90,7 @@ func (c *Client) guardCreate(kind createKind, opts client.ContainerCreateOptions
 	err := c.checkCreate(kind, opts)
 	if err != nil {
 		c.log.Error("refused to create a container outside BrowserPier's envelope; this is a bug in BrowserPier, please report it",
-			"kind", string(kind), "err", err)
+			"kind", kind.label(), "err", err)
 	}
 	return err
 }
@@ -197,9 +207,7 @@ var embeddedSeccomp = sync.OnceValue(func() string {
 // run a sandbox check under it, and the plan is set once, in UseDataDir.
 func (c *Client) checkCreate(kind createKind, o client.ContainerCreateOptions) error {
 	g := guard{kind: kind}
-	switch kind {
-	case kindBrowser, kindSandboxCheck:
-	default:
+	if kind.label() == "unknown" {
 		return g.refuse("the kind", "is unknown")
 	}
 	if o.Config == nil {
@@ -249,12 +257,14 @@ func (c *Client) checkCreate(kind createKind, o client.ContainerCreateOptions) e
 		return g.refuse("Config.Labels", "has no instance to name")
 	}
 
+	// Each kind by name: a new one is refused here until it has its case.
 	switch kind {
 	case kindBrowser:
 		return g.browser(c, o, apparmor)
-	default:
+	case kindSandboxCheck:
 		return g.sandboxCheck(c, o)
 	}
+	return g.refuse("the kind", "is unknown")
 }
 
 func (g guard) browser(c *Client, o client.ContainerCreateOptions, apparmor string) error {
