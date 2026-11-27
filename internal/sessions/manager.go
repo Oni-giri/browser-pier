@@ -175,6 +175,28 @@ type live struct {
 	failure string
 	// stop is the stop in progress, if any; everyone stopping waits on it.
 	stop *stopAttempt
+	// stopPrev is the state a failed stop puts back: what the session was
+	// as the stop began, or what a handoff ending meanwhile left it
+	// (SetNeedsHelp).
+	stopPrev State
+	// opCtx is for this session's calls on its profile's control socket
+	// that run without m.mu: the person's input (HumanInput) and a
+	// hand-back's lift and clipboard emptying. It ends as the session
+	// does (end), and end waits for those calls (sockOps, humanInputs)
+	// before it lets go of the profile, so none outlives the session to
+	// reach the next browser on the same socket.
+	opCtx    context.Context
+	opCancel context.CancelFunc
+	sockOps  int
+	// stops counts the stops begun, failed ones included: a Take control
+	// that waited across one gives up (TakeControlTurn).
+	stops uint64
+	// takeCtx is for the person's operations admitted under the takeover
+	// in progress (HumanInput): a child of opCtx, cancelled the moment
+	// its hand-back begins, so nothing admitted for it can reach the
+	// browser once the clipboard is being emptied.
+	takeCtx    context.Context
+	takeCancel context.CancelFunc
 	// conns are the agents' open connections to the browser.
 	conns map[*conn]struct{}
 	// lastActivity is when an agent or person last used the browser.
@@ -196,11 +218,13 @@ type live struct {
 	generation uint64
 	// human is set while a person has control from the live view, and
 	// holder names who: the opaque id TakeControl was given (PROJ-184).
-	// controlTurn numbers each Take control, so a live view that lost
-	// control behind its back can't release the next one's (ReleaseTurn).
-	human       bool
-	holder      string
-	controlTurn uint64
+	// humanGen is the generation the person in control took it at, which
+	// is the number of their turn (TakeControlTurn): only input and a
+	// hand-back that name it count, so a live view whose control ended
+	// elsewhere can't use, or end, the next person's (PROJ-196).
+	human    bool
+	holder   string
+	humanGen uint64
 	// releasing is set while ReleaseControl empties the clipboard, before
 	// human is cleared; humanInputs counts the person's inputs under way
 	// (HumanInput), which it waits for first.
@@ -208,9 +232,14 @@ type live struct {
 	humanInputs int
 	// clipboardLeft is set when a hand-back came while the browser was
 	// stopping and left its clipboard as it was: the container takes it
-	// along, but if the stop fails, runStop empties it before agents get
-	// the browser back.
-	clipboardLeft bool
+	// along, but if the stop fails, runStop empties it, for the takeover
+	// clipboardLeftGen, before agents get the browser back.
+	clipboardLeft    bool
+	clipboardLeftGen uint64
+	// released is closed once the hand-back in progress (releasing) is
+	// over; releaseStarted is when it began.
+	released       chan struct{}
+	releaseStarted time.Time
 	// viewers counts open live views.
 	viewers int
 	// exemptFull is set once the browser refused an exemption from the ad
@@ -229,10 +258,9 @@ type live struct {
 	// startedBy and fromApp say who started the browser (StartOptions).
 	startedBy string
 	fromApp   bool
-	// stopWhy is why the stop in progress was asked for, and stopFrom the
-	// state it stopped from.
-	stopWhy  StopReason
-	stopFrom State
+	// stopWhy is why the stop in progress was asked for (stopPrev, what
+	// it stopped from).
+	stopWhy StopReason
 	// record is the profile's Record sessions setting, as of the start or
 	// the admin's last change (RefreshRecording).
 	record bool
@@ -265,8 +293,10 @@ type stopAttempt struct {
 	err  error // set before done closes
 }
 
-func newLive(s Session) *live {
-	return &live{sess: s, ready: make(chan struct{}), done: make(chan struct{}), lastActivity: time.Now()}
+func newLive(parent context.Context, s Session) *live {
+	l := &live{sess: s, ready: make(chan struct{}), done: make(chan struct{}), lastActivity: time.Now()}
+	l.opCtx, l.opCancel = context.WithCancel(parent)
+	return l
 }
 
 // markReady unblocks everyone waiting for the start to resolve, either way.
@@ -503,7 +533,7 @@ func (m *Manager) begin(ctx context.Context, profile string, opts StartOptions) 
 	if err := insertSession(ctx, m.db, s); err != nil {
 		return nil, p, err
 	}
-	l := newLive(s)
+	l := newLive(m.ctx, s)
 	l.lastActivity = now
 	l.record = p.Record
 	l.startedBy, l.fromApp = opts.By, opts.FromApp
@@ -1014,12 +1044,16 @@ func (m *Manager) end(l *live, lastLog string, final func(*Session) StopReason) 
 	// its secrets are gone: scrubbed now (PROJ-125).
 	sc := m.lockScrubber(l.sess.ID)
 	// A handoff was open: it is cancelled once the session has ended.
-	inHelp := l.sess.State == NeedsHelp || (l.sess.State == Stopping && l.stopFrom == NeedsHelp)
+	inHelp := l.sess.State == NeedsHelp || (l.sess.State == Stopping && l.stop != nil && l.stopPrev == NeedsHelp)
 	why := final(&l.sess)
 	l.sess.LastLog = sc.String(lastLog)
 	l.sess.Error = sc.String(l.sess.Error)
 	l.sess.UpdatedAt = m.now()
 	m.regateLocked(l)
+	// No more calls on the control socket for this session: those under
+	// way break off (and are waited for below), and HumanInput and a
+	// hand-back admit no more, the session being final.
+	l.opCancel()
 	s := l.sess
 	m.mu.Unlock()
 	m.removeProxyFile(s.Profile)
@@ -1031,19 +1065,25 @@ func (m *Manager) end(l *live, lastLog string, final func(*Session) StopReason) 
 		}
 		m.log.Error("saving the final session state", "session", s.ID, "state", s.State, "try", i+1, "err", err)
 	}
+	m.mu.Lock()
+	// The profile's next browser listens on the same socket: nothing
+	// admitted for this one may still be on its way there.
+	m.waitSockOpsLocked(l)
+	m.mu.Unlock()
 	// The session's final secrets: one registered while the state was
 	// saved is in them.
 	sc = m.lockScrubber(s.ID)
 	if m.live[s.Profile] == l {
 		delete(m.live, s.Profile)
 	}
+	m.inputsDone.Broadcast() // a hand-back waiting on this session's input
 	// Scrubbed with them before they are forgotten: after that, nothing
 	// could hide them in the kept log (PROJ-158).
 	m.keepRunLocked(l, s, why, inHelp, sc)
 	m.secrets.Forget(s.ID)
 	l.calls = nil
 	l.disconnectLocked()
-	l.cancelAllLocked(ErrStopping)
+	l.cancelAllLocked(ErrStopping) // the person's input broke off with opCtx, above
 	hooks := slices.Clone(m.onEnd)
 	if l.recTimer != nil {
 		l.recTimer.Stop()
@@ -1269,8 +1309,9 @@ func (m *Manager) stopIf(ctx context.Context, id string, cond func(*live) bool, 
 			m.mu.Unlock()
 			return snap, errStillInUse
 		}
-		prev := l.sess.State
+		l.stopPrev = l.sess.State
 		l.sess.State = Stopping
+		l.stops++
 		l.sess.UpdatedAt = m.now()
 		m.regateLocked(l)
 		if err := updateSession(context.Background(), m.db, l.sess); err != nil {
@@ -1279,10 +1320,16 @@ func (m *Manager) stopIf(ctx context.Context, id string, cond func(*live) bool, 
 		}
 		attempt = &stopAttempt{done: make(chan struct{})}
 		l.stop = attempt
-		l.stopWhy, l.stopFrom = why, prev
+		l.stopWhy = why
 		// Page calls under way stop first (an act lets go of what it
 		// pressed), then the browser closes.
 		l.cancelAllLocked(ErrStopping)
+		// The person's input under way breaks off too (a long Type,
+		// PROJ-195), and new input is refused while stopping; should the
+		// stop fail, runStop gives their takeover a new context.
+		if l.human && !l.releasing {
+			l.takeCancel()
+		}
 		for len(l.leases) > 0 {
 			m.inputsDone.Wait()
 		}
@@ -1294,7 +1341,7 @@ func (m *Manager) stopIf(ctx context.Context, id string, cond func(*live) bool, 
 			return m.waitStopped(ctx, l)
 		}
 		cid := l.sess.ContainerID
-		if !m.spawn(func() { m.runStop(l, attempt, cid, prev) }) {
+		if !m.spawn(func() { m.runStop(l, attempt, cid) }) {
 			m.mu.Unlock()
 			return Session{}, ErrClosed
 		}
@@ -1327,7 +1374,7 @@ func (m *Manager) waitStopped(ctx context.Context, l *live) (Session, error) {
 // comes back after the container has exited and the session has ended is
 // no failure: the session's final state says how the browser stopped
 // (PROJ-64).
-func (m *Manager) runStop(l *live, attempt *stopAttempt, cid string, prev State) {
+func (m *Manager) runStop(l *live, attempt *stopAttempt, cid string) {
 	ctx, cancel := context.WithTimeout(m.ctx, stopTimeout)
 	defer cancel()
 	err := m.rt.Stop(ctx, cid)
@@ -1347,16 +1394,22 @@ func (m *Manager) runStop(l *live, attempt *stopAttempt, cid string, prev State)
 				// gate or any agent can have the browser (PROJ-194,
 				// PROJ-23).
 				l.clipboardLeft = false
-				id, profile := l.sess.ID, l.sess.Profile
-				m.mu.Unlock()
-				// As ReleaseControl does: a copy pressed just before the
-				// stop lands first, and is emptied too.
-				time.Sleep(clipboardSettle)
-				m.emptyClipboard(id, profile)
-				m.mu.Lock()
+				id, profile, gen := l.sess.ID, l.sess.Profile, l.clipboardLeftGen
+				m.unlockedOpLocked(l, func(ctx context.Context) {
+					// As ReleaseControl does: a copy pressed just before
+					// the stop lands first, and is emptied too.
+					if settle(ctx) {
+						m.emptyClipboard(ctx, id, profile, gen)
+					}
+				})
+			}
+			if l.sess.State == Stopping && l.human && !l.releasing {
+				// The stop broke off the person's input; their control
+				// goes on, with a context of its own again.
+				l.takeCtx, l.takeCancel = context.WithCancel(l.opCtx)
 			}
 			if l.sess.State == Stopping {
-				l.sess.State = prev
+				l.sess.State = l.stopPrev
 				l.sess.UpdatedAt = m.now()
 				m.regateLocked(l)
 				if err := updateSession(context.Background(), m.db, l.sess); err != nil {
@@ -1364,7 +1417,7 @@ func (m *Manager) runStop(l *live, attempt *stopAttempt, cid string, prev State)
 				}
 			}
 			l.stop = nil
-			l.stopWhy, l.stopFrom = StopReason{}, ""
+			l.stopWhy = StopReason{}
 			m.mu.Unlock()
 		}
 	}
@@ -1372,23 +1425,115 @@ func (m *Manager) runStop(l *live, attempt *stopAttempt, cid string, prev State)
 	close(attempt.done)
 }
 
-// SetNeedsHelp moves a running session to Needs help and back.
-func (m *Manager) SetNeedsHelp(id string, needsHelp bool) (Session, error) {
-	from, to := Running, NeedsHelp
-	if !needsHelp {
-		from, to = NeedsHelp, Running
+// ErrHelpOpen: the browser already waits for help (another handoff).
+var ErrHelpOpen = errors.New("the browser already waits for help")
+
+// OpenHelp moves a running session to Needs help for a handoff, and
+// returns which time it went there (its help epoch), which the handoff
+// keeps to end only its own help (EndHandoff). A session that already
+// waits for help refuses, with ErrHelpOpen: two handoffs never share one.
+func (m *Manager) OpenHelp(id string) (epoch uint64, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l := m.findLocked(id)
+	switch {
+	case l == nil:
+		return 0, ErrNotRunning
+	case l.sess.State == NeedsHelp:
+		return 0, ErrHelpOpen
+	case l.sess.State != Running:
+		return 0, ErrNotRunning
 	}
+	if _, err := m.setNeedsHelpLocked(l, true); err != nil {
+		return 0, err
+	}
+	return l.sess.helpEpoch, nil
+}
+
+// SetNeedsHelp moves a running session to Needs help and back. A handoff
+// opens with OpenHelp and ends with EndHandoff, which also ends its
+// person's control.
+func (m *Manager) SetNeedsHelp(id string, needsHelp bool) (Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.findLocked(id)
 	if l == nil {
 		return Session{}, ErrNotRunning
 	}
+	return m.setNeedsHelpLocked(l, needsHelp)
+}
+
+// EndHandoff ends the handoff that opened Needs help as epoch (OpenHelp),
+// in one step under m.mu: the browser stops waiting for that help, and
+// the control of whoever has it then, the person helping, begins to end.
+// It doesn't wait for that itself: done is closed once agents have the
+// browser (nil if no one had control), and the handoff waits for it
+// before it tells anyone the handoff has ended, so that is only ever said
+// once true (internal/handoff). Whoever takes control after it is someone
+// else, whose control this never ends; nor does an end for another
+// handoff's epoch, which changes nothing and returns ErrHandoffEnded
+// (PROJ-196).
+//
+// The browser stops waiting for help even if that can't be saved (it is
+// logged, and a restart finds no open handoff and puts it back Running):
+// a handoff that has ended never leaves its agent paused.
+func (m *Manager) EndHandoff(id string, epoch uint64) (done <-chan struct{}, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l := m.findLocked(id)
+	if l == nil {
+		return nil, ErrNotRunning
+	}
+	if epoch == 0 || l.sess.helpEpoch != epoch {
+		return nil, ErrHandoffEnded
+	}
+	switch {
+	case l.sess.State == NeedsHelp:
+		l.sess.State = Running
+		l.sess.UpdatedAt = m.now()
+		if err := updateSession(context.Background(), m.db, l.sess); err != nil {
+			m.log.Error("saving session state", "session", id, "err", err)
+		}
+		m.personTookLocked(l)
+		// A file chooser open passes back to the agent with its whole
+		// time limit (PROJ-181).
+		m.restartChoosers(l.sess.Profile)
+	case l.sess.State == Stopping && l.stop != nil && l.stopPrev == NeedsHelp:
+		// Should the stop fail, it is put back Running.
+		l.stopPrev = Running
+	default:
+		return nil, ErrHandoffEnded
+	}
+	l.lastActivity = m.now() // idle time starts at hand-back
+	if l.human {
+		done = m.beginReleaseLocked(l, id)
+	}
+	return done, nil
+}
+
+// setNeedsHelpLocked is SetNeedsHelp, with m.mu held.
+func (m *Manager) setNeedsHelpLocked(l *live, needsHelp bool) (Session, error) {
+	from, to := Running, NeedsHelp
+	if !needsHelp {
+		from, to = NeedsHelp, Running
+	}
 	switch l.sess.State {
 	case to:
+	case Stopping:
+		if needsHelp || l.stop == nil || l.stopPrev != from {
+			return l.sess, ErrNotRunning
+		}
+		// A handoff ending while the browser stops: should the stop
+		// fail, it is put back Running, not waiting for help that is
+		// over (and with no one left to hand back).
+		l.stopPrev = to
+		l.lastActivity = m.now() // idle time starts at hand-back
 	case from:
 		before := l.sess
 		l.sess.State = to
+		if to == NeedsHelp {
+			l.sess.helpEpoch++ // saved with the state
+		}
 		l.sess.UpdatedAt = m.now()
 		if err := updateSession(context.Background(), m.db, l.sess); err != nil {
 			l.sess = before

@@ -51,6 +51,8 @@ func checkMode(args []string) func() int {
 		return runSandboxCheck
 	case proxyCheckArg:
 		return func() int { return runProxyCheck(os.Stdout) }
+	case spareKeysArg:
+		return func() int { return runSpareKeys(os.Stdout) }
 	}
 	return nil
 }

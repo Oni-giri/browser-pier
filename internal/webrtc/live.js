@@ -171,7 +171,7 @@
     };
     pc.ontrack = (e) => { video.srcObject = e.streams[0] || new MediaStream([e.track]); };
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "failed" || pc.connectionState === "closed") { who.textContent = "Disconnected"; who.className = "pill"; setTimeout(() => location.reload(), 3000); }
+      if (pc.connectionState === "failed" || pc.connectionState === "closed") { who.textContent = "Disconnected"; who.className = "pill"; if (!("handingBack" in document.body.dataset)) setTimeout(() => location.reload(), 3000); }
     };
     await pc.setLocalDescription(await pc.createOffer());
     await new Promise((done) => {

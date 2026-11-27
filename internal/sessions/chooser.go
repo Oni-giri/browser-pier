@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"strconv"
 	"time"
 )
 
@@ -61,8 +62,11 @@ func (m *Manager) Choosers(ctx context.Context, profile string) ([]Chooser, erro
 
 // AnswerChooser answers chooser id in the profile's browser with the
 // uploads named (bare names, which the caller has checked are uploads,
-// and the browser checks again), or cancels it when there are none.
-func (m *Manager) AnswerChooser(ctx context.Context, profile, id string, uploads []string) error {
+// and the browser checks again), or cancels it when there are none. It
+// is the person's input, for their takeover turn (HumanInput): the
+// browser refuses it, with ErrControlEnded, once that takeover has ended
+// (TakeoverHeader, PROJ-196).
+func (m *Manager) AnswerChooser(ctx context.Context, profile, id string, uploads []string, turn uint64) error {
 	if !chooserIDRE.MatchString(id) {
 		return ErrChooserClosed
 	}
@@ -70,7 +74,8 @@ func (m *Manager) AnswerChooser(ctx context.Context, profile, id string, uploads
 	if len(uploads) > 0 {
 		body = map[string][]string{"files": uploads}
 	}
-	return chooserError(m.control(ctx, profile, http.MethodPost, "/chooser/"+id, body, nil))
+	hdr := map[string]string{TakeoverHeader: strconv.FormatUint(turn, 10)}
+	return chooserError(m.controlWith(ctx, profile, http.MethodPost, "/chooser/"+id, hdr, body, nil))
 }
 
 func chooserError(err error) error {
@@ -79,6 +84,8 @@ func chooserError(err error) error {
 		switch ce.status {
 		case http.StatusNotFound:
 			return ErrChooserClosed
+		case http.StatusConflict:
+			return ErrControlEnded // the browser fenced the takeover
 		case http.StatusServiceUnavailable:
 			return ErrNoPortal
 		}

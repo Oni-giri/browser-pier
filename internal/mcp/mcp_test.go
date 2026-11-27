@@ -49,6 +49,9 @@ type fixture struct {
 	opens  []string // and to open
 	// onClick, if set, runs as the fake browser clicks: a download, say.
 	onClick func()
+	// liftGate, if set, holds the browser's lift (a hand-back) until it
+	// is closed.
+	liftGate chan struct{}
 	// pageURL is the one tab's address, as /json/list answers it (a
 	// handoff's until_url watch); "" for a sign-in page.
 	pageURL string
@@ -154,6 +157,15 @@ func (f *fixture) browser() http.Handler {
 		f.types = append(f.types, string(b))
 		f.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		gate := f.liftGate
+		f.mu.Unlock()
+		if gate != nil {
+			<-gate
+		}
+		sessionstest.AnswerLift(w, r)
 	})
 	// Visual mode's element tree (PROJ-150): a page with one button.
 	mux.HandleFunc("GET /tree", func(w http.ResponseWriter, _ *http.Request) {
@@ -434,6 +446,95 @@ func TestClickIsScaledToTheScreen(t *testing.T) {
 	}
 }
 
+// Text with many different characters the keyboard map lacks is typed
+// in stretches; a type_text that would take over 45 s is refused before
+// anything is typed (PROJ-207), and one just under it goes through.
+func TestSlowTypingThroughMCPIsRefused(t *testing.T) {
+	f := newFixture(t)
+	cs := f.connect(f.all, versions[0], nil)
+	s, _, _ := f.m.Start(context.Background(), "google", "")
+	try := func(text, pace string) (bool, string) {
+		t.Helper()
+		res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "type_text", Arguments: map[string]any{"session_id": s.ID, "text": text, "pace": pace}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.IsError, res.Content[0].(*sdk.TextContent).Text
+	}
+	cjk := func(n int) string {
+		var b strings.Builder
+		for i := range n {
+			b.WriteRune(rune(0x4e00 + i))
+		}
+		return b.String()
+	}
+	if isErr, out := try(cjk(2000), "instant"); !isErr || !strings.Contains(out, "2000 characters, typed in 154 stretches") || !strings.HasSuffix(out, "split it across calls") || strings.Contains(out, "fill") {
+		t.Errorf("2,000 CJK characters: %v %s", isErr, out)
+	}
+	// 14 Cyrillic letters over and over: each stretch binds 13, so the
+	// 14th starts a new one: 153 stretches, though only 14 distinct.
+	if isErr, out := try(strings.Repeat("абвгдежзийклмн", 142), "instant"); !isErr || !strings.Contains(out, "typed in 153 stretches") {
+		t.Errorf("repeated Cyrillic: %v %s", isErr, out)
+	}
+	// About 2,000 characters of Russian prose: 77 stretches.
+	if isErr, out := try(strings.Repeat(prose, 9), "instant"); !isErr || !strings.Contains(out, "typed in 77 stretches") {
+		t.Errorf("Russian prose: %v %s", isErr, out)
+	}
+	// A Cyrillic sentence: 4 stretches, under 3 s.
+	if isErr, out := try("Съешь же ещё этих мягких французских булок, да выпей же чаю", "instant"); isErr {
+		t.Errorf("a Cyrillic sentence: %s", out)
+	}
+	// 800: 9.6 s of keys and 62 stretches, about 44 s.
+	if isErr, out := try(cjk(800), "instant"); isErr {
+		t.Errorf("800 CJK characters: %s", out)
+	}
+	// Human pace: 150 different ones, 37.5 s and 12 stretches, about 44 s.
+	if isErr, out := try(cjk(150), ""); isErr {
+		t.Errorf("150 CJK characters at human pace: %s", out)
+	}
+	// 2,000 ASCII characters, or one accent 2,000 times: as before.
+	if isErr, out := try(strings.Repeat("a", 2000), "instant"); isErr {
+		t.Errorf("2,000 ASCII characters: %s", out)
+	}
+	if isErr, out := try(strings.Repeat("é", 2000), "instant"); isErr {
+		t.Errorf("2,000 accents: %s", out)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.types) != 5 {
+		t.Fatalf("%d typed, want 5", len(f.types))
+	}
+}
+
+// prose is ordinary Russian, whose letters come back after more than 13
+// others again and again.
+const prose = "Мой дядя самых честных правил, когда не в шутку занемог, он уважать себя заставил и лучше выдумать не мог. Его пример другим наука; но, боже мой, какая скука с больным сидеть и день и ночь, не отходя ни шагу прочь! "
+
+// type_text refuses a control character or U+FFFD before the call's
+// turn, so its call_id isn't spent: the same id then goes through.
+func TestTypingRefusesBadTextBeforeACallID(t *testing.T) {
+	f := newFixture(t)
+	cs := f.connect(f.all, versions[0], nil)
+	s, _, _ := f.m.Start(context.Background(), "google", "")
+	try := func(text string) (bool, string) {
+		t.Helper()
+		res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "type_text", Arguments: map[string]any{"session_id": s.ID, "text": text, "pace": "instant", "call_id": "c1"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.IsError, res.Content[0].(*sdk.TextContent).Text
+	}
+	if isErr, out := try("hi\x1b"); !isErr || !strings.Contains(out, "character 3 is a control character") {
+		t.Fatalf("a control character: %v %s", isErr, out)
+	}
+	if isErr, out := try("hi\ufffd"); !isErr || !strings.Contains(out, "character 3 is U+FFFD") {
+		t.Fatalf("U+FFFD: %v %s", isErr, out)
+	}
+	if isErr, out := try("hi"); isErr || strings.Contains(out, "wasn't run again") {
+		t.Fatalf("the same call_id with good text: %v %s", isErr, out)
+	}
+}
+
 // Human-paced typing through MCP stops at 150 characters a call, so the
 // call ends (about 40 s) before a client's request timeout; instant pace,
 // and act's instant type steps, aren't held to it.
@@ -594,5 +695,84 @@ func TestStartBrowserSaysWhetherAdsAreBlocked(t *testing.T) {
 	_, out = call(t, cs, "start_browser", map[string]any{"profile": "google"})
 	if !strings.Contains(out, "Ads and trackers are blocked") || strings.Contains(out, "no list") {
 		t.Errorf("start_browser with a list: %s", out)
+	}
+}
+
+// wait_for_handoff never says a handoff has ended while the browser is
+// still being handed back: it keeps waiting, and says so once the agent
+// has the browser (PROJ-196).
+func TestWaitForHandoffWaitsForTheHandBack(t *testing.T) {
+	f := newFixture(t)
+	cs := f.connect(f.all, versions[0], nil)
+	ctx := context.Background()
+	s, _, _ := f.m.Start(ctx, "google", "")
+	call(t, cs, "request_handoff", map[string]any{"session_id": s.ID, "reason": "captcha", "detail": "Solve the CAPTCHA"})
+	open, _ := f.handoffs.Pending(ctx)
+	if len(open) != 1 {
+		t.Fatalf("pending: %+v", open)
+	}
+	if err := f.m.TakeControl(s.ID, "person"); err != nil { // the person helps
+		t.Fatal(err)
+	}
+	gate := make(chan struct{})
+	f.mu.Lock()
+	f.liftGate = gate
+	f.mu.Unlock()
+	defer func() {
+		select {
+		case <-gate:
+		default:
+			close(gate)
+		}
+	}()
+	finished := make(chan error, 1)
+	go func() { // the person's Done: it waits for the hand-back
+		_, err := f.handoffs.Finish(ctx, open[0], handoff.Done, "")
+		finished <- err
+	}()
+	time.Sleep(100 * time.Millisecond)
+	_, out := call(t, cs, "wait_for_handoff", map[string]any{"handoff_id": open[0].ID, "seconds": 1})
+	if !strings.Contains(out, "Still waiting") {
+		t.Errorf("wait_for_handoff mid-hand-back: %s", out)
+	}
+	if _, done, err := f.m.AgentInput(ctx, s.ID, "tok"); err == nil {
+		done()
+		t.Fatal("agents were let in mid-hand-back")
+	}
+	close(gate)
+	if err := <-finished; err != nil {
+		t.Fatal(err)
+	}
+	_, out = call(t, cs, "wait_for_handoff", map[string]any{"handoff_id": open[0].ID, "seconds": 5})
+	if !strings.Contains(out, "done") {
+		t.Fatalf("wait_for_handoff after: %s", out)
+	}
+	if _, done, err := f.m.AgentInput(ctx, s.ID, "tok"); err != nil {
+		t.Fatalf("agent input once told done = %v", err)
+	} else {
+		done()
+	}
+}
+
+// An MCP tool's call to the API while BrowserPier shuts down hears that
+// it is shutting down, not an empty answer it can't read (PROJ-196).
+func TestToolCallAsItShutsDown(t *testing.T) {
+	f := newFixture(t)
+	s, _, err := f.m.Start(context.Background(), "google", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, _, err := f.handoffs.Create(context.Background(), s.ID, "claude", handoff.Captcha, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqs, endReqs := context.WithCancelCause(context.Background())
+	time.AfterFunc(200*time.Millisecond, func() { endReqs(handoff.ErrClosing) })
+	extra := &sdk.RequestExtra{Header: http.Header{"Authorization": {"Bearer " + f.all}}}
+	var out handoffOut
+	err = f.mcp.callJSON(reqs, extra, http.MethodGet, "/api/handoffs/"+h.ID+"?wait=30", nil, &out)
+	var te toolError
+	if !errors.As(err, &te) || !strings.Contains(err.Error(), "shutting down") {
+		t.Fatalf("wait_for_handoff's call as BrowserPier shuts down = %v", err)
 	}
 }

@@ -242,3 +242,41 @@ func TestOnlyTheHolderAnswers(t *testing.T) {
 		t.Fatalf("the admin's upload: %d, %d answers", code, answered.Load())
 	}
 }
+
+// An answer names the person's takeover to the browser (PROJ-196), which
+// refuses it once that takeover has been fenced: the person is told
+// they no longer have control, not that the browser refused the file.
+func TestAnswerNamesTheTakeover(t *testing.T) {
+	ctl := http.NewServeMux()
+	var got atomic.Value
+	var fenced atomic.Bool
+	ctl.HandleFunc("POST /chooser/restart", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	ctl.HandleFunc("POST /chooser/{id}", func(w http.ResponseWriter, r *http.Request) {
+		got.Store(r.Header.Get(sessions.TakeoverHeader))
+		if fenced.Load() {
+			http.Error(w, "this person's control of the browser has ended", http.StatusConflict)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	m, s := rig(t, ctl)
+	fs := files.New(m.Layout().FilesDir, 0, os.Getuid(), os.Getgid())
+	p := New(m, fs, slog.New(slog.DiscardHandler))
+	answer := func() *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPost, "/chooser", bytes.NewReader([]byte("id=c1&cancel=1")))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		p.Answer(w, r, s, holder)
+		return w
+	}
+	if w := answer(); w.Code != http.StatusNoContent {
+		t.Fatalf("answer: %d %s", w.Code, w.Body)
+	}
+	if h, _ := got.Load().(string); h == "" || h == "0" {
+		t.Fatalf("the answer named takeover %q", h)
+	}
+	fenced.Store(true)
+	if w := answer(); w.Code != http.StatusConflict || !bytes.Contains(w.Body.Bytes(), []byte("no longer have control")) {
+		t.Fatalf("a fenced answer: %d %s", w.Code, w.Body)
+	}
+}

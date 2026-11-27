@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net/http"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Oni-giri/browser-pier/internal/keyplan"
 	"github.com/Oni-giri/browser-pier/internal/motion"
 )
 
@@ -43,6 +45,20 @@ type visual struct {
 	// clip is the live view's clipboard box's side of the X clipboard
 	// (clipboard.go).
 	clip clipState
+	// fence refuses what a person sends once their takeover has ended
+	// (fence.go): the live input's, shared.
+	fence *takeoverFence
+	// keymap opens the X keyboard map, to bind characters the map lacks
+	// before typing them (keymap.go), and bindSettle is how long Chromium
+	// gets to take a change of it (keymapSettle).
+	keymap     func(context.Context) (keymapConn, error)
+	bindSettle time.Duration
+	log        *slog.Logger
+	// leftover is keys a type bound and couldn't put back (with mu
+	// held): the next type puts them back first. The entrypoint lives as
+	// long as the display, so memory is enough.
+	leftover       []keyRun
+	leftoverPerKey int
 	// tree reads the page from the accessibility bus, in Visual-mode
 	// sessions only (PROJ-150); nil in API mode, where /tree is 404.
 	tree *treeReader
@@ -142,8 +158,15 @@ const (
 )
 
 func newVisual(width, height int) *visual {
-	return &visual{width: width, height: height, run: runCommand, output: runStdout, mot: motion.NewRandom(), live: newLiveInput(width, height),
-		clip: clipState{hold: holdClipboard, read: readSelection}, now: time.Now, sleep: sleepCtx, look: lookAt, chromium: installedChromium(chromiumVersionFile)}
+	live := newLiveInput(width, height)
+	v := &visual{width: width, height: height, run: runCommand, output: runStdout, mot: motion.NewRandom(), live: live,
+		clip: clipState{hold: holdClipboard, read: readSelection}, now: time.Now, sleep: sleepCtx, look: lookAt, chromium: installedChromium(chromiumVersionFile),
+		keymap: dialKeyboard, bindSettle: keymapSettle, log: slog.New(slog.NewTextHandler(os.Stderr, nil)), fence: live.fence}
+	v.live.runSync = func(args ...string) error {
+		_, err := v.run(context.Background(), "xdotool", args...)
+		return err
+	}
+	return v
 }
 
 func (v *visual) register(mux *http.ServeMux) {
@@ -359,20 +382,31 @@ func (v *visual) perform(w http.ResponseWriter, r *http.Request, kb keyboard, bu
 			v.shortcutAt = v.now()
 		}
 	}()
-	for _, c := range build(func() hand { return v.pointer(ctx) }) {
+	if err := v.runAll(ctx, build(func() hand { return v.pointer(ctx) })); err != nil {
+		var no refusal
+		if errors.As(err, &no) {
+			http.Error(w, no.Error(), http.StatusConflict)
+			return
+		}
+		http.Error(w, "input failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	ok = true
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// runAll runs xdotool commands in turn, with v.mu held, as perform says:
+// a check that refuses stops the rest (nothing is held between runs, so
+// there is no release to run); a run that fails, or a request that ends,
+// stops the rest and runs the failed run's release.
+func (v *visual) runAll(ctx context.Context, cmds []xcmd) error {
+	for _, c := range cmds {
 		err := ctx.Err()
 		switch {
 		case err != nil:
 		case c.check != nil:
 			if err = c.check(ctx); err != nil {
-				var no refusal
-				if errors.As(err, &no) {
-					http.Error(w, no.Error(), http.StatusConflict)
-					return
-				}
-				// Nothing is held between runs: no release to run.
-				http.Error(w, "input failed: "+err.Error(), http.StatusInternalServerError)
-				return
+				return err
 			}
 			continue
 		default:
@@ -383,12 +417,10 @@ func (v *visual) perform(w http.ResponseWriter, r *http.Request, kb keyboard, bu
 			if len(c.release) > 0 {
 				_, _ = v.run(context.WithoutCancel(ctx), "xdotool", c.release...)
 			}
-			http.Error(w, "input failed: "+err.Error(), http.StatusInternalServerError)
-			return
+			return err
 		}
 	}
-	ok = true
-	w.WriteHeader(http.StatusNoContent)
+	return nil
 }
 
 // hand is where an action's pointer starts from.
@@ -470,6 +502,25 @@ func typeArgs(text string) ([]string, error) {
 	return []string{"type", "--clearmodifiers", "--delay", "12", "--", text}, nil
 }
 
+// typeRelease lets go of what an "xdotool type" of text may hold if it
+// is killed part way (a hand-back or a Take control cutting it short):
+// libxdo holds each key, and Shift for a shifted character, for half the
+// delay. Each distinct key it can press, then Shift; letting go of a key
+// that isn't down does nothing. --clearmodifiers only puts back, at its
+// end, modifiers that were down as it began, so a kill leaves none of
+// those down.
+func typeRelease(text string) []string {
+	release := []string{"keyup"}
+	seen := map[string]bool{}
+	for _, r := range text {
+		if k := keyName(r); !seen[k] {
+			seen[k] = true
+			release = append(release, k)
+		}
+	}
+	return append(release, "Shift_L")
+}
+
 func checkText(text string, most int) error {
 	if text == "" || !utf8.ValidString(text) {
 		return fmt.Errorf("text: want non-empty UTF-8")
@@ -487,7 +538,7 @@ func checkText(text string, most int) error {
 // charKeys names the X keysym of each character a US keyboard types,
 // apart from letters and digits, which are their own names.
 var charKeys = map[rune]string{
-	' ': "space", '\n': "Return", '\t': "Tab",
+	' ': "space", '\n': "Return", '\r': "Return", '\t': "Tab",
 	'!': "exclam", '"': "quotedbl", '#': "numbersign", '$': "dollar", '%': "percent", '&': "ampersand",
 	'\'': "apostrophe", '(': "parenleft", ')': "parenright", '*': "asterisk", '+': "plus", ',': "comma",
 	'-': "minus", '.': "period", '/': "slash", ':': "colon", ';': "semicolon", '<': "less", '=': "equal",
@@ -512,8 +563,9 @@ const typeChunk = 8
 
 // humanType types text one keystroke at a time: each key held for a
 // typist's hold, with a typist's gaps between presses. The keys come
-// from charKeys; a character with none there keeps the instant path
-// ("type --"), on its own. Each run's release lets go of its keys.
+// from charKeys; a character with none there is pressed by its Unicode
+// name (keyName), which typeMapped has bound to a key first. Each run's
+// release lets go of its keys.
 func (v *visual) humanType(text string) []xcmd {
 	runes := []rune(text)
 	var cmds []xcmd
@@ -535,16 +587,7 @@ func (v *visual) humanType(text string) []xcmd {
 			next = runes[i+1]
 		}
 		gap := v.mot.KeyDelay(r, next)
-		k, ok := keysym(r)
-		if !ok {
-			// type takes every argument after it as text, so it ends a run.
-			args = append(args, "type", "--clearmodifiers", "--", string(r))
-			flush()
-			if next != 0 {
-				args = append(args, "sleep", secs(gap))
-			}
-			continue
-		}
+		k := keyName(r)
 		hold := v.mot.KeyHold()
 		args = append(args, "keydown", k, "sleep", secs(hold), "keyup", k)
 		if !slices.Contains(held, k) {
@@ -561,6 +604,30 @@ func (v *visual) humanType(text string) []xcmd {
 	return cmds
 }
 
+// instantChunk is how many keys one xdotool run presses at instant pace
+// in typeMapped (typeKeysInstantly): about 3 s each, well inside
+// runCommand's 30 s.
+const instantChunk = 200
+
+// typeKeysInstantly presses text's keys at instant pace, 12 ms apart as
+// type types. Each run's release lets go of its keys.
+func typeKeysInstantly(text []rune) []xcmd {
+	var cmds []xcmd
+	for chunk := range slices.Chunk(text, instantChunk) {
+		args := []string{"key", "--clearmodifiers", "--delay", "12", "--"}
+		var held []string
+		for _, r := range chunk {
+			k := keyName(r)
+			args = append(args, k)
+			if !slices.Contains(held, k) {
+				held = append(held, k)
+			}
+		}
+		cmds = append(cmds, xcmd{args: args, release: append([]string{"keyup"}, held...)})
+	}
+	return cmds
+}
+
 func (v *visual) typeText(w http.ResponseWriter, r *http.Request) {
 	var t typeRequest
 	if !decode(w, r, &t) {
@@ -571,20 +638,11 @@ func (v *visual) typeText(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	most := maxHumanTypeLen
 	if now {
-		args, err := typeArgs(t.Text)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		v.input(w, r, keysAction, args)
-		return
+		most = maxTypeLen
 	}
-	if err := checkText(t.Text, maxHumanTypeLen); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	v.perform(w, r, keysAction, func(func() hand) []xcmd { return v.humanType(t.Text) })
+	v.typeAs(w, r, t.Text, most, now, keysAction, 0, false)
 }
 
 // liveTypeRequest is the live view's Type button's text, typed at instant
@@ -592,20 +650,255 @@ func (v *visual) typeText(w http.ResponseWriter, r *http.Request) {
 type liveTypeRequest struct{ Text string }
 
 // liveType types the person's text from the live view's Type button: as
-// /input/type at instant pace, but as the person's input, so it doesn't
-// wait for an agent's shortcut gap (PROJ-151). Only the orchestrator's
-// live view calls it; agents' input never reaches it.
+// /input/type at instant pace, characters the keyboard map lacks
+// included (PROJ-195), but as the person's input, so it doesn't wait for
+// an agent's shortcut gap (PROJ-151). Only the orchestrator's live view
+// calls it; agents' input never reaches it.
+//
+// It names the person's takeover, and is refused once that has ended
+// (fence.go), checked before it types (PROJ-196).
 func (v *visual) liveType(w http.ResponseWriter, r *http.Request) {
-	var t liveTypeRequest
-	if !decode(w, r, &t) {
-		return
-	}
-	args, err := typeArgs(t.Text)
+	gen, person, err := v.fence.takeover(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	v.input(w, r, personAction, args)
+	var t liveTypeRequest
+	if !decode(w, r, &t) {
+		return
+	}
+	v.typeAs(w, r, t.Text, maxTypeLen, true, personAction, gen, person)
+}
+
+// typeAs types text at the pace asked for, as an agent's keys
+// (keysAction: after its shortcut gap) or the person's (personAction, for
+// takeover gen if person): through a binding if it has characters the
+// keyboard map lacks (typeMapped), else with charKeys's keys (typeKeys).
+func (v *visual) typeAs(w http.ResponseWriter, r *http.Request, text string, most int, now bool, kb keyboard, gen uint64, person bool) {
+	if err := checkText(text, most); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// The orchestrator checks the same before the call's turn.
+	if err := keyplan.Check(text); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// A person's text: refused if their takeover has ended, and the fence
+	// waits for it to be typed (fence.go). An agent's names none.
+	done, ok := v.fence.admit(gen, person)
+	if !ok {
+		refuseFenced(w)
+		return
+	}
+	defer done()
+	runes := []rune(text)
+	switch {
+	case needsKeymap(runes):
+		v.typeMapped(w, r, runes, now, kb)
+	case now:
+		args, err := typeArgs(text)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		v.typeKeys(w, r, kb, func() []xcmd { return []xcmd{{args: args, release: typeRelease(text)}} })
+	default:
+		v.typeKeys(w, r, kb, func() []xcmd { return v.humanType(text) })
+	}
+}
+
+// typeMapped types text with characters the keyboard map lacks
+// (keymap.go): it binds them all to spare keys, waits for Chromium to
+// take the new map, presses every character's key at the pace asked for,
+// waits again, and puts the map back. Text with more such characters than
+// there are spare keys is typed in stretches, each bound in turn. An
+// agent's text first waits out its shortcut gap (settle), as perform's
+// keys do. Its errors say whether anything may have been typed: a
+// failure before the first key (no spare key, the map refused) leaves
+// the field as it was, so the call can be retried; one after it may have
+// left part of the text, or all of it, typed.
+func (v *visual) typeMapped(w http.ResponseWriter, r *http.Request, text []rune, now bool, kb keyboard) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.live != nil {
+		// The live view's xdotool reads the map when it starts and binds
+		// keys of its own on the fly: neither while this one is changed,
+		// nor a key the person sent before that it hasn't run yet.
+		v.live.mu.Lock()
+		defer v.live.mu.Unlock()
+	}
+	ctx := r.Context()
+	before := func(err error) {
+		nothingTyped(w, err)
+	}
+	if kb != pointerAction {
+		if err := v.settle(ctx); err != nil {
+			before(err)
+			return
+		}
+	}
+	if v.live != nil {
+		if err := v.live.drain(); err != nil {
+			before(err)
+			return
+		}
+	}
+	open := func() (keymapConn, error) { return v.keymap(context.WithoutCancel(ctx)) }
+	if err := v.restoreLeftover(ctx); err != nil {
+		before(err)
+		return
+	}
+	conn, err := v.keymap(ctx)
+	if err != nil {
+		before(fmt.Errorf("couldn't open the keyboard map: %w", err))
+		return
+	}
+	defer func() { _ = conn.Close() }()
+	m, err := readKeyboardMap(conn)
+	if err != nil {
+		before(fmt.Errorf("couldn't read the keyboard map: %w", err))
+		return
+	}
+	spare := m.spare()
+	batches, err := planKeys(text, m.has, len(spare))
+	if err != nil {
+		before(err)
+		return
+	}
+	for i, b := range batches {
+		pressed, err := v.typeBatch(ctx, conn, open, m, spare, b, now)
+		if err == nil {
+			continue
+		}
+		if i == 0 && !pressed {
+			before(err)
+		} else {
+			http.Error(w, "typing failed after part of the text, or all of it, may have been typed; look at the field before typing again: "+err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// nothingTypedHeader marks a type that failed before any key was
+// pressed: the orchestrator then gives the call's id back (PROJ-156), so
+// the same call can be sent again.
+const nothingTypedHeader = "X-Nothing-Typed"
+
+// nothingTyped answers a type that failed before any key was pressed.
+func nothingTyped(w http.ResponseWriter, err error) {
+	w.Header().Set(nothingTypedHeader, "1")
+	http.Error(w, "typing failed before anything was typed, so it can be retried, with the same call id if it had one: "+err.Error(), http.StatusInternalServerError)
+}
+
+// keepLeftover remembers keys a binding couldn't put back, with v.mu
+// held, for the next type to put back first.
+func (v *visual) keepLeftover(b *binding) {
+	v.leftover, v.leftoverPerKey = append(v.leftover, b.runs...), b.perKey
+}
+
+// restoreLeftover puts back keys an earlier type couldn't, with v.mu
+// held. Every type does it before typing anything, and fails if it can't.
+func (v *visual) restoreLeftover(ctx context.Context) error {
+	if len(v.leftover) == 0 {
+		return nil
+	}
+	open := func() (keymapConn, error) { return v.keymap(context.WithoutCancel(ctx)) }
+	if err := restoreRuns(open, v.leftoverPerKey, v.leftover); err != nil {
+		return fmt.Errorf("keys an earlier type bound can't be put back: %w", err)
+	}
+	v.leftover = nil
+	return nil
+}
+
+// typeKeys types ASCII text with v.mu held, running build's commands as
+// perform does (an agent's after its shortcut gap), once keys an earlier
+// type left bound are put back.
+func (v *visual) typeKeys(w http.ResponseWriter, r *http.Request, kb keyboard, build func() []xcmd) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	ctx := r.Context()
+	if kb != pointerAction {
+		// Nothing has been sent yet, so there is nothing to let go of.
+		if err := v.settle(ctx); err != nil {
+			http.Error(w, "input failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if kb == personAction && v.live != nil {
+		// The person's Type, ASCII too: with the live view's lock, once
+		// its xdotool has run what it was sent and let go of what is
+		// held, so neither their queued input nor a key they held mixes
+		// with the text (cheap with nothing queued or held: no xdotool
+		// runs).
+		v.live.mu.Lock()
+		defer v.live.mu.Unlock()
+		if err := v.live.drain(); err != nil {
+			nothingTyped(w, err)
+			return
+		}
+	}
+	if len(v.leftover) > 0 {
+		// Changing the map, as typeMapped does: with the live view's
+		// lock, once its xdotool has run what it was sent. Without
+		// leftover keys, an agent's ASCII typing changes no map and
+		// drains nothing.
+		err := func() error {
+			if v.live != nil && kb != personAction {
+				v.live.mu.Lock()
+				defer v.live.mu.Unlock()
+				if err := v.live.drain(); err != nil {
+					return err
+				}
+			}
+			return v.restoreLeftover(ctx)
+		}()
+		if err != nil {
+			nothingTyped(w, err)
+			return
+		}
+	}
+	if err := v.runAll(ctx, build()); err != nil {
+		http.Error(w, "input failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// typeBatch types one stretch: binds its keys, waits, presses them, waits
+// and puts the map back, even if typing fails or panics. pressed says
+// whether any key may have been pressed. Keys it can't put back are left
+// for the next type (v.leftover), and fail this one.
+func (v *visual) typeBatch(ctx context.Context, conn keymapConn, open func() (keymapConn, error), m keyboardMap, spare []byte, b keyBatch, now bool) (pressed bool, err error) {
+	if len(b.bind) > 0 {
+		bound, berr := bind(conn, open, m, spare, b.bind)
+		if berr != nil {
+			if bound != nil {
+				v.keepLeftover(bound)
+			}
+			return false, fmt.Errorf("couldn't bind %d characters to keys: %w", len(b.bind), berr)
+		}
+		defer func() {
+			if pressed {
+				// Chromium reads the last keys with this map, not the next.
+				time.Sleep(v.bindSettle)
+			}
+			if rerr := bound.restore(); rerr != nil {
+				v.keepLeftover(bound)
+				v.log.Warn("couldn't put the keyboard map back", "keys", len(b.bind), "err", rerr)
+				err = errors.Join(err, fmt.Errorf("couldn't put the keyboard map back: %w", rerr))
+			}
+		}()
+		if serr := sleepCtx(ctx, v.bindSettle); serr != nil {
+			return false, serr
+		}
+	}
+	cmds := typeKeysInstantly(b.text)
+	if !now {
+		cmds = v.humanType(string(b.text))
+	}
+	return true, v.runAll(ctx, cmds)
 }
 
 type scrollRequest struct {
@@ -949,6 +1242,10 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 		http.Error(w, "bad JSON: "+err.Error(), http.StatusBadRequest)
 		return false
 	}
+	// Read the body to its end: only then does the server notice the
+	// caller going, which ends the request's context, so a long action
+	// (a long type) breaks off when the orchestrator cancels it.
+	_, _ = io.Copy(io.Discard, io.LimitReader(r.Body, 64<<10))
 	return true
 }
 
@@ -979,6 +1276,15 @@ func runTo(ctx context.Context, stdout bool, name string, args ...string) ([]byt
 		cmd.ExtraFiles = []*os.File{pw}
 	}
 	cmd.Stderr = os.Stderr
+	if name == "xdotool" {
+		stderr, err := withheldStderr(name)
+		if err != nil {
+			_ = pw.Close()
+			return nil, err
+		}
+		defer func() { _ = stderr.Close() }()
+		cmd.Stderr = stderr
+	}
 	exited, err := procs.start(cmd)
 	_ = pw.Close()
 	if err != nil {
@@ -998,6 +1304,31 @@ func runTo(ctx context.Context, stdout bool, name string, args ...string) ([]byt
 		return nil, fmt.Errorf("%s: %s", name, describe(ws))
 	}
 	return out, readErr
+}
+
+// withheldStderr is a pipe for xdotool's stderr, which can name a typed
+// key ("U00E9"): the log says how much it wrote, never what. It is an
+// *os.File, as the reaper needs (nothing in os/exec copies from it); the
+// caller closes it once the command has started, and the reading ends
+// when the command does.
+func withheldStderr(name string) (*os.File, error) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		n, _ := io.Copy(io.Discard, r)
+		_ = r.Close()
+		withheldLog(name, n)
+	}()
+	return w, nil
+}
+
+// withheldLog logs how much a command wrote to a withheld stderr.
+var withheldLog = func(name string, n int64) {
+	if n > 0 {
+		_, _ = fmt.Fprintf(os.Stderr, "%s: %d bytes on stderr, withheld: they can name typed keys\n", name, n)
+	}
 }
 
 // maxOutput caps what runCommand reads from a command, a screenshot say.

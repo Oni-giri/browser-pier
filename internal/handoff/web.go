@@ -111,7 +111,7 @@ func (w *Web) Register(mux *http.ServeMux) {
 }
 
 type view struct {
-	Step      string // pin, control, other, ended
+	Step      string // pin, control, ending, other, ended
 	H         Handoff
 	Token     string
 	Reason    string
@@ -145,12 +145,18 @@ func (w *Web) render(rw http.ResponseWriter, r *http.Request, status int, v view
 	}
 }
 
-// load finds the link's handoff, or renders why it doesn't work.
+// load finds the link's handoff, or renders why it doesn't work: ended,
+// or ending (its end under way, which ByToken starts once its time is
+// up), when the page says it is handing back and offers nothing more.
 func (w *Web) load(rw http.ResponseWriter, r *http.Request) (Handoff, string, bool) {
 	token := r.PathValue("token")
 	h, err := w.svc.ByToken(r.Context(), token)
 	if errors.Is(err, ErrNotFound) {
 		w.render(rw, r, http.StatusNotFound, view{Step: "ended", Ended: "missing"})
+		return h, token, false
+	}
+	if errors.Is(err, ErrClosing) || (err != nil && r.Context().Err() != nil) {
+		http.Error(rw, "BrowserPier is shutting down. Reload in a moment.", http.StatusServiceUnavailable)
 		return h, token, false
 	}
 	if err != nil {
@@ -161,7 +167,24 @@ func (w *Web) load(rw http.ResponseWriter, r *http.Request) (Handoff, string, bo
 		w.render(rw, r, http.StatusGone, view{Step: "ended", Ended: ended(h), H: h})
 		return h, token, false
 	}
+	if w.ending(h) {
+		w.renderEnding(rw, r, http.StatusOK, h, token)
+		return h, token, false
+	}
 	return h, token, true
+}
+
+// ending reports whether pending handoff h is being handed back: its end
+// is under way, or its time is up (which a read has started ending).
+func (w *Web) ending(h Handoff) bool {
+	return !h.Status.Final() && (w.svc.isEnding(h.ID) || !w.svc.now().Before(h.ExpiresAt))
+}
+
+// renderEnding renders the "Handing back…" page: no controls, no PIN, no
+// live view, no timer; it asks the status, less and less often, until the
+// handoff is over (handoff.js).
+func (w *Web) renderEnding(rw http.ResponseWriter, r *http.Request, status int, h Handoff, token string) {
+	w.render(rw, r, status, view{Step: "ending", H: h, Token: token})
 }
 
 // ended is how the page names the way a handoff ended: auto when the page
@@ -206,6 +229,11 @@ func private(ip string) bool {
 func (w *Web) unlock(rw http.ResponseWriter, r *http.Request, h Handoff, token string) bool {
 	secret := randomToken()
 	if err := w.svc.Unlock(r.Context(), h, secret); err != nil {
+		if w.ending(h) || w.svc.isEnding(h.ID) {
+			// Its end began meanwhile (a withdrawal, a fifth wrong PIN).
+			w.renderEnding(rw, r, http.StatusOK, h, token)
+			return false
+		}
 		w.render(rw, r, http.StatusForbidden, view{Step: "other", H: h})
 		return false
 	}
@@ -301,6 +329,8 @@ func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 			http.Error(rw, "something went wrong", http.StatusInternalServerError)
 		case h.Status.Final():
 			w.render(rw, r, http.StatusGone, view{Step: "ended", Ended: ended(h), H: h})
+		case w.ending(h):
+			w.renderEnding(rw, r, http.StatusOK, h, token)
 		default:
 			w.render(rw, r, http.StatusTooManyRequests, view{Step: "pin", H: h, Token: token, TriesLeft: MaxPINFailures - h.PINFailures, Error: "Wait for your other attempts to finish."})
 		}
@@ -345,7 +375,7 @@ func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 // server than its quota.
 func (w *Web) ice(rw http.ResponseWriter, r *http.Request) {
 	h, err := w.svc.ByToken(r.Context(), r.PathValue("token"))
-	if err != nil || h.Status.Final() || !w.holder(r, h) {
+	if err != nil || h.Status.Final() || w.svc.isEnding(h.ID) || !w.holder(r, h) {
 		http.Error(rw, "this link isn't open here", http.StatusForbidden)
 		return
 	}
@@ -359,6 +389,17 @@ func (w *Web) offer(rw http.ResponseWriter, r *http.Request) {
 		http.Error(rw, "this link isn't open here", http.StatusForbidden)
 		return
 	}
+	// Which time the browser went to Needs help, read while the handoff
+	// is open: read first, then the handoff found still open, so it is
+	// this handoff's (or a later one's, which only refuses). The take
+	// names it, and fails in the same step if the browser no longer
+	// waits for that help: a handoff ending while this offer is under
+	// way takes nothing back from the agent (PROJ-196).
+	epoch, ok := w.m.HelpEpoch(h.SessionID)
+	if cur, err := w.svc.Get(r.Context(), h.ID); !ok || err != nil || cur.Status != Pending || w.svc.isEnding(h.ID) {
+		http.Error(rw, "this link isn't open here", http.StatusForbidden)
+		return
+	}
 	// This browser holds the link, so an earlier view of it is a page
 	// since reloaded: replace it rather than refuse "someone else has control".
 	w.svc.replaceViewers(r.Context(), h)
@@ -366,12 +407,22 @@ func (w *Web) offer(rw http.ResponseWriter, r *http.Request) {
 	w.live.Offer(rw, r, h.Profile, webrtc.OfferOptions{
 		Holder:  sessions.HandoffHolder(id),
 		Control: true,
-		// Only while the handoff is open: hand-back ends this viewer's control.
+		// Only while the handoff is open: hand-back ends this viewer's
+		// control. A handoff whose end is under way is no longer open.
+		// Get is a read, which never waits for the browser.
 		Allowed: func() bool {
-			cur, err := w.svc.Get(context.Background(), id)
-			return err == nil && cur.Status == Pending
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			cur, err := w.svc.Get(ctx, id)
+			return err == nil && cur.Status == Pending && !w.svc.isEnding(id)
 		},
 		Opened: func(v *webrtc.Viewer) { w.svc.track(id, v) },
+		// The session this link is for: if it ended and another started
+		// on the profile meanwhile, the offer is refused, and that one is
+		// never taken.
+		Session:   h.SessionID,
+		Handoff:   true,
+		HelpEpoch: epoch,
 	})
 }
 
@@ -385,7 +436,7 @@ type chooserRoute = func(http.ResponseWriter, *http.Request, sessions.Session, s
 func (w *Web) chooser(route func(*picker.Picker) chooserRoute) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		h, err := w.svc.ByToken(r.Context(), r.PathValue("token"))
-		if err != nil || h.Status.Final() || !w.holder(r, h) {
+		if err != nil || h.Status.Final() || w.svc.isEnding(h.ID) || !w.holder(r, h) {
 			http.Error(rw, "This link isn't open here.", http.StatusForbidden)
 			return
 		}
@@ -400,8 +451,21 @@ func (w *Web) chooser(route func(*picker.Picker) chooserRoute) http.HandlerFunc 
 
 func (w *Web) status(rw http.ResponseWriter, r *http.Request) {
 	h, err := w.svc.ByToken(r.Context(), r.PathValue("token"))
-	if err != nil {
+	if errors.Is(err, ErrNotFound) {
 		http.Error(rw, "no such link", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		// Shutting down, or the database: ask again shortly.
+		http.Error(rw, "try again shortly", http.StatusServiceUnavailable)
+		return
+	}
+	rw.Header().Set("Cache-Control", "no-store")
+	if w.ending(h) {
+		// Anyone the page shows "Handing back…" to may wait for its end;
+		// nothing more is said of the browser meanwhile.
+		rw.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(rw).Encode(map[string]any{"handoff": h.Status, "ending": true})
 		return
 	}
 	if !h.Status.Final() && !w.holder(r, h) {
@@ -432,6 +496,18 @@ func (w *Web) finish(rw http.ResponseWriter, r *http.Request) {
 		status = Cant
 	}
 	h, err := w.svc.Finish(r.Context(), h, status, r.PostFormValue("note"))
+	if errors.Is(err, ErrClosing) || ShuttingDown(r.Context()) {
+		http.Error(rw, "BrowserPier is shutting down. Reload in a moment.", http.StatusServiceUnavailable)
+		return
+	}
+	if errors.Is(err, ErrHandingBack) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		// Finish waits handBackWait at most: the hand-back goes on, and
+		// the page says so until it is over.
+		if r.Context().Err() == nil {
+			w.renderEnding(rw, r, http.StatusServiceUnavailable, h, r.PathValue("token"))
+		}
+		return
+	}
 	if err != nil {
 		http.Error(rw, "something went wrong", http.StatusInternalServerError)
 		return

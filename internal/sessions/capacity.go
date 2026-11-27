@@ -24,7 +24,16 @@ func (m *Manager) Touch(id string) {
 // agent connected, a page call or an agent input action under way (a long
 // human-paced type), someone in live view, or one that is starting,
 // stopping or with a person during a handoff, is never idle.
+//
+// But one whose person's control is ending (a hand-back) counts as idle
+// from when that began, whoever watches: agents are kept out meanwhile,
+// and a hand-back the browser never answers would otherwise keep it from
+// ever being stopped as idle or for room. Stopping it ends the hand-back
+// (PROJ-196).
 func (l *live) idleLocked(now time.Time) time.Duration {
+	if l.releasing && (l.sess.State == Running || l.sess.State == NeedsHelp) {
+		return now.Sub(l.releaseStarted)
+	}
 	if len(l.conns) > 0 || len(l.leases) > 0 || len(l.inputs) > 0 || l.viewers > 0 || l.human || l.sess.State != Running {
 		return 0
 	}

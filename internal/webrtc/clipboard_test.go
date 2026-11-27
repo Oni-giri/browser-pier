@@ -8,11 +8,15 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/sessions"
+	"github.com/Oni-giri/browser-pier/internal/sessions/sessionstest"
 )
 
 // fakeClipboard is a browser container's clipboard endpoints, recording
@@ -47,7 +51,12 @@ func (c *fakeClipboard) routes(mux *http.ServeMux) {
 		c.held = t.Text
 		c.mu.Unlock()
 	}
-	mux.HandleFunc("POST /input/release", record("release", func(_ []byte, w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) }))
+	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, r *http.Request) {
+		c.mu.Lock()
+		c.calls = append(c.calls, "release")
+		c.mu.Unlock()
+		sessionstest.AnswerLift(w, r)
+	})
 	mux.HandleFunc("POST /input/events", record("events", func(_ []byte, w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) }))
 	mux.HandleFunc("POST /input/live-type", record("type", func(b []byte, w http.ResponseWriter) {
 		c.mu.Lock()
@@ -228,6 +237,7 @@ func TestViewerTypesText(t *testing.T) {
 	if r := k.send(`{"type":"text","text":"héllo"}`); len(r) != 0 {
 		t.Errorf("text: %v", r)
 	}
+	k.v.waitTyped()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if strings.Join(c.calls, " ") != "type" || len(c.sent) != 1 || c.sent[0] != `{"text":"héllo"}` {
@@ -285,6 +295,7 @@ func TestClipboardEmptiedWhenControlEnds(t *testing.T) {
 				t.Fatalf("set: %v", r)
 			}
 			end.end(k)
+			awaitHuman(t, m, false, 5*time.Second) // the hand-back goes on by itself
 			if got := strings.Join(c.took(), " "); got != end.want {
 				t.Errorf("the browser got %q, want %q", got, end.want)
 			}
@@ -321,4 +332,203 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.b.String()
+}
+
+// slowType is a browser whose Type takes until its request ends, and says
+// whether it was cut short.
+type slowType struct {
+	started chan struct{}
+	cut     chan struct{}
+}
+
+func (st *slowType) routes(mux *http.ServeMux) {
+	ok := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }
+	mux.HandleFunc("POST /input/release", sessionstest.AnswerLift) // the hand-back's lift fences the takeover
+	mux.HandleFunc("DELETE /input/clipboard", ok)
+	mux.HandleFunc("POST /input/live-type", func(w http.ResponseWriter, r *http.Request) {
+		// Read to the end, as the browser's decode does, so the server
+		// notices the client going.
+		_, _ = io.Copy(io.Discard, r.Body)
+		close(st.started)
+		select {
+		case <-r.Context().Done():
+			close(st.cut)
+		case <-time.After(30 * time.Second):
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+// A long Type breaks off as soon as the person's view goes, or their
+// control ends from elsewhere, instead of typing on for up to typeWait
+// with the view's lock and the hand-back held (PROJ-195). Text over the
+// container's cap is refused first.
+func TestViewerTypeEndsWithTheViewAndTheControl(t *testing.T) {
+	for _, end := range []string{"view closed", "handed back"} {
+		st := &slowType{started: make(chan struct{}), cut: make(chan struct{})}
+		h, m, s := offerFixtureWith(t, st.routes, slog.New(slog.DiscardHandler))
+		conn := &Viewer{closed: make(chan struct{})}
+		k := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: m.Layout().ControlSocket("google"), conn: conn})
+		k.send(`{"type":"take"}`)
+		done := make(chan struct{})
+		go func() {
+			k.v.message([]byte(`{"type":"text","text":"`+strings.Repeat("字", 1500)+`"}`), func(string) {})
+			close(done)
+		}()
+		<-st.started
+		start := time.Now()
+		if end == "view closed" {
+			close(conn.closed)
+		} else {
+			go m.ReleaseControl(s.ID)
+		}
+		select {
+		case <-st.cut:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: the Type wasn't cut short", end)
+		}
+		<-done
+		if d := time.Since(start); d > 3*time.Second {
+			t.Fatalf("%s: it took %s to stop", end, d)
+		}
+	}
+	var c fakeClipboard
+	h, m, s := offerFixtureWith(t, c.routes, slog.New(slog.DiscardHandler))
+	k := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: m.Layout().ControlSocket("google")})
+	k.send(`{"type":"take"}`)
+	if r := k.send(`{"type":"text","text":"` + strings.Repeat("a", maxLiveType+1) + `"}`); len(r) != 1 || !strings.Contains(fmt.Sprint(r[0]["msg"]), "at most 2000") {
+		t.Fatalf("over the cap: %v", r)
+	}
+	if got := c.took(); slices.Contains(got, "type") {
+		t.Fatalf("over the cap reached the browser: %v", got)
+	}
+}
+
+// waitTyped waits for the viewer's Type under way, if one is, to end.
+func (v *viewer) waitTyped() {
+	v.mu.Lock()
+	typed := v.typed
+	v.mu.Unlock()
+	if typed != nil {
+		<-typed
+	}
+}
+
+// A Type in flight doesn't hold the view's messages up: Hand back from
+// the same view is read at once, cuts the Type short and hands back; a
+// second Type, or other input, meanwhile is refused (PROJ-195).
+// The phone's Type prompt blurs the page as it closes, so the page's blur
+// lift arrives right behind the Type: it must not cut the Type short.
+func TestViewerLiftLeavesItsOwnTypeAlone(t *testing.T) {
+	st := &slowType{started: make(chan struct{}), cut: make(chan struct{})}
+	h, m, s := offerFixtureWith(t, st.routes, slog.New(slog.DiscardHandler))
+	k := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: m.Layout().ControlSocket("google")})
+	k.send(`{"type":"take"}`)
+	if r := k.send(`{"type":"text","text":"héllo"}`); len(r) != 0 {
+		t.Fatalf("text: %v", r)
+	}
+	if r := k.send(`{"type":"lift"}`); len(r) != 0 {
+		t.Fatalf("lift: %v", r)
+	}
+	select {
+	case <-st.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the Type never reached the browser: the lift stopped it first")
+	}
+	select {
+	case <-st.cut:
+		t.Fatal("a lift cut the Type short")
+	case <-time.After(500 * time.Millisecond):
+	}
+	k.send(`{"type":"release"}`)
+	<-st.cut
+	k.v.waitTyped()
+}
+
+func TestViewerHandBackStopsItsOwnType(t *testing.T) {
+	st := &slowType{started: make(chan struct{}), cut: make(chan struct{})}
+	h, m, s := offerFixtureWith(t, st.routes, slog.New(slog.DiscardHandler))
+	k := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: m.Layout().ControlSocket("google")})
+	k.send(`{"type":"take"}`)
+	if r := k.send(`{"type":"text","text":"` + strings.Repeat("字", 1500) + `"}`); len(r) != 0 {
+		t.Fatalf("text: %v", r)
+	}
+	<-st.started
+	for _, msg := range []string{`{"type":"text","text":"more"}`, `{"type":"input","events":[{"t":"keydown","k":"a"}]}`} {
+		if r := k.send(msg); len(r) != 1 || !strings.Contains(fmt.Sprint(r[0]["msg"]), "Still typing") {
+			t.Fatalf("%s while typing: %v", msg, r)
+		}
+	}
+	start := time.Now()
+	r := k.send(`{"type":"release"}`)
+	if len(r) != 1 || r[0]["type"] != "control" || r[0]["on"] != false {
+		t.Fatalf("release: %v", r)
+	}
+	select {
+	case <-st.cut:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the Type wasn't cut short")
+	}
+	k.v.waitTyped()
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("hand back took %s", d)
+	}
+	if m.ControlledBy(s.ID, sessions.AdminHolder) {
+		t.Fatal("still in control after Hand back")
+	}
+}
+
+// A lift that comes while the person's Type runs (the phone's Type prompt
+// blurs the page as it closes) isn't dropped: it waits for the Type and
+// runs once it ends, as the same turn's input, so a key held in the live
+// view (Shift, here) is let go of (PROJ-196).
+func TestLiftDuringATypeRunsAfterIt(t *testing.T) {
+	var mu sync.Mutex
+	var got []string
+	typing, finish := make(chan struct{}), make(chan struct{})
+	routes := func(mux *http.ServeMux) {
+		note := func(what string, r *http.Request) {
+			mu.Lock()
+			got = append(got, what+" "+r.Header.Get(sessions.TakeoverHeader))
+			mu.Unlock()
+		}
+		mux.HandleFunc("POST /input/events", func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.ReadAll(r.Body)
+			note("events", r)
+			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("POST /input/live-type", func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.ReadAll(r.Body)
+			note("type", r)
+			close(typing)
+			<-finish
+			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get(sessions.FenceHeader) != "" {
+				sessionstest.AnswerLift(w, r) // a hand-back's
+				return
+			}
+			note("lift", r)
+			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	}
+	h, m, s := offerFixtureWith(t, routes, slog.New(slog.DiscardHandler))
+	k := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: m.Layout().ControlSocket("google")})
+	k.send(`{"type":"take"}`)
+	turn := strconv.FormatUint(k.v.turn, 10)
+	k.send(`{"type":"input","events":[{"t":"keydown","k":"Shift_L"}]}`)
+	k.send(`{"type":"text","text":"hello"}`)
+	<-typing
+	if r := k.send(`{"type":"lift"}`); len(r) != 0 {
+		t.Fatalf("the lift during the Type said %v", r)
+	}
+	close(finish)
+	k.v.waitTyped()
+	mu.Lock()
+	defer mu.Unlock()
+	if want := "events " + turn + ",type " + turn + ",lift " + turn; strings.Join(got, ",") != want {
+		t.Fatalf("the browser got %q, want %q", strings.Join(got, ","), want)
+	}
 }

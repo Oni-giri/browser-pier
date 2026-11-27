@@ -457,7 +457,7 @@ func TestControlEntries(t *testing.T) {
 	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.m.TakeControlByLink(s.ID, HandoffHolder("h1")); err != nil {
+	if err := takeByLink(f.m, s.ID, HandoffHolder("h1")); err != nil {
 		t.Fatal(err)
 	}
 	f.m.ReleaseControl(s.ID)

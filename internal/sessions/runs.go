@@ -45,6 +45,9 @@ const (
 	EndRoom     EndReason = "room"     // stopped to make room for another browser
 	EndOutdated EndReason = "outdated" // an older BrowserPier started it (Reconcile)
 	EndSecrets  EndReason = "secrets"  // it held filled secrets when BrowserPier restarted (Reconcile)
+	// EndUnfenced: it didn't fence a person's last takeover as
+	// BrowserPier restarted (Reconcile, PROJ-196).
+	EndUnfenced EndReason = "unfenced"
 	EndShutdown EndReason = "shutdown" // stopped with BrowserPier (StopAll)
 	// EndStopped: a stop begun by the BrowserPier before a restart, whose
 	// reason went with it.
@@ -86,6 +89,7 @@ var (
 	stopRoom       = StopReason{end: EndRoom}
 	stopOutdated   = StopReason{end: EndOutdated}
 	stopSecrets    = StopReason{end: EndSecrets}
+	stopUnfenced   = StopReason{end: EndUnfenced}
 	stopShutdown   = StopReason{end: EndShutdown}
 	endCrashed     = StopReason{end: EndCrashed}
 	endUnclean     = StopReason{end: EndUnclean}
@@ -112,6 +116,8 @@ func (r StopReason) String() string {
 		return "Stopped: started by an older BrowserPier"
 	case EndSecrets:
 		return "Stopped: BrowserPier restarted while it held filled secrets"
+	case EndUnfenced:
+		return "Stopped: it didn't answer as BrowserPier restarted"
 	case EndShutdown:
 		return "Stopped with BrowserPier"
 	case EndCrashed:

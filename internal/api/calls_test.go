@@ -473,6 +473,27 @@ func TestACallThatRanKeepsItsReceipt(t *testing.T) {
 	}
 }
 
+// A type the browser says failed before any key was pressed gives its id
+// back, as a call never admitted does (PROJ-195): the same call runs when
+// sent again. Any other failure keeps the receipt.
+func TestATypeThatTypedNothingGivesItsIDBack(t *testing.T) {
+	f := newFixture(t)
+	v := f.start(f.all, "google", "visual")
+	for _, c := range [][3]string{{"type", "n1", `{"text": "unbound"}`}, {"computer", "n2", `{"action": "type", "text": "unbound"}`}} {
+		before := f.inputCount()
+		r := f.send(f.srv, f.all, v.ID, c[0], c[1], c[2])
+		if r.code != http.StatusInternalServerError || r.replayed || !strings.Contains(r.body.Error, "with the same call id") {
+			t.Fatalf("%s: %d %s", c[2], r.code, r.raw)
+		}
+		if st := f.receipt(f.all, v.ID, c[1]); st != "" {
+			t.Fatalf("%s kept a receipt: %s", c[2], st)
+		}
+		if r := f.send(f.srv, f.all, v.ID, c[0], c[1], c[2]); r.replayed || f.inputCount() != before+2 {
+			t.Fatalf("%s again: replayed %t, %d inputs", c[2], r.replayed, f.inputCount()-before)
+		}
+	}
+}
+
 // A repeat sent while the first is still running doesn't run, and says so.
 func TestARepeatWhileTheFirstRuns(t *testing.T) {
 	f := newFixture(t)
@@ -487,8 +508,8 @@ func TestARepeatWhileTheFirstRuns(t *testing.T) {
 	waitFor(t, func() bool { return f.inputCount() == 1 })
 	r := f.send(f.srv, f.all, v.ID, "computer", "r1", `{"action": "type", "text": "typed slowly"}`)
 	checkReplay(t, "the type again", r, "running")
-	if !strings.Contains(r.body.Error, "/calls/r1") {
-		t.Fatalf("the type again doesn't say where to ask: %s", r.raw)
+	if !strings.Contains(r.body.Error, "/calls/r1") || !strings.Contains(r.body.Error, "A 404 there doesn't prove it never ran") {
+		t.Fatalf("the type again doesn't say where to ask, or what a 404 means: %s", r.raw)
 	}
 	var st sessionStatusJSON
 	f.call(f.all, http.MethodGet, "/api/sessions/"+v.ID, "", &st)
@@ -747,8 +768,10 @@ func TestEveryRouteGivesARefusedIDBack(t *testing.T) {
 	}
 	visual := []route{
 		{"click", `{"x": 1, "y": 2}`, []string{`{"x": "1", "y": 2}`, `{"x": 1, "y": 2, "button": "side"}`, `{"x": 1, "y": 2, "pace": "slow"}`, `{"x": 1, "y": 2, "nope": 1}`}},
-		{"type", `{"text": "hi"}`, []string{`{"text": 42}`, `{"text": ""}`, `{}`, `{"text": "hi", "pace": "slow"}`}},
-		{"computer", `{"action": "click", "x": 1, "y": 2}`, []string{`{"action": "click", "x": "1", "y": 2}`, `{"action": "type", "text": ""}`, `{"action": "click", "x": 1, "y": 2, "button": "side"}`, `{"action": "open", "url": "ftp://example.com/"}`}},
+		{"type", `{"text": "hi"}`, []string{`{"text": 42}`, `{"text": ""}`, `{}`, `{"text": "hi", "pace": "slow"}`,
+			`{"text": "hi\u001b"}`, `{"text": "hi\ud800"}`, `{"text": "hi\ufffd"}`, `{"text": "hi\u007f"}`}},
+		{"computer", `{"action": "click", "x": 1, "y": 2}`, []string{`{"action": "click", "x": "1", "y": 2}`, `{"action": "type", "text": ""}`, `{"action": "click", "x": 1, "y": 2, "button": "side"}`,
+			`{"action": "type", "text": "hi\u001b"}`, `{"action": "type", "text": "hi\ud800"}`, `{"action": "open", "url": "ftp://example.com/"}`}},
 	}
 	page := []route{
 		{"act", `{"steps": [{"action": "press", "keys": "Enter"}]}`, []string{`{"steps": "press"}`}},

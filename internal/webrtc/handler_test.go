@@ -20,6 +20,7 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/db"
+	"github.com/Oni-giri/browser-pier/internal/keyplan"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/sessions/sessionstest"
@@ -40,6 +41,14 @@ func offerFixtureWith(t *testing.T, routes func(*http.ServeMux), log *slog.Logge
 	return r.h, r.m, r.s
 }
 
+// offerFixtureRuntime is offerFixtureWith, with the fake container
+// runtime, for its knobs.
+func offerFixtureRuntime(t *testing.T, routes func(*http.ServeMux), log *slog.Logger) (*Handler, *sessions.Manager, sessions.Session, *sessionstest.FakeRuntime) {
+	t.Helper()
+	r := newOfferRig(t, routes, log)
+	return r.h, r.m, r.s, r.rt
+}
+
 // offerRig is offerFixture's parts; register adds routes to the fake
 // browser's control socket, and log is the logger.
 type offerRig struct {
@@ -48,6 +57,7 @@ type offerRig struct {
 	s     sessions.Session
 	d     *sql.DB
 	relay *Relay
+	rt    *sessionstest.FakeRuntime
 }
 
 func newOfferRig(t *testing.T, register func(*http.ServeMux), log *slog.Logger) *offerRig {
@@ -87,7 +97,7 @@ func newOfferRig(t *testing.T, register func(*http.ServeMux), log *slog.Logger) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = relay.Close() })
-	return &offerRig{h: NewHandler(relay, m, nil, log), m: m, s: s, d: d, relay: relay}
+	return &offerRig{h: NewHandler(relay, m, nil, log), m: m, s: s, d: d, relay: relay, rt: rt}
 }
 
 func offer(h *Handler, o OfferOptions, body string) *httptest.ResponseRecorder {
@@ -101,9 +111,7 @@ func TestOfferWithControlThatFailsToConnectGivesControlBack(t *testing.T) {
 	if rec := offer(h, OfferOptions{Control: true, Holder: "viewer"}, `{"sdp": "not an offer"}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad SDP: %d %s", rec.Code, rec.Body)
 	}
-	if s, _ := m.Live("google"); s.HumanControl {
-		t.Fatal("a viewer that never connected kept control")
-	}
+	awaitHuman(t, m, false, 5*time.Second) // a viewer that never connected keeps no control
 }
 
 func TestOfferWithControlIsRefusedWhileSomeoneElseHasIt(t *testing.T) {
@@ -116,6 +124,31 @@ func TestOfferWithControlIsRefusedWhileSomeoneElseHasIt(t *testing.T) {
 	}
 	if s, _ := m.Live("google"); !s.HumanControl || s.Viewers != 0 {
 		t.Fatalf("the refused viewer changed control or still watches: %+v", s)
+	}
+}
+
+// The Type button's call has time for the longest text the container
+// takes (2,000 characters), however many of them the keyboard map lacks.
+func TestTypeWaitFitsTheText(t *testing.T) {
+	if got := typeWait(""); got != controlWait {
+		t.Fatalf("no text: %s", got)
+	}
+	if got := typeWait(strings.Repeat("字", 2000)); got != 130*time.Second {
+		t.Fatalf("2,000 characters: %s", got)
+	}
+	// Against the browser's own plan (keyplan.Estimate), the worst texts
+	// still leave 9 s for the rest: every stretch's 13 characters all new
+	// (2,000 different CJK characters, 154 stretches), or 14 letters
+	// over and over (153).
+	var cjk strings.Builder
+	for i := range 2000 {
+		cjk.WriteRune(rune(0x4e00 + i))
+	}
+	for _, text := range []string{cjk.String(), strings.Repeat("абвгдежзийклмн", 142) + "абвгдежзийкл", "é", strings.Repeat("a", 2000)} {
+		est, n := keyplan.Estimate(text, false)
+		if got := typeWait(text); got < est+9*time.Second {
+			t.Errorf("%d characters, %d stretches: %s for an estimate of %s", len([]rune(text)), n, got, est)
+		}
 	}
 }
 
@@ -151,6 +184,10 @@ func (l *inputLog) register(mux *http.ServeMux) {
 		l.mu.Lock()
 		l.hits = append(l.hits, r.PathValue("what"))
 		l.mu.Unlock()
+		if r.PathValue("what") == "release" {
+			sessionstest.AnswerLift(w, r) // a hand-back's lift fences the takeover
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 }

@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"io"
 	"log/slog"
 	"mime/multipart"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -58,6 +60,7 @@ type fixture struct {
 	rt      *sessionstest.FakeRuntime
 	app     *UI
 	cookie  string // the signed-in admin session's
+	db      *sql.DB
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -113,6 +116,7 @@ func newFixture(t *testing.T) *fixture {
 	f := &fixture{t: t, m: m, handoffs: handoff.New(d, m, log), web: web, tokens: tokens, settings: settings.New(d), files: fs, choosers: choosers, rt: rt,
 		picker: picker.New(m, fs, log)}
 	emptied = &f.emptied
+	f.db = d
 	f.recordings = recording.NewStore(filepath.Join(dir, "recordings"), log)
 	// Names resolve to a public address; addresses are themselves.
 	f.notify, err = notify.New(ctx, d, log, notify.Options{Lookup: func(context.Context, string) ([]netip.Addr, error) {
@@ -541,6 +545,15 @@ func TestHandBackFormEmptiesTheClipboard(t *testing.T) {
 	if r := f.post("/profiles/google/handback", url.Values{"status": {"done"}}); r.code != http.StatusSeeOther {
 		t.Fatalf("hand back: %d", r.code)
 	}
+	// Ending the handoff hands back by itself: wait for it.
+	for deadline := time.Now().Add(5 * time.Second); f.emptied.Load() < 2 && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if s, _ := f.m.Live("google"); !s.HumanControl {
+			break
+		}
+	}
 	if n := f.emptied.Load(); n != 2 {
 		t.Fatalf("emptied %d times", n)
 	}
@@ -856,3 +869,135 @@ func between(s, from, to string) string {
 	}
 	return s[i : i+j]
 }
+
+// The profile page's Hand back, with a help request open, redirects once
+// the browser is handed back (within a bound), so the page it lands on
+// doesn't show the person still in control (PROJ-196).
+func TestHandBackFormRedirectsOnceHandedBack(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.profile("google")
+	s, _, _ := f.m.Start(ctx, "google", "")
+	if _, _, err := f.handoffs.Create(ctx, s.ID, "research-bot", handoff.SensitiveInput, "Enter the 2FA code", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.post("/profiles/google/handback", url.Values{"status": {"done"}}); r.code != http.StatusSeeOther {
+		t.Fatalf("hand back: %d", r.code)
+	}
+	if got, _ := f.m.Live("google"); got.HumanControl || got.State != sessions.Running {
+		t.Errorf("redirected with the browser %s, person in control %v", got.State, got.HumanControl)
+	}
+}
+
+// A handoff past its time whose browser doesn't answer its hand-back
+// (PROJ-196): the pages that list handoffs only start its end, never
+// wait on that browser, so they all render, another profile's included,
+// and Stop on the wedged profile works from its page, which ends the
+// hand-back.
+func TestWedgedHandoffHangsNoPage(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.profile("google")
+	f.profile("github")
+	// Every browser's lift fails: no hand-back ever ends by itself.
+	f.choosers.wedged.Store(true)
+	s, _, err := f.m.Start(ctx, "google", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.m.Start(ctx, "github", ""); err != nil {
+		t.Fatal(err)
+	}
+	h, _, err := f.handoffs.Create(ctx, s.ID, "research-bot", handoff.SensitiveInput, "Enter the 2FA code", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.TakeControl(s.ID, f.holder); err != nil { // someone in the live view
+		t.Fatal(err)
+	}
+	if _, err := f.db.Exec(`UPDATE handoffs SET expires_at = ? WHERE id = ?`, time.Now().Add(-time.Second).UnixMilli(), h.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.client.Timeout = 10 * time.Second // a hang fails, rather than holds, the test
+	for _, path := range []string{"/", "/profiles", "/profiles/google", "/profiles/google/side", "/profiles/google/log", "/profiles/github"} {
+		start := time.Now()
+		if r := f.get(path); r.code != http.StatusOK {
+			t.Fatalf("%s: %d", path, r.code)
+		}
+		if d := time.Since(start); d > 3*time.Second {
+			t.Fatalf("%s took %s", path, d)
+		}
+	}
+	short, cancel := context.WithTimeout(ctx, 3*time.Second)
+	open, err := f.handoffs.Pending(short)
+	cancel()
+	if err != nil || len(open) != 1 || open[0].ID != h.ID {
+		t.Fatalf("Pending: %+v, %v; want the wedged one, still pending", open, err)
+	}
+	r := f.post("/profiles/google/stop", url.Values{})
+	if r.code != http.StatusSeeOther {
+		t.Fatalf("stop: %d %.300s", r.code, r.body)
+	}
+	if live, ok := f.m.Live("google"); ok {
+		t.Fatalf("still %s after Stop", live.State)
+	}
+	got, err := f.handoffs.Wait(ctx, h.ID, 5*time.Second)
+	if err != nil || !got.Status.Final() {
+		t.Fatalf("the handoff after Stop: %s, %v", got.Status, err)
+	}
+}
+
+// A hand-back from the profile page whose browser doesn't answer in time
+// is expected, not an error: the page says it couldn't hand back yet,
+// and nothing is logged as an error.
+func TestHandBackNotYetIsNoError(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	var mu sync.Mutex
+	var logged strings.Builder
+	f.app.log = slog.New(slog.NewTextHandler(writerFunc(func(b []byte) (int, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return logged.Write(b)
+	}), &slog.HandlerOptions{Level: slog.LevelError}))
+	f.handoffs.SetHandBackWait(200 * time.Millisecond)
+	f.profile("google")
+	s, _, err := f.m.Start(ctx, "google", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.handoffs.Create(ctx, s.ID, "research-bot", handoff.SensitiveInput, "Enter the 2FA code", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.TakeControl(s.ID, f.holder); err != nil {
+		t.Fatal(err)
+	}
+	f.choosers.wedged.Store(true)
+	r := f.post("/profiles/google/handback", url.Values{"status": {"done"}})
+	if r.code != http.StatusSeeOther {
+		t.Fatalf("hand back: %d", r.code)
+	}
+	var flash string
+	for _, c := range r.header.Values("Set-Cookie") {
+		if v, ok := strings.CutPrefix(c, flashCookie+"="); ok {
+			flash, _ = url.QueryUnescape(strings.SplitN(v, ";", 2)[0])
+		}
+	}
+	if !strings.HasPrefix(flash, "err:Couldn't hand back yet") {
+		t.Fatalf("the page says %q", flash)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if logged.Len() > 0 {
+		t.Fatalf("logged as an error: %s", logged.String())
+	}
+	_, _ = f.m.Stop(ctx, s.ID) // which ends the hand-back
+}
+
+// writerFunc is an io.Writer.
+type writerFunc func([]byte) (int, error)
+
+func (w writerFunc) Write(b []byte) (int, error) { return w(b) }

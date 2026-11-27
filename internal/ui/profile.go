@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -195,7 +196,14 @@ func (u *UI) handBack(w http.ResponseWriter, r *http.Request) {
 		if h.SessionID != s.ID {
 			continue
 		}
-		if _, err := u.handoffs.Finish(r.Context(), h, status, r.PostFormValue("note")); err != nil {
+		_, err := u.handoffs.Finish(r.Context(), h, status, r.PostFormValue("note"))
+		if errors.Is(err, handoff.ErrHandingBack) || errors.Is(err, handoff.ErrClosing) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			// Expected with a browser slow to answer: the hand-back goes
+			// on by itself, as below.
+			done(w, r, back, "Couldn't hand back yet: "+err.Error(), true)
+			return
+		}
+		if err != nil {
 			u.log.Error("finishing a handoff from the UI", "handoff", h.ID, "err", err)
 			done(w, r, back, "Couldn't hand back: "+err.Error(), true)
 			return
@@ -204,8 +212,15 @@ func (u *UI) handBack(w http.ResponseWriter, r *http.Request) {
 		done(w, r, back, "Handed back to "+h.Agent, false)
 		return
 	}
-	// No request open: just let go of the controls.
-	u.m.ReleaseControl(s.ID)
+	// No request open: just let go of the controls, waiting for that as
+	// long as this request lasts, and sessions.HandBackWait at most. If
+	// that ends first, the hand-back goes on by itself.
+	hctx, cancel := context.WithTimeout(r.Context(), sessions.HandBackWait)
+	defer cancel()
+	if err := u.m.HandBack(hctx, s.ID); err != nil {
+		done(w, r, back, "Couldn't hand back yet: "+err.Error(), true)
+		return
+	}
 	done(w, r, back, "Handed back", false)
 }
 

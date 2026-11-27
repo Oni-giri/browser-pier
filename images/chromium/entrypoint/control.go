@@ -55,7 +55,11 @@ func newControlHandler(cdp string, stream, record http.Handler, vis *visual, fwd
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(where)
 	})
-	registerChooser(mux, portal, portalOff)
+	var fence *takeoverFence
+	if vis != nil {
+		fence = vis.fence
+	}
+	registerChooser(mux, portal, portalOff, fence)
 	if fwd != nil {
 		mux.HandleFunc("GET /proxy/stats", fwd.stats)
 		if fwd.block != nil {

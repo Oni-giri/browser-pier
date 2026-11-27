@@ -38,6 +38,10 @@ func newTestVisual(fail bool) (*visual, *[]call) {
 		return []byte("x:100 y:700 screen:0 window:4194311\n"), nil
 	}
 	v.mot = motion.New(1)
+	// Never the real display's keyboard map: a map with no spare keys,
+	// unless a test gives it one (keymapVisual).
+	v.keymap = newFakeKeyboard(&calls).open
+	v.bindSettle = 0
 	v.chromium = addressBarChromium
 	return v, &calls
 }
@@ -379,9 +383,14 @@ func typed(t *testing.T, cmds []call) (text string, gaps []string) {
 	t.Helper()
 	names := map[string]rune{}
 	for r, k := range charKeys {
-		names[k] = r
+		if r != '\r' { // Return reads back as \n
+			names[k] = r
+		}
 	}
 	for _, c := range cmds {
+		if c.name != "xdotool" {
+			continue
+		}
 		a := c.args
 		for i := 0; i < len(a); i++ {
 			switch a[i] {
@@ -392,16 +401,12 @@ func typed(t *testing.T, cmds []call) (text string, gaps []string) {
 				}
 				if r, ok := names[k]; ok {
 					text += string(r)
+				} else if cp, err := strconv.ParseUint(strings.TrimPrefix(k, "U"), 16, 32); strings.HasPrefix(k, "U") && err == nil {
+					text += string(rune(cp))
 				} else {
 					text += k
 				}
 				i += 5
-			case "type":
-				if a[i+1] != "--clearmodifiers" || a[i+2] != "--" || i+4 != len(a) {
-					t.Fatalf("type not last, or not with --: %q", a[i:])
-				}
-				text += a[i+3]
-				i += 3
 			case "sleep":
 				gaps = append(gaps, a[i+1])
 				i++
@@ -414,12 +419,12 @@ func typed(t *testing.T, cmds []call) (text string, gaps []string) {
 }
 
 func TestHumanTypeHasATypistsRhythm(t *testing.T) {
-	v, calls := newTestVisual(false)
+	v, calls, _ := keymapVisual(t, 8)
 	text := "Hello, World! it's 9:30 am\tok"
 	if n := len([]rune(text)); n != 29 {
 		t.Fatal(n)
 	}
-	text += "é\n" // 31: an accent goes the old way, on its own
+	text += "é\n" // 31: an accent is a key too, once bound (keymap.go)
 	body, _ := json.Marshal(map[string]string{"text": text})
 	if rec := serveVisual(v, http.MethodPost, "/input/type", string(body)); rec.Code != http.StatusNoContent {
 		t.Fatalf("type: %d %s", rec.Code, rec.Body)
@@ -472,7 +477,7 @@ func TestCharKeysAreKeys(t *testing.T) {
 			t.Errorf("no key for %q", r)
 		}
 	}
-	for _, r := range "é€😀\r\x00" {
+	for _, r := range "é€😀\x1b\x00" {
 		if k, ok := keysym(r); ok {
 			t.Errorf("%q has key %q", r, k)
 		}
@@ -903,5 +908,50 @@ func TestACutShortListWithAShortcutArmsTheGap(t *testing.T) {
 	c.do(t, http.MethodPost, "/input/type", `{"text": "x", "pace": "instant"}`)
 	if len(c.slept) != 0 {
 		t.Errorf("a cut-short list of plain keys made the next call wait %v", c.slept)
+	}
+}
+
+// An instant ASCII type killed part way (a Type a hand-back cuts short,
+// an agent's type a Take control breaks off) lets go of every key it may
+// hold, and Shift, which it holds for a shifted character (PROJ-196).
+func TestInstantTypeCutShortLetsGoOfItsKeys(t *testing.T) {
+	for target, body := range map[string]string{"/input/type": `{"text": "Hi! Hi", "pace": "instant"}`, "/input/live-type": `{"text": "Hi! Hi"}`} {
+		v, calls := newTestVisual(false)
+		v.run = func(_ context.Context, name string, args ...string) ([]byte, error) {
+			*calls = append(*calls, call{name, args})
+			if len(args) > 0 && args[0] == "type" {
+				return nil, errors.New("signal: killed")
+			}
+			return nil, nil
+		}
+		rec := serveVisual(v, http.MethodPost, target, body)
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("%s killed: %d %s", target, rec.Code, rec.Body)
+		}
+		last := (*calls)[len(*calls)-1]
+		if got := strings.Join(last.args, " "); got != "keyup H i exclam space Shift_L" {
+			t.Fatalf("%s: the release after the kill is %q (calls %v)", target, got, *calls)
+		}
+	}
+}
+
+// The person's Type, ASCII included, drains the live view first: what it
+// queued has run and a key it holds is let go, before the text is typed,
+// so neither mixes with it (PROJ-196).
+func TestPersonTypeDrainsTheLiveView(t *testing.T) {
+	v, calls := newTestVisual(false)
+	x := &fakeXdotool{}
+	v.live.start = func() (*xdo, error) { return x.proc(), nil }
+	if rec := post(v.live.events, `[{"t":"keydown","k":"Shift_L"}]`); rec.Code != http.StatusNoContent {
+		t.Fatal(rec.Code)
+	}
+	if rec := serveVisual(v, http.MethodPost, "/input/live-type", `{"text": "ab"}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("type: %d %s", rec.Code, rec.Body)
+	}
+	if len(*calls) < 2 || strings.Join((*calls)[0].args, " ") != "keyup Shift_L" || (*calls)[1].args[0] != "type" {
+		t.Fatalf("calls %v, want Shift let go before the type", *calls)
+	}
+	if len(v.live.held) != 0 || v.live.x != nil {
+		t.Fatalf("held %v, live xdotool still running %v", v.live.held, v.live.x != nil)
 	}
 }

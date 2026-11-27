@@ -249,7 +249,12 @@ func (properties) Set(intf, name string, _ dbus.Variant) *dbus.Error {
 //
 // They answer 503 when the portal isn't running (a test's control socket;
 // a browser whose portal can't start doesn't start, see main.go).
-func registerChooser(mux *http.ServeMux, p *portal, why string) {
+//
+// A person's answer names their takeover (takeoverHeader), and fence
+// refuses it, 409, once that takeover has ended (fence.go, PROJ-196),
+// checked right before it answers; an answer naming none is always let
+// through.
+func registerChooser(mux *http.ServeMux, p *portal, why string, fence *takeoverFence) {
 	off := func(w http.ResponseWriter) bool {
 		if p == nil {
 			http.Error(w, why, http.StatusServiceUnavailable)
@@ -277,6 +282,11 @@ func registerChooser(mux *http.ServeMux, p *portal, why string) {
 		if off(w) {
 			return
 		}
+		gen, person, err := fence.takeover(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		var in struct {
 			Files  []string `json:"files"`
 			Cancel bool     `json:"cancel"`
@@ -284,11 +294,17 @@ func registerChooser(mux *http.ServeMux, p *portal, why string) {
 		if !decode(w, r, &in) {
 			return
 		}
-		var err error
-		switch {
-		case in.Cancel && len(in.Files) > 0:
+		if in.Cancel && len(in.Files) > 0 {
 			http.Error(w, "send files or cancel, not both", http.StatusBadRequest)
 			return
+		}
+		done, ok := fence.admit(gen, person)
+		if !ok {
+			refuseFenced(w)
+			return
+		}
+		defer done()
+		switch {
 		case in.Cancel:
 			err = p.chooser.cancel(r.PathValue("id"))
 		default:

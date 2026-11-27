@@ -183,6 +183,7 @@ func TestExpiryTellsOnce(t *testing.T) {
 		wg.Go(func() { _, _ = f.svc.Get(context.Background(), h.ID) })
 		wg.Go(func() { _, _ = f.svc.ByToken(context.Background(), token) })
 		wg.Wait()
+		_, _ = f.settled(h.ID) // the end they started
 		got := c.of(notify.HandoffExpired)
 		if len(got) != 1 {
 			t.Fatalf("queued %d handoff.expired", len(got))
@@ -196,10 +197,11 @@ func TestExpiryTellsOnce(t *testing.T) {
 func TestFiveWrongPINsTell(t *testing.T) {
 	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
 	c, _ := f.tell("https://pier.example.com", "https://hooks.example.com/x")
-	_, token := f.open("")
+	h, token := f.open("")
 	for range MaxPINFailures + 2 {
 		f.do(browser(), "POST", "/h/"+token+"/pin", url.Values{"pin": {"0000"}}, nil)
 	}
+	_, _ = f.settled(h.ID) // the fifth PIN starts the end; it runs on its own
 	got := c.of(notify.HandoffCancelled)
 	if len(got) != 1 || got[0].body["cause"] != "wrong_pins" {
 		t.Fatalf("handoff.cancelled: %v", got)
@@ -216,7 +218,7 @@ func TestOtherEndsTellNothing(t *testing.T) {
 	for name, end := range map[string]func(f *fixture, h Handoff){
 		"done":     func(f *fixture, h Handoff) { _, _ = f.svc.Finish(ctx, h, Done, "all set, see evil.example") },
 		"cant":     func(f *fixture, h Handoff) { _, _ = f.svc.Finish(ctx, h, Cant, "no") },
-		"until":    func(f *fixture, h Handoff) { _, _ = f.svc.end(ctx, h, Done, AutoNote, endAuto) },
+		"until":    func(f *fixture, h Handoff) { _, _ = f.svc.endWith(ctx, h, Done, AutoNote, endAuto, "", "") },
 		"withdraw": func(f *fixture, h Handoff) { _, _ = f.svc.Withdraw(ctx, h, "five wrong PINs") },
 		"stopped": func(f *fixture, h Handoff) {
 			if _, err := f.m.Stop(ctx, h.SessionID); err != nil {
@@ -230,7 +232,7 @@ func TestOtherEndsTellNothing(t *testing.T) {
 			c, _ := f.tell("https://pier.example.com", "https://hooks.example.com/x")
 			h, _ := f.open("")
 			end(f, h)
-			got, _ := f.svc.Get(ctx, h.ID)
+			got, _ := f.settled(h.ID)
 			if !got.Status.Final() {
 				t.Fatalf("still %s", got.Status)
 			}
@@ -249,7 +251,7 @@ func TestTurnedOffOrNoWebhookTellsNothing(t *testing.T) {
 		t.Errorf("a handoff.requested turned off is queued")
 	}
 	f.svc.now = func() time.Time { return time.Now().Add(Lifetime + time.Second) }
-	_, _ = f.svc.Get(context.Background(), h.ID)
+	_, _ = f.settled(h.ID)
 	if len(c.all()) != 0 {
 		t.Error("a handoff.expired turned off is queued")
 	}
@@ -309,7 +311,7 @@ func TestAStuckWebhookHoldsNothingUp(t *testing.T) {
 	}
 	f.svc.now = func() time.Time { return time.Now().Add(Lifetime + time.Second) }
 	start = time.Now()
-	if got, err := f.svc.Get(context.Background(), h.ID); err != nil || got.Status != Expired {
+	if got, err := f.settled(h.ID); err != nil || got.Status != Expired {
 		t.Fatalf("expiry: %v", err)
 	}
 	if d := time.Since(start); d > 2*time.Second {

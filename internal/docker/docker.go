@@ -67,8 +67,15 @@ const (
 // browsers with Chromium's accessibility on the session bus and the
 // entrypoint's /tree reader, and tells the container its mode
 // (BROWSERPIER_MODE), which visual_snapshot and click by ref rely on
-// (PROJ-150).
-const Spec = "10"
+// (PROJ-150); 11 types characters the keyboard map lacks by binding them
+// to spare keys for the whole call, so none is dropped (PROJ-195); 12
+// fences a person's takeover as it ends (X-BrowserPier-Takeover,
+// X-BrowserPier-Fence): the orchestrator lets agents back in only once
+// the browser answers 200 with the fence, having refused whatever of
+// that takeover is still on its way and run the live input it had
+// queued; each cleanup (the lift, the clipboard's emptying) names its
+// takeover, leaving a later one alone (PROJ-196).
+const Spec = "12"
 
 const (
 	// StopTimeout is how long a browser container gets to stop before Docker

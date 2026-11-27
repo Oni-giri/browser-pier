@@ -15,6 +15,8 @@ import (
 
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/recording"
+
+	"github.com/Oni-giri/browser-pier/internal/sessions/sessionstest"
 )
 
 // fakeRecorder notes what the manager tells it, in order.
@@ -83,6 +85,113 @@ func wantRecording(t *testing.T, rec *fakeRecorder, id string, want bool, why re
 	}
 }
 
+// A Take control waiting for the agent's broken-off input loses to a stop
+// that begins meanwhile: it gives up, and if the stop fails, the browser
+// is the agents' again, not left under a control no one holds, and
+// recording follows the agent as before (PROJ-200).
+func TestTakeControlThatLosesToAFailedStop(t *testing.T) {
+	f, rec := recordingFixture(t, true)
+	advance := f.clock()
+	s := f.start(f.m)
+	ctx, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	advance(takeOverAfter)
+	took := make(chan error, 1)
+	go func() {
+		_, err := f.m.TakeControlTurn(s.ID, "person")
+		took <- err
+	}()
+	<-ctx.Done() // broken off: the take waits for it to end
+	wantRecording(t, rec, s.ID, false, recording.Person)
+
+	// A stop begins, and fails; while it is under way, the input ends and
+	// the take gives up.
+	f.rt.Mu.Lock()
+	f.rt.StopErr = errors.New("the runtime refused to stop it")
+	f.rt.BeforeStop = func(string) {
+		if snap, _ := f.m.Live("google"); snap.State != Stopping {
+			t.Errorf("stopping in state %s", snap.State)
+		}
+		done()
+		select {
+		case err := <-took:
+			if !errors.Is(err, ErrNotRunning) {
+				t.Errorf("Take control as the browser stops = %v, want ErrNotRunning", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Error("Take control never returned")
+		}
+	}
+	f.rt.Mu.Unlock()
+	if _, err := f.m.Stop(context.Background(), s.ID); err == nil {
+		t.Fatal("the stop didn't fail")
+	}
+	snap, _ := f.m.Live("google")
+	if snap.State != Running || snap.HumanControl {
+		t.Fatalf("after the failed stop: %s, person in control %v", snap.State, snap.HumanControl)
+	}
+	// Not recording until the agent acts (the tail before the take is
+	// gone, as after any takeover), and then recording again.
+	wantRecording(t, rec, s.ID, false, recording.Idle)
+	_, done, err = f.m.AgentInput(context.Background(), s.ID, "tok")
+	if err != nil {
+		t.Fatalf("agent input after the failed stop = %v", err)
+	}
+	wantRecording(t, rec, s.ID, true, "")
+	done()
+	if l, err := f.m.PageLease(context.Background(), s.ID, "t"); err != nil {
+		t.Fatalf("a page call after the failed stop = %v", err)
+	} else {
+		l.Release()
+	}
+	// And a person can take control again, once the agent is quiet.
+	advance(agentQuiet + time.Second)
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
+		t.Fatalf("Take control after = %v", err)
+	}
+}
+
+// A handoff that ends while its browser is stopping: if the stop fails,
+// the browser is put back Running, the agents', not Needs help with no
+// handoff left to end it (PROJ-196).
+func TestHandoffEndingDuringAFailedStop(t *testing.T) {
+	f, rec := recordingFixture(t, true)
+	s := f.start(f.m)
+	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.TakeControl(s.ID, "person"); err != nil { // the handoff page
+		t.Fatal(err)
+	}
+	f.rt.Mu.Lock()
+	f.rt.StopErr = errors.New("the runtime refused to stop it")
+	f.rt.BeforeStop = func(string) {
+		// What the handoff's end does (handoff.Service.end).
+		f.m.ReleaseControl(s.ID)
+		if _, err := f.m.SetNeedsHelp(s.ID, false); err != nil && !errors.Is(err, ErrNotRunning) {
+			t.Errorf("ending the handoff while stopping = %v", err)
+		}
+	}
+	f.rt.Mu.Unlock()
+	if _, err := f.m.Stop(context.Background(), s.ID); err == nil {
+		t.Fatal("the stop didn't fail")
+	}
+	if snap, _ := f.m.Live("google"); snap.State != Running || snap.HumanControl {
+		t.Fatalf("after the failed stop: %s, person in control %v", snap.State, snap.HumanControl)
+	}
+	if stored := f.stored(s.ID); stored.State != Running {
+		t.Errorf("saved as %s", stored.State)
+	}
+	_, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
+	if err != nil {
+		t.Fatalf("agent input after the failed stop = %v", err)
+	}
+	wantRecording(t, rec, s.ID, true, "")
+	done()
+}
+
 func TestTakeControlStopsTheRecorderBeforeItReturns(t *testing.T) {
 	for _, viaHandoff := range []bool{false, true} {
 		f, rec := recordingFixture(t, true)
@@ -116,7 +225,7 @@ func TestTakeControlStopsTheRecorderBeforeItReturns(t *testing.T) {
 						rec.note("person has it")
 						return
 					}
-				} else if done, err := f.m.HumanInput(s.ID, "person"); err == nil {
+				} else if done, err := humanInput(f.m, s.ID); err == nil {
 					done()
 					rec.note("person has it")
 					return
@@ -458,9 +567,11 @@ func TestReconcileAndRecordings(t *testing.T) {
 		}
 	}
 	running, helped := f.start(f.m), f.startProfile("github")
-	if _, err := f.m.SetNeedsHelp(helped.ID, true); err != nil {
+	epoch, err := f.m.OpenHelp(helped.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
+	openHandoffRow(t, f.m, helped, epoch)
 	f.m.Close()
 	gone := writeRecording(t, f.dir, "deleted", "aaaaaaaaaaaaaaaaaaaaaaaa")
 
@@ -590,7 +701,7 @@ func TestRecordingStaysOffWhileTheClipboardIsEmptied(t *testing.T) {
 	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatal(err)
 	}
-	done, err := f.m.HumanInput(s.ID, "person")
+	done, err := humanInput(f.m, s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -628,8 +739,22 @@ func TestReconcileEmptiesTheClipboardBeforeAnyRecording(t *testing.T) {
 	var recP atomic.Pointer[fakeRecorder]
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	// Whatever key or button a person held as BrowserPier went is let go
+	// first, as at any hand-back.
+	var lifted atomic.Int64
+	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, r *http.Request) {
+		if rec := recP.Load(); rec != nil {
+			lifted.Store(time.Now().UnixNano())
+			rec.note("lifted")
+		}
+		sessionstest.AnswerLift(w, r)
+	})
 	mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) {
 		if rec := recP.Load(); rec != nil {
+			// A copy pressed just before the restart lands first.
+			if waited := time.Duration(time.Now().UnixNano() - lifted.Load()); waited < clipboardSettle {
+				t.Errorf("emptied %v after the lift, before a copy could land", waited)
+			}
 			rec.mu.Lock()
 			if rec.calls != 0 {
 				t.Errorf("the recorder was told %v before the clipboard was emptied", rec.events)
@@ -659,8 +784,8 @@ func TestReconcileEmptiesTheClipboardBeforeAnyRecording(t *testing.T) {
 	wantRecording(t, rec, s.ID, true, "")
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
-	if len(rec.events) != 2 || rec.events[0] != "emptied" || rec.events[1] != "recording" {
-		t.Fatalf("events %v, want the clipboard emptied, then recording", rec.events)
+	if len(rec.events) != 3 || rec.events[0] != "lifted" || rec.events[1] != "emptied" || rec.events[2] != "recording" {
+		t.Fatalf("events %v, want held keys let go, the clipboard emptied, then recording", rec.events)
 	}
 }
 
