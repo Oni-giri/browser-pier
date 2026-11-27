@@ -229,6 +229,9 @@ func TestHandoffPageWaitsOutAStuckHandBack(t *testing.T) {
 	if got := fmt.Sprint(phone.Eval(`document.body.innerText`)); !strings.Contains(got, "Done, hand back") {
 		t.Fatalf("the phone isn't on the control step: %q", got)
 	}
+	// The person has the file chooser open, in full screen, as the time
+	// runs out.
+	phone.Eval(`document.getElementById("chooser").showModal(); document.body.classList.add("full-open")`)
 	base := loads(token) // the link's first open redirects to the page: 2
 	// The time runs out (8 s), the end starts and sticks; give the page
 	// as long again to misbehave.
@@ -238,6 +241,11 @@ func TestHandoffPageWaitsOutAStuckHandBack(t *testing.T) {
 	}
 	if got := fmt.Sprint(phone.Eval(`document.body.innerText`)); !strings.Contains(got, "Handing back") {
 		t.Fatalf("the page as the time ran out: %q", got)
+	}
+	// Nothing to drive or answer is left: no live view, no finish form,
+	// no open dialog, no full screen.
+	if left := fmt.Sprint(phone.Eval(`[document.querySelector(".ho-viewer"), document.getElementById("finish"), document.querySelector("dialog[open]"), document.body.classList.contains("full-open") || null].filter(Boolean).length`)); left != "0" {
+		t.Fatalf("%s controls left on the page as it hands back", left)
 	}
 	// Opened again meanwhile: the server's "Handing back…" page, which
 	// doesn't reload either.

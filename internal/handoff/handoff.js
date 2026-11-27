@@ -28,13 +28,24 @@
   };
 
   // showEnding turns the page into the "Handing back…" state, with no
-  // controls left, and waits for the end.
+  // controls left: the live view, the finish form and its card go, the
+  // file chooser closes, full screen ends. Then it waits for the end.
   const showEnding = () => {
     if (ending) return;
     ending = true;
     if (timer) timer.textContent = "Handing back…";
-    const main = document.querySelector("main.ho, .ho-viewer");
-    if (main && !main.querySelector("[data-handing-back]")) {
+    body.dataset.handingBack = "";
+    body.classList.remove("full-open");
+    if (document.fullscreenElement && document.exitFullscreen) {
+      document.exitFullscreen().catch(() => { /* gone already */ });
+    }
+    const chooser = document.getElementById("chooser");
+    if (chooser) {
+      if (chooser.open) chooser.close();
+      chooser.remove();
+    }
+    if (!document.querySelector("section[data-handing-back]")) {
+      const live = document.querySelectorAll("main.ho, .ho-viewer");
       const sec = document.createElement("section");
       sec.className = "cell ho-end";
       sec.dataset.handingBack = "";
@@ -46,7 +57,12 @@
       const wrap = document.createElement("main");
       wrap.className = "ho";
       wrap.append(sec);
-      main.replaceWith(wrap);
+      if (live.length > 0) {
+        live[0].replaceWith(wrap);
+        for (const el of Array.from(live).slice(1)) el.remove();
+      } else {
+        body.append(wrap);
+      }
     }
     if (statusURL) pollEnd(2000);
   };
