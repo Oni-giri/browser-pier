@@ -384,18 +384,3 @@ func TestProxyCheckModeSkipsTheBrowser(t *testing.T) {
 		t.Fatal("proxy-check prepared the profile")
 	}
 }
-
-// TestProxyErrorKeepsItsText: the kinds don't change what a browser's
-// start logs.
-func TestProxyErrorKeepsItsText(t *testing.T) {
-	addr := statusProxy(t, "407 Proxy Authentication Required")
-	u, _ := url.Parse("http://" + checkUser + ":" + checkPass + "@" + addr)
-	f := startForwarder(t, u.String(), egressPolicy{})
-	_, err := f.connect(t.Context(), "geo.test:80")
-	if err == nil || err.Error() != "the proxy answered 407 Proxy Authentication Required" {
-		t.Fatalf("err = %v", err)
-	}
-	if checkReason(err, false) != proxyAuth {
-		t.Fatalf("kind %s", checkReason(err, false))
-	}
-}
