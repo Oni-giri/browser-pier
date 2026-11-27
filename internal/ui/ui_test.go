@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -948,3 +949,55 @@ func TestWedgedHandoffHangsNoPage(t *testing.T) {
 		t.Fatalf("the handoff after Stop: %s, %v", got.Status, err)
 	}
 }
+
+// A hand-back from the profile page whose browser doesn't answer in time
+// is expected, not an error: the page says it couldn't hand back yet,
+// and nothing is logged as an error.
+func TestHandBackNotYetIsNoError(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	var mu sync.Mutex
+	var logged strings.Builder
+	f.app.log = slog.New(slog.NewTextHandler(writerFunc(func(b []byte) (int, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return logged.Write(b)
+	}), &slog.HandlerOptions{Level: slog.LevelError}))
+	f.handoffs.SetHandBackWait(200 * time.Millisecond)
+	f.profile("google")
+	s, _, err := f.m.Start(ctx, "google", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.handoffs.Create(ctx, s.ID, "research-bot", handoff.SensitiveInput, "Enter the 2FA code", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.TakeControl(s.ID, f.holder); err != nil {
+		t.Fatal(err)
+	}
+	f.choosers.wedged.Store(true)
+	r := f.post("/profiles/google/handback", url.Values{"status": {"done"}})
+	if r.code != http.StatusSeeOther {
+		t.Fatalf("hand back: %d", r.code)
+	}
+	var flash string
+	for _, c := range r.header.Values("Set-Cookie") {
+		if v, ok := strings.CutPrefix(c, flashCookie+"="); ok {
+			flash, _ = url.QueryUnescape(strings.SplitN(v, ";", 2)[0])
+		}
+	}
+	if !strings.HasPrefix(flash, "err:Couldn't hand back yet") {
+		t.Fatalf("the page says %q", flash)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if logged.Len() > 0 {
+		t.Fatalf("logged as an error: %s", logged.String())
+	}
+	_, _ = f.m.Stop(ctx, s.ID) // which ends the hand-back
+}
+
+// writerFunc is an io.Writer.
+type writerFunc func([]byte) (int, error)
+
+func (w writerFunc) Write(b []byte) (int, error) { return w(b) }
