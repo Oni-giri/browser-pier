@@ -523,10 +523,16 @@ func TestSweepCancelsAHandoffWhoseBrowserStopped(t *testing.T) {
 	if _, err := f.m.Stop(ctx, h.SessionID); err != nil {
 		t.Fatal(err)
 	}
-	f.svc.sweep(ctx)
+	f.svc.sweep(ctx) // each handoff's end on its own
 	var status Status
-	if err := f.svc.db.QueryRow(`SELECT status FROM handoffs WHERE id = ?`, h.ID).Scan(&status); err != nil || status != Cancelled {
-		t.Fatalf("after a sweep: %s, %v", status, err)
+	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		err := f.svc.db.QueryRow(`SELECT status FROM handoffs WHERE id = ?`, h.ID).Scan(&status)
+		if err == nil && status == Cancelled {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after a sweep: %s, %v", status, err)
+		}
 	}
 	select {
 	case got := <-waited:
@@ -1159,10 +1165,25 @@ func TestWedgedBrowserDoesntHoldTheSweep(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("the sweep is held by a browser that doesn't answer")
 	}
-	for _, h := range []Handoff{wedged, waiting} {
-		if got, err := f.svc.Get(ctx, h.ID); err != nil || got.Status != Expired {
-			t.Errorf("handoff %s after the sweep: %+v, %v", h.ID, got.Status, err)
+	// The other profile's handoff ends, on its own.
+	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		short, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+		got, err := f.svc.Get(short, waiting.ID)
+		cancel()
+		if err == nil && got.Status == Expired {
+			break
 		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the other profile's handoff after the sweep: %s, %v", got.Status, err)
+		}
+	}
+	// The wedged one isn't told as ended while its browser isn't handed
+	// back: still handing back.
+	short, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	got, err := f.svc.Get(short, wedged.ID)
+	cancel()
+	if got.Status.Final() || !errors.Is(err, ErrHandingBack) {
+		t.Errorf("the wedged handoff: %s, %v; want it still handing back", got.Status, err)
 	}
 	if s, _ := f.m.Live("github"); s.State != sessions.Running {
 		t.Errorf("the other profile's browser: %s", s.State)
@@ -1187,42 +1208,58 @@ func holdLifts(t *testing.T, f *fixture) (letGo func()) {
 	return letGo
 }
 
-func shortHandBack(f *fixture) { f.svc.handBackWait = 300 * time.Millisecond }
-
-// An agent is never told a handoff has ended while its browser is still
-// being handed back: not by the expiry that ends it, nor by a question
-// that arrives during the hand-back. It hears handing_back, and the
-// final status once its agents are let in (PROJ-196).
-func TestAgentHearsTheEndOnlyOnceHandedBack(t *testing.T) {
-	for _, how := range []string{"expiry", "done, then a question"} {
+// Nothing tells anyone a handoff has ended before its browser is handed
+// back: the end that asked waits for it (or, its request over, says it
+// is still handing back), and anyone else looking meanwhile sees it
+// pending, or, if their look would end it, also hears it is still
+// handing back; once handed back, it is final and agents can act
+// (PROJ-196).
+func TestHandoffIsFinalOnlyOnceHandedBack(t *testing.T) {
+	for _, how := range []string{"done", "expiry"} {
 		t.Run(how, func(t *testing.T) {
 			f := newFixture(t, profiles.PolicyLink, auth.WebOptions{})
-			shortHandBack(f)
 			ctx := context.Background()
 			h, _ := f.open("")
 			if err := f.m.TakeControl(h.SessionID); err != nil { // a person helps
 				t.Fatal(err)
 			}
 			letGo := holdLifts(t, f)
-			want := Expired
-			if how == "expiry" {
+			want := Done
+			ended := make(chan error, 1)
+			if how == "done" {
+				go func() {
+					_, err := f.svc.Finish(ctx, h, Done, "")
+					ended <- err
+				}()
+			} else {
+				want = Expired
 				later := time.Now().Add(Lifetime + time.Second)
 				f.svc.now = func() time.Time { return later }
-			} else {
-				want = Done
-				if _, err := f.svc.Finish(ctx, h, Done, ""); err != nil {
-					t.Fatal(err)
-				}
+				go func() {
+					_, err := f.svc.Get(ctx, h.ID) // ends it
+					ended <- err
+				}()
 			}
-			got, err := f.svc.Wait(ctx, h.ID, 0)
-			if err != nil {
-				t.Fatal(err)
+			for !f.svc.isEnding(h.ID) {
+				time.Sleep(time.Millisecond)
 			}
+			// A request that gives up: told it is still handing back.
+			short, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+			got, err := f.svc.Wait(short, h.ID, 0)
+			cancel()
 			if got.Status.Final() {
-				t.Errorf("told %s while the browser is still being handed back", got.Status)
+				t.Errorf("told %s mid-hand-back", got.Status)
 			}
-			if got.Status != HandingBack {
-				t.Errorf("told %s, want %s", got.Status, HandingBack)
+			if how == "expiry" && !errors.Is(err, ErrHandingBack) {
+				t.Errorf("a look that ends it, mid-hand-back = %v, want ErrHandingBack", err)
+			}
+			// An agent withdrawing it meanwhile joins the end under way, and
+			// its request, given up, hears that it is still handing back.
+			short, cancel = context.WithTimeout(ctx, 100*time.Millisecond)
+			got, err = f.svc.Withdraw(short, h, "")
+			cancel()
+			if got.Status.Final() || !errors.Is(err, ErrHandingBack) {
+				t.Errorf("a withdrawal mid-hand-back: %s, %v; want ErrHandingBack", got.Status, err)
 			}
 			if _, done, err := f.m.AgentInput(ctx, h.SessionID); !errors.Is(err, sessions.ErrHumanDriving) {
 				if err == nil {
@@ -1230,8 +1267,16 @@ func TestAgentHearsTheEndOnlyOnceHandedBack(t *testing.T) {
 				}
 				t.Fatalf("agent input mid-hand-back = %v", err)
 			}
+			select {
+			case err := <-ended:
+				t.Fatalf("the end returned (%v) before the hand-back", err)
+			default:
+			}
 			letGo()
-			got, err = f.svc.Wait(ctx, h.ID, 5*time.Second)
+			if err := <-ended; err != nil {
+				t.Fatal(err)
+			}
+			got, err = f.svc.Wait(ctx, h.ID, 0)
 			if err != nil || got.Status != want {
 				t.Fatalf("after the hand-back: %s, %v; want %s", got.Status, err, want)
 			}
@@ -1248,7 +1293,7 @@ func TestAgentHearsTheEndOnlyOnceHandedBack(t *testing.T) {
 // closed page's takeover is still being handed back (PROJ-196).
 func TestClosedThenReloadedHandoffPageGetsControlBack(t *testing.T) {
 	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
-	h, token := f.open("")
+	_, token := f.open("")
 	phone := browser()
 	if p := f.do(phone, "POST", "/h/"+token+"/pin", url.Values{"pin": {"4821"}}, nil); p.code != http.StatusSeeOther {
 		t.Fatalf("right PIN: %d %s", p.code, p.body)
@@ -1316,14 +1361,6 @@ func TestClosedThenReloadedHandoffPageGetsControlBack(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the closed page's takeover was never handed back")
 	}
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		f.svc.mu.Lock()
-		n := len(f.svc.viewers[h.ID])
-		f.svc.mu.Unlock()
-		if n == 0 {
-			break
-		}
-	}
 	// The reloaded page, while that hand-back is under way.
 	if r := offer(pionOffer(t)); r.code != http.StatusOK || !strings.Contains(r.body, `"control":true`) {
 		t.Fatalf("the reloaded page's offer: %d %s", r.code, r.body)
@@ -1385,5 +1422,83 @@ func TestHandoffEndRepairsAMismatchedEpoch(t *testing.T) {
 	}
 	if s, _ := f.m.Live("google"); s.State != sessions.Running {
 		t.Fatalf("after the handoff: %s", s.State)
+	}
+}
+
+// Two ends of one handoff at once (the person's Done, the agent's
+// withdrawal) run one hand-back: the second joins the first and gets its
+// outcome, neither returns before the browser is handed back, and the
+// loser never undoes the winner's end (PROJ-196).
+func TestConcurrentEndsOfOneHandoff(t *testing.T) {
+	f := newFixture(t, profiles.PolicyLink, auth.WebOptions{})
+	ctx := context.Background()
+	h, _ := f.open("")
+	if err := f.m.TakeControl(h.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	var lifts atomic.Int32
+	gate := make(chan struct{})
+	var once sync.Once
+	letGo := func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(letGo)
+	hold := func() { lifts.Add(1); <-gate }
+	f.onLift.Store(&hold)
+	type outcome struct {
+		h   Handoff
+		err error
+	}
+	results := make(chan outcome, 2)
+	go func() {
+		got, err := f.svc.Finish(ctx, h, Done, "")
+		results <- outcome{got, err}
+	}()
+	go func() {
+		got, err := f.svc.Withdraw(ctx, h, "")
+		results <- outcome{got, err}
+	}()
+	time.Sleep(200 * time.Millisecond)
+	select {
+	case r := <-results:
+		t.Fatalf("an end returned (%s, %v) before the hand-back", r.h.Status, r.err)
+	default:
+	}
+	if n := lifts.Load(); n != 1 {
+		t.Errorf("%d hand-backs began, want 1", n)
+	}
+	letGo()
+	a, b := <-results, <-results
+	if a.err != nil || b.err != nil || a.h.Status != b.h.Status || !a.h.Status.Final() {
+		t.Fatalf("the two ends: %s, %v and %s, %v; want one final status", a.h.Status, a.err, b.h.Status, b.err)
+	}
+	got, err := f.svc.Get(ctx, h.ID)
+	if err != nil || got.Status != a.h.Status {
+		t.Fatalf("stored: %s, %v; told %s", got.Status, err, a.h.Status)
+	}
+	if s, _ := f.m.Live("google"); s.State != sessions.Running || s.HumanControl {
+		t.Errorf("after: %s, person in control %v", s.State, s.HumanControl)
+	}
+}
+
+// A handoff's end whose help has already ended never ends a newer help:
+// a later handoff's, opened meanwhile, before that one's row was stored
+// (PROJ-196).
+func TestOldHandoffEndLeavesANewerHelp(t *testing.T) {
+	f := newFixture(t, profiles.PolicyLink, auth.WebOptions{})
+	ctx := context.Background()
+	old, _ := f.open("")
+	// Its help ends (as by an end cut short), and a later handoff opens
+	// help, its row not stored yet.
+	if _, err := f.m.EndHandoff(old.SessionID, old.helpEpoch); err != nil {
+		t.Fatal(err)
+	}
+	newer, err := f.m.OpenHelp(old.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Finish(ctx, old, Done, ""); err != nil {
+		t.Fatal(err)
+	}
+	if epoch, waiting := f.m.HelpEpoch(old.SessionID); !waiting || epoch != newer {
+		t.Fatalf("the newer help: waiting %v, epoch %d; want %d", waiting, epoch, newer)
 	}
 }

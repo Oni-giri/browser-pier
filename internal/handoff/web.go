@@ -415,6 +415,12 @@ func (w *Web) finish(rw http.ResponseWriter, r *http.Request) {
 		status = Cant
 	}
 	h, err := w.svc.Finish(r.Context(), h, status, r.PostFormValue("note"))
+	if errors.Is(err, ErrHandingBack) {
+		if r.Context().Err() == nil {
+			http.Error(rw, "Handing back: the browser hasn't answered yet. Reload in a moment.", http.StatusServiceUnavailable)
+		}
+		return
+	}
 	if err != nil {
 		http.Error(rw, "something went wrong", http.StatusInternalServerError)
 		return

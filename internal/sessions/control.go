@@ -112,6 +112,19 @@ func (m *Manager) HelpEpoch(id string) (uint64, bool) {
 	return l.sess.helpEpoch, true
 }
 
+// WaitsForHelp reports whether session id still waits for the help it
+// asked for as epoch: in Needs help with that epoch, or stopping from it
+// (a stop that fails puts it back).
+func (m *Manager) WaitsForHelp(id string, epoch uint64) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l := m.findLocked(id)
+	if l == nil || epoch == 0 || l.sess.helpEpoch != epoch {
+		return false
+	}
+	return l.sess.State == NeedsHelp || (l.sess.State == Stopping && l.stop != nil && l.stopPrev == NeedsHelp)
+}
+
 // TakeControlInHandoff is TakeControlGen for a handoff's live view: only
 // while the session still waits for the help it asked for as epoch
 // (HelpEpoch), checked in the same step as the take and again once
@@ -319,11 +332,9 @@ func (m *Manager) InControl(id string, gen uint64) bool {
 // (PROJ-23) stays off throughout, and the gate is asked again only as
 // agents get the browser back.
 //
-// The hand-back runs on its own (beginReleaseLocked), tied to the
-// session: ReleaseControl waits for it, until agents have the browser or
-// the session has ended (a stop ends a hand-back the browser never
-// answers). Callers that mustn't wait on a browser use HandBack, with
-// their context, or EndHandoff.
+// It returns once agents have the browser (or the session has ended: a
+// stop ends a hand-back the browser never answers). Callers that must not
+// wait longer than a request use HandBack.
 //
 // It ends whoever's control it is: it is for what ends a takeover from
 // outside it (a handoff, the profile page's Hand back). The person's own
@@ -332,21 +343,15 @@ func (m *Manager) ReleaseControl(id string) {
 	_ = m.HandBack(context.Background(), id)
 }
 
-// HandingBack returns, while the person's control of session id is
-// ending (a hand-back under way), a channel closed once agents have the
-// browser; nil otherwise. It starts nothing.
-func (m *Manager) HandingBack(id string) <-chan struct{} {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if l := m.findLocked(id); l != nil && l.releasing {
-		return l.released
-	}
-	return nil
-}
+// ErrHandingBack: the caller stopped waiting (its context ended) before
+// the browser was handed back. The hand-back goes on to its end, agents
+// kept out until then; ask again.
+var ErrHandingBack = errors.New("the browser is still being handed back; ask again shortly")
 
-// HandBack is ReleaseControl, waiting no longer than ctx: the hand-back
-// goes on without the caller if ctx ends first, and ctx's error is
-// returned.
+// HandBack is ReleaseControl, waiting no longer than ctx: if ctx ends
+// first it returns ErrHandingBack, and the hand-back goes on to its end
+// without the caller (it runs tied to the session, so a caller giving up
+// never leaves it half done).
 func (m *Manager) HandBack(ctx context.Context, id string) error {
 	m.mu.Lock()
 	l := m.findLocked(id)
@@ -356,32 +361,39 @@ func (m *Manager) HandBack(ctx context.Context, id string) error {
 	}
 	done := m.beginReleaseLocked(l, id)
 	m.mu.Unlock()
+	return waitHandedBack(ctx, done)
+}
+
+// waitHandedBack waits for a hand-back's done, or ctx: ErrHandingBack.
+func waitHandedBack(ctx context.Context, done <-chan struct{}) error {
 	select {
 	case <-done:
 		return nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return ErrHandingBack
 	}
 }
 
-// ReleaseControlGen starts handing back the takeover of generation gen
+// ReleaseControlGen is ReleaseControl for the takeover of generation gen
 // (TakeControlGen) alone: if that control has ended already, however, it
-// does nothing and returns nil, so a live view that missed the end of its
-// control never ends, or lifts the keys or empties the clipboard of, the
-// takeover of whoever took the browser since (PROJ-196). The check and
-// the start of the hand-back are one step under m.mu, and no one else can
-// take control until it is over. It doesn't wait: done is closed once
-// agents have the browser. started is false if the hand-back had begun
-// already (its control was ended for it meanwhile).
-func (m *Manager) ReleaseControlGen(id string, gen uint64) (done <-chan struct{}, started bool) {
+// does nothing and returns false, so a live view that missed the end of
+// its control never ends, or lifts the keys or empties the clipboard of,
+// the takeover of whoever took the browser since (PROJ-196). The check
+// and the start of the hand-back are one step under m.mu, and no one
+// else can take control until it is over. It waits for it as HandBack
+// does: ErrHandingBack if ctx ends first. ended is false if this
+// takeover's control had ended already, or was ending for it.
+func (m *Manager) ReleaseControlGen(ctx context.Context, id string, gen uint64) (ended bool, err error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	l := m.findLocked(id)
 	if l == nil || !l.human || l.humanGen != gen {
-		return nil, false
+		m.mu.Unlock()
+		return false, nil
 	}
-	started = !l.releasing
-	return m.beginReleaseLocked(l, id), started
+	ended = !l.releasing
+	done := m.beginReleaseLocked(l, id)
+	m.mu.Unlock()
+	return ended, waitHandedBack(ctx, done)
 }
 
 // beginReleaseLocked starts ending l's person's control, unless that has

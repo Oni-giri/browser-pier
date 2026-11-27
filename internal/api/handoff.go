@@ -51,8 +51,6 @@ func handoffOut(h handoff.Handoff) handoffJSON {
 	switch {
 	case h.Status == handoff.Done && h.Auto:
 		out.Message = "The tab in front reached the address you gave in until_url, so the handoff ended without the person tapping Done. The page may have changed: re-read it before acting."
-	case h.Status == handoff.HandingBack:
-		out.Message = "The handoff has ended and the browser is being handed back to you. Wait on GET /api/handoffs/{id}?wait=60 again before acting."
 	case h.Status == handoff.Pending:
 		out.Message = "Send the URL to the person through your own channel, then wait on GET /api/handoffs/{id}?wait=900. You are paused until they hand back."
 	case h.Status == handoff.Done:
@@ -177,6 +175,13 @@ func (a *API) withdrawHandoff(w http.ResponseWriter, r *http.Request) {
 	h, err = a.handoffs.Withdraw(r.Context(), h, note)
 	if errors.Is(err, handoff.ErrInUse) {
 		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if errors.Is(err, handoff.ErrHandingBack) {
+		if r.Context().Err() != nil {
+			return // the agent gave up waiting
+		}
+		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 	if err != nil {

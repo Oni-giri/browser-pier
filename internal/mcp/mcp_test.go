@@ -556,9 +556,12 @@ func TestWaitForHandoffWaitsForTheHandBack(t *testing.T) {
 			close(gate)
 		}
 	}()
-	if _, err := f.handoffs.Finish(ctx, open[0], handoff.Done, ""); err != nil {
-		t.Fatal(err)
-	}
+	finished := make(chan error, 1)
+	go func() { // the person's Done: it waits for the hand-back
+		_, err := f.handoffs.Finish(ctx, open[0], handoff.Done, "")
+		finished <- err
+	}()
+	time.Sleep(100 * time.Millisecond)
 	_, out := call(t, cs, "wait_for_handoff", map[string]any{"handoff_id": open[0].ID, "seconds": 1})
 	if !strings.Contains(out, "Still waiting") {
 		t.Errorf("wait_for_handoff mid-hand-back: %s", out)
@@ -568,6 +571,9 @@ func TestWaitForHandoffWaitsForTheHandBack(t *testing.T) {
 		t.Fatal("agents were let in mid-hand-back")
 	}
 	close(gate)
+	if err := <-finished; err != nil {
+		t.Fatal(err)
+	}
 	_, out = call(t, cs, "wait_for_handoff", map[string]any{"handoff_id": open[0].ID, "seconds": 5})
 	if !strings.Contains(out, "done") {
 		t.Fatalf("wait_for_handoff after: %s", out)

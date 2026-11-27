@@ -1308,8 +1308,10 @@ func (m *Manager) SetNeedsHelp(id string, needsHelp bool) (Session, error) {
 // EndHandoff ends the handoff that opened Needs help as epoch (OpenHelp),
 // in one step under m.mu: the browser stops waiting for that help, and
 // the control of whoever has it then, the person helping, begins to end.
-// It doesn't wait for that: done is closed once agents have the browser
-// (nil if no one had control). Whoever takes control after it is someone
+// It doesn't wait for that itself: done is closed once agents have the
+// browser (nil if no one had control), and the handoff waits for it
+// before it tells anyone the handoff has ended, so that is only ever said
+// once true (internal/handoff). Whoever takes control after it is someone
 // else, whose control this never ends; nor does an end for another
 // handoff's epoch, which changes nothing and returns ErrHandoffEnded
 // (PROJ-196).

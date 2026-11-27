@@ -522,7 +522,7 @@ func TestControlBelongsToItsTakeover(t *testing.T) {
 	if f.m.InControl(s.ID, first) || !f.m.InControl(s.ID, second) {
 		t.Error("InControl names the wrong takeover")
 	}
-	if done, _ := f.m.ReleaseControlGen(s.ID, first); done != nil {
+	if ended, _ := f.m.ReleaseControlGen(context.Background(), s.ID, first); ended {
 		t.Error("the first person's hand-back ended the second's control")
 	}
 	if got, _ := f.m.Live("google"); !got.HumanControl {
@@ -536,10 +536,8 @@ func TestControlBelongsToItsTakeover(t *testing.T) {
 	} else {
 		done()
 	}
-	if done, started := f.m.ReleaseControlGen(s.ID, second); done == nil || !started {
-		t.Error("the second person's hand-back did nothing")
-	} else {
-		<-done
+	if ended, err := f.m.ReleaseControlGen(context.Background(), s.ID, second); !ended || err != nil {
+		t.Errorf("the second person's hand-back = %v, %v", ended, err)
 	}
 	if got := took(); got != "lift empty" {
 		t.Errorf("the second person's hand-back: the browser got %q, want lift, then empty", got)
@@ -547,7 +545,7 @@ func TestControlBelongsToItsTakeover(t *testing.T) {
 	if got, _ := f.m.Live("google"); got.HumanControl {
 		t.Error("still under a person's control")
 	}
-	if done, _ := f.m.ReleaseControlGen(s.ID, second); done != nil || took() != "" {
+	if ended, _ := f.m.ReleaseControlGen(context.Background(), s.ID, second); ended || took() != "" {
 		t.Error("handed back twice")
 	}
 }

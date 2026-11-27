@@ -221,7 +221,7 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 	if err != nil {
 		markGone()
 		if control {
-			h.m.ReleaseControlGen(s.ID, gen)
+			_, _ = h.m.ReleaseControlGen(r.Context(), s.ID, gen)
 		}
 		unwatch()
 		http.Error(w, "couldn't connect: "+err.Error(), http.StatusBadRequest)
@@ -236,6 +236,7 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 		markGone()
 		vw.handBack()
 		unwatch()
+		v.markGone()
 	}()
 	if control {
 		// It may have been handed back meanwhile (its input channel's
@@ -322,7 +323,7 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if !v.stillAllowed() {
-		v.releaseLocked()
+		_ = v.releaseLocked(viewerHandBackWait)
 		if v.conn != nil {
 			go v.conn.Close()
 		}
@@ -336,7 +337,7 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 				return
 			}
 			// Its control ended elsewhere: this is a take afresh.
-			v.releaseLocked()
+			_ = v.releaseLocked(viewerHandBackWait)
 		}
 		gen, err := v.take()
 		switch {
@@ -355,7 +356,9 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 			say(map[string]any{"type": "error", "msg": "The browser isn't running."})
 		}
 	case "release":
-		v.releaseLocked()
+		if err := v.releaseLocked(viewerHandBackWait); errors.Is(err, sessions.ErrHandingBack) {
+			say(map[string]any{"type": "error", "msg": "The browser is still being handed back."})
+		}
 		say(map[string]any{"type": "control", "on": false})
 	case "lift", "input", "text", "clipboard", "clipboard-set":
 		var ctx context.Context
@@ -380,26 +383,35 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 			// the page is told, rather than outliving it with no one
 			// holding it if the stop fails. For control that has ended,
 			// this only drops the flag.
-			v.releaseLocked()
+			_ = v.releaseLocked(viewerHandBackWait)
 			if m.Type == "clipboard" || m.Type == "clipboard-set" {
 				say(map[string]any{"type": "clipboard-error", "id": m.ID, "msg": "You don't have control."})
 			}
 			say(map[string]any{"type": "control", "on": false})
 			return
 		}
-		defer done()
 		// ended: the browser refused the operation (409) because this
 		// takeover has ended, or it was cut short as its hand-back began.
 		// The viewer then gives control up, tells its page, and sends
-		// nothing more, rather than answer every move with an error.
+		// nothing more, rather than answer every move with an error. It
+		// gives it up only once the operation's lease is let go (done):
+		// the hand-back waits for the person's operations under way, this
+		// one included, so releasing while holding it would wait on itself.
+		giveUp := false
+		defer func() {
+			done()
+			if giveUp {
+				_ = v.releaseLocked(viewerHandBackWait)
+				say(map[string]any{"type": "control", "on": false})
+			}
+		}()
 		ended := func(err error) bool {
 			var se *statusError
 			refused := errors.As(err, &se) && se.code == http.StatusConflict
 			if ctx.Err() == nil && !refused {
 				return false
 			}
-			v.releaseLocked()
-			say(map[string]any{"type": "control", "on": false})
+			giveUp = true
 			return true
 		}
 		switch m.Type {
@@ -486,35 +498,38 @@ func (v *viewer) take() (uint64, error) {
 func (v *viewer) handBack() {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	v.releaseLocked()
+	// No page to answer: it waits the hand-back out, whatever it takes
+	// (a stop ends one the browser never answers), so whoever watches for
+	// this viewer to be gone (a handoff's reloaded page) finds the browser
+	// handed back.
+	_ = v.releaseLocked(0)
 }
 
 // releaseLocked ends this viewer's control, if it still has it (the
 // hand-back lets go of what the person held first). Control that has
 // ended without it (and perhaps been taken by someone else since) is
 // left alone: the viewer only forgets it had it.
-func (v *viewer) releaseLocked() {
+func (v *viewer) releaseLocked(wait time.Duration) error {
 	if !v.control {
-		return
+		return nil
 	}
 	v.control = false
-	// The hand-back goes on by itself; the viewer waits for it a little
-	// (handBackReply), so that by the time its page hears control:false
-	// and asks the status, the browser no longer shows a person in
-	// control, as if someone else had it.
-	if done, _ := v.h.m.ReleaseControlGen(v.session, v.gen); done != nil {
-		t := time.NewTimer(handBackReply)
-		defer t.Stop()
-		select {
-		case <-done:
-		case <-t.C:
-		}
+	// The hand-back is over before this returns (agents have the
+	// browser), unless wait (if not 0) passes first: ErrHandingBack, the
+	// hand-back going on by itself.
+	ctx := context.Background()
+	if wait > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, wait)
+		defer cancel()
 	}
+	_, err := v.h.m.ReleaseControlGen(ctx, v.session, v.gen)
+	return err
 }
 
-// handBackReply bounds how long a viewer waits for its own hand-back
-// before it tells its page control:false.
-const handBackReply = 2 * time.Second
+// viewerHandBackWait bounds how long a live view's message waits for its
+// hand-back (a browser that doesn't answer it).
+const viewerHandBackWait = 30 * time.Second
 
 func (v *viewer) post(ctx context.Context, path string, body []byte) error {
 	_, err := v.do(ctx, http.MethodPost, path, body, http.StatusNoContent, controlWait)

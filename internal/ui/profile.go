@@ -178,28 +178,15 @@ func (u *UI) handBack(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		u.log.Info("handoff finished from the UI", "handoff", h.ID, "profile", name, "status", status)
-		// The hand-back goes on by itself: wait for it a little, so the
-		// page this redirects to doesn't show the person still in control.
-		if hb := u.m.HandingBack(s.ID); hb != nil {
-			ctx, cancel := context.WithTimeout(r.Context(), handBackRedirect)
-			select {
-			case <-hb:
-			case <-ctx.Done():
-			}
-			cancel()
-		}
 		done(w, r, back, "Handed back to "+h.Agent, false)
 		return
 	}
-	// No request open: just let go of the controls. The hand-back goes on
-	// by itself if the browser is slow to answer; this request waits for
-	// it a little, no longer than it lasts.
-	ctx, cancel := context.WithTimeout(r.Context(), handBackRedirect)
-	defer cancel()
-	_ = u.m.HandBack(ctx, s.ID)
+	// No request open: just let go of the controls, waiting for that as
+	// long as this request lasts. If it ends first, the hand-back goes on
+	// by itself.
+	if err := u.m.HandBack(r.Context(), s.ID); err != nil {
+		done(w, r, back, "Couldn't hand back yet: "+err.Error(), true)
+		return
+	}
 	done(w, r, back, "Handed back", false)
 }
-
-// handBackRedirect bounds how long the Hand back form waits for the
-// hand-back before it redirects.
-const handBackRedirect = 2 * time.Second

@@ -719,3 +719,29 @@ func TestHandBackAnswersOnceHandedBack(t *testing.T) {
 		t.Error("told control:false while the browser still shows a person in control")
 	}
 }
+
+// A live view whose operation the browser refuses gives control up at
+// once: it lets go of the operation's lease first, so its hand-back,
+// which waits for the person's operations under way, doesn't wait on it
+// (PROJ-196).
+func TestRefusedViewerHandsBackAtOnce(t *testing.T) {
+	b := &fencingBrowser{}
+	h, m, s := offerFixtureWith(t, b.routes, slog.New(slog.DiscardHandler))
+	k := newTalk(t, &viewer{h: h, session: s.ID, sock: m.Layout().ControlSocket("google")})
+	if r := k.send(`{"type":"take"}`); len(r) != 1 || r[0]["on"] != true {
+		t.Fatalf("take: %v", r)
+	}
+	b.mu.Lock()
+	b.fence = k.v.gen
+	b.mu.Unlock()
+	start := time.Now()
+	if r := k.send(`{"type":"input","events":[]}`); len(r) != 1 || r[0]["on"] != false {
+		t.Errorf("input refused by the browser: %v, want control off", r)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("giving control up took %s: the hand-back waited on the viewer's own operation", took.Round(time.Millisecond))
+	}
+	if got, _ := m.Live("google"); got.HumanControl {
+		t.Error("told control off with the browser not yet handed back")
+	}
+}

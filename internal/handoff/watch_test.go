@@ -502,13 +502,12 @@ func TestSweepWatchesAgainAfterARestart(t *testing.T) {
 	f.svc.Close()
 	again := New(f.svc.db, f.m, f.svc.log)
 	t.Cleanup(again.Close)
-	again.sweep(ctx)
-	again.mu.Lock()
-	w := again.watching[h.ID]
-	again.mu.Unlock()
-	if w == nil {
-		t.Fatal("the sweep didn't watch the open handoff again")
-	}
+	again.sweep(ctx) // each handoff on its own
+	eventually(t, "the sweep watching the open handoff again", func() bool {
+		again.mu.Lock()
+		defer again.mu.Unlock()
+		return again.watching[h.ID] != nil
+	})
 	n := f.tabs.count()
 	eventually(t, "a look", func() bool { return f.tabs.count() > n })
 	f.tabs.set(tab{ID: "T1", Typ: "page", URL: "https://site.example/account"})

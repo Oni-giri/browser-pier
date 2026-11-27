@@ -133,9 +133,7 @@ func (s *Server) waitAndReport(ctx context.Context, req *sdk.CallToolRequest, id
 		if err := s.callJSON(ctx, req.Extra, "GET", path, nil, &h); err != nil {
 			return nil, nil, err
 		}
-		// Still pending, or ended with the browser not yet handed back
-		// (handing_back): either way the agent waits on.
-		if h.Status != "pending" && h.Status != "handing_back" {
+		if h.Status != "pending" {
 			if req.Session != nil {
 				_ = req.Session.NotifyElicitationComplete(ctx, &sdk.ElicitationCompleteParams{ElicitationID: id})
 			}

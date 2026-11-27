@@ -136,10 +136,21 @@ func (r *Relay) Close() error {
 type Viewer struct {
 	pc     *webrtc.PeerConnection
 	closed chan struct{}
+	// gone is closed once the viewer has gone and whatever control it had
+	// is handed back (Handler.Offer).
+	gone     chan struct{}
+	goneOnce sync.Once
 }
 
 // Done is closed when the viewer has gone.
 func (v *Viewer) Done() <-chan struct{} { return v.closed }
+
+// Gone is closed once the viewer has gone and its control, if it had
+// any, has been handed back: someone opening the same link again then
+// finds the browser free.
+func (v *Viewer) Gone() <-chan struct{} { return v.gone }
+
+func (v *Viewer) markGone() { v.goneOnce.Do(func() { close(v.gone) }) }
 
 // Close hangs up.
 func (v *Viewer) Close() { _ = v.pc.Close() }
@@ -167,7 +178,7 @@ func (r *Relay) Connect(ctx context.Context, profile string, offer string, in In
 	if err != nil {
 		return nil, "", err
 	}
-	v := &Viewer{pc: pc, closed: make(chan struct{})}
+	v := &Viewer{pc: pc, closed: make(chan struct{}), gone: make(chan struct{})}
 	st := r.acquire(profile)
 	var once sync.Once
 	gone := func() {
