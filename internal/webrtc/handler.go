@@ -292,6 +292,10 @@ type viewer struct {
 	// it; typed is closed once it has ended (tests wait on it).
 	typing context.CancelFunc
 	typed  chan struct{}
+	// liftAfter is a lift that came while the Type ran: it runs, as the
+	// same turn's input, once the Type has ended (a lift is never
+	// dropped: the page has already forgotten what it held).
+	liftAfter bool
 }
 
 // stillAllowed re-checks, at most once a second, that this viewer may act.
@@ -388,10 +392,13 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 			// A lift never cuts a Type short: the phone's Type prompt
 			// itself blurs the page as it closes (Safari, desktop
 			// Chromium), so the page's blur lift arrives right behind the
-			// Type it just sent. The Type lets go of the live view's keys
-			// before it types (the drain) and of its own after; Hand back,
-			// the end of control or the view going still stop it.
+			// Type it just sent. It waits for the Type to end instead, and
+			// runs then (liftAfter): the Type drains the live view before
+			// it types, but a key or button pressed meanwhile, or one the
+			// drain couldn't let go of, is still let go of. Hand back, the
+			// end of control or the view going still stop the Type.
 			if m.Type == "lift" {
+				v.liftAfter = true
 				return
 			}
 			// The person's Type is still going: its keys and this input's
@@ -533,8 +540,13 @@ func (v *viewer) startTypingLocked(inputCtx context.Context, done func(), text s
 			v.typing, v.typed = nil, nil
 		}
 		if ended && v.control && v.turn == turn {
+			v.liftAfter = false
 			_ = v.releaseLocked(viewerHandBackWait)
 			say(map[string]any{"type": "control", "on": false})
+		}
+		if v.liftAfter {
+			v.liftAfter = false
+			v.liftLocked(turn)
 		}
 		v.mu.Unlock()
 		close(typed)
@@ -542,6 +554,22 @@ func (v *viewer) startTypingLocked(inputCtx context.Context, done func(), text s
 			say(map[string]any{"type": "error", "msg": err.Error()})
 		}
 	}()
+}
+
+// liftLocked runs a lift that waited for a Type of turn: as that turn's
+// input, so it never lifts a later takeover's keys, and only while this
+// viewer still holds that turn (a hand-back lets go of the keys itself).
+// v.mu must be held.
+func (v *viewer) liftLocked(turn uint64) {
+	if !v.control || v.turn != turn {
+		return
+	}
+	ctx, done, err := v.h.m.HumanInputTurn(v.session, v.holder, turn)
+	if err != nil {
+		return
+	}
+	defer done()
+	_ = v.post(ctx, "/input/release", nil)
 }
 
 // refusedOrCut reports whether a person's call failed because their
