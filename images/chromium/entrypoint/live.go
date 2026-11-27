@@ -121,28 +121,20 @@ func (li *liveInput) drain() error {
 		for h := range li.released {
 			delete(li.held, h)
 		}
-		clear(li.released)
-		// Releases a dead xdotool was sent and no xdotool has had since
-		// run here, in one of their own.
-		if len(li.lost) == 0 {
-			return nil
-		}
-		if err := li.runSync(releaseArgs(li.lost)...); err != nil {
-			return fmt.Errorf("couldn't let go of the live view's keys: %w", err)
-		}
-		for h := range li.lost {
-			delete(li.held, h)
-		}
-		clear(li.lost)
-		return nil
 	}
+	// No xdotool runs now: what was released in the last one is either
+	// confirmed (and gone from held) or held still, let go below.
+	clear(li.released)
+	// Clean means every key held had its release run. Whatever is held
+	// still, its release lost with a dead xdotool, never written (a write
+	// or a start that failed), or never asked for, is let go here, in an
+	// xdotool of its own.
 	if len(li.held) > 0 {
 		if err := li.runSync(releaseArgs(li.held)...); err != nil {
 			return fmt.Errorf("couldn't let go of the live view's keys: %w", err)
 		}
 	}
 	clear(li.held)
-	clear(li.released)
 	clear(li.lost)
 	return nil
 }
@@ -328,8 +320,14 @@ func (li *liveInput) events(w http.ResponseWriter, r *http.Request) {
 				delete(li.lost, h)
 			}
 		case "up", "keyup":
-			if written && li.held[h] {
-				li.released[h] = true
+			if li.held[h] {
+				if written {
+					li.released[h] = true
+				} else {
+					// Asked for and not written: the next xdotool gets it
+					// first, or drain runs it.
+					li.lost[h] = true
+				}
 			}
 		}
 	}
@@ -360,27 +358,35 @@ func (li *liveInput) release(w http.ResponseWriter, r *http.Request) {
 	// held. With nothing new to send but releases still queued, a no-op
 	// checks the xdotool that has them is still there; if it isn't, its
 	// releases go to a new one.
+	var sendErr error
 	if len(li.held) > 0 {
-		err := li.send(func() []string {
+		sendErr = li.send(func() []string {
 			lines := li.releaseLines(false)
 			if len(lines) == 0 {
 				lines = []string{"sleep 0"}
 			}
 			return lines
 		})
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
 		for h := range li.held {
-			li.released[h] = true
+			if sendErr == nil {
+				li.released[h] = true
+			} else if !li.released[h] {
+				// Not written: the next xdotool gets it first, or drain
+				// runs it.
+				li.lost[h] = true
+			}
 		}
 	}
 	if r.URL.Query().Get("drain") == "1" {
+		// Even if the send failed: the drain lets go of what is held in
+		// an xdotool of its own, and only its failure fails the release.
 		if err := li.drain(); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+	} else if sendErr != nil {
+		http.Error(w, sendErr.Error(), http.StatusInternalServerError)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

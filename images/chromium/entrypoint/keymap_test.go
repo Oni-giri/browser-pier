@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"slices"
@@ -884,14 +885,15 @@ func TestTypeMappedLetsGoOfLiveKeysAfterAKill(t *testing.T) {
 		t.Fatalf("release failing: %d %s", rec.Code, rec.Body)
 	}
 
-	// Exited cleanly: its releases ran, so nothing is released again, and
-	// Shift, still down, stays held.
+	// Exited cleanly: its releases ran, so Control isn't released again;
+	// Shift, still down, is let go before the map changes (clean means
+	// every key held had its release run).
 	v, calls, _ = keymapVisual(t, 8)
 	x := &closingXdotool{}
 	v.live.start = func() (ioWriteCloser, error) { return x, nil }
 	post(v.live.events, `[{"t":"keydown","k":"Control_L"},{"t":"keyup","k":"Control_L"},{"t":"keydown","k":"Shift_L"}]`)
 	serveVisual(v, http.MethodPost, "/input/type", `{"text": "é", "pace": "instant"}`)
-	if got := events(*calls); got[0] != "keymap open" || !v.live.held["kShift_L"] || v.live.held["kControl_L"] {
+	if got := events(*calls); got[0] != "xdotool keyup" || strings.Join((*calls)[0].args, " ") != "keyup Shift_L" || got[1] != "keymap open" || len(v.live.held) != 0 {
 		t.Fatalf("clean: %q, held %v", got, v.live.held)
 	}
 }
@@ -996,5 +998,35 @@ func TestKeymapConnectionEndsWithItsRequest(t *testing.T) {
 func TestSpareKeysIsACheck(t *testing.T) {
 	if checkMode([]string{"entrypoint", spareKeysArg}) == nil {
 		t.Fatal("spare-keys isn't a check")
+	}
+}
+
+// A type cancelled while it types (the person's control ended, their view
+// went) stops: the stretch under way is cut, the map is put back, the
+// stretches after it don't run, and the answer says part may have been
+// typed.
+func TestTypeMappedStopsWhenCancelled(t *testing.T) {
+	v, calls, f := keymapVisual(t, 8)
+	ctx, cancel := context.WithCancel(context.Background())
+	v.run = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		*calls = append(*calls, call{name, args})
+		if args[0] == "key" {
+			cancel()
+			return nil, context.Canceled
+		}
+		return nil, nil
+	}
+	mux := http.NewServeMux()
+	v.register(mux)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequestWithContext(ctx, http.MethodPost, "/input/live-type", strings.NewReader(`{"text": "éžāū"}`)))
+	keys := 0
+	for _, c := range *calls {
+		if c.name == "xdotool" && c.args[0] == "key" {
+			keys++
+		}
+	}
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "may have been typed") || keys != 1 || f.key(8)[0] != 0 {
+		t.Fatalf("cancelled: %d %s, %d key runs, key 8 %x", rec.Code, rec.Body, keys, f.key(8))
 	}
 }
