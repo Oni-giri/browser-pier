@@ -334,10 +334,7 @@ func (m *Manager) releaseLocked(id string, l *live) {
 		return
 	}
 	l.releasing = true
-	if l.humanCancel != nil {
-		l.humanCancel()
-		l.humanCtx, l.humanCancel = nil, nil
-	}
+	l.cancelHumanLocked()
 	for l.humanInputs > 0 {
 		m.inputsDone.Wait()
 	}
@@ -473,4 +470,13 @@ func HandoffHolder(handoff string) string {
 		return ""
 	}
 	return "handoff " + handoff
+}
+
+// cancelHumanLocked ends the person's turn context (HumanInputTurnContext):
+// their control is ending, or the session is (PROJ-195). With m.mu held.
+func (l *live) cancelHumanLocked() {
+	if l.humanCancel != nil {
+		l.humanCancel()
+		l.humanCtx, l.humanCancel = nil, nil
+	}
 }

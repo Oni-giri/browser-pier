@@ -1049,6 +1049,7 @@ func (m *Manager) end(l *live, lastLog string, final func(*Session) StopReason) 
 	l.calls = nil
 	l.disconnectLocked()
 	l.cancelAllLocked(ErrStopping)
+	l.cancelHumanLocked()
 	hooks := slices.Clone(m.onEnd)
 	if l.recTimer != nil {
 		l.recTimer.Stop()
@@ -1288,6 +1289,7 @@ func (m *Manager) stopIf(ctx context.Context, id string, cond func(*live) bool, 
 		// Page calls under way stop first (an act lets go of what it
 		// pressed), then the browser closes.
 		l.cancelAllLocked(ErrStopping)
+		l.cancelHumanLocked()
 		for len(l.leases) > 0 {
 			m.inputsDone.Wait()
 		}

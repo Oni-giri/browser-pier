@@ -689,3 +689,30 @@ func TestRevokingATokenCancelsItsInput(t *testing.T) {
 		t.Fatalf("cause = %v", err)
 	}
 }
+
+// The person's turn context ends as the session stops, as well as at a
+// hand-back, so a Type of theirs under way breaks off (PROJ-195).
+func TestHumanTurnContextEndsWithTheSession(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	turn, err := f.m.TakeControlTurn(s.ID, AdminHolder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, done, err := f.m.HumanInputTurnContext(s.ID, AdminHolder, turn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped := make(chan struct{})
+	go func() {
+		_, _ = f.m.Stop(context.Background(), s.ID)
+		close(stopped)
+	}()
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the turn's context outlived the stop")
+	}
+	done()
+	<-stopped
+}
