@@ -13,11 +13,11 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/settings"
 )
 
-// TestStickyTemplateShownNeverFilled: agents see a {sticky} proxy as its
-// template with the password redacted, never the profile's token; a
-// profile an agent makes under a {sticky} default gets a token of its
-// own; and no agent route can change one.
-func TestStickyTemplateShownNeverFilled(t *testing.T) {
+// TestStickyTemplateNeverShown: agents see neither a {sticky} proxy's
+// template nor the profile's token, only that the profile is proxied
+// (PROJ-205); a profile an agent makes under a {sticky} default gets a
+// token of its own; and no agent route can change one.
+func TestStickyTemplateNeverShown(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
 	p, _ := f.profiles.Get(ctx, "google")
@@ -34,19 +34,21 @@ func TestStickyTemplateShownNeverFilled(t *testing.T) {
 	if code := f.call(f.all, http.MethodGet, "/api/profiles", "", &raw); code != http.StatusOK {
 		t.Fatalf("list: %d", code)
 	}
-	if strings.Contains(string(raw), tok) || strings.Contains(string(raw), "s3cret") {
-		t.Fatalf("the reply holds the token or the password: %s", raw)
+	for _, leak := range []string{tok, "s3cret", "{sticky}", "%7Bsticky%7D", "pier-", "proxy.example", `"proxy"`} {
+		if strings.Contains(string(raw), leak) {
+			t.Fatalf("the reply holds %q: %s", leak, raw)
+		}
 	}
 	var list struct{ Profiles []profileJSON }
 	_ = json.Unmarshal(raw, &list)
-	shown := ""
+	proxied := false
 	for _, pr := range list.Profiles {
 		if pr.Name == "google" {
-			shown = pr.Proxy
+			proxied = pr.Proxied
 		}
 	}
-	if shown != "http://pier-{sticky}:xxxxx@proxy.example:8080" {
-		t.Fatalf("proxy shown as %q", shown)
+	if !proxied {
+		t.Fatalf("google isn't shown as proxied: %s", raw)
 	}
 
 	// A start fills the template in for the browser only.
@@ -76,7 +78,10 @@ func TestStickyTemplateShownNeverFilled(t *testing.T) {
 	if err != nil || shop.Proxy != template || shop.StickyToken == "" || shop.StickyToken == tok {
 		t.Fatalf("the agent's profile: proxy %q, token %q (google's %q), %v", shop.Proxy, shop.StickyToken, tok, err)
 	}
-	if strings.Contains(string(raw), shop.StickyToken) || !strings.Contains(string(raw), "pier-{sticky}") {
+	var created profileJSON
+	_ = json.Unmarshal(raw, &created)
+	if strings.Contains(string(raw), shop.StickyToken) || strings.Contains(string(raw), "sticky") || strings.Contains(string(raw), "proxy.example") ||
+		strings.Contains(string(raw), `"proxy"`) || !created.Proxied {
 		t.Fatalf("create replied %s", raw)
 	}
 	if code := f.call(f.all, http.MethodPost, "/api/profiles", `{"name": "y", "proxy": "http://pier-{sticky}:pw@proxy.example:8080"}`, nil); code != http.StatusBadRequest {

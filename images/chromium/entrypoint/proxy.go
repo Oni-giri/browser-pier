@@ -124,7 +124,9 @@ func (f *forwarder) handle(client net.Conn) {
 			code = 0x02
 			f.block.blocked.Add(1)
 		case f.upstream != nil:
-			f.log.Warn("proxy: upstream refused a connection", "err", err)
+			// err is a proxyError, in BrowserPier's own words: this line
+			// can end up in what agents are told of a session (LastLog).
+			f.log.Warn("proxy: upstream refused a connection", "kind", proxyKind(err), "err", err)
 		}
 		_, _ = client.Write([]byte{0x05, code, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 		_ = client.Close()
@@ -262,7 +264,7 @@ func (f *forwarder) dial(ctx context.Context, addr string) (net.Conn, error) {
 // connect opens a connection to addr through the upstream proxy, or
 // straight to it without one. It checks nothing: dial does, for pages.
 // An error reaching or going through the upstream is a *proxyError,
-// which says what kind of failure it was; its text is the cause's own.
+// which says what kind of failure it was, in BrowserPier's words only.
 func (f *forwarder) connect(ctx context.Context, addr string) (net.Conn, error) {
 	if f.upstream == nil {
 		return f.dialer.DialContext(ctx, "tcp", addr)
@@ -316,16 +318,45 @@ const (
 )
 
 // proxyError is a failure reaching the upstream proxy or getting a
-// tunnel through it. Error is the cause's own text, as before kinds
-// existed; kind is what the proxy check reports, never the text, which
-// may hold the proxy's own words.
+// tunnel through it. Its text is BrowserPier's own, never the cause's:
+// a dial or TLS error names the proxy's host, port or address, and a
+// proxy's reason phrase is its own words. The text reaches the browser's
+// log, whose last line agents are shown (a failed start's error and
+// last_log, PROJ-205), so it names only the kind of failure, and a
+// detail BrowserPier wrote itself (an HTTP status code, a SOCKS5 reply
+// code). The proxy check reports only the kind.
 type proxyError struct {
 	kind string
-	err  error
+	msg  string // BrowserPier's own words; "" for the kind's phrase
+	err  error  // the cause, for errors.Is; its text is never shown
 }
 
-func (e *proxyError) Error() string { return e.err.Error() }
+// proxyPhrases are the kinds' texts.
+var proxyPhrases = map[string]string{
+	proxyUnreachable: "couldn't reach the proxy",
+	proxyTLS:         "the TLS handshake with the proxy failed",
+	proxyAuth:        "the proxy refused the credentials",
+	proxyRefused:     "the proxy opened no tunnel",
+	proxyTimeout:     "the proxy didn't answer in time",
+}
+
+func (e *proxyError) Error() string {
+	if e.msg != "" {
+		return e.msg
+	}
+	return proxyPhrases[e.kind]
+}
+
 func (e *proxyError) Unwrap() error { return e.err }
+
+// proxyKind is err's proxyError kind, or "".
+func proxyKind(err error) string {
+	var pe *proxyError
+	if errors.As(err, &pe) {
+		return pe.kind
+	}
+	return ""
+}
 
 // failKind is kind, unless err is a deadline passing.
 func failKind(err error, kind string) string {
@@ -360,7 +391,8 @@ func httpConnect(conn net.Conn, addr string, user *url.Userinfo) error {
 		if resp.StatusCode == http.StatusProxyAuthRequired {
 			kind = proxyAuth
 		}
-		return &proxyError{kind: kind, err: fmt.Errorf("the proxy answered %s", resp.Status)}
+		// The code only: the reason phrase is the proxy's own words.
+		return &proxyError{kind: kind, msg: fmt.Sprintf("the proxy answered %d", resp.StatusCode)}
 	}
 	return nil
 }
@@ -405,13 +437,13 @@ func socks5Connect(conn net.Conn, addr string, user *url.Userinfo) error {
 		if reply[0] != 0x05 {
 			kind = proxyRefused
 		}
-		return &proxyError{kind: kind, err: errors.New("the SOCKS5 proxy refused our authentication method")}
+		return &proxyError{kind: kind, msg: "the SOCKS5 proxy refused our authentication method"}
 	}
 	if user != nil {
 		pass, _ := user.Password()
 		name := user.Username()
 		if len(name) > 255 || len(pass) > 255 {
-			return &proxyError{kind: proxyAuth, err: errors.New("SOCKS5 username or password over 255 bytes")}
+			return &proxyError{kind: proxyAuth, msg: "SOCKS5 username or password over 255 bytes"}
 		}
 		msg := append([]byte{0x01, byte(len(name))}, name...) //nolint:gosec // checked ≤ 255 above
 		msg = append(append(msg, byte(len(pass))), pass...)   //nolint:gosec // checked ≤ 255 above
@@ -422,7 +454,7 @@ func socks5Connect(conn net.Conn, addr string, user *url.Userinfo) error {
 			return err
 		}
 		if reply[1] != 0x00 {
-			return &proxyError{kind: proxyAuth, err: errors.New("the SOCKS5 proxy rejected the username or password")}
+			return &proxyError{kind: proxyAuth, msg: "the SOCKS5 proxy rejected the username or password"}
 		}
 	}
 	if len(host) > 255 {
@@ -445,7 +477,7 @@ func socks5Connect(conn net.Conn, addr string, user *url.Userinfo) error {
 		return err
 	}
 	if head[1] != 0x00 {
-		return &proxyError{kind: proxyRefused, err: fmt.Errorf("the SOCKS5 proxy couldn't connect (code %d)", head[1])}
+		return &proxyError{kind: proxyRefused, msg: fmt.Sprintf("the SOCKS5 proxy couldn't connect (code %d)", head[1])}
 	}
 	var skip int
 	switch head[3] {

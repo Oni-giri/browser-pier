@@ -102,6 +102,10 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			// Recorded again by the same rules: a Needs help session
 			// isn't, and a running one only from the agent's next action.
 			l.record = p.Record
+			// Its last log line and error hide its proxy, as a start
+			// of this BrowserPier's would (PROJ-205): an older image's
+			// can quote it.
+			l.proxyHide = proxyHideFor(p)
 		}
 		// The run's log was in the BrowserPier before (PROJ-158).
 		l.noteLocked(m.now(), KindSession, restartedNote)

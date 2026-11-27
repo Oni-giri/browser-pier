@@ -57,8 +57,9 @@ type Profile struct {
 	Width, Height int
 	// Proxy is the upstream proxy URL, which may carry credentials: never
 	// log it. It may be a template holding StickyPlaceholder in its user
-	// name or password, stored and shown as such and filled in only when
-	// the browser starts.
+	// name or password, stored and shown to the admin as such (agents see
+	// only that a profile is proxied) and filled in only when the browser
+	// starts.
 	Proxy string
 	// StickyToken is what StickyPlaceholder becomes in this profile's
 	// proxy: 8 characters from a-z0-9, given once (see Store.StickyToken)

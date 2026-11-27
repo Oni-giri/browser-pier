@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -50,7 +51,8 @@ func lookupGeo(ctx context.Context, client *http.Client, endpoint string) (ip, c
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return "", "", "", fmt.Errorf("%s answered %s", endpoint, resp.Status)
+		// The code only: the reason phrase is the answer's own words.
+		return "", "", "", geoAnswerError(fmt.Sprintf("%s answered %d", endpoint, resp.StatusCode))
 	}
 	var v struct {
 		IP       string `json:"ip"`
@@ -58,16 +60,43 @@ func lookupGeo(ctx context.Context, client *http.Client, endpoint string) (ip, c
 		TimeZone string `json:"time_zone"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&v); err != nil {
-		return "", "", "", fmt.Errorf("%s: %w", endpoint, err)
+		return "", "", "", geoAnswerError(endpoint + " gave no JSON")
 	}
 	v.Country = strings.ToUpper(v.Country)
 	if !countryRE.MatchString(v.Country) {
-		return "", "", "", fmt.Errorf("%s gave no country", endpoint)
+		return "", "", "", geoAnswerError(endpoint + " gave no country")
 	}
 	if _, err := time.LoadLocation(v.TimeZone); err != nil || v.TimeZone == "" || v.TimeZone == "Local" {
-		return "", "", "", fmt.Errorf("%s gave no usable time zone", endpoint)
+		return "", "", "", geoAnswerError(endpoint + " gave no usable time zone")
 	}
 	return v.IP, v.Country, v.TimeZone, nil
+}
+
+// geoAnswerError is a lookup's answer that can't be used, in
+// BrowserPier's words.
+type geoAnswerError string
+
+func (e geoAnswerError) Error() string { return string(e) }
+
+// throughProxy is a failed lookup through a proxy in BrowserPier's own
+// words (PROJ-205): the proxy's failure (a proxyError), the answer's, or
+// a fixed phrase. Any other error would name the proxy: the tunnel's
+// connection is to the proxy, so a reset or a cut-off read names its
+// address and port. The text goes into the browser's log and a failed
+// start's error, which agents are shown.
+func throughProxy(err error) error {
+	var pe *proxyError
+	var ae geoAnswerError
+	var ne net.Error
+	switch {
+	case errors.As(err, &pe):
+		return pe
+	case errors.As(err, &ae):
+		return ae
+	case errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()):
+		return errors.New("the lookup through the proxy took too long")
+	}
+	return errors.New("the lookup through the proxy failed after the tunnel opened")
 }
 
 // decideGeo picks the time zone and language for this start. In order:
@@ -109,6 +138,9 @@ func lookupOrStored(c config, proxied bool, lookup func() (ip, country, tz strin
 			return geo{IP: ip, Country: country, TimeZone: tz, Locale: locale, Accept: accept, Source: "lookup"}, nil
 		}
 		lookupErr = err
+		if proxied {
+			lookupErr = throughProxy(err)
+		}
 	} else {
 		lookupErr = errors.New("location lookup is off")
 	}

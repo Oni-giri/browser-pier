@@ -54,8 +54,8 @@ func HasSticky(proxy string) bool { return strings.Contains(proxy, StickyPlaceho
 // URL without the placeholder comes back as it is, and the
 // percent-encoded %7Bsticky%7D is not a placeholder. The orchestrator
 // calls it only when it hands the proxy to a starting browser (and, with
-// a sample token, to check a template): what is stored and shown stays
-// the template.
+// a sample token, to check a template): what is stored and shown to the
+// admin stays the template.
 func FillSticky(proxy, token string) string {
 	return replaceInUserinfo(proxy, StickyPlaceholder, token)
 }

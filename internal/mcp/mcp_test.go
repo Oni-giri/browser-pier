@@ -36,6 +36,7 @@ import (
 type fixture struct {
 	t        *testing.T
 	m        *sessions.Manager
+	rt       *sessionstest.FakeRuntime
 	tokens   *auth.Tokens
 	handoffs *handoff.Service
 	mcp      *Server
@@ -77,6 +78,7 @@ func newFixture(t *testing.T) *fixture {
 	log := slog.New(slog.DiscardHandler)
 	f := &fixture{t: t, tokens: auth.NewTokens(d)}
 	rt := sessionstest.New(dir)
+	f.rt = rt
 	rt.Control = cdptest.New(f.targets).Handler(f.browser())
 	f.m, err = sessions.NewManager(d, rt, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)
 	if err != nil {

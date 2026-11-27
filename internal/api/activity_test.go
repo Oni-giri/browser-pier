@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"mime/multipart"
 	"net/http"
 	"strings"
@@ -106,11 +107,13 @@ func TestCreatedProfilesStartFromTheSettings(t *testing.T) {
 	}
 	f.api.SetSettings(st)
 
-	var p profileJSON
-	if code := f.call(f.all, http.MethodPost, "/api/profiles", `{"name": "shop", "handoff_policy": "pin"}`, &p); code != http.StatusCreated {
+	var raw json.RawMessage
+	if code := f.call(f.all, http.MethodPost, "/api/profiles", `{"name": "shop", "handoff_policy": "pin"}`, &raw); code != http.StatusCreated {
 		t.Fatalf("create: %d", code)
 	}
-	if p.HandoffPolicy != "signin" || p.AutoStopMinutes != 30 || strings.Contains(p.Proxy, "s3cret") || !strings.Contains(p.Proxy, "corp-proxy.test:3128") {
+	var p profileJSON
+	_ = json.Unmarshal(raw, &p)
+	if p.HandoffPolicy != "signin" || p.AutoStopMinutes != 30 || !p.Proxied || strings.Contains(string(raw), "corp-proxy") || strings.Contains(string(raw), "s3cret") {
 		t.Fatalf("created %+v (an agent asking for pin must not lower a signin default)", p)
 	}
 	stored, err := f.profiles.Get(ctx, "shop")
