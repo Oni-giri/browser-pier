@@ -459,3 +459,28 @@ func TestLiveHandBackReleaseDrains(t *testing.T) {
 		t.Fatalf("failed hand-back: %d", rec.Code)
 	}
 }
+
+// A drain whose xdotool didn't end cleanly and whose own release then
+// fails drops nothing: the key-ups pending in the dead xdotool, and
+// everything held, are lost, and the next xdotool sends them first.
+func TestLiveFailedDrainKeepsItsReleases(t *testing.T) {
+	li := testLiveInput()
+	li.start = func() (ioWriteCloser, error) { return &killedXdotool{}, nil }
+	post(li.events, `[{"t":"keydown","k":"Control_L"},{"t":"keyup","k":"Control_L"}]`)
+	if !li.released["kControl_L"] {
+		t.Fatalf("released %v", li.released)
+	}
+	li.runSync = func(...string) error { return errors.New("too many open files") }
+	li.mu.Lock()
+	err := li.drain()
+	li.mu.Unlock()
+	if err == nil || !li.held["kControl_L"] || !li.lost["kControl_L"] {
+		t.Fatalf("failed drain: %v, held %v, lost %v", err, li.held, li.lost)
+	}
+	y := &fakeXdotool{}
+	li.start = func() (ioWriteCloser, error) { return y, nil }
+	post(li.events, `[{"t":"move","x":5,"y":5}]`)
+	if got := y.buf.String(); got != "keyup Control_L\nmousemove 5 5\n" {
+		t.Fatalf("the next xdotool got %q", got)
+	}
+}

@@ -121,16 +121,20 @@ func (li *liveInput) drain() error {
 		for h := range li.released {
 			delete(li.held, h)
 		}
+		clear(li.released)
 	}
-	// No xdotool runs now: what was released in the last one is either
-	// confirmed (and gone from held) or held still, let go below.
-	clear(li.released)
+	// What the last xdotool may not have run is lost, never dropped.
+	li.loseReleased()
 	// Clean means every key held had its release run. Whatever is held
 	// still, its release lost with a dead xdotool, never written (a write
 	// or a start that failed), or never asked for, is let go here, in an
-	// xdotool of its own.
+	// xdotool of its own; if that fails, all of it is lost, for the next
+	// xdotool to send first or the next drain to run.
 	if len(li.held) > 0 {
 		if err := li.runSync(releaseArgs(li.held)...); err != nil {
+			for h := range li.held {
+				li.lost[h] = true
+			}
 			return fmt.Errorf("couldn't let go of the live view's keys: %w", err)
 		}
 	}
