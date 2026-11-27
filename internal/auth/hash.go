@@ -1,5 +1,8 @@
-// Package auth handles the admin login, agent tokens and the handoff PIN,
-// all hashed at rest, plus rate limits. Nothing here logs a secret.
+// Package auth handles the admin login and its optional second step,
+// agent tokens and the handoff PIN, plus rate limits. Passwords, the PIN,
+// tokens and recovery codes are hashed at rest. The authenticator app's
+// secret can't be: the server computes codes from it, so it is stored as
+// it is, like the device cookie's key. Nothing here logs a secret.
 package auth
 
 import (

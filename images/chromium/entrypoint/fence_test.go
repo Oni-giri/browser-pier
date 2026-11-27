@@ -74,7 +74,7 @@ func TestFencedOperationsDoNothing(t *testing.T) {
 		name, method, target, body string
 	}{
 		{"live input", http.MethodPost, "/input/events", `[{"t":"keydown","k":"Control_L"},{"t":"down","b":1}]`},
-		{"typing", http.MethodPost, "/input/type", `{"text":"typed by the person","pace":"instant"}`},
+		{"typing", http.MethodPost, "/input/live-type", `{"text":"typed by the person"}`},
 		{"clipboard set", http.MethodPost, "/input/clipboard", `{"text":"the person's secret"}`},
 		{"paste", http.MethodPost, "/input/paste", `{"text":"the person's secret"}`},
 	} {

@@ -325,10 +325,10 @@ func TestRecordingStopsForAPerson(t *testing.T) {
 				t.Fatal(err)
 			}
 			// The handoff's person drives as Take control's does.
-			if err := r.m.TakeControl(s.ID); err != nil {
+			if err := r.m.TakeControl(s.ID, "person"); err != nil {
 				t.Fatal(err)
 			}
-		} else if err := r.m.TakeControl(s.ID); err != nil {
+		} else if err := r.m.TakeControl(s.ID, "person"); err != nil {
 			t.Fatal(err)
 		}
 		personTypes("hunter2-person")

@@ -105,11 +105,15 @@ func (h *Handler) ICE(w http.ResponseWriter, _ *http.Request, until time.Time, v
 }
 
 func (h *Handler) offer(w http.ResponseWriter, r *http.Request) {
-	h.Offer(w, r, r.PathValue("profile"), OfferOptions{})
+	h.Offer(w, r, r.PathValue("profile"), OfferOptions{Holder: sessions.AdminHolder})
 }
 
 // OfferOptions shape a live view.
 type OfferOptions struct {
+	// Holder names who this viewer is when it takes control (see
+	// sessions.Manager.TakeControl): the signed-in admin's browser or the
+	// handoff link. The file chooser routes answer only them (PROJ-184).
+	Holder string
 	// Control gives the viewer the mouse and keyboard from the start (a
 	// handoff link, once unlocked).
 	Control bool
@@ -126,7 +130,7 @@ type OfferOptions struct {
 	// Handoff marks a handoff's live view, and HelpEpoch is its handoff's
 	// (sessions.Manager.HelpEpoch): control, at the offer or a later
 	// take, is taken only while the session still waits for that help
-	// (TakeControlInHandoff). A handoff's view never falls back to the
+	// (TakeControlTurnByLink). A handoff's view never falls back to the
 	// admin's take, whatever its epoch.
 	Handoff   bool
 	HelpEpoch uint64
@@ -145,7 +149,7 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 		http.Error(w, "the browser isn't running", http.StatusConflict)
 		return
 	}
-	// From here on, everything names s.ID: Watch and TakeControlGen find
+	// From here on, everything names s.ID: Watch and TakeControlTurn find
 	// that session or none, under the manager's lock, so a session that
 	// replaces it is never watched or taken through this offer.
 	var in struct {
@@ -160,7 +164,7 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 		http.Error(w, "the browser isn't running", http.StatusConflict)
 		return
 	}
-	vw := &viewer{h: h, session: s.ID, sock: h.m.Layout().ControlSocket(profile), allowed: o.Allowed, handoff: o.Handoff, helpEpoch: o.HelpEpoch}
+	vw := &viewer{h: h, session: s.ID, holder: o.Holder, sock: h.m.Layout().ControlSocket(profile), allowed: o.Allowed, handoff: o.Handoff, helpEpoch: o.HelpEpoch}
 	// opened closes once the page's input channel is open; gone once the
 	// viewer has gone, or never connected.
 	opened, gone := make(chan struct{}), make(chan struct{})
@@ -168,30 +172,33 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 	markGone := func() { goneOnce.Do(func() { close(gone) }) }
 	// A viewer promised control gets it or isn't connected: a page that
 	// thinks it drives while it only watches would send input into nothing.
-	// control and gen are read here, before anything else (the timer
+	// control and turn are read here, before anything else (the timer
 	// below, the data channel) can change the viewer's.
 	var control bool
-	var gen uint64
+	var turn uint64
 	if o.Control {
-		g, err := vw.take()
+		t, err := vw.take()
 		if err != nil {
 			unwatch()
-			msg := "The browser isn't running."
+			msg, code := "The browser isn't running.", http.StatusConflict
 			switch {
 			case errors.Is(err, sessions.ErrHumanDriving):
 				msg = "Someone else has control."
 			case errors.Is(err, sessions.ErrAgentDriving):
 				msg = "The agent is driving."
-			case errors.Is(err, sessions.ErrNotInControl):
-				msg = "The browser was handed back before you got control."
+			case errors.Is(err, sessions.ErrControlEnded):
+				msg = "Control was handed back meanwhile. Try again."
 			case errors.Is(err, sessions.ErrHandoffEnded):
 				msg = "This request for help has ended."
+			case errors.Is(err, sessions.ErrNoHolder):
+				h.log.Error("a live view offered control with no holder", "profile", profile)
+				msg, code = "Couldn't take control: this live view says nobody's taking it.", http.StatusInternalServerError
 			}
-			http.Error(w, msg, http.StatusConflict)
+			http.Error(w, msg, code)
 			return
 		}
-		vw.control, vw.gen = true, g
-		control, gen = true, g
+		vw.control, vw.turn = true, t
+		control, turn = true, t
 		// Control from now on, but no input channel yet: if none opens
 		// within inputOpenWait of now (a video-only offer, one stuck
 		// negotiating, or a registration that stalls), the control ends,
@@ -221,7 +228,7 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 	if err != nil {
 		markGone()
 		if control {
-			_, _ = h.m.ReleaseControlGen(r.Context(), s.ID, gen)
+			_, _ = h.m.ReleaseTurn(r.Context(), s.ID, turn)
 		}
 		unwatch()
 		http.Error(w, "couldn't connect: "+err.Error(), http.StatusBadRequest)
@@ -242,7 +249,7 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 		// It may have been handed back meanwhile (its input channel's
 		// time ran out, its handoff ended): say how it is now.
 		vw.mu.Lock()
-		control = vw.control && h.m.InControl(s.ID, gen)
+		control = vw.control && h.m.HoldsTurn(s.ID, turn)
 		vw.mu.Unlock()
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -255,6 +262,7 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 type viewer struct {
 	h       *Handler
 	session string
+	holder  string // who takes control through this viewer
 	sock    string
 
 	allowed func() bool // nil: always
@@ -265,13 +273,15 @@ type viewer struct {
 	helpEpoch uint64
 
 	mu sync.Mutex
-	// control is set once this viewer took control, as generation gen
-	// (TakeControlGen). Its control can also end without it (a handoff
-	// ends, the profile page's Hand back), and someone else take the
-	// browser: whatever it sends then names gen, which the manager no
-	// longer honours, so it never uses or ends that takeover (PROJ-196).
+	// control is set once this viewer took control, as turn (the
+	// takeover's generation, sessions.TakeControlTurn). Its control can
+	// also end without it (a handoff ends, the profile page's Hand back),
+	// and someone else take the browser, even another of the admin's
+	// views under the same holder: whatever it sends then names turn,
+	// which neither the manager nor the browser honours any more, so it
+	// never uses or ends that takeover (PROJ-184, PROJ-196).
 	control   bool
-	gen       uint64
+	turn      uint64
 	checkedAt time.Time // when allowed last said yes
 }
 
@@ -332,26 +342,29 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 	switch m.Type {
 	case "take":
 		if v.control {
-			if v.h.m.InControl(v.session, v.gen) {
+			if v.h.m.HoldsTurn(v.session, v.turn) {
 				say(map[string]any{"type": "control", "on": true})
 				return
 			}
 			// Its control ended elsewhere: this is a take afresh.
 			_ = v.releaseLocked(viewerHandBackWait)
 		}
-		gen, err := v.take()
+		turn, err := v.take()
 		switch {
 		case errors.Is(err, sessions.ErrHumanDriving):
 			say(map[string]any{"type": "error", "msg": "Someone else has control."})
 		case err == nil:
-			v.control, v.gen = true, gen
+			v.control, v.turn = true, turn
 			say(map[string]any{"type": "control", "on": true})
 		case errors.Is(err, sessions.ErrAgentDriving):
 			say(map[string]any{"type": "error", "msg": "The agent is driving. Try again in a few seconds, or when it asks for help."})
-		case errors.Is(err, sessions.ErrNotInControl):
-			say(map[string]any{"type": "error", "msg": "The browser was handed back before you got control. Try again."})
+		case errors.Is(err, sessions.ErrControlEnded):
+			say(map[string]any{"type": "error", "msg": "Control was handed back meanwhile. Try again."})
 		case errors.Is(err, sessions.ErrHandoffEnded):
 			say(map[string]any{"type": "error", "msg": "This request for help has ended."})
+		case errors.Is(err, sessions.ErrNoHolder):
+			v.h.log.Error("a live view took control with no holder", "session", v.session)
+			say(map[string]any{"type": "error", "msg": "Couldn't take control: this live view says nobody's taking it."})
 		default:
 			say(map[string]any{"type": "error", "msg": "The browser isn't running."})
 		}
@@ -367,12 +380,12 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 		if v.control {
 			// Held until the input has reached the browser: a hand-back
 			// empties the clipboard only after it. Only for this viewer's
-			// own takeover: once its control has ended, whoever drives now
-			// (a person, or an agent mid-drag) gets nothing from it, not
-			// even a lift.
+			// own turn: once its control has ended, whoever drives now (a
+			// person, another of the admin's views under the same holder,
+			// or an agent mid-drag) gets nothing from it, not even a lift.
 			// ctx ends with the session, which waits for done before its
 			// profile can have a new browser on the same socket.
-			ctx, done, err = v.h.m.HumanInput(v.session, v.gen)
+			ctx, done, err = v.h.m.HumanInputTurn(v.session, v.holder, v.turn)
 		}
 		if !v.control || err != nil {
 			if m.Type == "lift" && !v.control {
@@ -432,9 +445,10 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 		default:
 			path, body := "/input/events", []byte(m.Events)
 			if m.Type == "text" {
-				path = "/input/type"
-				// A person typing: at once, not at an agent's human pace.
-				body, _ = json.Marshal(map[string]string{"text": m.Text, "pace": "instant"})
+				// A person typing: at once, not at an agent's human pace,
+				// and not held back by an agent's shortcut gap (PROJ-151).
+				path = "/input/live-type"
+				body, _ = json.Marshal(map[string]string{"text": m.Text})
 			}
 			if err := v.post(ctx, path, body); err != nil && !ended(err) {
 				say(map[string]any{"type": "error", "msg": err.Error()})
@@ -470,7 +484,7 @@ func (v *viewer) setClipboard(ctx context.Context, id int, text string, paste bo
 		fail("Couldn't send it to the browser: " + err.Error())
 		return err
 	}
-	v.h.m.Note(v.session, "", what)
+	v.h.m.NoteControl(v.session, what)
 	say(map[string]any{"type": "clipboard-set", "id": id})
 	return nil
 }
@@ -484,13 +498,14 @@ type statusError struct {
 
 func (e *statusError) Error() string { return e.msg }
 
-// take takes control for this viewer: for a handoff's, only while its
-// handoff's Needs help lasts, checked by the manager in the same step.
+// take takes control for this viewer's holder: for a handoff's, only
+// while its handoff's Needs help lasts, checked by the manager in the
+// same step.
 func (v *viewer) take() (uint64, error) {
 	if v.handoff {
-		return v.h.m.TakeControlInHandoff(v.session, v.helpEpoch)
+		return v.h.m.TakeControlTurnByLink(v.session, v.holder, v.helpEpoch)
 	}
-	return v.h.m.TakeControlGen(v.session)
+	return v.h.m.TakeControlTurn(v.session, v.holder)
 }
 
 // handBack runs when the viewer goes, or its input channel closes:
@@ -523,7 +538,7 @@ func (v *viewer) releaseLocked(wait time.Duration) error {
 		ctx, cancel = context.WithTimeout(ctx, wait)
 		defer cancel()
 	}
-	_, err := v.h.m.ReleaseControlGen(ctx, v.session, v.gen)
+	_, err := v.h.m.ReleaseTurn(ctx, v.session, v.turn)
 	return err
 }
 
@@ -563,7 +578,7 @@ func (v *viewer) do(ctx context.Context, method, path string, body []byte, want 
 	// Every call here is the person's, for the takeover this viewer took:
 	// once its hand-back has fenced it, the browser refuses the call,
 	// however long it was held up (PROJ-196).
-	req.Header.Set(sessions.TakeoverHeader, strconv.FormatUint(v.gen, 10))
+	req.Header.Set(sessions.TakeoverHeader, strconv.FormatUint(v.turn, 10))
 	resp, err := c.Do(req) //nolint:gosec // as above
 	if err != nil {
 		return nil, err

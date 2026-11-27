@@ -56,7 +56,7 @@ func (c *fakeClipboard) routes(mux *http.ServeMux) {
 		sessionstest.AnswerLift(w, r)
 	})
 	mux.HandleFunc("POST /input/events", record("events", func(_ []byte, w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) }))
-	mux.HandleFunc("POST /input/type", record("type", func(b []byte, w http.ResponseWriter) {
+	mux.HandleFunc("POST /input/live-type", record("type", func(b []byte, w http.ResponseWriter) {
 		c.mu.Lock()
 		c.sent = append(c.sent, string(b))
 		c.mu.Unlock()
@@ -135,7 +135,7 @@ func TestViewerClipboardBox(t *testing.T) {
 	var c fakeClipboard
 	var logs syncBuffer
 	h, m, s := offerFixtureWith(t, c.routes, slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	k := newTalk(t, &viewer{h: h, session: s.ID, sock: m.Layout().ControlSocket("google")})
+	k := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: m.Layout().ControlSocket("google")})
 
 	// Without control: refused, with the box told, and nothing reaches
 	// the browser.
@@ -206,6 +206,15 @@ func TestViewerClipboardBox(t *testing.T) {
 	if !strings.Contains(acts, "Clipboard set") || !strings.Contains(acts, "Pasted from the clipboard box") || strings.Contains(acts, "characters") {
 		t.Errorf("activity: %s", acts)
 	}
+	// They are the person's, in the control entries (PROJ-158), never an
+	// agent's action.
+	for _, a := range m.Activity(s.ID) {
+		if strings.HasPrefix(a.What, "Clipboard set") || strings.HasPrefix(a.What, "Pasted from") {
+			if a.Kind != sessions.KindControl || a.TokenID != "" {
+				t.Errorf("clipboard entry %+v: want a control entry with no token", a)
+			}
+		}
+	}
 	k.send(`{"type":"release"}`)
 	// None of the texts is logged, in the activity log or the orchestrator's.
 	all := logs.String() + fmt.Sprint(m.Activity(s.ID))
@@ -221,14 +230,14 @@ func TestViewerClipboardBox(t *testing.T) {
 func TestViewerTypesText(t *testing.T) {
 	var c fakeClipboard
 	h, m, s := offerFixtureWith(t, c.routes, slog.New(slog.DiscardHandler))
-	k := newTalk(t, &viewer{h: h, session: s.ID, sock: m.Layout().ControlSocket("google")})
+	k := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: m.Layout().ControlSocket("google")})
 	k.send(`{"type":"take"}`)
 	if r := k.send(`{"type":"text","text":"héllo"}`); len(r) != 0 {
 		t.Errorf("text: %v", r)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if strings.Join(c.calls, " ") != "type" || len(c.sent) != 1 || c.sent[0] != `{"pace":"instant","text":"héllo"}` {
+	if strings.Join(c.calls, " ") != "type" || len(c.sent) != 1 || c.sent[0] != `{"text":"héllo"}` {
 		t.Errorf("the browser got %v %v", c.calls, c.sent)
 	}
 }
@@ -242,7 +251,7 @@ func TestClipboardEmptiedWhenControlEnds(t *testing.T) {
 	var mu sync.Mutex
 	var during []error
 	c.onEmpty = func() {
-		_, done, err := m.AgentInput(context.Background(), s.ID)
+		_, done, err := m.AgentInput(context.Background(), s.ID, "tok")
 		if err == nil {
 			done()
 		}
@@ -268,14 +277,14 @@ func TestClipboardEmptiedWhenControlEnds(t *testing.T) {
 			if r := k.send(set(2, "after", false)); len(r) != 2 || r[0]["type"] != "clipboard-error" || r[1]["on"] != false {
 				t.Errorf("a set after losing control: %v", r)
 			}
-		}, "set release empty"},
+		}, "set release empty"}, // the hand-back lets go of held keys itself
 		{"the viewer goes", func(k *talk) { k.v.handBack() }, "set release empty"},
 	} {
 		t.Run(end.name, func(t *testing.T) {
 			mu.Lock()
 			during = nil
 			mu.Unlock()
-			k := newTalk(t, &viewer{h: h, session: s.ID, sock: m.Layout().ControlSocket("google")})
+			k := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: m.Layout().ControlSocket("google")})
 			if r := k.send(`{"type":"take"}`); len(r) != 1 || r[0]["on"] != true {
 				t.Fatalf("take: %v", r)
 			}

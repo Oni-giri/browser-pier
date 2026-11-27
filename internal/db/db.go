@@ -138,9 +138,23 @@ var migrations = []string{
 	// orchestrator with one is stopped when it is picked up, not answered
 	// for unscrubbed. Only the flag is stored, never a value.
 	`ALTER TABLE sessions ADD COLUMN had_fills INTEGER NOT NULL DEFAULT 0;`,
+
 	// PROJ-23: the profile's Record sessions setting, off until the admin
 	// turns it on.
 	`ALTER TABLE profiles ADD COLUMN record_sessions INTEGER NOT NULL DEFAULT 0;`,
+
+	// What {sticky} becomes in a profile's proxy (PROJ-153): empty for
+	// the profiles that exist, which get one the first time they need it.
+	`ALTER TABLE profiles ADD COLUMN sticky_token TEXT NOT NULL DEFAULT '';`,
+
+	// The admin's two-step recovery codes (PROJ-162), by their SHA-256:
+	// 80 random bits each, so a slow hash would add nothing. Each row goes
+	// when its code is used.
+	`CREATE TABLE admin_recovery_codes (
+		hash       TEXT PRIMARY KEY,
+		created_at INTEGER NOT NULL
+	);`,
+
 	// PROJ-196: the highest takeover a session handed out, saved before it
 	// is handed out, so a browser picked up after a restart can fence it
 	// and the takeovers after it number above it; and which time a session

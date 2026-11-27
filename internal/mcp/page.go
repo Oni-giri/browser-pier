@@ -16,12 +16,12 @@ import (
 func (s *Server) addPageTools(srv *sdk.Server) {
 	sdk.AddTool(srv, &sdk.Tool{Name: "snapshot", Description: "API mode only. Read the page: URL, title, controls with refs (like a7e12) and text, within a budget; the open dialog and what's in view come first. A control built from a div or span (it shows a pointer cursor or takes the focus, with no role) is listed as generic \"its text\". Hidden text a person can't see may still appear: it is fenced like the rest. Iframes aren't read; [under an iframe] marks a control one seems to cover, which act probably can't click; act checks before clicking. With diff, only what changed since your last snapshot of this page (as act's changes), or the whole page when there is none."}, s.snapshot)
 	sdk.AddTool(srv, &sdk.Tool{Name: "find", Description: "API mode only. Find text on the page (case-insensitive), with the text around each match and the nearest ref."}, s.find)
-	sdk.AddTool(srv, &sdk.Tool{Name: "act", Description: "API mode only. Act on elements, 1 to 20 steps in order, stopping at the first that fails: click, fill (replace a field's text), type (key by key), press (keys, like Enter or ctrl+a), select (an option of a <select>), check, uncheck, hover, upload (set files from upload_file on an <input type=file> or its <label>; no chooser opens, and a page's own button that opens one can't be handled). Each step names its element by ref (from snapshot, find or an earlier answer) or by target, with no snapshot needed: " +
+	sdk.AddTool(srv, &sdk.Tool{Name: "act", Description: "API mode only. Act on elements, 1 to 20 steps in order, stopping at the first that fails: click, fill (replace a field's text), type (key by key), press (keys, like Enter or ctrl+a), select (an option of a <select>), check, uncheck, hover, upload (set files from upload_file on an <input type=file> or its <label>; no chooser opens. For a page's own button that opens one, click it, then answer the chooser with choose_files: the answer ends with a file chooser is open (c3) once it is, perhaps an action late). Each step names its element by ref (from snapshot, find or an earlier answer) or by target, with no snapshot needed: " +
 		"role=button[name=\"Save\"] (an ARIA role and a part of the accessible name, ignoring case), text=Save (the innermost element whose visible text holds it) or text=\"Save\" (exactly that text), optionally followed by >> nth=0 (the first match; -1 the last). " +
 		"No CSS selectors. A target must match exactly one visible element; otherwise the step fails listing up to 5 candidates with refs you can use. Each result names what was hit, with its ref. A covered element is scrolled to the middle of the screen, then waited for up to cover_wait_ms (1 s by default); if it stays covered the step fails, naming what covers it and any open dialog. A step that navigates makes later refs stale (targets still work). No date or range inputs. Nothing inside iframes: for a banner in one (cookie consent, often), request_handoff or use Visual mode. After a snapshot of the page, the answer ends with ### Changes: the lines added (+) or removed (-) since your last snapshot, each with its ref, under the unchanged lines around it (a changed state like [expanded] is a - and a + line), at most 20 lines; refs in it work like a snapshot's. The changes become the new baseline. If the page navigated, it says so: take a snapshot. changes: false turns them off; snapshot: true gives the whole page instead. If a step started a download, the answer ends with ### Downloads: downloaded name (size), or download in progress when it isn't finished within download_wait_ms (3 s by default; list_files shows it once it is). Downloads land in the profile's files."}, s.actOnPage)
 	sdk.AddTool(srv, &sdk.Tool{Name: "wait_for", Description: "API mode only. Wait for one thing: text to appear, a ref or a target (as act's: role=button[name=\"Save\"], text=Save…) to be visible or hidden, the URL to change, or load (the page loaded and the network quiet: the document complete and no request finished for 0.5 s, for a single-page app that fetches its content after loading; requests still under way aren't seen, so a long poll doesn't hold it, nor is one slower than 0.5 s waited for); up to 10 s by default, 30 s at most. " +
 		"Answers already true when wait started: … when it was so before waiting (waiting for text already on the page, your own typed text say, proves nothing), else waited 1.4 s for …, or timed out, with what a ref is now (on the page but hidden, or gone). A target is visible when exactly one visible element matches (the answer gives its ref); several for more than 1 s fail, listing them with refs."}, s.waitFor)
-	sdk.AddTool(srv, &sdk.Tool{Name: "tabs", Description: "API mode only. List the browser's tabs (the active one is the one in front), or switch to one, close one, or open a new one. Tools always act on the active tab; when a page opens a tab, results say so and you switch to it."}, s.tabs)
+	sdk.AddTool(srv, &sdk.Tool{Name: "tabs", Description: "API mode only. List the browser's tabs (the active one is the one in front), or switch to one, close one, or open a new one. Tools always act on the active tab; when a page opens a tab, results say so and you switch to it. From 10 open tabs on, results also say how many are open: close the ones you're done with, since each holds its page's memory."}, s.tabs)
 	sdk.AddTool(srv, &sdk.Tool{Name: "navigate", Description: "API mode only. Open an http(s) URL in the active tab, or go back, forward or reload; waits for the page to load, then for script redirects (a sign-in bounce) to settle, up to 15 s, and answers with the page it landed on, adding Redirected from: when that isn't the URL you gave. A failed navigation names the address that failed when a redirect led there. The tab's refs go stale."}, s.navigate)
 	sdk.AddTool(srv, &sdk.Tool{Name: "page_content", Description: "The active tab's content: markdown (the whole page, with links) or readability (its main text only, the fewest tokens), API mode only, 20000 characters at a time (read on with offset); pdf, API mode only; or screenshot, either mode. Text a person can't see may appear: it is fenced like the rest."}, s.pageContent)
 }
@@ -81,9 +81,17 @@ func (s *Server) pageContent(ctx context.Context, req *sdk.CallToolRequest, in c
 
 // pageCall calls a page tool's endpoint and returns its text.
 func (s *Server) pageCall(ctx context.Context, req *sdk.CallToolRequest, id, tool string, body any) (*sdk.CallToolResult, any, error) {
-	r, err := s.call(ctx, req.Extra, "POST", "/api/sessions/"+url.PathEscape(id)+"/"+tool, body)
+	return s.pageCallWithID(ctx, req, id, tool, body, nil)
+}
+
+// pageCallWithID is pageCall with the tool's call_id (PROJ-156).
+func (s *Server) pageCallWithID(ctx context.Context, req *sdk.CallToolRequest, id, tool string, body any, callID *string) (*sdk.CallToolResult, any, error) {
+	r, err := s.callWithID(ctx, req.Extra, "POST", "/api/sessions/"+url.PathEscape(id)+"/"+tool, body, callID)
 	if err != nil {
 		return nil, nil, err
+	}
+	if res, ok := r.replayed(); ok {
+		return res, nil, nil
 	}
 	if !r.ok() {
 		return nil, nil, toolError(r.errorText())
@@ -121,10 +129,12 @@ type navigateArgs struct {
 	SessionID string `json:"session_id" jsonschema:"from start_browser"`
 	URL       string `json:"url,omitempty" jsonschema:"an http or https URL to open"`
 	Action    string `json:"action,omitempty" jsonschema:"instead of a URL: back, forward or reload"`
+	// CallID is passed on as the API's Idempotency-Key (PROJ-156).
+	CallID *string `json:"call_id,omitempty" jsonschema:"optional: a new id of yours (1 to 64 letters, digits, - or _) for an action that must not happen twice; if its answer is lost, send the same call again with the same call_id and it won't run twice, or ask call_status how it went"`
 }
 
 func (s *Server) navigate(ctx context.Context, req *sdk.CallToolRequest, in navigateArgs) (*sdk.CallToolResult, any, error) {
-	return s.pageCall(ctx, req, in.SessionID, "navigate", map[string]any{"url": in.URL, "action": in.Action})
+	return s.pageCallWithID(ctx, req, in.SessionID, "navigate", map[string]any{"url": in.URL, "action": in.Action}, in.CallID)
 }
 
 type stepArgs struct {
@@ -150,6 +160,8 @@ type actArgs struct {
 	Changes *bool `json:"changes,omitempty" jsonschema:"append what changed since your last snapshot of this page; on by default once you have one (and snapshot isn't set), false to turn it off"`
 	// DownloadWaitMS is a pointer, so 0 (don't wait) differs from unset.
 	DownloadWaitMS *int `json:"download_wait_ms,omitempty" jsonschema:"how long to wait for a download the steps started to finish, in ms; default 3000, 0 not to wait, at most 30000; when set, also how long to look for one to start, so a slow server's download is told now rather than with the next action"`
+	// CallID is passed on as the API's Idempotency-Key (PROJ-156).
+	CallID *string `json:"call_id,omitempty" jsonschema:"optional: a new id of yours (1 to 64 letters, digits, - or _) for an action that must not happen twice; if its answer is lost, send the same call again with the same call_id and it won't run twice, or ask call_status how it went"`
 }
 
 func (s *Server) actOnPage(ctx context.Context, req *sdk.CallToolRequest, in actArgs) (*sdk.CallToolResult, any, error) {
@@ -162,7 +174,7 @@ func (s *Server) actOnPage(ctx context.Context, req *sdk.CallToolRequest, in act
 	if err := tooLongToType("type steps", human, true); err != nil {
 		return nil, nil, err
 	}
-	return s.pageCall(ctx, req, in.SessionID, "act", map[string]any{"steps": in.Steps, "snapshot": in.Snapshot, "changes": in.Changes, "download_wait_ms": in.DownloadWaitMS})
+	return s.pageCallWithID(ctx, req, in.SessionID, "act", map[string]any{"steps": in.Steps, "snapshot": in.Snapshot, "changes": in.Changes, "download_wait_ms": in.DownloadWaitMS}, in.CallID)
 }
 
 type waitForArgs struct {
@@ -185,8 +197,10 @@ type tabsArgs struct {
 	Action    string `json:"action,omitempty" jsonschema:"list (default), switch, close or new"`
 	ID        string `json:"id,omitempty" jsonschema:"for switch and close: the tab, like t2 (close takes the active tab without one)"`
 	URL       string `json:"url,omitempty" jsonschema:"for new: an http or https URL (default about:blank)"`
+	// CallID is passed on as the API's Idempotency-Key (PROJ-156).
+	CallID *string `json:"call_id,omitempty" jsonschema:"optional: a new id of yours (1 to 64 letters, digits, - or _) for an action that must not happen twice; if its answer is lost, send the same call again with the same call_id and it won't run twice, or ask call_status how it went"`
 }
 
 func (s *Server) tabs(ctx context.Context, req *sdk.CallToolRequest, in tabsArgs) (*sdk.CallToolResult, any, error) {
-	return s.pageCall(ctx, req, in.SessionID, "tabs", map[string]any{"action": in.Action, "id": in.ID, "url": in.URL})
+	return s.pageCallWithID(ctx, req, in.SessionID, "tabs", map[string]any{"action": in.Action, "id": in.ID, "url": in.URL}, in.CallID)
 }

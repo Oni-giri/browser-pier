@@ -73,7 +73,7 @@ func TestBrowserConfigLocksDownTheContainer(t *testing.T) {
 }
 
 func TestNewCompactsTheEmbeddedSeccompProfile(t *testing.T) {
-	c, err := New(Options{Image: "img", Instance: "i1"})
+	c, err := New(Options{Image: "img", Instance: "i1", User: "1000:1000"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,8 +87,38 @@ func TestNewCompactsTheEmbeddedSeccompProfile(t *testing.T) {
 	if _, err := New(Options{Instance: "i1"}); err == nil {
 		t.Fatal("New must refuse an empty image")
 	}
-	if _, err := New(Options{Image: "img"}); err == nil {
+	if _, err := New(Options{Image: "img", User: "1000:1000"}); err == nil {
 		t.Fatal("New must refuse an empty instance ID")
+	}
+	// What the create guard refuses, New refuses (PROJ-159).
+	// Each part a 32-bit number, as the guard has it (item 2 of the Codex
+	// review): ten digits fit the pattern but may not fit.
+	for _, user := range []string{"", "0:0", "00:1000", "chrome:chrome", "1000",
+		"1000:4294967296", "4294967296:1000", "9999999999:1000", "1000:9999999999"} {
+		if _, err := New(Options{Image: "img", Instance: "i1", User: user}); err == nil {
+			t.Errorf("New took the user %q", user)
+		}
+	}
+	for _, userns := range []string{"host", "private", "keep-id:"} {
+		if _, err := New(Options{Image: "img", Instance: "i1", User: "1000:1000", UsernsMode: userns}); err == nil {
+			t.Errorf("New took the user namespace mode %q", userns)
+		}
+	}
+	for _, user := range []string{"1000:1000", "4294967295:4294967295", "1:0"} {
+		c, err := New(Options{Image: "img", Instance: "i1", User: user})
+		if err != nil {
+			t.Errorf("%q: %v", user, err)
+			continue
+		}
+		_ = c.Close()
+	}
+	for _, userns := range []string{"", "keep-id", "keep-id:uid=1000,gid=1000"} {
+		c, err := New(Options{Image: "img", Instance: "i1", User: "1000:1000", UsernsMode: userns})
+		if err != nil {
+			t.Errorf("%q: %v", userns, err)
+			continue
+		}
+		_ = c.Close()
 	}
 }
 
@@ -339,12 +369,12 @@ func TestOutdated(t *testing.T) {
 		{settled, Spec + ";apparmor=browserpier", false},
 		{settled, Spec + ";apparmor=unconfined", true}, // another choice
 		{settled, Spec, true},
-		{settled, "1;apparmor=browserpier", true}, // an older definition
-		{settled, "3;apparmor=browserpier", true}, // 0.2.x's, before PROJ-112/113/119
-		{settled, "4;apparmor=browserpier", true}, // 0.3.x's, before PROJ-194
-		{settled, "5;apparmor=browserpier", true}, // 0.4.x's, before PROJ-23
-		{settled, "6;apparmor=browserpier", true}, // 0.5.x's, before PROJ-196
-		{settled, "7;apparmor=browserpier", true}, // before PROJ-196's fence
+		{settled, "1;apparmor=browserpier", true},  // an older definition
+		{settled, "3;apparmor=browserpier", true},  // 0.2.x's, before PROJ-112/113/119
+		{settled, "4;apparmor=browserpier", true},  // 0.3.x's, before PROJ-194
+		{settled, "5;apparmor=browserpier", true},  // 0.4.x's, before PROJ-23
+		{settled, "6;apparmor=browserpier", true},  // 0.5.x's, before PROJ-152/181
+		{settled, "10;apparmor=browserpier", true}, // before PROJ-196's takeover fence
 		{settled, "", true},
 		// Until the choice is known, a browser under any choice runs on;
 		// not an older definition, though.
@@ -354,7 +384,7 @@ func TestOutdated(t *testing.T) {
 		{unsettled, "3", true},
 		{unsettled, "5", true},
 		{unsettled, "6", true},
-		{unsettled, "7", true},
+		{unsettled, "10", true},
 	} {
 		if got := c.client.Outdated(c.spec); got != c.want {
 			t.Errorf("settled %t, Outdated(%q) = %t", c.client.apparmorSettled, c.spec, got)
@@ -368,17 +398,5 @@ func TestIsPodman(t *testing.T) {
 	}
 	if isPodman([]system.ComponentVersion{{Name: "Engine"}, {Name: "containerd"}, {Name: "runc"}}) {
 		t.Fatal("Docker taken for Podman")
-	}
-}
-
-func TestMemoryInUse(t *testing.T) {
-	if got := memoryInUse(container.MemoryStats{Usage: 1000, Stats: map[string]uint64{"inactive_file": 300}}); got != 700 {
-		t.Errorf("cgroup v2: %d", got)
-	}
-	if got := memoryInUse(container.MemoryStats{Usage: 1000, Stats: map[string]uint64{"total_inactive_file": 100}}); got != 900 {
-		t.Errorf("cgroup v1: %d", got)
-	}
-	if got := memoryInUse(container.MemoryStats{Usage: 1000}); got != 1000 {
-		t.Errorf("no stats: %d", got)
 	}
 }

@@ -18,17 +18,17 @@ func TestPageLeasesAreNotConnections(t *testing.T) {
 	if got, _ := f.m.Live("google"); len(got.InUseBy) != 0 {
 		t.Errorf("a page call shows as a connection: %v", got.InUseBy)
 	}
-	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrAgentDriving) {
+	if err := f.m.TakeControl(s.ID, "person"); !errors.Is(err, ErrAgentDriving) {
 		t.Fatalf("take control during a page call = %v", err)
 	}
 	ls.Release()
 	ls.Release() // twice is fine
-	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrAgentDriving) {
+	if err := f.m.TakeControl(s.ID, "person"); !errors.Is(err, ErrAgentDriving) {
 		t.Fatalf("take control just after a page call = %v", err)
 	}
 	advance(agentQuiet + time.Second)
 	gen := ls.Generation
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.m.PageLease(context.Background(), s.ID, "tok"); !errors.Is(err, ErrHumanDriving) {
@@ -293,7 +293,7 @@ func TestTakeControlBreaksOffABreakablePageCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	advance(time.Minute)
-	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrAgentDriving) {
+	if err := f.m.TakeControl(s.ID, "person"); !errors.Is(err, ErrAgentDriving) {
 		t.Fatalf("take control during a long read = %v", err)
 	}
 	read.Release()
@@ -304,12 +304,12 @@ func TestTakeControlBreaksOffABreakablePageCall(t *testing.T) {
 	}
 	act.Breakable()
 	advance(takeOverAfter - time.Millisecond)
-	if err := f.m.TakeControl(s.ID); !errors.Is(err, ErrAgentDriving) {
+	if err := f.m.TakeControl(s.ID, "person"); !errors.Is(err, ErrAgentDriving) {
 		t.Fatalf("take control in act's first %s = %v", takeOverAfter, err)
 	}
 	advance(time.Millisecond)
 	took := make(chan error, 1)
-	go func() { took <- f.m.TakeControl(s.ID) }()
+	go func() { took <- f.m.TakeControl(s.ID, "person") }()
 	if err := leaseEnds(t, act); !errors.Is(err, ErrTookControl) {
 		t.Fatalf("act's lease ended for %v", err)
 	}
@@ -330,5 +330,175 @@ func TestTakeControlBreaksOffABreakablePageCall(t *testing.T) {
 	}
 	if _, err := f.m.PageLease(context.Background(), s.ID, "tok"); !errors.Is(err, ErrHumanDriving) {
 		t.Fatalf("a page call after Take control = %v", err)
+	}
+}
+
+// TestReadLeasesDontKeepAPersonOut: Visual mode's tree reads (PROJ-150)
+// take turns with page calls, but neither start nor extend the seconds
+// after an agent's input in which Take control is refused (PROJ-134),
+// and Take control breaks one off at once.
+func TestReadLeasesDontKeepAPersonOut(t *testing.T) {
+	f := newFixture(t)
+	advance := f.clock()
+	s := f.start(f.m)
+	read, err := f.m.ReadLease(context.Background(), s.ID, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// It takes turns with a page call.
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	if _, err := f.m.PageLease(ctx, s.ID, "tok"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a page call during a read = %v, want it to wait", err)
+	}
+	cancel()
+	took := make(chan error, 1)
+	go func() { took <- f.m.TakeControl(s.ID, "person") }()
+	if err := leaseEnds(t, read); !errors.Is(err, ErrTookControl) {
+		t.Fatalf("the read ended for %v", err)
+	}
+	read.Release()
+	if err := <-took; err != nil {
+		t.Fatalf("Take control during a read = %v", err)
+	}
+	if _, err := f.m.ReadLease(context.Background(), s.ID, "tok"); !errors.Is(err, ErrHumanDriving) {
+		t.Fatalf("a read while a person drives = %v", err)
+	}
+	f.m.ReleaseControl(s.ID)
+
+	// Reads after an agent's last input don't extend its quiet time.
+	_, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done()
+	for range 3 {
+		advance(2 * time.Second)
+		r, err := f.m.ReadLease(context.Background(), s.ID, "tok")
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Release()
+	}
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
+		t.Fatalf("take control %s after the last input, with reads since = %v", 6*time.Second, err)
+	}
+	f.m.ReleaseControl(s.ID)
+
+	// A read under way doesn't cut the quiet time short either: right
+	// after an input, Take control is refused, and the read goes on.
+	_, done, err = f.m.AgentInput(context.Background(), s.ID, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done()
+	advance(time.Second)
+	read, err = f.m.ReadLease(context.Background(), s.ID, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	took = make(chan error, 1)
+	go func() { took <- f.m.TakeControl(s.ID, "person") }()
+	select {
+	case err := <-took:
+		if !errors.Is(err, ErrAgentDriving) {
+			t.Fatalf("take control 1 s after an input, with a read under way = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		read.Release()
+		t.Fatal("take control 1 s after an input broke the read off and waited for it, instead of being refused")
+	}
+	if read.Ctx.Err() != nil {
+		t.Fatal("the refused Take control broke the read off")
+	}
+	read.Release()
+
+	// A handoff and the token's revocation end a read as a page call.
+	read, err = f.m.ReadLease(context.Background(), s.ID, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _, _ = f.m.SetNeedsHelp(s.ID, true) }()
+	if err := leaseEnds(t, read); !errors.Is(err, ErrHandedOver) {
+		t.Fatalf("a handoff ended the read for %v", err)
+	}
+	read.Release()
+}
+
+// TestRevokingATokenEndsItsWaitForATurn: a page call waiting for another
+// to finish is listed under its token, and revoking the token ends the
+// wait with ErrRevoked; the other token's call goes on.
+func TestRevokingATokenEndsItsWaitForATurn(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	held, err := f.m.PageLease(context.Background(), s.ID, "keeper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Release()
+	got := make(chan error, 1)
+	go func() {
+		ls, err := f.m.ReadLease(context.Background(), s.ID, "doomed")
+		if ls != nil {
+			ls.Release()
+		}
+		got <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		toks := f.m.ConnectedTokens()
+		if len(toks) == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("ConnectedTokens = %v; want the waiting call's token too", toks)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	f.m.DisconnectToken("doomed")
+	select {
+	case err := <-got:
+		if !errors.Is(err, ErrRevoked) {
+			t.Fatalf("revoked while waiting: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the call went on waiting after its token was revoked")
+	}
+	if held.Ctx.Err() != nil {
+		t.Fatal("another token's revocation ended the call under way")
+	}
+	if toks := f.m.ConnectedTokens(); len(toks) != 1 || toks[0] != "keeper" {
+		t.Fatalf("ConnectedTokens after = %v", toks)
+	}
+}
+
+// TestAgentInputAtRefusesAfterAPerson: an action aimed by a read is
+// refused once a person has had the browser since that read.
+func TestAgentInputAtRefusesAfterAPerson(t *testing.T) {
+	f := newFixture(t)
+	advance := f.clock()
+	s := f.start(f.m)
+	ls, err := f.m.ReadLease(context.Background(), s.ID, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gen := ls.Generation
+	ls.Release()
+	_, done, err := f.m.AgentInputAt(context.Background(), s.ID, "tok", gen)
+	if err != nil {
+		t.Fatalf("same generation: %v", err)
+	}
+	done()
+	advance(agentQuiet + time.Second)
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
+		t.Fatal(err)
+	}
+	f.m.ReleaseControl(s.ID)
+	if _, _, err := f.m.AgentInputAt(context.Background(), s.ID, "tok", gen); !errors.Is(err, ErrPersonHadIt) {
+		t.Fatalf("after a hand-back: %v, want ErrPersonHadIt", err)
+	}
+	if _, done, err := f.m.AgentInput(context.Background(), s.ID, "tok"); err != nil {
+		t.Fatalf("a click by point after a hand-back: %v", err)
+	} else {
+		done()
 	}
 }

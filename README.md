@@ -108,7 +108,7 @@ curl -s -X POST https://pier.example.com/api/sessions/ID/computer -H "$H" \
 <img src="docs/images/handoff-phone.png" alt="A handoff on a phone: claude needs you on google to enter the 2FA code, and asks for the handoff PIN" width="300" align="right">
 
 1. The agent asks for a handoff, with a reason and a detail ("Enter the 2FA code sent to your phone").
-2. BrowserPier gives it a one-time link. MCP clients that can show links, such as Claude, show it to you directly. Other agents send it through their own channel: chat, Telegram, Slack. BrowserPier sends no notifications of its own.
+2. BrowserPier gives it a one-time link. MCP clients that can show links, such as Claude, show it to you directly. Other agents send it through their own channel: chat, Telegram, Slack. For agents with no channel (headless or scheduled ones), BrowserPier can also tell a webhook you set in Settings, such as a Slack or Discord channel.
 3. You open the link, enter your PIN and take control of the live view. Meanwhile the agent is paused.
 4. You tap **Done, hand back** or **Can't do this**, with a note if you like.
 5. The agent gets your answer and carries on.

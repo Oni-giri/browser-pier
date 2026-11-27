@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -26,6 +25,7 @@ import (
 	"github.com/moby/moby/client"
 
 	"github.com/Oni-giri/browser-pier/images/chromium"
+	"github.com/Oni-giri/browser-pier/internal/docker/memusage"
 )
 
 // Labels on every browser container.
@@ -54,17 +54,29 @@ const (
 // entrypoint's /input/clipboard and /input/paste, which the orchestrator
 // calls to empty the clipboard when a person's control ends (PROJ-194);
 // 6 adds the entrypoint's /record pipeline, which the recorder reads
-// (PROJ-23); 7 keeps a held key or button until its release has been
-// sent, by the person's own key-up or by the hand-back's lift, so the
-// orchestrator's second try at the lift lets go of what the first
-// failed to (PROJ-196); 8 fences a person's takeover as it ends
+// (PROJ-23); 7 answers pages' file choosers through the container's
+// portal, with no GTK dialog left (PROJ-152, PROJ-181): a browser from
+// before it would keep the dialog, which can hand a page any file in the
+// container (PROJ-183); 8 adds the entrypoint's /input/live-type, which
+// the live view's Type button calls, so a person's typing doesn't wait
+// for an agent's shortcut gap (PROJ-151), and /input/open, which the open
+// action calls (PROJ-164): a browser from before either answers them 404;
+// 9 turns address-bar search suggestions off by managed policy
+// (PROJ-191): a browser from an older image would keep sending what is
+// typed into the address bar to the search engine; 10 runs Visual-mode
+// browsers with Chromium's accessibility on the session bus and the
+// entrypoint's /tree reader, and tells the container its mode
+// (BROWSERPIER_MODE), which visual_snapshot and click by ref rely on
+// (PROJ-150); 11 fences a person's takeover as it ends
 // (X-BrowserPier-Takeover, X-BrowserPier-Fence): the orchestrator lets
 // agents back in only once the browser answers 200 with the fence,
 // having refused whatever of that takeover is still on its way and run
-// the live input it had queued, and each cleanup (the lift, the
-// clipboard's emptying) names its takeover, leaving a later one alone
+// the live input it had queued; each cleanup (the lift, the clipboard's
+// emptying) names its takeover, leaving a later one alone; and a held
+// key is forgotten only once its release is known to have run, so the
+// orchestrator's lift lets go of what an earlier try failed to
 // (PROJ-196).
-const Spec = "8"
+const Spec = "11"
 
 const (
 	// StopTimeout is how long a browser container gets to stop before Docker
@@ -125,7 +137,12 @@ type Client struct {
 	userns          string
 	user            string // uid:gid browsers run as, and the sandbox check
 	instance        string
-	log             *slog.Logger
+	// hostDataDir is the data dir as the daemon sees it, set by
+	// UseDataDir: the create guard checks browsers' mounts against it.
+	hostDataDir string
+	log         *slog.Logger
+	// proxyTestMu is held by the one proxy test running (TestProxy).
+	proxyTestMu sync.Mutex
 }
 
 // Options configure a Client.
@@ -142,7 +159,8 @@ type Options struct {
 	// chosen to suit the host (see planAppArmor).
 	AppArmor string
 	// User is the uid:gid browsers run as; the sandbox check runs as it
-	// too. Empty means the image's own user.
+	// too. Required, numeric, and not root: the create guard refuses any
+	// other.
 	User string
 	// Log gets what's worth saying about the AppArmor choice, and what
 	// the daemon reports that isn't an error for the caller (see Stop).
@@ -158,6 +176,14 @@ func New(o Options) (*Client, error) {
 	}
 	if o.Instance == "" {
 		return nil, errors.New("no instance ID set")
+	}
+	// What the create guard would refuse at every browser start, refused
+	// now instead.
+	if p := userProblem(o.User); p != "" {
+		return nil, fmt.Errorf("the browsers' user must be a numeric uid:gid other than root, each part below 2^32; %q %s", o.User, p)
+	}
+	if !ValidUsernsMode(o.UsernsMode) {
+		return nil, fmt.Errorf("the user namespace mode must be unset or keep-id (with uid, gid or size), got %q", o.UsernsMode)
 	}
 	var seccomp bytes.Buffer
 	if err := json.Compact(&seccomp, chromium.SeccompProfile); err != nil {
@@ -183,6 +209,10 @@ func New(o Options) (*Client, error) {
 // short-lived container to check (see planAppArmor). It doesn't pull the
 // browser image for that: without it, the first browser start chooses.
 func (c *Client) UseDataDir(ctx context.Context, dataDir, hostDataDir string) error {
+	if !filepath.IsAbs(hostDataDir) {
+		return fmt.Errorf("the data dir's path on the Docker host must be absolute, got %q", hostDataDir)
+	}
+	c.hostDataDir = filepath.Clean(hostDataDir)
 	info, err := c.api.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		return err
@@ -195,6 +225,10 @@ func (c *Client) UseDataDir(ctx context.Context, dataDir, hostDataDir string) er
 		if err := c.writeSeccomp(dataDir, hostDataDir); err != nil {
 			return err
 		}
+	}
+	// A proxy test cut short by a killed orchestrator left its container.
+	if err := c.RemoveProxyTest(ctx); err != nil {
+		c.log.Warn("removing a proxy test's leftover container", "err", err)
 	}
 	c.apparmorMu.Lock()
 	defer c.apparmorMu.Unlock()
@@ -242,23 +276,41 @@ func (c *Client) Ping(ctx context.Context) error {
 // Create creates a browser container, pulling the image first if Docker
 // doesn't have it.
 func (c *Client) Create(ctx context.Context, spec BrowserSpec) (string, error) {
-	opt := c.appArmorForCreate(ctx)
-	cfg, host := browserConfig(c.image, c.seccompOpt, opt, spec)
-	cfg.Labels[LabelInstance] = c.instance
-	cfg.Labels[LabelSpec] = specLabel(opt)
-	host.UsernsMode = container.UsernsMode(c.userns)
-	opts := client.ContainerCreateOptions{Name: spec.Name, Config: cfg, HostConfig: host}
-	res, err := c.api.ContainerCreate(ctx, opts)
+	// The body under the current AppArmor option goes through the guard
+	// first: choosing the option may pull the image, while the choice
+	// isn't settled, and a body the guard refuses mustn't get that far.
+	// The option chosen next is one the plan allows too, so a refusal here
+	// is about the body, not the option.
+	c.apparmorMu.Lock()
+	current := c.apparmorOpt
+	c.apparmorMu.Unlock()
+	if err := c.guardCreate(kindBrowser, c.browserCreateOptions(current, spec)); err != nil {
+		return "", err
+	}
+	opts := c.browserCreateOptions(c.appArmorForCreate(ctx), spec)
+	// Both attempts go through the guard; a refusal isn't NotFound, so it
+	// never leads to a pull.
+	res, err := c.create(ctx, kindBrowser, opts)
 	if cerrdefs.IsNotFound(err) {
 		if err := c.pull(ctx); err != nil {
 			return "", err
 		}
-		res, err = c.api.ContainerCreate(ctx, opts)
+		res, err = c.create(ctx, kindBrowser, opts)
 	}
 	if err != nil {
 		return "", err
 	}
 	return res.ID, nil
+}
+
+// browserCreateOptions is the body Create sends for spec, under the
+// AppArmor option opt.
+func (c *Client) browserCreateOptions(opt string, spec BrowserSpec) client.ContainerCreateOptions {
+	cfg, host := browserConfig(c.image, c.seccompOpt, opt, spec)
+	cfg.Labels[LabelInstance] = c.instance
+	cfg.Labels[LabelSpec] = specLabel(opt)
+	host.UsernsMode = container.UsernsMode(c.userns)
+	return client.ContainerCreateOptions{Name: spec.Name, Config: cfg, HostConfig: host}
 }
 
 func (c *Client) pull(ctx context.Context) error {
@@ -481,25 +533,5 @@ func User(uid, gid int) string { return strconv.Itoa(uid) + ":" + strconv.Itoa(g
 // MemoryUsage is how much memory the container uses now, counted as
 // docker stats does: usage less the page cache the kernel can drop.
 func (c *Client) MemoryUsage(ctx context.Context, id string) (int64, error) {
-	res, err := c.api.ContainerStats(ctx, id, client.ContainerStatsOptions{})
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = res.Body.Close() }()
-	var s container.StatsResponse
-	if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&s); err != nil {
-		return 0, err
-	}
-	return memoryInUse(s.MemoryStats), nil
-}
-
-func memoryInUse(m container.MemoryStats) int64 {
-	used := m.Usage
-	// cgroup v2 calls it inactive_file, v1 total_inactive_file.
-	for _, k := range []string{"inactive_file", "total_inactive_file"} {
-		if v, ok := m.Stats[k]; ok && v < used {
-			return int64(used - v) //nolint:gosec // v < used
-		}
-	}
-	return int64(used) //nolint:gosec // memory sizes fit
+	return memusage.Read(ctx, c.api.ContainerStats, id)
 }

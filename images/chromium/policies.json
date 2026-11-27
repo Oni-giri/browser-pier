@@ -3,5 +3,6 @@
   "DownloadDirectory": "/files/downloads",
   "PromptForDownloadLocation": false,
   "DnsOverHttpsMode": "off",
-  "RestoreOnStartup": 1
+  "RestoreOnStartup": 1,
+  "SearchSuggestEnabled": false
 }

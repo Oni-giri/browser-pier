@@ -100,7 +100,7 @@ func startBrowserIn(t *testing.T, mode profiles.Mode, change func(*profiles.Prof
 		t.Skip("BROWSERPIER_TEST_IMAGE not set; run `make test-docker`")
 	}
 	ctx := context.Background()
-	rt, err := docker.New(docker.Options{Image: image, UsernsMode: os.Getenv("BROWSERPIER_USERNS_MODE"), Instance: fmt.Sprintf("test%d", time.Now().UnixNano())})
+	rt, err := docker.New(docker.Options{Image: image, UsernsMode: os.Getenv("BROWSERPIER_USERNS_MODE"), User: docker.User(os.Getuid(), os.Getgid()), Instance: fmt.Sprintf("test%d", time.Now().UnixNano())})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -30,6 +30,8 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/handoff"
 	"github.com/Oni-giri/browser-pier/internal/mcp"
+	"github.com/Oni-giri/browser-pier/internal/notify"
+	"github.com/Oni-giri/browser-pier/internal/picker"
 	"github.com/Oni-giri/browser-pier/internal/recording"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/settings"
@@ -52,6 +54,13 @@ func main() {
 	if flag.Arg(0) == "pin" {
 		if err := pinCommand(os.Stdin, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "browserpier pin:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if flag.Arg(0) == "2fa" {
+		if err := twoFACommand(flag.Args()[1:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "browserpier 2fa:", err)
 			os.Exit(1)
 		}
 		return
@@ -176,6 +185,15 @@ func run(log *slog.Logger) error {
 	mgr.SetRecorder(recorder, recStore)
 	go recStore.Run(ctx, time.Hour)
 	go mgr.WatchIdle(ctx, 30*time.Second)
+	// The admin's webhook (Settings → Notifications). Its links are built
+	// on the public URL or the admin's address for links, never on the
+	// address a request used. It sends nothing until a URL is set.
+	notifier, err := notify.New(ctx, database, log, notify.Options{PublicURL: cfg.PublicURL, Version: version})
+	if err != nil {
+		return err
+	}
+	go notifier.Run(ctx)
+	mgr.OnFailed(func(s sessions.Session, how sessions.EndReason) { notifier.BrowserFailed(s.Profile, string(how)) })
 	if err := mgr.Reconcile(ctx); err != nil {
 		return fmt.Errorf("checking browsers left running: %w", err)
 	}
@@ -229,10 +247,15 @@ func run(log *slog.Logger) error {
 	defer func() { _ = relay.Close() }()
 	live := webrtc.NewHandler(relay, mgr, web, log)
 	handoffs := handoff.New(database, mgr, log)
+	handoffs.SetNotifier(notifier)
 	defer handoffs.Close() // its until_url watches; the next start's sweep resumes them
 	go handoffs.Sweep(ctx, 15*time.Second)
 	agentAPI.SetHandoffs(handoffs)
+	// The person's answer to a page's file chooser, in the live view and
+	// on a handoff link (PROJ-181).
+	people := picker.New(mgr, fileStore, log)
 	app := ui.New(mgr, web, handoffs, prefs, log, ui.Options{
+		Picker:          people,
 		PublicURL:       cfg.PublicURL,
 		HostMemory:      total,
 		HostFree:        localFree(),
@@ -240,6 +263,7 @@ func run(log *slog.Logger) error {
 		Version:         version,
 		Recordings:      recStore,
 		Recorder:        recorder,
+		Notify:          notifier,
 		SetRAMLimit: func(percent int) {
 			if total > 0 {
 				mgr.SetMemoryLimit(total*int64(percent)/100, perBrowser)
@@ -247,7 +271,9 @@ func run(log *slog.Logger) error {
 			}
 		},
 	})
-	err = serve(ctx, ln, newHandler(web, agentAPI, live, handoff.NewWeb(handoffs, web, live, mgr, log), app, log), log)
+	handoffWeb := handoff.NewWeb(handoffs, web, live, mgr, log)
+	handoffWeb.SetPicker(people)
+	err = serve(ctx, ln, newHandler(web, agentAPI, live, handoffWeb, app, log), log)
 	if cfg.StopBrowsersOnExit {
 		// After serve: no request can start another browser meanwhile.
 		stopBrowsers(mgr, log)

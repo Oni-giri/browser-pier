@@ -45,6 +45,14 @@ type config struct {
 	// read from BlockFile (BROWSERPIER_BLOCKLIST_FILE). Off by default.
 	BlockAds  bool
 	BlockFile string
+	// Visual (BROWSERPIER_MODE=visual; api, the default, is false) turns
+	// on Chromium's accessibility, published on the session bus, and the
+	// tree reader, for Visual mode's element tree (PROJ-150). A session's mode is fixed when it
+	// starts, so the state never changes during one.
+	Visual bool
+	// ChooserTimeout (BROWSERPIER_CHOOSER_TIMEOUT) is how long a page's
+	// file chooser waits for an answer before it is cancelled.
+	ChooserTimeout time.Duration
 }
 
 func loadConfig(lookup func(string) (string, bool)) (config, error) {
@@ -83,6 +91,13 @@ func loadConfig(lookup func(string) (string, bool)) (config, error) {
 	if c.BlockAds, err = strconv.ParseBool(get("BROWSERPIER_BLOCK_ADS", "false")); err != nil {
 		return config{}, fmt.Errorf("BROWSERPIER_BLOCK_ADS: want true or false, got %q", get("BROWSERPIER_BLOCK_ADS", ""))
 	}
+	switch mode := get("BROWSERPIER_MODE", "api"); mode {
+	case "api":
+	case "visual":
+		c.Visual = true
+	default:
+		return config{}, fmt.Errorf("BROWSERPIER_MODE: want api or visual, got %q", mode)
+	}
 	for _, s := range strings.Split(get("BROWSERPIER_HOST_IPS", ""), ",") {
 		if s = strings.TrimSpace(s); s == "" {
 			continue
@@ -95,6 +110,9 @@ func loadConfig(lookup func(string) (string, bool)) (config, error) {
 	}
 	if c.StopTimeout, err = time.ParseDuration(get("BROWSERPIER_STOP_TIMEOUT", "20s")); err != nil || c.StopTimeout <= 0 {
 		return config{}, fmt.Errorf("BROWSERPIER_STOP_TIMEOUT: want a positive duration such as 20s, got %q", get("BROWSERPIER_STOP_TIMEOUT", ""))
+	}
+	if c.ChooserTimeout, err = time.ParseDuration(get("BROWSERPIER_CHOOSER_TIMEOUT", "5m")); err != nil || c.ChooserTimeout < time.Second || c.ChooserTimeout > time.Hour {
+		return config{}, fmt.Errorf("BROWSERPIER_CHOOSER_TIMEOUT: want a duration between 1s and 1h, such as 5m, got %q", get("BROWSERPIER_CHOOSER_TIMEOUT", ""))
 	}
 	if c.ProfileDir == "" || c.ControlSocket == "" {
 		return config{}, fmt.Errorf("BROWSERPIER_PROFILE_DIR and BROWSERPIER_CONTROL_SOCKET must not be empty")

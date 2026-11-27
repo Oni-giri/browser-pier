@@ -269,7 +269,7 @@ func (t *Tools) downloads(ctx context.Context, s sessions.Session, who Caller, m
 		return ""
 	}
 	for _, line := range files.LogLines(ds) {
-		t.m.Note(s.ID, who.Agent, line)
+		t.m.NoteDownloadFor(ctx, s.ID, who.Agent, line)
 	}
 	return "### Downloads\n" + fence.Wrap("downloads", strings.Join(files.Lines(ds), "\n"))
 }
@@ -334,6 +334,7 @@ func (t *Tools) act(ctx context.Context, s sessions.Session, who Caller, in ActI
 			}
 			c.notices = nil
 			body, marker := c.render(p, DefaultMaxChars)
+			c.noteTitle(p.title)
 			out += "\n" + c.result("page snapshot", body, marker)
 		case unkept:
 			// Still that document (a step that navigated has nothing to
@@ -1480,8 +1481,8 @@ func (c *call) upload(ctx context.Context, n *node, names []string) (string, err
 		return "", err
 	}
 	if r.ObjectID == "" {
-		return "", &Error{Status: 422, Msg: n.ref + " isn't a file input (<input type=file>) or a label for one. A page's own button that opens a file chooser can't be handled: the chooser waits for a person. " +
-			"Target the <input type=file> itself, which is often styled out of sight; if the snapshot doesn't list it, target the <label> that controls it (find its text); otherwise request a file_upload handoff."}
+		return "", &Error{Status: 422, Msg: n.ref + " isn't a file input (<input type=file>) or a label for one. " +
+			"Target the <input type=file> itself, which is often styled out of sight; if the snapshot doesn't list it, target the <label> that controls it (find its text). For a page's own button that opens a file chooser, click it, then answer the chooser with choose_files (POST /api/sessions/{id}/chooser)."}
 	}
 	var in struct {
 		Multiple bool `json:"multiple"`

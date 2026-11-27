@@ -29,13 +29,13 @@
     </section>
 
     <section class="cell span-4" aria-labelledby="links-title">
-      <div class="cell-head"><h2 class="cell-title big" id="links-title">Handoff links</h2>{{if .PINSet}}<span class="pill running">PIN set</span>{{else}}<span class="pill help">No PIN</span>{{end}}</div>
+      <div class="cell-head"><h2 class="cell-title big" id="links-title">Handoff links</h2>{{if .PINSet}}<span class="pill running">PIN set</span>{{else}}<span class="pill">No PIN</span>{{end}}</div>
       <ul class="checks">
         <li>Expire after 15 minutes, work once</li>
         <li>Open one browser only</li>
         <li>Five wrong PINs cancel the link</li>
       </ul>
-      {{if not .PINSet}}<p class="notice warn">Set a handoff PIN, or links that ask for one can't be opened.</p>{{end}}
+      {{if not .PINSet}}<p class="notice">Set a handoff PIN, or links that ask for one can't be opened.</p>{{end}}
       <a class="btn" href="/settings">PIN and policies in Settings →</a>
     </section>
 
@@ -87,7 +87,7 @@ codex mcp add browserpier --url {{.Base}}/mcp \
 }}}
 
 <span class="c"># tools: start_browser, request_handoff, stop_browser…
-# Visual mode: screenshot, click, type_text, press_keys, scroll, drag, wait, zoom
+# Visual mode: screenshot, visual_snapshot, click, type_text, press_keys, scroll, drag, wait, zoom
 # API mode: snapshot, find, act, wait_for, navigate, tabs, page_content</span></pre>
       <div data-panel="Agent" hidden>
         <p class="code-note">Create a token, set it as <code>PIER_TOKEN</code> where your agent runs, then paste this into the agent's chat. It reads BrowserPier's setup guide and connects itself, whichever agent it is. The token stays out of the chat.</p>

@@ -97,7 +97,7 @@ func newPhone(t *testing.T, image string) *browsertest.CDP {
 func newPhoneContainer(t *testing.T, image string) (*browsertest.CDP, string) {
 	t.Helper()
 	ctx := context.Background()
-	rt, err := docker.New(docker.Options{Image: image, UsernsMode: os.Getenv("BROWSERPIER_USERNS_MODE"), Instance: fmt.Sprintf("test%d", time.Now().UnixNano())})
+	rt, err := docker.New(docker.Options{Image: image, UsernsMode: os.Getenv("BROWSERPIER_USERNS_MODE"), User: docker.User(os.Getuid(), os.Getgid()), Instance: fmt.Sprintf("test%d", time.Now().UnixNano())})
 	if err != nil {
 		t.Fatal(err)
 	}

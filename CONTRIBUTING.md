@@ -58,6 +58,8 @@ make image        # the orchestrator image, ghcr.io/oni-giri/browser-pier
 
 Tests that need Docker sit behind the `docker` build tag, so `go test ./...` stays fast. `BROWSERPIER_TEST_RECORD=1` runs the API package's Docker tests with every session recorded (PROJ-23), to check recording changes nothing a page or an agent sees; `BROWSERPIER_MEASURE=1` runs `TestMeasureRecordingCost` in `internal/sessions`, which logs the recording pipeline's CPU, memory and bytes per hour (`BROWSERPIER_MEASURE_SECONDS`, default 60, per scene). Before calling a change done, run it for real: start a browser, sign in to a test site, stop it, start it again and check that the login survived.
 
+After a change to the browser image, set `BROWSERPIER_TEST_OLD_IMAGE` to the last released one (`ghcr.io/oni-giri/browser-pier-chromium:0.2.1`, say): `TestLoginSurvivesImageUpgrade` then checks a profile it made keeps its login on the new image. Measurements that aren't checks, such as `TestMeasureWebGLCost` (what WebGL's renderer costs, PROJ-148), `TestMeasureMemoryFlags` (what the back/forward cache and the spare renderer cost, PROJ-160; about 40 minutes, one browser holding a 200 MB page at a time) and `TestMeasureWindowAtLoad`, also need the `measure` tag: `go test -tags 'docker measure' -run TestMeasureWebGLCost -v ./images/chromium/`.
+
 ### On rootless Podman
 
 Start Podman's Docker API and point the tests at it, with a `docker` → `podman` shim on your `PATH`:
@@ -119,5 +121,15 @@ curl -H "Authorization: Bearer $TOKEN" -X DELETE localhost:7437/api/sessions/<id
 - Small, focused commits, each naming its task, e.g. `PROJ-5: session lifecycle state machine`.
 - Write tests alongside the code.
 - If the code and the spec disagree, raise it rather than diverging, and update SPEC.md when a decision changes.
+
+### Changing what a container gets
+
+Every container BrowserPier creates passes the create guard (`internal/docker/guard.go`) right before Docker sees it. The guard states, per kind of container (`browser`, `sandbox-check`, `proxy-test`), the value of every field BrowserPier sets, and refuses any other field that is set at all. It restates the builders' values on purpose instead of calling them, so don't make it derive anything from `browserConfig` or a `BrowserSpec`. To give a container something new (a device, a mount, a network, a limit, an environment variable for the entrypoint):
+
+1. Allow it in the guard first: name the field in `guardNamed` and check its exact value for the kinds that get it (for a browser's environment variable, add its name to `guardBrowserEnv`; the proxy test's one variable is checked in `proxyTestEnv`).
+2. Then change the builder (`browserConfig`, `browserCreateOptions`, `sandboxCheckOptions`, or `proxyTestConfig` and `proxyTestOptions`).
+3. Then the tests: a row in `TestGuardRefusesEachWidening` for each way the new value could be wrong, and the golden bodies in `internal/docker/testdata` (`go test ./internal/docker -run TestCreateBodiesAreUnchanged -update-golden`), whose diff shows the change.
+
+A new kind of container is a new `createKind` and a new case in `checkCreate`, written by hand. A new Docker operation (an exec, a network, a copy) is a deliberate edit of the list in `TestDockerOperationsAreAClosedSet`. Only `internal/docker` may import the Docker SDK, with two exceptions the test names: `internal/docker/memusage`, which uses the SDK's stats types and is handed `ContainerStats` alone, never the client, and the memory measure test in `images/chromium`.
 
 CI lints, tests and builds every push and pull request. It publishes both images to ghcr.io from `main` (tag `edge`) and from `v*` tags, which also make the GitHub release. See [RELEASING.md](RELEASING.md).

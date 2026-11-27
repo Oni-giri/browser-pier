@@ -277,6 +277,12 @@ func TestUntilURLEndsTheHandoff(t *testing.T) {
 	if !strings.Contains(all, "Handed back when the page reached the expected address") || strings.Contains(all, "site.example") || strings.Contains(all, "s3cr3t") {
 		t.Fatalf("activity: %q", notes)
 	}
+	// Nor the request's words, an address or the link (PROJ-158).
+	for _, a := range f.m.Activity(h.SessionID) {
+		if strings.Contains(a.What+a.Title, h.Detail) || strings.Contains(a.What+a.Title, h.UntilURL) || strings.Contains(a.What+a.Title, token) {
+			t.Fatalf("activity: %+v", a)
+		}
+	}
 	// The phone's page says it was handed back by itself.
 	p := f.do(b, "GET", "/h/"+token, nil, nil)
 	if p.code != http.StatusGone || !strings.Contains(p.body, "Done: handed back automatically") || strings.Contains(p.body, "s3cr3t") {

@@ -25,6 +25,8 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/cdp/cdptest"
 	"github.com/Oni-giri/browser-pier/internal/db"
+	"github.com/Oni-giri/browser-pier/internal/files"
+	"github.com/Oni-giri/browser-pier/internal/picker"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/sessions/sessionstest"
@@ -48,6 +50,10 @@ type fixture struct {
 	// onLift, if set, runs as the browser is asked to let go of held
 	// keys and buttons (a hand-back).
 	onLift *atomic.Pointer[func()]
+	// choosers is the browsers' file choosers (chooser_test.go), files
+	// the profiles' files, with a 1 MiB cap.
+	choosers *fakeChoosers
+	files    *files.Store
 }
 
 type clipRecord struct {
@@ -99,6 +105,8 @@ func newFixture(t *testing.T, policy profiles.HandoffPolicy, opts auth.WebOption
 		}
 		sessionstest.AnswerLift(w, r)
 	})
+	choosers := &fakeChoosers{}
+	choosers.register(mux)
 	// No CDP: what the handoff reads of the browser, it reads over HTTP.
 	b := cdptest.New(func(m cdptest.Message) (any, error) {
 		return nil, cdptest.Error{Message: "not in the fake: " + m.Method}
@@ -134,12 +142,15 @@ func newFixture(t *testing.T, policy profiles.HandoffPolicy, opts auth.WebOption
 	t.Cleanup(func() { _ = relay.Close() })
 	hmux := http.NewServeMux()
 	web.Register(hmux)
-	NewWeb(svc, web, webrtc.NewHandler(relay, m, web, log), m, log).Register(hmux)
+	fs := files.New(m.Layout().FilesDir, 1<<20, os.Getuid(), os.Getgid())
+	hw := NewWeb(svc, web, webrtc.NewHandler(relay, m, web, log), m, log)
+	hw.SetPicker(picker.New(m, fs, log))
+	hw.Register(hmux)
 	// As in production, form posts from other origins are refused.
 	srv := httptest.NewServer(new(http.CrossOriginProtection).Handler(hmux))
 	t.Cleanup(srv.Close)
 	t.Cleanup(svc.Close)
-	return &fixture{t: t, m: m, svc: svc, admin: admin, srv: srv, cdp: b, tabs: tabs, emptied: emptied, onLift: onLift}
+	return &fixture{t: t, m: m, svc: svc, admin: admin, srv: srv, cdp: b, tabs: tabs, emptied: emptied, onLift: onLift, choosers: choosers, files: fs}
 }
 
 func (f *fixture) running() sessions.Session {
@@ -373,6 +384,34 @@ func TestLinkOnlyAndSignIn(t *testing.T) {
 	_, token = g.open("")
 	if p := g.do(browser(), "GET", "/h/"+token, nil, nil); p.code != http.StatusSeeOther || p.location != "/login?next=%2Fh%2F"+token {
 		t.Fatalf("full sign-in without a session: %d to %q", p.code, p.location)
+	}
+
+	// With two-step sign-in on (PROJ-162), the password alone doesn't
+	// open a Full sign-in link; the code does, and the browser lands on it.
+	secret := auth.NewTOTPSecret()
+	if _, _, err := g.admin.EnableTwoStep(context.Background(), secret, auth.TOTPCode(secret, time.Now()), ""); err != nil {
+		t.Fatal(err)
+	}
+	phone = browser()
+	if p := g.do(phone, "GET", "/h/"+token, nil, nil); p.code != http.StatusSeeOther || p.location != "/login?next=%2Fh%2F"+token {
+		t.Fatalf("full sign-in, two-step on, fresh browser: %d to %q", p.code, p.location)
+	}
+	if p := g.do(phone, "POST", "/login", url.Values{"password": {"the-admin-password"}, "next": {"/h/" + token}}, nil); p.code != http.StatusSeeOther || p.location != "/login/code" {
+		t.Fatalf("password step: %d to %q", p.code, p.location)
+	}
+	if p := g.do(phone, "GET", "/h/"+token, nil, nil); p.code != http.StatusSeeOther || p.location != "/login?next=%2Fh%2F"+token {
+		t.Fatalf("the password alone opened a Full sign-in link: %d to %q", p.code, p.location)
+	}
+	code := auth.TOTPCode(secret, time.Now().Add(30*time.Second)) // the confirming code's step is used
+	if p := g.do(phone, "POST", "/login/code", url.Values{"code": {code}}, nil); p.code != http.StatusSeeOther || p.location != "/h/"+token {
+		t.Fatalf("code step: %d to %q", p.code, p.location)
+	}
+	p := g.do(phone, "GET", "/h/"+token, nil, nil)
+	for i := 0; p.code == http.StatusSeeOther && p.location == "/h/"+token && i < 3; i++ {
+		p = g.do(phone, "GET", "/h/"+token, nil, nil)
+	}
+	if p.code != http.StatusOK || !strings.Contains(p.body, "Done, hand back") {
+		t.Fatalf("after the code, the link: %d to %q", p.code, p.location)
 	}
 }
 
@@ -935,7 +974,7 @@ func TestHandoffEndEmptiesTheClipboard(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t, profiles.PolicyLink, auth.WebOptions{})
 			h, _ := f.open("")
-			if err := f.m.TakeControl(h.SessionID); err != nil {
+			if err := f.m.TakeControl(h.SessionID, sessions.HandoffHolder(h.ID)); err != nil {
 				t.Fatal(err)
 			}
 			end(f, h)
@@ -1007,7 +1046,7 @@ func TestHandoffOfferNeverTakesTheNextSession(t *testing.T) {
 	if s, _ := f.m.Live("google"); s.ID != next.ID || s.HumanControl {
 		t.Fatalf("the new session: %s, person in control %v", s.ID, s.HumanControl)
 	}
-	if _, done, err := f.m.AgentInput(context.Background(), next.ID); err != nil {
+	if _, done, err := f.m.AgentInput(context.Background(), next.ID, "tok"); err != nil {
 		t.Fatalf("the new session's agent = %v", err)
 	} else {
 		done()
@@ -1075,7 +1114,7 @@ func TestHandoffOfferAfterItsHandoffEndedTakesNothing(t *testing.T) {
 	if s, _ := f.m.Live("google"); s.State != sessions.Running || s.HumanControl {
 		t.Fatalf("after the handoff: %s, person in control %v", s.State, s.HumanControl)
 	}
-	if _, done, err := f.m.AgentInput(context.Background(), h.SessionID); err != nil {
+	if _, done, err := f.m.AgentInput(context.Background(), h.SessionID, "tok"); err != nil {
 		t.Fatalf("the agent = %v", err)
 	} else {
 		done()
@@ -1108,7 +1147,7 @@ func TestHandoffEndLeavesALaterTakeoverAlone(t *testing.T) {
 				default:
 				}
 				if sess, _ := f.m.Live("google"); sess.State == sessions.Running {
-					if f.m.TakeControl(s.ID) == nil {
+					if f.m.TakeControl(s.ID, "person") == nil {
 						took <- true
 						return
 					}
@@ -1136,7 +1175,7 @@ func TestWedgedBrowserDoesntHoldTheSweep(t *testing.T) {
 	f := newFixture(t, profiles.PolicyLink, auth.WebOptions{})
 	ctx := context.Background()
 	wedged, _ := f.open("")
-	if err := f.m.TakeControl(wedged.SessionID); err != nil { // a person helps
+	if err := f.m.TakeControl(wedged.SessionID, "person"); err != nil { // a person helps
 		t.Fatal(err)
 	}
 	if _, err := f.m.Profiles().Create(ctx, profiles.New("github")); err != nil {
@@ -1188,7 +1227,7 @@ func TestWedgedBrowserDoesntHoldTheSweep(t *testing.T) {
 	if s, _ := f.m.Live("github"); s.State != sessions.Running {
 		t.Errorf("the other profile's browser: %s", s.State)
 	}
-	if _, done, err := f.m.AgentInput(ctx, other.ID); err != nil {
+	if _, done, err := f.m.AgentInput(ctx, other.ID, "tok"); err != nil {
 		t.Errorf("the other profile's agent = %v", err)
 	} else {
 		done()
@@ -1220,7 +1259,7 @@ func TestHandoffIsFinalOnlyOnceHandedBack(t *testing.T) {
 			f := newFixture(t, profiles.PolicyLink, auth.WebOptions{})
 			ctx := context.Background()
 			h, _ := f.open("")
-			if err := f.m.TakeControl(h.SessionID); err != nil { // a person helps
+			if err := f.m.TakeControl(h.SessionID, "person"); err != nil { // a person helps
 				t.Fatal(err)
 			}
 			letGo := holdLifts(t, f)
@@ -1261,7 +1300,7 @@ func TestHandoffIsFinalOnlyOnceHandedBack(t *testing.T) {
 			if got.Status.Final() || !errors.Is(err, ErrHandingBack) {
 				t.Errorf("a withdrawal mid-hand-back: %s, %v; want ErrHandingBack", got.Status, err)
 			}
-			if _, done, err := f.m.AgentInput(ctx, h.SessionID); !errors.Is(err, sessions.ErrHumanDriving) {
+			if _, done, err := f.m.AgentInput(ctx, h.SessionID, "tok"); !errors.Is(err, sessions.ErrHumanDriving) {
 				if err == nil {
 					done()
 				}
@@ -1280,7 +1319,7 @@ func TestHandoffIsFinalOnlyOnceHandedBack(t *testing.T) {
 			if err != nil || got.Status != want {
 				t.Fatalf("after the hand-back: %s, %v; want %s", got.Status, err, want)
 			}
-			if _, done, err := f.m.AgentInput(ctx, h.SessionID); err != nil {
+			if _, done, err := f.m.AgentInput(ctx, h.SessionID, "tok"); err != nil {
 				t.Fatalf("agent input once told %s = %v", got.Status, err)
 			} else {
 				done()
@@ -1433,7 +1472,7 @@ func TestConcurrentEndsOfOneHandoff(t *testing.T) {
 	f := newFixture(t, profiles.PolicyLink, auth.WebOptions{})
 	ctx := context.Background()
 	h, _ := f.open("")
-	if err := f.m.TakeControl(h.SessionID); err != nil {
+	if err := f.m.TakeControl(h.SessionID, "person"); err != nil {
 		t.Fatal(err)
 	}
 	var lifts atomic.Int32

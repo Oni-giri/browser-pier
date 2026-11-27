@@ -93,14 +93,14 @@ func TestTakeControlThatLosesToAFailedStop(t *testing.T) {
 	f, rec := recordingFixture(t, true)
 	advance := f.clock()
 	s := f.start(f.m)
-	ctx, done, err := f.m.AgentInput(context.Background(), s.ID)
+	ctx, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
 	advance(takeOverAfter)
 	took := make(chan error, 1)
 	go func() {
-		_, err := f.m.TakeControlGen(s.ID)
+		_, err := f.m.TakeControlTurn(s.ID, "person")
 		took <- err
 	}()
 	<-ctx.Done() // broken off: the take waits for it to end
@@ -135,7 +135,7 @@ func TestTakeControlThatLosesToAFailedStop(t *testing.T) {
 	// Not recording until the agent acts (the tail before the take is
 	// gone, as after any takeover), and then recording again.
 	wantRecording(t, rec, s.ID, false, recording.Idle)
-	_, done, err = f.m.AgentInput(context.Background(), s.ID)
+	_, done, err = f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatalf("agent input after the failed stop = %v", err)
 	}
@@ -148,7 +148,7 @@ func TestTakeControlThatLosesToAFailedStop(t *testing.T) {
 	}
 	// And a person can take control again, once the agent is quiet.
 	advance(agentQuiet + time.Second)
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatalf("Take control after = %v", err)
 	}
 }
@@ -162,7 +162,7 @@ func TestHandoffEndingDuringAFailedStop(t *testing.T) {
 	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.m.TakeControl(s.ID); err != nil { // the handoff page
+	if err := f.m.TakeControl(s.ID, "person"); err != nil { // the handoff page
 		t.Fatal(err)
 	}
 	f.rt.Mu.Lock()
@@ -184,7 +184,7 @@ func TestHandoffEndingDuringAFailedStop(t *testing.T) {
 	if stored := f.stored(s.ID); stored.State != Running {
 		t.Errorf("saved as %s", stored.State)
 	}
-	_, done, err := f.m.AgentInput(context.Background(), s.ID)
+	_, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatalf("agent input after the failed stop = %v", err)
 	}
@@ -236,7 +236,7 @@ func TestTakeControlStopsTheRecorderBeforeItReturns(t *testing.T) {
 			if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
 				t.Fatal(err)
 			}
-		} else if err := f.m.TakeControl(s.ID); err != nil {
+		} else if err := f.m.TakeControl(s.ID, "person"); err != nil {
 			t.Fatal(err)
 		}
 		want := recording.Person
@@ -277,20 +277,20 @@ func TestRecordingWaitsForTheAgentAfterHandBack(t *testing.T) {
 	f, rec := recordingFixture(t, true)
 	advance := f.clock()
 	s := f.start(f.m)
-	_, done, err := f.m.AgentInput(context.Background(), s.ID)
+	_, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
 	done()
 	advance(agentQuiet + time.Second) // within the tail, past the agent's quiet time
 	wantRecording(t, rec, s.ID, true, "")
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatal(err)
 	}
 	f.m.ReleaseControl(s.ID)
 	// The tail from before doesn't carry over the person's control.
 	wantRecording(t, rec, s.ID, false, recording.Idle)
-	_, done, err = f.m.AgentInput(context.Background(), s.ID)
+	_, done, err = f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +343,7 @@ func TestAgentActionsStartRecordingAndTheTailEnds(t *testing.T) {
 			return l.Release
 		},
 		"input action": func() func() {
-			_, done, err := f.m.AgentInput(context.Background(), s.ID)
+			_, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -374,7 +374,7 @@ func TestAgentActionsStartRecordingAndTheTailEnds(t *testing.T) {
 	}
 	// The timer itself, on the real clock.
 	f.m.now = func() time.Time { return time.Now() }
-	_, done, err := f.m.AgentInput(context.Background(), s.ID)
+	_, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +390,7 @@ func TestAgentActionsStartRecordingAndTheTailEnds(t *testing.T) {
 func TestRecordingNeedsTheSettingAndARunningBrowser(t *testing.T) {
 	f, rec := recordingFixture(t, false)
 	s := f.start(f.m)
-	_, done, err := f.m.AgentInput(context.Background(), s.ID)
+	_, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,7 +462,7 @@ func TestRecordingDoesntHoldOffIdleStop(t *testing.T) {
 	}
 	rs, ps := f.startProfile("recorded"), f.startProfile("plain")
 	for _, s := range []Session{rs, ps} {
-		_, done, err := f.m.AgentInput(ctx, s.ID)
+		_, done, err := f.m.AgentInput(ctx, s.ID, "tok")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -586,14 +586,14 @@ func TestReconcileAndRecordings(t *testing.T) {
 	}
 	// Picked up: the running one records from the agent's next action...
 	wantRecording(t, rec, running.ID, false, "")
-	_, done, err := m.AgentInput(ctx, running.ID)
+	_, done, err := m.AgentInput(ctx, running.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
 	done()
 	wantRecording(t, rec, running.ID, true, "")
 	// ...the one with a person for a handoff doesn't.
-	if _, _, err := m.AgentInput(ctx, helped.ID); err == nil {
+	if _, _, err := m.AgentInput(ctx, helped.ID, "tok"); err == nil {
 		t.Fatal("agent input during a handoff")
 	}
 	if ok, _ := rec.state(helped.ID); ok {
@@ -646,7 +646,7 @@ func TestRecordingStaysOffWhileTheClipboardIsEmptied(t *testing.T) {
 	// enough for a person to take control, within the tail.
 	agentActs := func() {
 		t.Helper()
-		_, done, err := f.m.AgentInput(context.Background(), s.ID)
+		_, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -689,7 +689,7 @@ func TestRecordingStaysOffWhileTheClipboardIsEmptied(t *testing.T) {
 	// page's form and a failed offer: each is ReleaseControl).
 	agentActs()
 	m := mark()
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatal(err)
 	}
 	wantRecording(t, rec, s.ID, false, recording.Person)
@@ -698,7 +698,7 @@ func TestRecordingStaysOffWhileTheClipboardIsEmptied(t *testing.T) {
 
 	// With the person's input under way: off while it is waited for too.
 	m = mark()
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatal(err)
 	}
 	done, err := humanInput(f.m, s.ID)
@@ -719,7 +719,7 @@ func TestRecordingStaysOffWhileTheClipboardIsEmptied(t *testing.T) {
 	if _, err := f.m.SetNeedsHelp(s.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatal(err)
 	}
 	f.m.ReleaseControl(s.ID)
@@ -776,7 +776,7 @@ func TestReconcileEmptiesTheClipboardBeforeAnyRecording(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantRecording(t, rec, s.ID, false, "")
-	_, done, err := m.AgentInput(context.Background(), s.ID)
+	_, done, err := m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -801,7 +801,7 @@ func TestAFailedStopEmptiesTheClipboardOfAHandBackDuringIt(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
 	mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) {
-		if _, done, err := f.m.AgentInput(context.Background(), id); err == nil {
+		if _, done, err := f.m.AgentInput(context.Background(), id, "tok"); err == nil {
 			done()
 			t.Error("agent input let in before the clipboard was emptied")
 		}
@@ -815,14 +815,14 @@ func TestAFailedStopEmptiesTheClipboardOfAHandBackDuringIt(t *testing.T) {
 	advance := f.clock()
 	s := f.start(f.m)
 	id = s.ID
-	_, done, err := f.m.AgentInput(context.Background(), s.ID)
+	_, done, err := f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
 	done()
 	advance(agentQuiet + time.Second)
 	wantRecording(t, rec, s.ID, true, "")
-	if err := f.m.TakeControl(s.ID); err != nil {
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
 		t.Fatal(err)
 	}
 	rec.mu.Lock()
@@ -847,7 +847,7 @@ func TestAFailedStopEmptiesTheClipboardOfAHandBackDuringIt(t *testing.T) {
 	if snap, _ := f.m.Live("google"); snap.State != Running || snap.HumanControl {
 		t.Fatalf("after the failed stop: %s, person in control %v", snap.State, snap.HumanControl)
 	}
-	_, done, err = f.m.AgentInput(context.Background(), s.ID)
+	_, done, err = f.m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -907,7 +907,7 @@ func TestRefreshRecordingAppliesTheSettingAsItIs(t *testing.T) {
 	if record {
 		t.Fatal("the browser records with Record sessions off")
 	}
-	_, done, err := f.m.AgentInput(ctx, s.ID)
+	_, done, err := f.m.AgentInput(ctx, s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -915,4 +915,25 @@ func TestRefreshRecordingAppliesTheSettingAsItIs(t *testing.T) {
 	if on, _ := rec.state(s.ID); on {
 		t.Fatal("recording with Record sessions off")
 	}
+}
+
+// TestAReadOfTheTreeIsAnAgentActing: Visual mode's tree read (PROJ-150's
+// ReadLease) records as any page call does, while it doesn't keep a
+// person out (TestReadLeasesDontKeepAPersonOut).
+func TestAReadOfTheTreeIsAnAgentActing(t *testing.T) {
+	f, rec := recordingFixture(t, true)
+	f.clock()
+	s := f.start(f.m)
+	wantRecording(t, rec, s.ID, false, "")
+	lease, err := f.m.ReadLease(context.Background(), s.ID, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRecording(t, rec, s.ID, true, "")
+	lease.Release()
+	wantRecording(t, rec, s.ID, true, "") // the tail
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
+		t.Fatal(err)
+	}
+	wantRecording(t, rec, s.ID, false, recording.Person)
 }

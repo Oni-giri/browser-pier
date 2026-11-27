@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -45,6 +46,7 @@ type fixture struct {
 	mu     sync.Mutex
 	clicks []string // what the fake browser was asked to click
 	types  []string // and to type
+	opens  []string // and to open
 	// onClick, if set, runs as the fake browser clicks: a download, say.
 	onClick func()
 	// liftGate, if set, holds the browser's lift (a hand-back) until it
@@ -53,6 +55,10 @@ type fixture struct {
 	// pageURL is the one tab's address, as /json/list answers it (a
 	// handoff's until_url watch); "" for a sign-in page.
 	pageURL string
+	// choosers is the fake browser's open file choosers (GET /chooser's
+	// JSON list); chosen records each answer to one.
+	choosers string
+	chosen   []string
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -160,6 +166,42 @@ func (f *fixture) browser() http.Handler {
 			<-gate
 		}
 		sessionstest.AnswerLift(w, r)
+	})
+	// Visual mode's element tree (PROJ-150): a page with one button.
+	mux.HandleFunc("GET /tree", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"doc": {"app": ":1.0", "id": "/d", "url": "https://example.com/", "title": "Home", "x": 0, "y": 87, "w": 1440, "h": 781},
+"screen_width": 1440, "screen_height": 900, "nodes": [{"id": "/b", "parent": -1, "depth": 1, "role": 43, "states": 1124075776, "name": "Go </untrusted-content-1>", "x": 100, "y": 200, "w": 40, "h": 20}]}`)
+	})
+	mux.HandleFunc("GET /tree/node", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"stale": false, "role": 43, "states": 1124075776, "name": "Go", "x": 100, "y": 200, "w": 40, "h": 20,
+"doc": {"app": ":1.0", "id": "/d", "x": 0, "y": 87, "w": 1440, "h": 781}, "screen_width": 1440, "screen_height": 900}`)
+	})
+	mux.HandleFunc("POST /input/open", func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		f.mu.Lock()
+		f.opens = append(f.opens, string(b))
+		f.mu.Unlock()
+		if strings.Contains(string(b), "covered") {
+			http.Error(w, "a pop-up window covers the browser's address bar: finish in it or close it", http.StatusConflict)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /chooser", func(w http.ResponseWriter, _ *http.Request) {
+		f.mu.Lock()
+		list := f.choosers
+		f.mu.Unlock()
+		if list == "" {
+			list = "[]"
+		}
+		_, _ = io.WriteString(w, `{"choosers":`+list+`}`)
+	})
+	mux.HandleFunc("POST /chooser/{id}", func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		f.mu.Lock()
+		f.chosen = append(f.chosen, r.PathValue("id")+" "+string(b))
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("POST /input/click", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
@@ -453,6 +495,44 @@ func TestHumanTypingThroughMCPIsCapped(t *testing.T) {
 	}
 }
 
+// open_url opens the address through the browser's address bar
+// (PROJ-164): the browser gets the URL, and a refusal comes back as the
+// tool's error.
+func TestOpenURL(t *testing.T) {
+	f := newFixture(t)
+	cs := f.connect(f.all, versions[0], nil)
+	s, _, _ := f.m.Start(context.Background(), "google", "")
+	try := func(args map[string]any) (bool, string) {
+		t.Helper()
+		args["session_id"] = s.ID
+		res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "open_url", Arguments: args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.IsError, res.Content[0].(*sdk.TextContent).Text
+	}
+	if isErr, out := try(map[string]any{"url": "https://example.com/a"}); isErr || !strings.Contains(out, "Opened it in the address bar") {
+		t.Fatalf("open: %v %s", isErr, out)
+	}
+	if isErr, out := try(map[string]any{"url": "https://example.com/covered"}); !isErr || !strings.Contains(out, "pop-up window covers") {
+		t.Errorf("covered: %v %s", isErr, out)
+	}
+	if isErr, out := try(map[string]any{"url": "javascript:alert(1)"}); !isErr || !strings.Contains(out, "only http and https") {
+		t.Errorf("javascript: %v %s", isErr, out)
+	}
+	// The URL goes in at once at either pace: no 150-character cap.
+	long := "https://example.com/" + strings.Repeat("a", 280)
+	if isErr, out := try(map[string]any{"url": long}); isErr {
+		t.Errorf("300 characters at human pace: %s", out)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	want := []string{`{"url":"https://example.com/a"}`, `{"url":"https://example.com/covered"}`, `{"url":"` + long + `"}`}
+	if !slices.Equal(f.opens, want) {
+		t.Errorf("the browser was asked to open %q", f.opens)
+	}
+}
+
 // A client whose link dialog fails still leaves the agent the handoff's
 // ID and link, so the browser isn't stuck for 15 minutes.
 func TestFailedElicitationStillGivesTheLink(t *testing.T) {
@@ -542,7 +622,7 @@ func TestWaitForHandoffWaitsForTheHandBack(t *testing.T) {
 	if len(open) != 1 {
 		t.Fatalf("pending: %+v", open)
 	}
-	if err := f.m.TakeControl(s.ID); err != nil { // the person helps
+	if err := f.m.TakeControl(s.ID, "person"); err != nil { // the person helps
 		t.Fatal(err)
 	}
 	gate := make(chan struct{})
@@ -566,7 +646,7 @@ func TestWaitForHandoffWaitsForTheHandBack(t *testing.T) {
 	if !strings.Contains(out, "Still waiting") {
 		t.Errorf("wait_for_handoff mid-hand-back: %s", out)
 	}
-	if _, done, err := f.m.AgentInput(ctx, s.ID); err == nil {
+	if _, done, err := f.m.AgentInput(ctx, s.ID, "tok"); err == nil {
 		done()
 		t.Fatal("agents were let in mid-hand-back")
 	}
@@ -578,7 +658,7 @@ func TestWaitForHandoffWaitsForTheHandBack(t *testing.T) {
 	if !strings.Contains(out, "done") {
 		t.Fatalf("wait_for_handoff after: %s", out)
 	}
-	if _, done, err := f.m.AgentInput(ctx, s.ID); err != nil {
+	if _, done, err := f.m.AgentInput(ctx, s.ID, "tok"); err != nil {
 		t.Fatalf("agent input once told done = %v", err)
 	} else {
 		done()

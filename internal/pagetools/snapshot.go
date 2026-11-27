@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Oni-giri/browser-pier/internal/fence"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
 
@@ -51,6 +52,7 @@ func (t *Tools) Snapshot(ctx context.Context, s sessions.Session, who Caller, in
 			if err != nil {
 				return "", err
 			}
+			c.noteTitle(p.title)
 			c.note("Read the page")
 			c.noteChallenge(p.cf)
 			if r.kind == diffDone {
@@ -90,6 +92,7 @@ func (t *Tools) Snapshot(ctx context.Context, s sessions.Session, who Caller, in
 			}
 		}
 		body, marker := c.render(p, budget)
+		c.noteTitle(p.title)
 		c.note("Read the page")
 		c.noteChallenge(p.cf)
 		return c.result("page snapshot", body, marker), nil
@@ -104,7 +107,7 @@ func header(p *page) string {
 // line is how an item reads in a snapshot; controls and iframes get a ref.
 func (c *call) line(p *page, it item) string {
 	if !it.control && !it.iframe {
-		return it.text
+		return fence.TextLine(it.text) // never a control line's look-alike
 	}
 	ref := c.ref(p, it.backend)
 	if it.iframe {
@@ -121,7 +124,11 @@ func (c *call) line(p *page, it item) string {
 	return b.String()
 }
 
-func quote(s string) string { return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"` }
+// quote quotes s, escaping backslashes and quotes, so a name can't seem
+// to end early and add states of its own.
+func quote(s string) string {
+	return `"` + strings.ReplaceAll(strings.ReplaceAll(s, `\`, `\\`), `"`, `\"`) + `"`
+}
 
 // ref is the ref of a node of the page's document.
 func (c *call) ref(p *page, backend int64) string {
@@ -176,10 +183,12 @@ func (c *call) render(p *page, budget int) (body, marker string) {
 					if pass {
 						omittedControls++
 					} else {
-						// Text is cut to fit rather than dropped whole.
+						// Text is cut to fit rather than dropped whole:
+						// its line as shown, so a look-alike keeps its
+						// "text: " prefix.
 						n := len([]rune(it.text))
 						if left > 40 {
-							l = capText(it.text, left-1)
+							l = capText(fence.TextLine(it.text), left-1)
 							omittedChars += n - len([]rune(l)) + 1
 							lines = append(lines, l)
 							left = 0
@@ -237,10 +246,11 @@ func (c *call) summary(p *page, id int, g *group) string {
 // A control's ref is only made once its line is shown.
 func (c *call) lineIfFits(p *page, it item, left int) string {
 	if !it.control && !it.iframe {
-		if len([]rune(it.text))+1 > left {
+		l := fence.TextLine(it.text)
+		if len([]rune(l))+1 > left {
 			return ""
 		}
-		return it.text
+		return l
 	}
 	// Estimate before making a ref, so refs aren't spent on lines that
 	// won't be shown.

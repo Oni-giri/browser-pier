@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -16,6 +17,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
+	"github.com/Oni-giri/browser-pier/internal/weburl"
 )
 
 // maxPause caps a wait action.
@@ -28,9 +30,12 @@ type pointJSON struct {
 
 // computerRequest is one Visual-mode action. Coordinates are screen pixels.
 type computerRequest struct {
-	Action string `json:"action"` // click, type, scroll, key, drag, wait or zoom
+	Action string `json:"action"` // click, type, scroll, key, drag, open, wait or zoom
 	X      *int   `json:"x"`
 	Y      *int   `json:"y"`
+	// Ref is a click's element by its Visual-mode ref, from
+	// visual_snapshot, instead of x and y (PROJ-150).
+	Ref    string `json:"ref"`
 	Button string `json:"button"`
 	Double bool   `json:"double"`
 	Text   string `json:"text"`
@@ -40,9 +45,11 @@ type computerRequest struct {
 	Keys json.RawMessage `json:"keys"`
 	From *pointJSON      `json:"from"`
 	To   *pointJSON      `json:"to"`
-	MS   int             `json:"ms"`
-	W    int             `json:"w"`
-	H    int             `json:"h"`
+	// URL is the address open opens (PROJ-164).
+	URL string `json:"url"`
+	MS  int    `json:"ms"`
+	W   int    `json:"w"`
+	H   int    `json:"h"`
 	// Screenshot returns the screen after the action, Width wide if set.
 	Screenshot bool `json:"screenshot"`
 	Width      int  `json:"width"`
@@ -57,8 +64,11 @@ type computerRequest struct {
 }
 
 // downloads reports whether an action may start a download, so its
-// notice is looked for: a click on a link, or a key (Return on one).
-func (c computerRequest) downloads() bool { return c.Action == "click" || c.Action == "key" }
+// notice is looked for: a click on a link, a key (Return on one), or an
+// address that is a file.
+func (c computerRequest) downloads() bool {
+	return c.Action == "click" || c.Action == "key" || c.Action == "open"
+}
 
 // inputBody is what the control socket takes for an input action, or an
 // error saying what is missing.
@@ -123,8 +133,17 @@ func (c computerRequest) inputBody() (path string, body any, err error) {
 			return "", nil, fmt.Errorf("drag: want from and to, each {x, y}")
 		}
 		return "/input/drag", drag{*c.From, *c.To, c.Button, c.Pace}, nil
+	case "open":
+		u, err := weburl.Check(c.URL)
+		if err != nil {
+			return "", nil, err
+		}
+		return "/input/open", struct {
+			URL  string `json:"url"`
+			Pace string `json:"pace,omitempty"`
+		}{u, c.Pace}, nil
 	}
-	return "", nil, fmt.Errorf("action %q: want click, type, scroll, key, drag, wait or zoom", c.Action)
+	return "", nil, fmt.Errorf("action %q: want click, type, scroll, key, drag, open, wait or zoom", c.Action)
 }
 
 // computer runs one Visual-mode action: input through xdotool, a wait,
@@ -161,12 +180,22 @@ func (a *API) computer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.m.Touch(s.ID)
-		a.m.Note(s.ID, tok.Name, "Waited "+strconv.FormatFloat(d.Seconds(), 'f', -1, 64)+" s")
+		a.m.NoteFor(r.Context(), s.ID, tok.Name, "Waited "+strconv.FormatFloat(d.Seconds(), 'f', -1, 64)+" s")
 		a.done(w, r, s, c)
 		return
 	}
-	path, body, err := c.inputBody()
-	if err != nil {
+	var rc *refClick
+	if c.Ref != "" {
+		switch {
+		case c.Action != "click":
+			writeError(w, http.StatusBadRequest, "ref: only click takes a ref; "+c.Action+" takes coordinates")
+			return
+		case c.X != nil || c.Y != nil:
+			writeError(w, http.StatusBadRequest, "click: give a ref or x and y, not both")
+			return
+		}
+	}
+	if _, _, err := c.inputBody(); err != nil && c.Ref == "" {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -179,10 +208,33 @@ func (a *API) computer(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if c.Ref != "" {
+		// A click by a Visual-mode ref (PROJ-150) clicks the element's
+		// centre as it is now.
+		if rc, ok = a.locateRef(w, r, s, c.Ref); !ok {
+			return
+		}
+		c.X, c.Y = &rc.target.X, &rc.target.Y
+	}
+	path, body, err := c.inputBody()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	raw, err := json.Marshal(body)
 	if err != nil {
 		a.internal(w, "encoding an action", err)
 		return
+	}
+	if err := checkInput(path, raw); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var first func(ctx context.Context)
+	if c.Action == "open" {
+		u, _ := weburl.Check(c.URL) // checked by inputBody
+		// Once the agent has the input: not while a person has the browser.
+		first = func(ctx context.Context) { a.openingDirectly(ctx, s, u) }
 	}
 	var mark *files.Mark
 	if c.downloads() {
@@ -191,10 +243,23 @@ func (a *API) computer(w http.ResponseWriter, r *http.Request) {
 			mark.Expect(wait) // the caller expects a download: look as long for it to start
 		}
 	}
-	if !a.act(w, r, s, path, raw) {
+	note := describeInput(path, raw)
+	if rc != nil {
+		note = describeRefClick(rc.ref, raw)
+	}
+	if !a.actNoted(w, r, s, path, raw, note, rc.generation(), first) {
 		return
 	}
 	mark.Ended()
+	if rc != nil && !c.Screenshot {
+		// A click by ref answers with what it clicked.
+		if mark != nil {
+			a.reportDownloads(w, r, s, mark, wait)
+		}
+		a.setChooserNotice(w, r, s)
+		writeJSON(w, http.StatusOK, map[string]string{"text": rc.clickedText()})
+		return
+	}
 	a.doneWith(w, r, s, c, func() {
 		if mark != nil {
 			a.reportDownloads(w, r, s, mark, wait)
@@ -218,6 +283,9 @@ func (a *API) done(w http.ResponseWriter, r *http.Request, s sessions.Session, c
 // after the screenshot is taken, so that a download notice gets the
 // screenshot's time to see a download start.
 func (a *API) doneWith(w http.ResponseWriter, r *http.Request, s sessions.Session, c computerRequest, before func()) {
+	before = func(set func()) func() {
+		return func() { set(); a.setChooserNotice(w, r, s) }
+	}(before)
 	if !c.Screenshot {
 		before()
 		w.WriteHeader(http.StatusNoContent)
@@ -303,7 +371,7 @@ func (a *API) zoom(w http.ResponseWriter, r *http.Request, c computerRequest) {
 		return
 	}
 	tok, _ := auth.TokenFromContext(r.Context())
-	a.m.Note(s.ID, tok.Name, "Zoomed into a region")
+	a.m.NoteFor(r.Context(), s.ID, tok.Name, "Zoomed into a region")
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("X-Screen-Width", strconv.Itoa(screen.Dx()))
 	w.Header().Set("X-Screen-Height", strconv.Itoa(screen.Dy()))
@@ -344,4 +412,16 @@ func describeKeys(raw json.RawMessage) string {
 		shown[i] = strings.Join(parts, "+")
 	}
 	return "Pressed " + strings.Join(shown, ", ")
+}
+
+// openingDirectly lets the host of an address the agent opens through
+// the address bar past the session's ad and tracker list, as navigate
+// does (SPEC §3, Egress): BrowserPier knows the address was asked for.
+func (a *API) openingDirectly(ctx context.Context, s sessions.Session, raw string) {
+	if !s.BlockAds {
+		return
+	}
+	if err := a.m.ExemptURL(ctx, s.ID, raw); err != nil {
+		a.log.Debug("couldn't exempt a host from the ad and tracker list", "session", s.ID, "err", err)
+	}
 }

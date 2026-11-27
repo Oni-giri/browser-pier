@@ -6,6 +6,7 @@ require (
 	filippo.io/age v1.3.2
 	github.com/coder/websocket v1.8.15
 	github.com/containerd/errdefs v1.0.0
+	github.com/godbus/dbus/v5 v5.2.4
 	github.com/moby/moby/api v1.56.1
 	github.com/moby/moby/client v0.6.2
 	github.com/modelcontextprotocol/go-sdk v1.8.0
@@ -17,6 +18,7 @@ require (
 	golang.org/x/crypto v0.58.0
 	golang.org/x/net v0.60.0
 	modernc.org/sqlite v1.61.0
+	rsc.io/qr v0.2.0
 )
 
 require (

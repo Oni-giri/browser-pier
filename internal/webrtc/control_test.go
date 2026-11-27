@@ -80,7 +80,7 @@ func TestStaleViewerLeavesTheNextTakeoverAlone(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			open := true
-			va := &viewer{h: h, session: s.ID, sock: sock}
+			va := &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: sock}
 			if tc.handoff {
 				va.allowed = func() bool { return open }
 			}
@@ -95,7 +95,7 @@ func TestStaleViewerLeavesTheNextTakeoverAlone(t *testing.T) {
 				t.Fatalf("as A's control ended, the browser got %q", got)
 			}
 			// B takes the browser and puts something on its clipboard.
-			b := newTalk(t, &viewer{h: h, session: s.ID, sock: sock})
+			b := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: sock})
 			if r := b.send(`{"type":"take"}`); len(r) != 1 || r[0]["on"] != true {
 				t.Fatalf("B's take: %v", r)
 			}
@@ -142,7 +142,7 @@ func TestStaleViewerLeavesTheNextTakeoverAlone(t *testing.T) {
 func TestInputRefusedWhileStoppingEndsControl(t *testing.T) {
 	var c fakeClipboard
 	h, m, s, rt := offerFixtureRuntime(t, c.routes, slog.New(slog.DiscardHandler))
-	a := newTalk(t, &viewer{h: h, session: s.ID, sock: m.Layout().ControlSocket("google")})
+	a := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: m.Layout().ControlSocket("google")})
 	if r := a.send(`{"type":"take"}`); len(r) != 1 || r[0]["on"] != true {
 		t.Fatalf("take: %v", r)
 	}
@@ -170,7 +170,7 @@ func TestInputRefusedWhileStoppingEndsControl(t *testing.T) {
 	if got := strings.Join(c.took(), " "); got != "release empty" {
 		t.Errorf("the browser got %q, want release, then empty", got)
 	}
-	if _, done, err := m.AgentInput(context.Background(), s.ID); err != nil {
+	if _, done, err := m.AgentInput(context.Background(), s.ID, "tok"); err != nil {
 		t.Fatalf("agent input after the failed stop = %v", err)
 	} else {
 		done()
@@ -188,7 +188,7 @@ func TestControlEndedElsewhereLetsGoOfHeldButtons(t *testing.T) {
 	var c fakeClipboard
 	h, m, s := offerFixtureWith(t, c.routes, slog.New(slog.DiscardHandler))
 	sock := m.Layout().ControlSocket("google")
-	a := newTalk(t, &viewer{h: h, session: s.ID, sock: sock})
+	a := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: sock})
 	if r := a.send(`{"type":"take"}`); len(r) != 1 || r[0]["on"] != true {
 		t.Fatalf("take: %v", r)
 	}
@@ -209,7 +209,7 @@ func TestRepeatedTakeAsksWhoHasControl(t *testing.T) {
 	var c fakeClipboard
 	h, m, s := offerFixtureWith(t, c.routes, slog.New(slog.DiscardHandler))
 	sock := m.Layout().ControlSocket("google")
-	a := newTalk(t, &viewer{h: h, session: s.ID, sock: sock})
+	a := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: sock})
 	if r := a.send(`{"type":"take"}`); len(r) != 1 || r[0]["on"] != true {
 		t.Fatalf("take: %v", r)
 	}
@@ -217,7 +217,7 @@ func TestRepeatedTakeAsksWhoHasControl(t *testing.T) {
 		t.Fatalf("take again, still in control: %v", r)
 	}
 	m.ReleaseControl(s.ID)
-	if err := m.TakeControl(s.ID); err != nil { // someone else
+	if err := m.TakeControl(s.ID, "person"); err != nil { // someone else
 		t.Fatal(err)
 	}
 	if r := a.send(`{"type":"take"}`); len(r) != 1 || r[0]["type"] != "error" {
@@ -342,7 +342,7 @@ func TestClosingTheInputChannelHandsBack(t *testing.T) {
 	var c fakeClipboard
 	h, m, _ := offerFixtureWith(t, c.routes, slog.New(slog.DiscardHandler))
 	pv := newPionViewer(t, InputLabel)
-	pv.connect(t, h, OfferOptions{Control: true})
+	pv.connect(t, h, OfferOptions{Control: true, Holder: sessions.AdminHolder})
 	awaitHuman(t, m, true, time.Second)
 	if err := pv.dcs[InputLabel].Close(); err != nil {
 		t.Fatal(err)
@@ -366,7 +366,7 @@ func TestOnlyTheInputChannelCounts(t *testing.T) {
 	aux := pv.dcs["aux"]
 	auxClosed := make(chan struct{})
 	aux.OnClose(func() { close(auxClosed) })
-	pv.connect(t, h, OfferOptions{Control: true})
+	pv.connect(t, h, OfferOptions{Control: true, Holder: sessions.AdminHolder})
 	awaitHuman(t, m, true, time.Second)
 	// What it sends isn't heard, and the server closes it; its closing
 	// (from either side) hands nothing back.
@@ -416,7 +416,7 @@ func TestControlEndsIfNoInputChannelOpens(t *testing.T) {
 			once.Do(func() { close(connected) })
 		}
 	})
-	rec := offer(h, OfferOptions{Control: true}, pv.body)
+	rec := offer(h, OfferOptions{Control: true, Holder: sessions.AdminHolder}, pv.body)
 	var answer struct {
 		SDP string `json:"sdp"`
 	}
@@ -451,7 +451,7 @@ func TestOfferForAStoppedSessionTakesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	pv := newPionViewer(t, InputLabel)
-	if rec := offer(h, OfferOptions{Control: true, Session: s.ID}, pv.body); rec.Code != http.StatusConflict {
+	if rec := offer(h, OfferOptions{Control: true, Holder: sessions.AdminHolder, Session: s.ID}, pv.body); rec.Code != http.StatusConflict {
 		t.Fatalf("an offer for the stopped session: %d %s", rec.Code, rec.Body)
 	}
 	if got, _ := m.Live("google"); got.ID != next.ID || got.HumanControl || got.Viewers != 0 {
@@ -460,7 +460,7 @@ func TestOfferForAStoppedSessionTakesNothing(t *testing.T) {
 	// The profile page's own live view, connected to the stopped
 	// session, can't take the new one either: its viewer names the
 	// session it was offered.
-	old := newTalk(t, &viewer{h: h, session: s.ID, sock: m.Layout().ControlSocket("google")})
+	old := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: m.Layout().ControlSocket("google")})
 	if r := old.send(`{"type":"take"}`); len(r) != 1 || r[0]["type"] != "error" {
 		t.Errorf("a take from the stopped session's live view: %v", r)
 	}
@@ -485,17 +485,17 @@ func TestHandoffViewAfterItsHandoffEndedTakesNothing(t *testing.T) {
 	if _, err := m.SetNeedsHelp(s.ID, false); err != nil { // the handoff ends
 		t.Fatal(err)
 	}
-	ctx, done, err := m.AgentInput(context.Background(), s.ID)
+	ctx, done, err := m.AgentInput(context.Background(), s.ID, "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer done()
 	time.Sleep(3100 * time.Millisecond) // long enough for a take to break it off
 	pv := newPionViewer(t, InputLabel)
-	if rec := offer(h, OfferOptions{Control: true, Session: s.ID, Handoff: true, HelpEpoch: epoch}, pv.body); rec.Code != http.StatusConflict {
+	if rec := offer(h, OfferOptions{Control: true, Holder: sessions.HandoffHolder("h1"), Session: s.ID, Handoff: true, HelpEpoch: epoch}, pv.body); rec.Code != http.StatusConflict {
 		t.Fatalf("the ended handoff's offer: %d %s", rec.Code, rec.Body)
 	}
-	old := newTalk(t, &viewer{h: h, session: s.ID, sock: m.Layout().ControlSocket("google"), handoff: true, helpEpoch: epoch})
+	old := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.HandoffHolder("h1"), sock: m.Layout().ControlSocket("google"), handoff: true, helpEpoch: epoch})
 	if r := old.send(`{"type":"take"}`); len(r) != 1 || r[0]["type"] != "error" {
 		t.Errorf("the ended handoff's view taking control: %v", r)
 	}
@@ -590,7 +590,7 @@ func (b *fencingBrowser) routes(mux *http.ServeMux) {
 func TestHeldUpSetNeverActsAfterTheHandBack(t *testing.T) {
 	b := &fencingBrowser{holdUp: make(chan struct{}), inSet: make(chan struct{}, 1)}
 	h, m, s := offerFixtureWith(t, b.routes, slog.New(slog.DiscardHandler))
-	k := newTalk(t, &viewer{h: h, session: s.ID, sock: m.Layout().ControlSocket("google")})
+	k := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: m.Layout().ControlSocket("google")})
 	if r := k.send(`{"type":"take"}`); len(r) != 1 || r[0]["on"] != true {
 		t.Fatalf("take: %v", r)
 	}
@@ -610,7 +610,7 @@ func TestHeldUpSetNeverActsAfterTheHandBack(t *testing.T) {
 	if got := b.took(); got != "lift empty refused" {
 		t.Errorf("the browser got %q, want the lift, the emptying, and the held-up set refused", got)
 	}
-	if _, done, err := m.AgentInput(context.Background(), s.ID); err != nil {
+	if _, done, err := m.AgentInput(context.Background(), s.ID, "tok"); err != nil {
 		t.Fatalf("agent input after = %v", err)
 	} else {
 		done()
@@ -632,7 +632,7 @@ func TestInputChannelClockStartsAtTheGrant(t *testing.T) {
 	answered := make(chan struct{})
 	go func() {
 		defer close(answered)
-		offer(h, OfferOptions{Control: true, Opened: func(*Viewer) { <-stall }}, pv.body)
+		offer(h, OfferOptions{Control: true, Holder: sessions.AdminHolder, Opened: func(*Viewer) { <-stall }}, pv.body)
 	}()
 	awaitHuman(t, m, true, 5*time.Second)
 	awaitHuman(t, m, false, 3*time.Second)
@@ -650,14 +650,14 @@ func TestInputChannelClockStartsAtTheGrant(t *testing.T) {
 func TestRefusedViewerGivesUpControl(t *testing.T) {
 	b := &fencingBrowser{}
 	h, m, s := offerFixtureWith(t, b.routes, slog.New(slog.DiscardHandler))
-	k := newTalk(t, &viewer{h: h, session: s.ID, sock: m.Layout().ControlSocket("google")})
+	k := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: m.Layout().ControlSocket("google")})
 	if r := k.send(`{"type":"take"}`); len(r) != 1 || r[0]["on"] != true {
 		t.Fatalf("take: %v", r)
 	}
 	// The browser has fenced this takeover, though BrowserPier still
 	// counts it as holding control.
 	b.mu.Lock()
-	b.fence = k.v.gen
+	b.fence = k.v.turn
 	b.mu.Unlock()
 	if r := k.send(`{"type":"input","events":[]}`); len(r) != 1 || r[0]["type"] != "control" || r[0]["on"] != false {
 		t.Errorf("input refused by the browser: %v, want control off", r)
@@ -684,7 +684,7 @@ func TestOfferAnswersTheControlItHas(t *testing.T) {
 	var c fakeClipboard
 	h, m, _ := offerFixtureWith(t, c.routes, slog.New(slog.DiscardHandler))
 	pv := newPionViewer(t)
-	rec := offer(h, OfferOptions{Control: true, Opened: func(*Viewer) { awaitHuman(t, m, false, 5*time.Second) }}, pv.body)
+	rec := offer(h, OfferOptions{Control: true, Holder: sessions.AdminHolder, Opened: func(*Viewer) { awaitHuman(t, m, false, 5*time.Second) }}, pv.body)
 	var answer struct {
 		Control bool `json:"control"`
 	}
@@ -708,7 +708,7 @@ func TestHandBackAnswersOnceHandedBack(t *testing.T) {
 		})
 	}
 	h, m, s := offerFixtureWith(t, slowLift, slog.New(slog.DiscardHandler))
-	k := newTalk(t, &viewer{h: h, session: s.ID, sock: m.Layout().ControlSocket("google")})
+	k := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: m.Layout().ControlSocket("google")})
 	if r := k.send(`{"type":"take"}`); len(r) != 1 || r[0]["on"] != true {
 		t.Fatalf("take: %v", r)
 	}
@@ -727,12 +727,12 @@ func TestHandBackAnswersOnceHandedBack(t *testing.T) {
 func TestRefusedViewerHandsBackAtOnce(t *testing.T) {
 	b := &fencingBrowser{}
 	h, m, s := offerFixtureWith(t, b.routes, slog.New(slog.DiscardHandler))
-	k := newTalk(t, &viewer{h: h, session: s.ID, sock: m.Layout().ControlSocket("google")})
+	k := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: m.Layout().ControlSocket("google")})
 	if r := k.send(`{"type":"take"}`); len(r) != 1 || r[0]["on"] != true {
 		t.Fatalf("take: %v", r)
 	}
 	b.mu.Lock()
-	b.fence = k.v.gen
+	b.fence = k.v.turn
 	b.mu.Unlock()
 	start := time.Now()
 	if r := k.send(`{"type":"input","events":[]}`); len(r) != 1 || r[0]["on"] != false {

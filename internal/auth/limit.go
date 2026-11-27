@@ -7,7 +7,8 @@ import (
 
 // Lockout counts failed attempts per key and locks a key out once it has
 // failed too often within a window. Keys are, for example, "admin" or a
-// client address. It is in memory: a restart clears it.
+// client address. It is in memory, so a restart clears it, unless save
+// keeps it somewhere restore can read it back from.
 //
 // An attempt counts from the moment it begins, so requests sent in
 // parallel can't all get through before the first failure is recorded.
@@ -17,8 +18,49 @@ type Lockout struct {
 	lockFor time.Duration
 	now     func() time.Time
 
-	mu   sync.Mutex
-	keys map[string]*attempts
+	mu      sync.Mutex
+	keys    map[string]*attempts
+	changes uint64 // under mu: numbers each change, for save's order
+
+	// save, if set, is given a key's failures and lock after every change
+	// to them, outside mu, newest last: a slower call with an older state
+	// never overwrites a newer one. Attempts in flight aren't saved.
+	save   func(key string, failures []time.Time, lockedUntil time.Time)
+	saveMu sync.Mutex
+	saved  uint64 // under saveMu
+}
+
+// restore puts back what save was given for key.
+func (l *Lockout) restore(key string, failures []time.Time, lockedUntil time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	a := l.keys[key]
+	if a == nil {
+		a = &attempts{}
+		l.keys[key] = a
+	}
+	a.failures = append([]time.Time(nil), failures...)
+	a.lockedUntil = lockedUntil
+}
+
+// changedLocked numbers a change to a and returns what saves it, to call
+// once mu is released.
+func (l *Lockout) changedLocked(key string, a *attempts) func() {
+	if l.save == nil {
+		return func() {}
+	}
+	l.changes++
+	n := l.changes
+	failures, until := append([]time.Time(nil), a.failures...), a.lockedUntil
+	return func() {
+		l.saveMu.Lock()
+		defer l.saveMu.Unlock()
+		if n <= l.saved {
+			return
+		}
+		l.saved = n
+		l.save(key, failures, until)
+	}
 }
 
 type attempts struct {
@@ -83,24 +125,30 @@ func (l *Lockout) Begin(key string) (*Attempt, time.Duration) {
 func (t *Attempt) Fail() (left int) {
 	l := t.l
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	now := l.now()
 	a := l.end(t.key)
 	a.failures = append(prune(a.failures, now.Add(-l.window)), now)
-	if len(a.failures) >= l.max {
+	left = l.max - len(a.failures)
+	if left <= 0 {
 		a.lockedUntil = now.Add(l.lockFor)
 		a.failures = nil
-		return 0
+		left = 0
 	}
-	return l.max - len(a.failures)
+	save := l.changedLocked(t.key, a)
+	l.mu.Unlock()
+	save()
+	return left
 }
 
 // Succeed clears the key's failures.
 func (t *Attempt) Succeed() {
-	t.l.mu.Lock()
-	defer t.l.mu.Unlock()
-	a := t.l.end(t.key)
+	l := t.l
+	l.mu.Lock()
+	a := l.end(t.key)
 	a.failures = nil
+	save := l.changedLocked(t.key, a)
+	l.mu.Unlock()
+	save()
 }
 
 // Cancel ends the attempt without counting it, for when it never got to

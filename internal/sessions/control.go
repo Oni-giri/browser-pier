@@ -24,16 +24,30 @@ const takeOverAfter = 3 * time.Second
 // person has control, and with ErrInputBusy while another is under way:
 // one at a time per session, so an agent can't queue up minutes of input.
 //
-// It is a lease: call done once the browser has answered. A handoff
-// (Needs help) or a stop cancels the context it returns, so an action
-// that takes a while (typing at human pace, PROJ-113) breaks off at once,
-// and waits for leases to end before the person gets the browser; it
-// refuses new ones. The browser lets go of what the action held as it
-// answers, so the person gets it at most tens of milliseconds after the
-// break. A person can take control from the live view once one has run
+// It is a lease, held by the token tokenID: call done once the browser
+// has answered. A handoff (Needs help), a stop or the token's revocation
+// (DisconnectToken, with ErrRevoked) cancels the context it returns, so
+// an action that takes a while (typing at human pace, PROJ-113) breaks
+// off at once. A handoff or a stop also waits for leases to end before
+// the person gets the browser, and refuses new ones; a revocation doesn't
+// wait. The browser lets go of what the action held as it answers, so the
+// person gets it at most tens of milliseconds after the break. A person can take control from the live view once one has run
 // for takeOverAfter, which breaks it off the same way; not before, nor
 // for agentQuiet after it ends.
-func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, func(), error) {
+func (m *Manager) AgentInput(ctx context.Context, id, tokenID string) (context.Context, func(), error) {
+	return m.agentInput(ctx, id, tokenID, nil)
+}
+
+// AgentInputAt is AgentInput for an action aimed by what a read under
+// lease generation gen learnt about the page (a click by a Visual-mode
+// ref, whose point the element tree gave). It fails with ErrPersonHadIt
+// if a person has had the browser since: what the read learnt is out of
+// date, and the action must not land on the page they left.
+func (m *Manager) AgentInputAt(ctx context.Context, id, tokenID string, gen uint64) (context.Context, func(), error) {
+	return m.agentInput(ctx, id, tokenID, &gen)
+}
+
+func (m *Manager) agentInput(ctx context.Context, id, tokenID string, gen *uint64) (context.Context, func(), error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.findLocked(id)
@@ -43,21 +57,42 @@ func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, f
 	if l.human || l.sess.State == NeedsHelp {
 		return nil, nil, ErrHumanDriving
 	}
+	if gen != nil && *gen != l.generation {
+		return nil, nil, ErrPersonHadIt
+	}
 	if len(l.inputs) > 0 {
 		return nil, nil, ErrInputBusy
+	}
+	if err := ctx.Err(); err != nil {
+		// The caller went away before its turn: it never began, so it
+		// isn't admitted.
+		return nil, nil, err
 	}
 	now := m.now()
 	l.lastActivity, l.lastAgentInput = now, now
 	cctx, cancel := context.WithCancelCause(ctx)
-	in := &lease{cancel: cancel, started: now}
+	// tokenID: DisconnectToken cancels it with ErrRevoked.
+	in := &lease{cancel: cancel, started: now, call: CallFrom(ctx), tokenID: tokenID}
+	if in.call != nil {
+		// Granted: the call is admitted (its receipt stays, PROJ-156).
+		in.call.admitLocked()
+	}
 	if l.inputs == nil {
 		l.inputs = map[*lease]struct{}{}
 	}
 	l.inputs[in] = struct{}{}
 	m.agentActedLocked(l)
 	return cctx, sync.OnceFunc(func() {
+		// Ended before done: a handoff, Take control, a stop or the
+		// caller going away cut it short.
+		// (A cut that comes after the browser answered, just before this,
+		// still counts: the receipt then errs on the safe side.)
+		cut := cctx.Err() != nil
 		cancel(context.Canceled)
 		m.mu.Lock()
+		if cut && in.call != nil {
+			in.call.cut = true
+		}
 		delete(l.inputs, in)
 		// The agent counts as driving for agentQuiet after its last
 		// event, not after the action began.
@@ -76,24 +111,33 @@ func (m *Manager) AgentInput(ctx context.Context, id string) (context.Context, f
 // Breakable (act), under way for less than takeOverAfter. One that has
 // run longer (a long human-paced type, or act's steps) is broken off, as
 // a handoff breaks it off, and TakeControl waits for it to end. A page
-// call not marked Breakable (a read, bounded by its own timeouts) is
-// never broken off: Take control is refused while it runs. Meanwhile agents can only watch: their input and new CDP
-// connections are refused. During a handoff (Needs help) the agent is
-// paused, so it always succeeds. If the browser begins to stop while it
-// waits, it gives up with ErrNotRunning, leaving the browser to agents
-// should the stop fail.
-func (m *Manager) TakeControl(id string) error {
-	_, err := m.TakeControlGen(id)
+// call not marked Breakable (the page tools' reads, bounded by their own
+// timeouts) is never broken off: Take control is refused while it runs.
+// A read lease (ReadLease, Visual mode's tree) is broken off at once, but
+// only once the agent's quiet time is over: a read neither starts,
+// extends nor cuts short those seconds. Meanwhile agents can only watch:
+// their input and new CDP connections are refused. During a handoff
+// (Needs help) the agent is paused, so it always succeeds. If the
+// browser begins to stop while it waits, it gives up with ErrNotRunning,
+// leaving the browser to agents should the stop fail (PROJ-200).
+//
+// holder names who takes it, opaque here: the live view's viewer passes
+// the admin's (AdminHolder) or the handoff link's (PROJ-184), and what only
+// the person in control may do (HumanInput, ControlledBy) checks it. An
+// empty holder can't take control (ErrNoHolder).
+func (m *Manager) TakeControl(id, holder string) error {
+	_, err := m.TakeControlTurn(id, holder)
 	return err
 }
 
-// TakeControlGen is TakeControl, returning the generation this takeover
-// has: the person's input (HumanInput) and their own hand-back
-// (ReleaseControlGen) name it, so once their control has ended some other
-// way and someone else has taken the browser, nothing they still send
-// reaches it (PROJ-196).
-func (m *Manager) TakeControlGen(id string) (gen uint64, err error) {
-	return m.takeControl(id, false, 0)
+// TakeControlTurn is TakeControl, and returns this turn's number: the
+// takeover's generation. The person's input (HumanInputTurn), HoldsTurn
+// and their own hand-back (ReleaseTurn) name it, so once their control
+// has ended some other way and someone else has taken the browser,
+// nothing they still send reaches it, and the browser itself refuses
+// what of it is still on its way (TakeoverHeader, PROJ-196).
+func (m *Manager) TakeControlTurn(id, holder string) (uint64, error) {
+	return m.takeControlTurn(id, holder, tookControl, false, 0)
 }
 
 // ErrHandoffEnded: the handoff a Take control was for has ended.
@@ -101,7 +145,7 @@ var ErrHandoffEnded = errors.New("the handoff has ended")
 
 // HelpEpoch says which time the session went to Needs help, while it
 // waits for help: a handoff's live view reads it while its handoff is
-// open, and takes control with it (TakeControlInHandoff).
+// open, and takes control with it (TakeControlTurnByLink).
 func (m *Manager) HelpEpoch(id string) (uint64, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -125,39 +169,48 @@ func (m *Manager) WaitsForHelp(id string, epoch uint64) bool {
 	return l.sess.State == NeedsHelp || (l.sess.State == Stopping && l.stop != nil && l.stopPrev == NeedsHelp)
 }
 
-// TakeControlInHandoff is TakeControlGen for a handoff's live view: only
-// while the session still waits for the help it asked for as epoch
-// (HelpEpoch), checked in the same step as the take and again once
-// whatever it waited for has ended; otherwise ErrHandoffEnded. A
-// handoff's link that outlives its handoff, even by a moment, never
-// takes the browser back from the agent it was handed back to.
-func (m *Manager) TakeControlInHandoff(id string, epoch uint64) (gen uint64, err error) {
-	return m.takeControl(id, true, epoch)
+// TakeControlTurnByLink is TakeControlTurn for the person a handoff link
+// gave the browser to (webrtc.OfferOptions.Control); the log says so
+// (PROJ-158). It takes control only while the session still waits for
+// the help it asked for as epoch (HelpEpoch), checked in the same step as
+// the take and again once whatever it waited for has ended; otherwise
+// ErrHandoffEnded. A handoff's link that outlives its handoff, even by a
+// moment, never takes the browser back from the agent it was handed back
+// to (PROJ-196).
+func (m *Manager) TakeControlTurnByLink(id, holder string, epoch uint64) (uint64, error) {
+	return m.takeControlTurn(id, holder, tookControlByLink, true, epoch)
 }
 
-// takeControl is TakeControlGen, and for a handoff, TakeControlInHandoff:
-// no epoch, 0 included, lets a handoff's take through once its Needs
-// help is over.
-func (m *Manager) takeControl(id string, handoff bool, epoch uint64) (gen uint64, err error) {
+// takeControlTurn is TakeControlTurn, and for a handoff's link,
+// TakeControlTurnByLink: no epoch, 0 included, lets a link's take through
+// once its Needs help is over. entry is what the log says.
+func (m *Manager) takeControlTurn(id, holder, entry string, byLink bool, epoch uint64) (uint64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if holder == "" {
+		return 0, ErrNoHolder
+	}
 	l := m.findLocked(id)
 	if l == nil || (l.sess.State != Running && l.sess.State != NeedsHelp) {
 		return 0, ErrNotRunning
 	}
 	handoffOver := func() bool {
-		return handoff && (epoch == 0 || l.sess.State != NeedsHelp || l.sess.helpEpoch != epoch)
+		return byLink && (epoch == 0 || l.sess.State != NeedsHelp || l.sess.helpEpoch != epoch)
 	}
 	if handoffOver() {
 		return 0, ErrHandoffEnded
 	}
 	now := m.now()
-	breakOff := false
+	breakOff, breakReads := false, false
 	if l.sess.State == Running {
 		if len(l.conns) > 0 {
 			return 0, ErrAgentDriving
 		}
 		for ls := range l.leases {
+			if ls.yields {
+				breakReads = true // a read: the person goes first, after the quiet time
+				continue
+			}
 			if !ls.breakable || now.Sub(ls.started) < takeOverAfter {
 				return 0, ErrAgentDriving
 			}
@@ -183,20 +236,23 @@ func (m *Manager) takeControl(id string, handoff bool, epoch uint64) (gen uint64
 		return 0, fmt.Errorf("saving the takeover: %w", err)
 	}
 	l.generation++
-	l.human = true
+	l.human, l.holder = true, holder
 	// Recording stops here, under m.mu and before anything else: no
 	// fragment the browser sends from now on is kept, and HumanInput,
 	// which the live view needs before it forwards any input, can't see
 	// human until it has.
 	m.personTookLocked(l)
 	l.humanGen = l.generation
-	gen = l.generation
+	turn := l.humanGen
 	l.takeCtx, l.takeCancel = context.WithCancel(l.opCtx)
 	l.lastActivity = now
-	if breakOff {
+	m.restartChoosers(l.sess.Profile)
+	l.noteLocked(now, KindControl, entry)
+	if breakOff || breakReads {
 		// New agent input and page calls are refused from now on
 		// (l.human); what is under way breaks off. Every lease left here
-		// is Breakable and old enough, or TakeControl was refused above.
+		// is a read, or Breakable and old enough, or TakeControl was
+		// refused above.
 		for in := range l.inputs {
 			in.cancel(ErrTookControl)
 		}
@@ -212,21 +268,22 @@ func (m *Manager) takeControl(id string, handoff bool, epoch uint64) (gen uint64
 			// A stop began meanwhile, even one that failed and put the
 			// browser back before this woke: the take gives up
 			// (PROJ-200), as it would have had it woken first.
-			m.untakeLocked(l, gen)
+			m.untakeLocked(l, turn)
 			return 0, ErrNotRunning
 		}
 		if handoffOver() {
-			m.untakeLocked(l, gen)
+			m.untakeLocked(l, turn)
 			return 0, ErrHandoffEnded
 		}
-		if !l.human || l.humanGen != gen || l.releasing {
+		if !l.human || l.humanGen != turn || l.releasing {
 			// Handed back meanwhile (the profile page's Hand back, a
-			// handoff ending): that ended this takeover before the
-			// person ever had it, and no generation of it is handed out.
-			return 0, ErrNotInControl
+			// handoff's end), and perhaps taken by someone else since:
+			// that ended this takeover before the person ever had it,
+			// and its turn is never handed out.
+			return 0, ErrControlEnded
 		}
 	}
-	return gen, nil
+	return turn, nil
 }
 
 // untakeLocked undoes a TakeControl that gave up, so that if the browser
@@ -234,27 +291,29 @@ func (m *Manager) takeControl(id string, handoff bool, epoch uint64) (gen uint64
 // is the agents' again, with no control left set that no one holds
 // (PROJ-200). It runs under m.mu, in the same step that decides to give
 // up, and only if the control set is still that take's own (human, its
-// generation, not ending): one already ended by a ReleaseControl
-// meanwhile is that hand-back's to finish.
+// turn, not ending): one already ended by a ReleaseControl meanwhile is
+// that hand-back's to finish.
 //
 // The clipboard needn't be emptied: nothing the person did can be on it.
 // The live view forwards input only once Take control has returned its
-// generation, and HumanInput accepts only that generation; this take
-// returns none.
+// turn, and HumanInput accepts only that turn; this take returns none.
 //
 // The generation stays as it is, never goes back: it was bumped as the
 // agent's work under way was broken off, and a page call learning it
 // changed only re-reads the page. Recording is asked again, as at a
 // hand-back: it resumes at the agent's next action (the tail from before
 // was dropped by personTookLocked, as for any takeover). runStop asks too
-// as it puts the browser back.
-func (m *Manager) untakeLocked(l *live, gen uint64) {
-	if !l.human || l.humanGen != gen || l.releasing {
+// as it puts the browser back. The log says control went back, as the
+// take noted it.
+func (m *Manager) untakeLocked(l *live, turn uint64) {
+	if !l.human || l.humanGen != turn || l.releasing {
 		return
 	}
-	l.human = false
+	l.human, l.holder = false, ""
 	l.takeCancel()
+	m.restartChoosers(l.sess.Profile)
 	if m.live[l.sess.Profile] == l {
+		l.noteLocked(m.now(), KindControl, controlHandedBack)
 		m.regateLocked(l)
 	}
 }
@@ -264,26 +323,49 @@ func (m *Manager) untakeLocked(l *live, gen uint64) {
 // whoever drives now, if anyone, took it afresh.
 var ErrNotInControl = errors.New("you don't have control of this browser")
 
-// HumanInput records that the person who took control as generation gen
-// (TakeControlGen) used the browser. It fails with ErrNotInControl unless
-// that takeover still holds control and isn't ending, and with
-// ErrNotRunning while the browser isn't running or waiting for help (it
-// is stopping, say). Call done once the input has reached the browser:
-// ReleaseControl waits for input under way, so none lands (text put on
-// the clipboard, say) after it has emptied the clipboard.
+// HumanInput records that holder, the person in control, used the
+// browser: what holder alone may do, whichever of their views took it (a
+// file chooser's answer, internal/picker). It fails with ErrNotInControl
+// unless holder holds control and it isn't ending, and with ErrNotRunning
+// while the browser isn't running or waiting for help (it is stopping,
+// say). turn is their takeover's: send it to the browser with what the
+// input does (TakeoverHeader), which refuses it once the takeover has
+// ended. Call done once the input has reached the browser: a hand-back
+// waits for input under way, so none lands (text put on the clipboard,
+// say) after it has emptied the clipboard.
 //
 // Do all of it with ctx, from admission on: it ends the moment the
 // takeover's hand-back begins (or the session ends), so whatever the
 // operation hasn't sent by then never reaches the browser. The hand-back
 // lets agents in, and the session lets go of its profile, only once done
 // is called.
-func (m *Manager) HumanInput(id string, gen uint64) (ctx context.Context, done func(), err error) {
+func (m *Manager) HumanInput(id, holder string) (ctx context.Context, turn uint64, done func(), err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.findLocked(id)
-	if err := humanRefusal(l, gen); err != nil {
+	if err := humanRefusal(l, holder, 0); err != nil {
+		return nil, 0, nil, err
+	}
+	ctx, done = m.humanInputLocked(l)
+	return ctx, l.humanGen, done, nil
+}
+
+// HumanInputTurn is HumanInput for the live view that took turn (from
+// TakeControlTurn): the admin's views share one holder, so a view whose
+// turn ended can't send input into the next one's, or read its clipboard,
+// even when the same admin took control again from another view.
+func (m *Manager) HumanInputTurn(id, holder string, turn uint64) (ctx context.Context, done func(), err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l := m.findLocked(id)
+	if err := humanRefusal(l, holder, turn); err != nil {
 		return nil, nil, err
 	}
+	ctx, done = m.humanInputLocked(l)
+	return ctx, done, nil
+}
+
+func (m *Manager) humanInputLocked(l *live) (context.Context, func()) {
 	l.lastActivity = m.now()
 	l.humanInputs++
 	return l.takeCtx, sync.OnceFunc(func() {
@@ -291,16 +373,16 @@ func (m *Manager) HumanInput(id string, gen uint64) (ctx context.Context, done f
 		l.humanInputs--
 		m.inputsDone.Broadcast()
 		m.mu.Unlock()
-	}), nil
+	})
 }
 
-// humanRefusal says why the person who took control as generation gen
+// humanRefusal says why holder, in their turn (any of theirs if 0),
 // can't use the browser now, if they can't. m.mu must be held.
-func humanRefusal(l *live, gen uint64) error {
+func humanRefusal(l *live, holder string, turn uint64) error {
 	switch {
 	case l == nil:
 		return ErrNotRunning
-	case !l.human || l.humanGen != gen || l.releasing:
+	case !l.human || l.releasing || holder == "" || l.holder != holder, turn != 0 && l.humanGen != turn:
 		return ErrNotInControl
 	case l.sess.State != Running && l.sess.State != NeedsHelp, l.opCtx.Err() != nil:
 		return ErrNotRunning
@@ -308,13 +390,14 @@ func humanRefusal(l *live, gen uint64) error {
 	return nil
 }
 
-// InControl reports whether the takeover of generation gen holds the
-// browser now, as HumanInput would admit its input: not while it is
+// HoldsTurn reports whether turn (from TakeControlTurn) holds the
+// browser now, as HumanInputTurn would admit its input: not while it is
 // ending, nor while the browser is stopping or its session over.
-func (m *Manager) InControl(id string, gen uint64) bool {
+func (m *Manager) HoldsTurn(id string, turn uint64) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return humanRefusal(m.findLocked(id), gen) == nil
+	l := m.findLocked(id)
+	return l != nil && humanRefusal(l, l.holder, turn) == nil
 }
 
 // ReleaseControl hands the browser back to agents, whatever ends the
@@ -330,7 +413,7 @@ func (m *Manager) InControl(id string, gen uint64) bool {
 // clipboard: the container takes it along, or, if the stop fails,
 // runStop empties it before agents get the browser back. Recording
 // (PROJ-23) stays off throughout, and the gate is asked again only as
-// agents get the browser back.
+// agents get the browser back. The log says so (PROJ-158).
 //
 // It returns once agents have the browser (or the session has ended: a
 // stop ends a hand-back the browser never answers). Callers that must not
@@ -338,7 +421,7 @@ func (m *Manager) InControl(id string, gen uint64) bool {
 //
 // It ends whoever's control it is: it is for what ends a takeover from
 // outside it (a handoff, the profile page's Hand back). The person's own
-// live view hands back with ReleaseControlGen.
+// live view hands back with ReleaseTurn.
 func (m *Manager) ReleaseControl(id string) {
 	_ = m.HandBack(context.Background(), id)
 }
@@ -374,19 +457,19 @@ func waitHandedBack(ctx context.Context, done <-chan struct{}) error {
 	}
 }
 
-// ReleaseControlGen is ReleaseControl for the takeover of generation gen
-// (TakeControlGen) alone: if that control has ended already, however, it
-// does nothing and returns false, so a live view that missed the end of
-// its control never ends, or lifts the keys or empties the clipboard of,
-// the takeover of whoever took the browser since (PROJ-196). The check
-// and the start of the hand-back are one step under m.mu, and no one
-// else can take control until it is over. It waits for it as HandBack
-// does: ErrHandingBack if ctx ends first. ended is false if this
-// takeover's control had ended already, or was ending for it.
-func (m *Manager) ReleaseControlGen(ctx context.Context, id string, gen uint64) (ended bool, err error) {
+// ReleaseTurn is ReleaseControl for turn (from TakeControlTurn) alone:
+// if that control has ended already, however, it does nothing and
+// returns false, so a live view that missed the end of its control never
+// ends, or lifts the keys or empties the clipboard of, the takeover of
+// whoever took the browser since (PROJ-184, PROJ-196). The check and the
+// start of the hand-back are one step under m.mu, and no one else can
+// take control until it is over. It waits for it as HandBack does:
+// ErrHandingBack if ctx ends first. ended is false if this turn's control
+// had ended already, or was ending for it.
+func (m *Manager) ReleaseTurn(ctx context.Context, id string, turn uint64) (ended bool, err error) {
 	m.mu.Lock()
 	l := m.findLocked(id)
-	if l == nil || !l.human || l.humanGen != gen {
+	if l == nil || !l.human || l.humanGen != turn {
 		m.mu.Unlock()
 		return false, nil
 	}
@@ -478,12 +561,15 @@ func (m *Manager) runRelease(l *live, id string, gen uint64) {
 
 // endReleaseLocked lets agents back in as a hand-back ends.
 func (m *Manager) endReleaseLocked(l *live, id string) {
-	l.human, l.releasing = false, false
+	l.human, l.holder, l.releasing = false, "", false
 	l.lastActivity = m.now()
+	m.restartChoosers(l.sess.Profile)
 	// Only now, the clipboard emptied and agents let back in, may the
 	// gate record again (PROJ-23): never while the person's control is
 	// still ending. A session stopped meanwhile has nothing to record.
+	// The log says so (PROJ-158).
 	if m.findLocked(id) == l {
+		l.noteLocked(l.lastActivity, KindControl, controlHandedBack)
 		m.regateLocked(l)
 	}
 	close(l.released)
@@ -685,7 +771,10 @@ func (m *Manager) waitSockOpsLocked(l *live) {
 }
 
 // Watch records an open live view until release is called; a watched
-// browser is never stopped as idle.
+// browser is never stopped as idle. The log says when the first view
+// opens and when the last one goes, never who watches; a view that
+// opens again within unwatchGrace of the last one going takes that
+// entry back instead (a reload, a reconnection).
 func (m *Manager) Watch(id string) (release func(), err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -694,6 +783,9 @@ func (m *Manager) Watch(id string) (release func(), err error) {
 		return nil, ErrNotRunning
 	}
 	l.viewers++
+	if l.viewers == 1 {
+		m.firstViewerLocked(l)
+	}
 	done := false
 	return func() {
 		m.mu.Lock()
@@ -702,6 +794,58 @@ func (m *Manager) Watch(id string) (release func(), err error) {
 			done = true
 			l.viewers--
 			l.lastActivity = m.now()
+			if l.viewers == 0 && m.findLocked(id) == l {
+				l.noteLocked(l.lastActivity, KindWatch, nobodyWatching)
+				l.unwatchedAt = l.lastActivity
+			}
 		}
 	}, nil
+}
+
+// firstViewerLocked notes that someone started watching, or takes back
+// the "Nobody is watching" entry if the last view went within
+// unwatchGrace.
+func (m *Manager) firstViewerLocked(l *live) {
+	now := m.now()
+	gone := l.unwatchedAt
+	l.unwatchedAt = time.Time{}
+	if gone.IsZero() || now.Sub(gone) >= unwatchGrace {
+		l.noteLocked(now, KindWatch, startedWatching)
+		return
+	}
+	for i := len(l.activity) - 1; i >= 0; i-- {
+		if a := l.activity[i]; a.Kind == KindWatch && a.What == nobodyWatching && a.At.Equal(gone) {
+			l.removeLocked(i)
+			return
+		}
+	}
+}
+
+// ControlledBy reports whether holder holds control of the session (the
+// live view's Take control, or a handoff link's), without counting as
+// their use of it.
+func (m *Manager) ControlledBy(id, holder string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l := m.findLocked(id)
+	return l != nil && l.controlledByLocked(holder)
+}
+
+// controlledByLocked: holder holds control, and it isn't ending.
+func (l *live) controlledByLocked(holder string) bool {
+	return l.human && !l.releasing && holder != "" && l.holder == holder && (l.sess.State == Running || l.sess.State == NeedsHelp)
+}
+
+// AdminHolder is the holder of control for the admin's live view, in any
+// of the admin's signed-in browsers: one account, so a browser signed in
+// again while its live view stays open keeps answering its file
+// choosers. Which view holds control is the turn's (TakeControlTurn).
+const AdminHolder = "admin"
+
+// HandoffHolder is the holder of control for a handoff link's holder.
+func HandoffHolder(handoff string) string {
+	if handoff == "" {
+		return ""
+	}
+	return "handoff " + handoff
 }

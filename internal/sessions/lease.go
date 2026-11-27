@@ -20,13 +20,19 @@ var (
 	ErrTookControl = errors.New("a person took control of this browser in the live view; wait until they hand it back")
 	// ErrRevoked: the caller's token was revoked.
 	ErrRevoked = errors.New("the agent token was revoked")
+	// ErrPersonHadIt: a person had the browser (a handoff or Take
+	// control) since the read an agent's action was aimed by
+	// (AgentInputAt).
+	ErrPersonHadIt = errors.New("a person had this browser since the element was read; its refs are stale: take a new visual_snapshot")
 	// ErrSessionHeld: something holds the session (HoldSession) and
 	// agents' page calls wait until it's done.
 	ErrSessionHeld = errors.New("BrowserPier is busy with this browser; try again shortly")
 )
 
-// lease is one call of BrowserPier's page tools into a session's browser.
+// lease is one call of BrowserPier's page tools into a session's browser,
+// or an agent's input action (AgentInput).
 type lease struct {
+	// tokenID is the agent token the call came with.
 	tokenID string
 	cancel  context.CancelCauseFunc
 	// started is when an agent input action (AgentInput) or a page call
@@ -35,6 +41,11 @@ type lease struct {
 	// breakable: a page call the person in the live view may break off
 	// once it has run for takeOverAfter (Lease.Breakable).
 	breakable bool
+	// yields: a read (ReadLease) that the person in the live view breaks
+	// off at once, and that doesn't count as the agent driving.
+	yields bool
+	// call is the agent call holding the lease (CallFrom), if known.
+	call *Call
 }
 
 // Lease is a call into a session's page, held from PageLease until
@@ -74,6 +85,20 @@ func (l *Lease) Breakable() { l.breakable() }
 // Calls on one session take turns: PageLease waits (until ctx ends) while
 // another lease is held, so two calls never interleave.
 func (m *Manager) PageLease(ctx context.Context, id, tokenID string) (*Lease, error) {
+	return m.pageLease(ctx, id, tokenID, false)
+}
+
+// ReadLease is PageLease for a read that is not the agent driving:
+// Visual mode's element tree (PROJ-150). It takes turns with page calls
+// and is cancelled by a handoff, a hold, a stop or the token's
+// revocation as they are, but it doesn't keep a person out: it doesn't
+// start or extend the few seconds after an agent's input in which Take
+// control is refused (PROJ-134), and Take control breaks it off at once.
+func (m *Manager) ReadLease(ctx context.Context, id, tokenID string) (*Lease, error) {
+	return m.pageLease(ctx, id, tokenID, true)
+}
+
+func (m *Manager) pageLease(ctx context.Context, id, tokenID string, read bool) (*Lease, error) {
 	m.mu.Lock()
 	l := m.findLocked(id)
 	if err := leaseRefusal(l); err != nil {
@@ -84,31 +109,68 @@ func (m *Manager) PageLease(ctx context.Context, id, tokenID string) (*Lease, er
 		l.turn = make(chan struct{}, 1)
 	}
 	turn := l.turn
+	// A call waiting for its turn is already its token's: revoking the
+	// token (DisconnectToken) ends the wait, as it ends a lease.
+	cctx, cancel := context.WithCancelCause(ctx)
+	waiting := &lease{tokenID: tokenID, cancel: cancel}
+	if l.queued == nil {
+		l.queued = map[*lease]struct{}{}
+	}
+	l.queued[waiting] = struct{}{}
 	m.mu.Unlock()
 
 	// One call at a time per session.
 	select {
 	case turn <- struct{}{}:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	case <-cctx.Done():
+		m.mu.Lock()
+		delete(l.queued, waiting)
+		m.mu.Unlock()
+		cancel(context.Canceled)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return nil, context.Cause(cctx)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if err := leaseRefusal(l); err != nil || m.findLocked(id) != l {
-		<-turn
-		if err == nil {
-			err = ErrNotRunning
+	delete(l.queued, waiting)
+	err := leaseRefusal(l)
+	if err == nil && m.findLocked(id) != l {
+		err = ErrNotRunning
+	}
+	if err == nil && cctx.Err() != nil {
+		// Revoked, or the caller gone, as the turn came.
+		if err = ctx.Err(); err == nil {
+			err = context.Cause(cctx)
 		}
+	}
+	if err != nil {
+		<-turn
+		cancel(context.Canceled)
 		return nil, err
 	}
-	cctx, cancel := context.WithCancelCause(ctx)
 	now := m.now()
-	ls := &lease{tokenID: tokenID, cancel: cancel, started: now}
+	ls := &lease{tokenID: tokenID, cancel: cancel, started: now, yields: read}
+	if !read {
+		ls.call = CallFrom(ctx)
+	}
+	if ls.call != nil {
+		// Granted: the call is admitted (its receipt stays, PROJ-156).
+		// A read never admits one: a click by ref reads the element
+		// first, and its call is admitted only by its input
+		// (AgentInputAt), so a click refused after the read gives its
+		// receipt back.
+		ls.call.admitLocked()
+	}
 	if l.leases == nil {
 		l.leases = map[*lease]struct{}{}
 	}
 	l.leases[ls] = struct{}{}
-	l.lastActivity, l.lastAgentInput = now, now
+	l.lastActivity = now
+	if !read {
+		l.lastAgentInput = now
+	}
 	m.agentActedLocked(l)
 	var once sync.Once
 	return &Lease{Ctx: cctx, Generation: l.generation, breakable: func() {
@@ -117,11 +179,22 @@ func (m *Manager) PageLease(ctx context.Context, id, tokenID string) (*Lease, er
 		m.mu.Unlock()
 	}, release: func() {
 		once.Do(func() {
+			// Ended before it let go: a handoff, a hold, a stop, the
+			// token's revocation or the caller going away cut it short.
+			// (A cut that comes after the browser answered, just before this,
+			// still counts: the receipt then errs on the safe side.)
+			cut := cctx.Err() != nil
 			cancel(context.Canceled)
 			m.mu.Lock()
+			if cut && ls.call != nil {
+				ls.call.cut = true
+			}
 			delete(l.leases, ls)
 			now := m.now()
-			l.lastActivity, l.lastAgentInput = now, now
+			l.lastActivity = now
+			if !read {
+				l.lastAgentInput = now
+			}
 			m.agentActedLocked(l)
 			m.inputsDone.Broadcast()
 			m.mu.Unlock()

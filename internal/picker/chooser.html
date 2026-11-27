@@ -1,0 +1,27 @@
+<form class="chooser" data-id="{{.ID}}" novalidate>
+  <div class="dlg-head"><div>
+    <h2 id="chooser-title">{{if .Multiple}}Choose files for the page{{else}}Choose a file for the page{{end}}</h2>
+    <p>{{if .Multiple}}The page asked for files. Pick any of this profile’s uploads, or upload one from this device.{{else}}The page asked for a file. Pick one of this profile’s uploads, or upload one from this device.{{end}}</p>
+  </div></div>
+  <div class="dlg-body">
+    {{- if .Files}}
+    <ul class="chooser-files" aria-label="Uploads">
+      {{- range .Files}}
+      <li><label><input type="{{if $.Multiple}}checkbox{{else}}radio{{end}}" name="file" value="{{.Name}}"><span class="chooser-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg></span><span class="chooser-name"><span>{{.Name}}</span><span class="caption">{{.Size}} · {{.Ago}}</span></span></label></li>
+      {{- end}}
+    </ul>
+    {{- else}}
+    <p class="chooser-empty">No uploads in this profile yet. Upload one from this device, or ask the agent to send it.</p>
+    {{- end}}
+    <div class="chooser-progress" role="status" hidden><span class="chooser-progress-text"></span><span class="chooser-bar" aria-hidden="true"><span></span></span></div>
+    <p class="chooser-error" role="alert" hidden></p>
+    <p class="caption chooser-note">The page gets only what you choose. Unanswered, its chooser closes in {{.Left}}.</p>
+  </div>
+  <div class="dlg-foot">
+    <button class="btn chooser-upload" type="button" data-upload><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>Upload from this device</button>
+    <input class="sr-only" type="file" tabindex="-1" aria-hidden="true" data-device>
+    <span class="grow"></span>
+    <button class="btn" type="button" data-cancel>Cancel</button>
+    <button class="btn primary" type="submit" disabled>Choose</button>
+  </div>
+</form>

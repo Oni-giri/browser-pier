@@ -76,7 +76,7 @@ func (m *Manager) stopIdle(ctx context.Context) {
 			continue
 		}
 		limit := p.AutoStop
-		_, err = m.stopIf(ctx, c.id, func(l *live) bool { return l.idleLocked(m.now()) >= limit })
+		_, err = m.stopIf(ctx, c.id, func(l *live) bool { return l.idleLocked(m.now()) >= limit }, stopIdle(limit))
 		if errors.Is(err, errStillInUse) {
 			continue // used again since we looked
 		}
@@ -228,7 +228,7 @@ func (m *Manager) makeRoom(ctx context.Context) error {
 			m.log.Warn("refused a browser: no room", "why", full.Why(), "running", strings.Join(list, "; "))
 			return full
 		}
-		_, err := m.stopIf(ctx, victim, func(l *live) bool { return l.idleLocked(m.now()) > 0 })
+		_, err := m.stopIf(ctx, victim, func(l *live) bool { return l.idleLocked(m.now()) > 0 }, stopRoom)
 		if errors.Is(err, errStillInUse) {
 			continue // someone started using it; look again
 		}
