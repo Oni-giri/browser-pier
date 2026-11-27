@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -103,10 +104,10 @@ func TestAgentsSeeOnlyWhetherAProfileIsProxied(t *testing.T) {
 	}
 
 	// Running sessions, for a template, a plain proxy and none.
-	var ids []string
+	var ids, names []string
 	for name := range want {
 		s := f.start(f.all, name, "api")
-		ids = append(ids, s.ID)
+		ids, names = append(ids, s.ID), append(names, name)
 	}
 	raw = nil
 	f.call(f.all, http.MethodGet, "/api/profiles", "", &raw)
@@ -126,9 +127,76 @@ func TestAgentsSeeOnlyWhetherAProfileIsProxied(t *testing.T) {
 	raw = nil
 	f.call(f.all, http.MethodPost, "/api/sessions", `{"profile": "google"}`, &raw)
 	check("POST /api/sessions (attach)", raw, nil)
-	for _, id := range ids {
-		f.call(f.all, http.MethodDelete, "/api/sessions/"+id, "", nil)
+
+	// A browser's last log line can quote its proxy (an older image's
+	// dial error did): the session's last_log and error hide it, after a
+	// stop and after a failed start, the {sticky} token filled in too.
+	tok, err := f.profiles.StickyToken(ctx, "google")
+	if err != nil {
+		t.Fatal(err)
 	}
+	proxyParts := append(proxyParts, tok)
+	// What a browser's log could say of its own proxy, filled in.
+	leakyLog := func(name string) string {
+		proxy := map[string]string{
+			"google": "http://acct-9f3k2-" + tok + ":pw-7q2x@hidden-proxy.example:31877",
+			"github": "socks5://acct-9f3k2:pw-7q2x@hidden-proxy.example:31877",
+		}[name]
+		if proxy == "" {
+			return `level=INFO msg="Chromium closed"`
+		}
+		u, _ := url.Parse(proxy)
+		pw, _ := u.User.Password()
+		return `level=ERROR msg=exiting err="couldn't find where the proxy exits (Get \"http://geo.test/geo\": ` +
+			`dial tcp: lookup ` + u.Hostname() + `: no such host; ` + proxy + `; user ` + u.User.Username() + ` password ` + pw + ` at ` + u.Host + `)"`
+	}
+	checkLeaks := func(where string, raw []byte) {
+		t.Helper()
+		for _, part := range proxyParts {
+			if strings.Contains(string(raw), part) {
+				t.Errorf("%s holds %q: %s", where, part, raw)
+			}
+		}
+		noProxyKey(t, where, raw)
+	}
+	for i, id := range ids {
+		f.rt.LastLog = leakyLog(names[i])
+		raw = nil
+		if code := f.call(f.all, http.MethodDelete, "/api/sessions/"+id, "", &raw); code != http.StatusOK {
+			t.Fatalf("stop: %d %s", code, raw)
+		}
+		checkLeaks("DELETE /api/sessions/"+id, raw)
+		var s sessionJSON
+		_ = json.Unmarshal(raw, &s)
+		if s.LastLog == "" || (names[i] != "direct" && !strings.Contains(s.LastLog, "<hidden>")) {
+			t.Errorf("the stop kept no last_log: %s", raw)
+		}
+		raw = nil
+		f.call(f.all, http.MethodGet, "/api/sessions/"+id, "", &raw)
+		checkLeaks("GET /api/sessions/"+id+" after the stop", raw)
+	}
+	status := 1
+	f.rt.ExitOnStart = &status
+	for _, name := range []string{"google", "github"} {
+		f.rt.LastLog = leakyLog(name)
+		raw = nil
+		if code := f.call(f.all, http.MethodPost, "/api/sessions", `{"profile": "`+name+`"}`, &raw); code != http.StatusBadGateway {
+			t.Fatalf("failed start of %s: %d %s", name, code, raw)
+		}
+		checkLeaks("a failed start of "+name, raw)
+		var s sessionJSON
+		_ = json.Unmarshal(raw, &s)
+		if !strings.Contains(s.Error, "couldn't find where the proxy exits") || !strings.Contains(s.LastLog, "<hidden>") {
+			t.Errorf("the failed start says too little: %s", raw)
+		}
+		raw = nil
+		f.call(f.all, http.MethodGet, "/api/sessions/"+s.ID, "", &raw)
+		checkLeaks("GET /api/sessions/"+s.ID+" after a failed start", raw)
+	}
+	raw = nil
+	f.call(f.all, http.MethodGet, "/api/sessions", "", &raw)
+	checkLeaks("GET /api/sessions after a failed start", raw)
+	f.rt.ExitOnStart, f.rt.LastLog = nil, ""
 
 	// A profile an agent makes gets the admin's default proxy, template
 	// or not, and the answer says only that it's proxied.

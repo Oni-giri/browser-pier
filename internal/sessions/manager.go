@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -199,6 +200,9 @@ type live struct {
 	takeCancel context.CancelFunc
 	// conns are the agents' open connections to the browser.
 	conns map[*conn]struct{}
+	// proxyHide hides the parts of the proxy the browser was given from
+	// its last log line and error (end); nil without a proxy.
+	proxyHide *scrub.Scrubber
 	// lastActivity is when an agent or person last used the browser.
 	lastActivity time.Time
 	// lastAgentInput is when an agent last clicked or typed.
@@ -569,9 +573,15 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 		m.abort(l, "", fmt.Sprintf("closing the tabs of a session a secret was typed into: %v", err))
 		return
 	}
-	if err := m.writeProxyFile(ctx, p); err != nil {
+	proxy, err := m.writeProxyFile(ctx, p)
+	if err != nil {
 		m.abort(l, "", fmt.Sprintf("handing over the proxy: %v", err))
 		return
+	}
+	if hide := scrub.New(proxySecrets(proxy)); hide != nil {
+		m.mu.Lock()
+		l.proxyHide = hide
+		m.mu.Unlock()
 	}
 	wantBlocking := m.snapshot(l).BlockAds
 	blocking, err := m.writeBlockFile(p.Name, wantBlocking)
@@ -932,18 +942,19 @@ const proxyFile = "proxy.json"
 // writeProxyFile hands the profile's proxy, credentials included, to the
 // browser container through its control folder, never its environment.
 // A template's {sticky} is filled in here, and only here, with the
-// profile's own token: what is stored and shown stays the template.
-func (m *Manager) writeProxyFile(ctx context.Context, p profiles.Profile) error {
+// profile's own token: what is stored and shown to the admin stays the
+// template. It returns the URL it wrote, filled in, or "" for none.
+func (m *Manager) writeProxyFile(ctx context.Context, p profiles.Profile) (string, error) {
 	root, err := os.OpenRoot(m.layout.dir(p.Name, "run"))
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() { _ = root.Close() }()
 	if err := root.Remove(proxyFile); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+		return "", err
 	}
 	if p.Proxy == "" {
-		return nil
+		return "", nil
 	}
 	proxy := p.Proxy
 	if profiles.HasSticky(proxy) {
@@ -951,29 +962,53 @@ func (m *Manager) writeProxyFile(ctx context.Context, p profiles.Profile) error 
 		// tokens gets its own here, once.
 		tok, err := m.profiles.StickyToken(ctx, p.Name)
 		if err != nil {
-			return err
+			return "", err
 		}
 		proxy = profiles.FillSticky(proxy, tok)
 	}
 	b, err := json.Marshal(map[string]string{"url": proxy})
 	if err != nil {
-		return err
+		return "", err
 	}
 	f, err := root.OpenFile(proxyFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if os.Getuid() == 0 {
 		if err := f.Chown(m.layout.UID, m.layout.GID); err != nil {
 			_ = f.Close()
-			return err
+			return "", err
 		}
 	}
 	_, err = f.Write(b)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
-	return err
+	return proxy, err
+}
+
+// proxySecrets are the parts of a proxy URL that name the proxy or its
+// account: the URL, its host (with and without the port), user name and
+// password. A browser's log can quote them (an older image's dial or TLS
+// error, PROJ-205), and its last line reaches agents (a session's
+// last_log and error), so they are hidden there.
+func proxySecrets(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	out := []string{raw}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return out
+	}
+	out = append(out, u.Host, u.Hostname())
+	if u.User != nil {
+		out = append(out, u.User.Username())
+		if pw, ok := u.User.Password(); ok {
+			out = append(out, pw)
+		}
+	}
+	return out
 }
 
 // removeProxyFile deletes the credentials if the browser never read them.
@@ -1041,8 +1076,9 @@ func (m *Manager) cleanup(cid string) string {
 // next Reconcile, clears the stale row.
 func (m *Manager) end(l *live, lastLog string, final func(*Session) StopReason) {
 	// The container's words are kept and shown after the session, when
-	// its secrets are gone: scrubbed now (PROJ-125).
-	sc := m.lockScrubber(l.sess.ID)
+	// its secrets are gone: scrubbed now (PROJ-125), and its proxy's
+	// parts hidden from them too (PROJ-205).
+	sc := scrub.Union(m.lockScrubber(l.sess.ID), l.proxyHide)
 	// A handoff was open: it is cancelled once the session has ended.
 	inHelp := l.sess.State == NeedsHelp || (l.sess.State == Stopping && l.stop != nil && l.stopPrev == NeedsHelp)
 	why := final(&l.sess)
