@@ -69,15 +69,19 @@ RUN for t in xdg-desktop-portal xdg-desktop-portal-gtk xdg-desktop-portal-gnome 
 # Chromium's interface languages (chromium-l10n): without them it runs in
 # en-US whatever LANGUAGE says, and Intl's locale contradicts
 # navigator.languages, which matches the exit location.
+# Visual mode's element tree (PROJ-150) needs Chromium's AT-SPI bridge
+# (libatk-bridge, a dependency of chromium); it talks over the session bus
+# above, which carries the accessibility tree in Visual mode.
 RUN for el in ximagesrc videoconvert videoscale x264enc mp4mux fdsink; do gst-inspect-1.0 "$el" >/dev/null || { echo "missing GStreamer element $el"; exit 1; }; done \
  && { command -v xclip >/dev/null || { echo "missing xclip, the live view's clipboard box"; exit 1; }; } \
  && { command -v xdotool >/dev/null || { echo "missing xdotool, Visual mode's input"; exit 1; }; } \
+ && { ls /usr/lib/*/libatk-bridge-2.0.so.0 >/dev/null || { echo "missing libatk-bridge"; exit 1; }; } \
  && for l in de fr es ja; do test -f /usr/lib/chromium/locales/$l.pak || { echo "missing Chromium locale $l"; exit 1; }; done \
  && tr '\0' '\n' < /usr/lib/chromium/chromium > /tmp/strings \
  && for sw in user-data-dir remote-debugging-port password-store disable-blink-features ignore-gpu-blocklist disable-gpu-compositing gpu-sandbox-failures-fatal \
                proxy-bypass-list webrtc-ip-handling-policy disable-component-update disable-background-networking no-first-run \
                no-default-browser-check hide-crash-restore-bubble noerrdialogs window-position window-size disable-dev-shm-usage proxy-server host-resolver-rules \
-               disable-features; do \
+               disable-features force-renderer-accessibility; do \
       LC_ALL=C grep -qaxF -- "$sw" /tmp/strings || { echo "chromium binary lacks --$sw"; exit 1; }; done \
  && for feature in BackForwardCache; do \
       LC_ALL=C grep -qaxF -- "$feature" /tmp/strings || { echo "chromium binary lacks the feature $feature"; exit 1; }; done \

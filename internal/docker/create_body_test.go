@@ -136,6 +136,7 @@ func goldenSpec() BrowserSpec {
 			"BROWSERPIER_LOCAL_NETWORK=false",
 			"BROWSERPIER_HOST_IPS=192.168.1.10",
 			"BROWSERPIER_BLOCK_ADS=true",
+			"BROWSERPIER_MODE=visual",
 		},
 	}
 }

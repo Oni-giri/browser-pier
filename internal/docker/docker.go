@@ -63,10 +63,13 @@ const (
 // action calls (PROJ-164): a browser from before either answers them 404;
 // 9 turns address-bar search suggestions off by managed policy
 // (PROJ-191): a browser from an older image would keep sending what is
-// typed into the address bar to the search engine; 10 types characters
-// the keyboard map lacks by binding them to spare keys for the whole
-// call, so none is dropped (PROJ-195).
-const Spec = "10"
+// typed into the address bar to the search engine; 10 runs Visual-mode
+// browsers with Chromium's accessibility on the session bus and the
+// entrypoint's /tree reader, and tells the container its mode
+// (BROWSERPIER_MODE), which visual_snapshot and click by ref rely on
+// (PROJ-150); 11 types characters the keyboard map lacks by binding them
+// to spare keys for the whole call, so none is dropped (PROJ-195).
+const Spec = "11"
 
 const (
 	// StopTimeout is how long a browser container gets to stop before Docker

@@ -314,6 +314,10 @@ var widenings = []widening{
 		setEnv(o, "BROWSERPIER_LOCALE_OVERRIDE", "fr-FR\nBROWSERPIER_BLOCK_ADS=false")
 	}, field: "Config.Env"},
 	{name: "a NUL in a value", mutate: func(o *client.ContainerCreateOptions) { setEnv(o, "BROWSERPIER_GEO_TZ", "Europe/Paris\x00") }, field: "Config.Env"},
+	{name: "the mode twice", mutate: cfgOf(func(c *container.Config) { c.Env = append(c.Env, "BROWSERPIER_MODE=api") }), field: "Config.Env"},
+	{name: "a newline in the mode", mutate: func(o *client.ContainerCreateOptions) {
+		setEnv(o, "BROWSERPIER_MODE", "visual\nLD_PRELOAD=/files/x.so")
+	}, field: "Config.Env"},
 	{name: "no equals sign", mutate: cfgOf(func(c *container.Config) { c.Env = append(c.Env, "BROWSERPIER_BLOCK_ADS") }), field: "Config.Env"},
 	{name: "a required name missing", mutate: cfgOf(func(c *container.Config) { c.Env = c.Env[1:] }), field: "Config.Env"},
 	{name: "environment on the check", kind: kindSandboxCheck, mutate: cfgOf(func(c *container.Config) { c.Env = []string{"BROWSERPIER_SCREEN=1x1"} }), field: "Config.Env"},

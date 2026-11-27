@@ -56,6 +56,9 @@ type visual struct {
 	// long as the display, so memory is enough.
 	leftover       []keyRun
 	leftoverPerKey int
+	// tree reads the page from the accessibility bus, in Visual-mode
+	// sessions only (PROJ-150); nil in API mode, where /tree is 404.
+	tree *treeReader
 	// shortcutAt is when the last agent key call that ended on a
 	// browser-bound combination ended (with mu held); the next keyboard
 	// action waits until shortcutGap after it (PROJ-151).
@@ -171,6 +174,9 @@ func (v *visual) register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /input/key", v.key)
 	mux.HandleFunc("POST /input/drag", v.drag)
 	mux.HandleFunc("POST /input/open", v.open)
+	if v.tree != nil {
+		v.tree.register(mux)
+	}
 	if v.live != nil {
 		mux.HandleFunc("POST /input/events", v.live.events)
 		mux.HandleFunc("POST /input/release", v.live.release)

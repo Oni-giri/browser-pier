@@ -1,6 +1,6 @@
 # Browser image
 
-`ghcr.io/oni-giri/browser-pier-chromium`: headful Chromium on Xvfb with a minimal desktop (JWM and a taskbar, `jwmrc`), xdotool for OS-level input, GStreamer sidecars that stream the display as H.264, live and, for session recordings, as fragmented MP4, and a private session bus (Debian's `dbus-daemon`) on which the entrypoint answers Chromium's file choosers as a desktop portal would (`entrypoint/portal.go`, with `github.com/godbus/dbus/v5`, BSD-2-Clause; see `NOTICE`), so no file dialog shows: an agent or the person in control answers each chooser from the profile's uploads. A browser whose bus or portal can't start exits rather than fall back to Chromium's own dialog (PROJ-183). No `xdg-desktop-portal` or other portal is installed; the build fails if one is. See SPEC.md §3 for why it's built this way.
+`ghcr.io/oni-giri/browser-pier-chromium`: headful Chromium on Xvfb with a minimal desktop (JWM and a taskbar, `jwmrc`), xdotool for OS-level input, GStreamer sidecars that stream the display as H.264, live and, for session recordings, as fragmented MP4, and a private session bus (Debian's `dbus-daemon`) on which the entrypoint answers Chromium's file choosers as a desktop portal would (`entrypoint/portal.go`, with `github.com/godbus/dbus/v5`, BSD-2-Clause; see `NOTICE`), so no file dialog shows: an agent or the person in control answers each chooser from the profile's uploads. A browser whose bus or portal can't start exits rather than fall back to Chromium's own dialog (PROJ-183). In Visual mode Chromium's accessibility goes over the same bus, and the entrypoint reads the page's element tree from it (PROJ-150). No `xdg-desktop-portal` or other portal is installed; the build fails if one is. See SPEC.md §3 for why it's built this way.
 
 ```sh
 make image-chromium   # build from the repo root
@@ -36,6 +36,7 @@ Settings, all optional:
 | `BROWSERPIER_GEOIP_URL` | none | Endpoint to look up the exit location (`country_iso`, `time_zone`); empty for no lookup. |
 | `BROWSERPIER_GEO_COUNTRY`, `BROWSERPIER_GEO_TZ` | none | The location the profile ran with last time; the zone is kept while the country is the same. |
 | `BROWSERPIER_TZ_OVERRIDE`, `BROWSERPIER_LOCALE_OVERRIDE` | none | The profile's manual time zone and language; they win. |
+| `BROWSERPIER_MODE` | `api` | `visual` adds `--force-renderer-accessibility=basic`, points Chromium's accessibility at the session bus (`AT_SPI_BUS_ADDRESS`, `ACCESSIBILITY_ENABLED=1`; the bus is the one the file chooser portal is on, in every mode) and serves `/tree` (PROJ-150). `api` changes nothing. |
 | `BROWSERPIER_CHOOSER_TIMEOUT` | `5m` | How long a page's file chooser waits for an answer before it is cancelled (1 s to 1 h). The orchestrator doesn't set it; tests shorten it. |
 | `BROWSERPIER_MOUNT_CHECK` | none | When set, both `/profile` and the control socket's folder must hold a `.browserpier-mount` file with this value, or the entrypoint exits 1 before touching the profile. The orchestrator sets it so a wrong host path can't open an empty profile. |
 
@@ -66,6 +67,8 @@ HTTP over the Unix socket:
 | `POST /input/live-type` | `{"text"}`, as `/input/type` at instant pace, for the live view's Type button: the person's input, so it doesn't wait for an agent's shortcut gap. |
 | `POST /input/events` | The live view's mouse and keyboard: a JSON array of `{"t": "move", "x", "y"}`, `{"t": "down"/"up", "b": 1-3}`, `{"t": "wheel", "dx", "dy"}`, `{"t": "keydown"/"keyup", "k": "<X keysym>"}`, fed to one long-running `xdotool`. |
 | `POST /input/release` | Lets go of any key or button the live view still holds. |
+| `GET /tree` | Visual mode only: the active tab's page from the session bus (Chromium's accessibility), as JSON (document URL, title and box; each node's AT-SPI path, parent, depth, role and state numbers, name, a field's text, boxes in screen pixels, a few attributes; a password field's `filled`, never its text). `?nodes=`, `?depth=`, `?string=` and `?ms=` lower the limits (20,000 nodes, depth 128, 1,000 bytes, 2 s); a read cut short says why in `cut`. 404 when no page is showing, 504 when nothing was read in time, 502 when the bus fails. One read at a time. Read-only: see `readMethods` in `entrypoint/tree.go`. |
+| `GET /tree/node` | Visual mode only: `?app=&doc=&id=`, one element read again for a click by ref: its role, states, name and box now, `stale` if it or its document is gone, and what Chromium's hit test finds at its centre when it isn't the element. |
 | `GET /geo` | The location the browser runs with: country, time zone, locale, Accept-Language list, and where they came from. |
 | `GET /proxy/stats` | Bytes sent and received through the proxy, when there is one. |
 | `GET /chooser` | The page's open file choosers: `{"choosers": [{"id": "c3", "multiple": false, "accept": ["*.pdf"], "age_ms": 1200}]}`. 503, saying why, when the portal is off or couldn't start. |

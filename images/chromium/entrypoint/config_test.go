@@ -75,7 +75,7 @@ func TestLoadConfigRejectsBadValues(t *testing.T) {
 // TestChromiumEnv: Mesa starts no thread before Chromium's GPU sandbox
 // does, which it can only do in a single-threaded process (PROJ-165).
 func TestChromiumEnv(t *testing.T) {
-	env := chromiumEnv([]string{"PATH=/usr/bin"}, nil, nil)
+	env := chromiumEnv([]string{"PATH=/usr/bin"}, nil, nil, false)
 	for _, want := range []string{"LP_NUM_THREADS=0", "MESA_SHADER_CACHE_DISABLE=true"} {
 		if !slices.Contains(env, want) {
 			t.Errorf("Chromium's environment lacks %s: %v", want, env)
@@ -164,5 +164,50 @@ func TestChromiumArgs(t *testing.T) {
 	}
 	if !slices.Contains(chromiumArgs(c, true), "--disable-dev-shm-usage") {
 		t.Error("small /dev/shm: want --disable-dev-shm-usage")
+	}
+}
+
+func TestLoadConfigMode(t *testing.T) {
+	for mode, visual := range map[string]bool{"": false, "api": false, "visual": true} {
+		vars := map[string]string{}
+		if mode != "" {
+			vars["BROWSERPIER_MODE"] = mode
+		}
+		c, err := loadConfig(env(vars))
+		if err != nil || c.Visual != visual {
+			t.Errorf("BROWSERPIER_MODE=%q: visual %t, %v", mode, c.Visual, err)
+		}
+	}
+	if _, err := loadConfig(env(map[string]string{"BROWSERPIER_MODE": "Visual"})); err == nil {
+		t.Error("BROWSERPIER_MODE=Visual: want an error")
+	}
+}
+
+// TestChromiumArgsByMode: API mode's command line and environment are
+// what they are without PROJ-150; Visual mode's differ by the
+// accessibility switch and the two variables that point it at the session
+// bus only.
+func TestChromiumArgsByMode(t *testing.T) {
+	api := config{Width: 1280, Height: 800, ProfileDir: "/profile"}
+	before := chromiumArgs(api, false)
+	if slices.ContainsFunc(before, func(a string) bool { return strings.Contains(a, "accessibility") }) {
+		t.Fatalf("API mode has accessibility: %q", before)
+	}
+	where := geo{TimeZone: "Europe/Riga", Locale: "lv-LV"}
+	bus := &sessionBus{dir: "/tmp/browserpier-bus-1000"}
+	envBefore := []string{"DISPLAY=:99", "TZ=Europe/Riga", "LANGUAGE=lv_LV:lv", "LANG=lv_LV.UTF-8",
+		"DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/browserpier-bus-1000/bus", "LP_NUM_THREADS=0", "MESA_SHADER_CACHE_DISABLE=true"}
+	if got := chromiumEnv(nil, where.env(), bus, false); !slices.Equal(got, envBefore) {
+		t.Fatalf("API mode's environment: %q", got)
+	}
+
+	vis := api
+	vis.Visual = true
+	if got := chromiumArgs(vis, false); !slices.Equal(got, append(slices.Clone(before), "--force-renderer-accessibility=basic")) {
+		t.Fatalf("Visual mode: %q", got)
+	}
+	got := chromiumEnv(nil, where.env(), bus, true)
+	if want := append(slices.Clone(envBefore), "AT_SPI_BUS_ADDRESS=unix:path=/tmp/browserpier-bus-1000/bus", "ACCESSIBILITY_ENABLED=1"); !slices.Equal(got, want) {
+		t.Fatalf("Visual mode's environment: %q", got)
 	}
 }

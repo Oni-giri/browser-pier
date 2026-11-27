@@ -13,11 +13,14 @@ import (
 )
 
 // The session bus (PROJ-152): one private dbus-daemon, the image's own,
-// for Chromium and the file chooser portal (portal.go) only. Chromium
-// asks the desktop portal on it for its file choosers and "Save as"
+// for Chromium, the file chooser portal (portal.go) and, in Visual mode,
+// the tree reader (tree.go, a11y.go) only. Chromium asks the desktop
+// portal on it for its file choosers and "Save as"
 // (images/chromium/ANTI-BOT.md), and the portal answers them, so no
-// dialog shows on the screen. Nothing else is on it: no system bus, no
-// xdg-desktop-portal, no service activation.
+// dialog shows on the screen. In Visual mode Chromium's accessibility
+// bridge publishes the page's tree on it too (PROJ-150). Nothing else is
+// on it: no system bus, no xdg-desktop-portal, no AT-SPI launcher or
+// registry, no service activation.
 //
 // It listens on a path socket only, in a 0700 folder of the browser's
 // uid under /tmp, never an abstract socket or TCP, and never in
@@ -221,11 +224,16 @@ func busGone(b *sessionBus) bool {
 }
 
 // chromiumEnv is Chromium's environment: the entrypoint's own, the
-// display, the location's, the bus's address, and Mesa's settings
-// (mesaEnv). The address goes to Chromium only, never into the
+// display, the location's, the bus's address, Mesa's settings (mesaEnv),
+// and in Visual mode (visual) the accessibility's pointer to the same bus
+// (a11yEnv, PROJ-150). The addresses go to Chromium only, never into the
 // entrypoint's environment (base), which Xvfb, JWM, xdotool and GStreamer
 // get.
-func chromiumEnv(base, geo []string, bus *sessionBus) []string {
+func chromiumEnv(base, geo []string, bus *sessionBus, visual bool) []string {
 	env := append(append([]string{}, base...), "DISPLAY="+display)
-	return append(append(append(env, geo...), bus.env()...), mesaEnv()...)
+	env = append(append(append(env, geo...), bus.env()...), mesaEnv()...)
+	if visual && bus != nil {
+		env = append(env, a11yEnv(bus.address())...)
+	}
+	return env
 }

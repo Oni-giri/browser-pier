@@ -33,6 +33,9 @@ type computerRequest struct {
 	Action string `json:"action"` // click, type, scroll, key, drag, open, wait or zoom
 	X      *int   `json:"x"`
 	Y      *int   `json:"y"`
+	// Ref is a click's element by its Visual-mode ref, from
+	// visual_snapshot, instead of x and y (PROJ-150).
+	Ref    string `json:"ref"`
 	Button string `json:"button"`
 	Double bool   `json:"double"`
 	Text   string `json:"text"`
@@ -181,8 +184,18 @@ func (a *API) computer(w http.ResponseWriter, r *http.Request) {
 		a.done(w, r, s, c)
 		return
 	}
-	path, body, err := c.inputBody()
-	if err != nil {
+	var rc *refClick
+	if c.Ref != "" {
+		switch {
+		case c.Action != "click":
+			writeError(w, http.StatusBadRequest, "ref: only click takes a ref; "+c.Action+" takes coordinates")
+			return
+		case c.X != nil || c.Y != nil:
+			writeError(w, http.StatusBadRequest, "click: give a ref or x and y, not both")
+			return
+		}
+	}
+	if _, _, err := c.inputBody(); err != nil && c.Ref == "" {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -193,6 +206,19 @@ func (a *API) computer(w http.ResponseWriter, r *http.Request) {
 	}
 	s, ok := a.running(w, r, true)
 	if !ok {
+		return
+	}
+	if c.Ref != "" {
+		// A click by a Visual-mode ref (PROJ-150) clicks the element's
+		// centre as it is now.
+		if rc, ok = a.locateRef(w, r, s, c.Ref); !ok {
+			return
+		}
+		c.X, c.Y = &rc.target.X, &rc.target.Y
+	}
+	path, body, err := c.inputBody()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	raw, err := json.Marshal(body)
@@ -217,10 +243,23 @@ func (a *API) computer(w http.ResponseWriter, r *http.Request) {
 			mark.Expect(wait) // the caller expects a download: look as long for it to start
 		}
 	}
-	if !a.actAfter(w, r, s, path, raw, first) {
+	note := describeInput(path, raw)
+	if rc != nil {
+		note = describeRefClick(rc.ref, raw)
+	}
+	if !a.actNoted(w, r, s, path, raw, note, rc.generation(), first) {
 		return
 	}
 	mark.Ended()
+	if rc != nil && !c.Screenshot {
+		// A click by ref answers with what it clicked.
+		if mark != nil {
+			a.reportDownloads(w, r, s, mark, wait)
+		}
+		a.setChooserNotice(w, r, s)
+		writeJSON(w, http.StatusOK, map[string]string{"text": rc.clickedText()})
+		return
+	}
 	a.doneWith(w, r, s, c, func() {
 		if mark != nil {
 			a.reportDownloads(w, r, s, mark, wait)
