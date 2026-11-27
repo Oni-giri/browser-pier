@@ -650,7 +650,7 @@ func TestReleaseControlEmptiesTheClipboardFirst(t *testing.T) {
 }
 
 // A person's input and their own hand-back count only for the takeover
-// they took (TakeControlGen): once it has ended without them and someone
+// they took (TakeControlTurn): once it has ended without them and someone
 // else has taken the browser, they neither reach it nor end that
 // takeover; their own hand-back lifts what they held before the
 // clipboard is emptied (PROJ-196).
@@ -697,7 +697,7 @@ func TestControlBelongsToItsTakeover(t *testing.T) {
 		t.Errorf("the first person's input during the second's control = %v, want ErrNotInControl", err)
 	}
 	if f.m.HoldsTurn(s.ID, first) || !f.m.HoldsTurn(s.ID, second) {
-		t.Error("InControl names the wrong takeover")
+		t.Error("HoldsTurn names the wrong takeover")
 	}
 	if ended, _ := f.m.ReleaseTurn(context.Background(), s.ID, first); ended {
 		t.Error("the first person's hand-back ended the second's control")
@@ -986,7 +986,7 @@ func TestTakeControlGivesUpOnAStopThatFailedBeforeItWoke(t *testing.T) {
 	}
 }
 
-// InControl answers as HumanInput admits: not while the browser is
+// HoldsTurn answers as HumanInput admits: not while the browser is
 // stopping, though the takeover hasn't ended (PROJ-196).
 func TestInControlWhileStopping(t *testing.T) {
 	f := newFixture(t)
@@ -1003,7 +1003,7 @@ func TestInControlWhileStopping(t *testing.T) {
 	f.rt.BeforeStop = func(string) {
 		_, _, inputErr := f.m.HumanInputTurn(s.ID, "person", gen)
 		if f.m.HoldsTurn(s.ID, gen) || inputErr == nil {
-			t.Errorf("while stopping: InControl %v, input %v", f.m.HoldsTurn(s.ID, gen), inputErr)
+			t.Errorf("while stopping: HoldsTurn %v, input %v", f.m.HoldsTurn(s.ID, gen), inputErr)
 		}
 	}
 	f.rt.Mu.Unlock()

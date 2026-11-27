@@ -189,7 +189,7 @@ type live struct {
 	opCancel context.CancelFunc
 	sockOps  int
 	// stops counts the stops begun, failed ones included: a Take control
-	// that waited across one gives up (TakeControlGen).
+	// that waited across one gives up (TakeControlTurn).
 	stops uint64
 	// takeCtx is for the person's operations admitted under the takeover
 	// in progress (HumanInput): a child of opCtx, cancelled the moment
