@@ -206,6 +206,9 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 					m.log.Error("saving session state", "session", p.id, "err", err)
 				}
 				m.log.Info("a browser left waiting for a handoff that had ended is the agents' again", "session", p.id)
+				// A file chooser open passes back to the agent with its
+				// whole time limit, as at any handoff's end (PROJ-181).
+				m.restartChoosers(p.profile)
 			}
 		})
 	}

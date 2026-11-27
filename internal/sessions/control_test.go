@@ -1404,8 +1404,19 @@ func openHandoffRow(t *testing.T, m *Manager, s Session, epoch uint64) {
 // A browser left waiting for help whose handoff had ended as BrowserPier
 // went (between the two) is the agents' again after the restart, once it
 // is fenced (PROJ-196).
+//
+// A file chooser open passes back to the agent with its whole time limit,
+// as at any handoff's end (PROJ-181).
 func TestReconcileEndsHelpNoHandoffAsksFor(t *testing.T) {
 	f := newFixture(t)
+	var restarts atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	mux.HandleFunc("POST /chooser/restart", func(w http.ResponseWriter, _ *http.Request) {
+		restarts.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	f.rt.Control = mux
 	s := f.start(f.m)
 	if _, err := f.m.OpenHelp(s.ID); err != nil {
 		t.Fatal(err)
@@ -1413,11 +1424,20 @@ func TestReconcileEndsHelpNoHandoffAsksFor(t *testing.T) {
 	f.m.Close() // and the handoff's row says it ended, or never was
 
 	m := f.manager()
+	// The help's own restart may still be on its way: count from a
+	// quiet moment.
+	time.Sleep(200 * time.Millisecond)
+	before := restarts.Load()
 	if err := m.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := m.Live("google"); got.State != Running {
 		t.Fatalf("after the restart: %s", got.State)
+	}
+	for deadline := time.Now().Add(3 * time.Second); restarts.Load() == before; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the file choosers' time limit wasn't restarted as the browser went back to the agents")
+		}
 	}
 	if _, done, err := m.AgentInput(context.Background(), s.ID, "tok"); err != nil {
 		t.Fatalf("agent input = %v", err)
