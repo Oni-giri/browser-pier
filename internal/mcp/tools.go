@@ -28,7 +28,7 @@ import (
 const maxScreens = 1024
 
 func (s *Server) addTools(srv *sdk.Server) {
-	sdk.AddTool(srv, &sdk.Tool{Name: "list_profiles", Description: "List the browser profiles this token can use, with whether each is running."}, s.listProfiles)
+	sdk.AddTool(srv, &sdk.Tool{Name: "list_profiles", Description: "List the browser profiles this token can use, with whether each is running and whether it goes through a proxy."}, s.listProfiles)
 	sdk.AddTool(srv, &sdk.Tool{Name: "start_browser", Description: "Start a profile's browser, or attach to it if it's already running. Returns the session_id the other tools take."}, s.startBrowser)
 	sdk.AddTool(srv, &sdk.Tool{Name: "stop_browser", Description: "Stop a browser to free its memory. Cookies and logins are kept for next time."}, s.stopBrowser)
 	sdk.AddTool(srv, &sdk.Tool{Name: "screenshot", Description: "See the browser's screen (Visual mode); the strip along the bottom is the desktop's taskbar, not the page. Other tools take coordinates in this screenshot's pixels."}, s.screenshot)
@@ -63,6 +63,7 @@ func (s *Server) listProfiles(ctx context.Context, req *sdk.CallToolRequest, _ n
 			DefaultMode string `json:"default_mode"`
 			Status      string `json:"status"`
 			SessionID   string `json:"session_id"`
+			Proxied     bool   `json:"proxied"`
 		} `json:"profiles"`
 	}
 	if err := s.callJSON(ctx, req.Extra, "GET", "/api/profiles", nil, &out); err != nil {
@@ -74,6 +75,12 @@ func (s *Server) listProfiles(ctx context.Context, req *sdk.CallToolRequest, _ n
 	var b strings.Builder
 	for _, p := range out.Profiles {
 		fmt.Fprintf(&b, "%s: %s, %s mode", p.Name, p.Status, p.DefaultMode)
+		// Whether it goes through a proxy, never which (SPEC §8).
+		if p.Proxied {
+			b.WriteString(", through a proxy")
+		} else {
+			b.WriteString(", no proxy")
+		}
 		if p.SessionID != "" {
 			fmt.Fprintf(&b, ", session_id %s", p.SessionID)
 		}
