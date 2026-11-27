@@ -314,12 +314,13 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 	case "input", "text", "clipboard", "clipboard-set":
 		var done func()
 		var err error
+		var inputCtx context.Context
 		if v.holdsLocked() {
 			// Held until the input has reached the browser: a hand-back
 			// empties the clipboard only after it. Only this view's turn:
 			// another admin view may hold control now under the same
 			// holder.
-			done, err = v.h.m.HumanInputTurn(v.session, v.holder, v.turn)
+			inputCtx, done, err = v.h.m.HumanInputTurnContext(v.session, v.holder, v.turn)
 		}
 		if !v.control || err != nil {
 			v.control = false
@@ -342,14 +343,33 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 			v.setClipboard(m.ID, m.Text, m.Paste, say)
 		default:
 			path, body, wait := "/input/events", []byte(m.Events), controlWait
+			ctx := context.Background()
 			if m.Type == "text" {
+				if n := utf8.RuneCountInString(m.Text); n > maxLiveType {
+					say(map[string]any{"type": "error", "msg": fmt.Sprintf("That's %d characters: at most %d can be typed at once.", n, maxLiveType)})
+					return
+				}
 				// A person typing: at once, not at an agent's human pace,
 				// and not held back by an agent's shortcut gap (PROJ-151);
-				// with time for characters the keyboard map lacks (PROJ-195).
+				// with time for characters the keyboard map lacks
+				// (PROJ-195), but broken off as soon as the person's
+				// control ends or this view goes.
 				path, wait = "/input/live-type", typeWait(m.Text)
 				body, _ = json.Marshal(map[string]string{"text": m.Text})
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(inputCtx)
+				defer cancel()
+				if v.conn != nil {
+					go func() {
+						select {
+						case <-v.conn.Done():
+							cancel()
+						case <-ctx.Done():
+						}
+					}()
+				}
 			}
-			if _, err := v.do(http.MethodPost, path, body, http.StatusNoContent, wait); err != nil {
+			if _, err := v.doCtx(ctx, http.MethodPost, path, body, http.StatusNoContent, wait); err != nil {
 				say(map[string]any{"type": "error", "msg": err.Error()})
 			}
 		}
@@ -414,6 +434,10 @@ func (v *viewer) post(path string, body []byte) error {
 // controlWait bounds a call to the container's control socket.
 const controlWait = 10 * time.Second
 
+// maxLiveType caps the Type button's text, as the container's maxTypeLen
+// does, before typeWait is worked out from it.
+const maxLiveType = 2000
+
 // typeWait bounds the Type button's call, which may type up to 2,000
 // characters: 12 ms a key at instant pace, and, for characters the
 // keyboard map lacks, stretches of as many bound keys as the map has
@@ -432,7 +456,12 @@ const maxClipboard = 32 << 10
 // do calls the container's control socket, wanting status want, within
 // wait, and returns the answer's body.
 func (v *viewer) do(method, path string, body []byte, want int, wait time.Duration) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	return v.doCtx(context.Background(), method, path, body, want, wait)
+}
+
+// doCtx is do, broken off too when parent ends.
+func (v *viewer) doCtx(parent context.Context, method, path string, body []byte, want int, wait time.Duration) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(parent, wait)
 	defer cancel()
 	c := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", v.sock)

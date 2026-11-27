@@ -1183,6 +1183,10 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 		http.Error(w, "bad JSON: "+err.Error(), http.StatusBadRequest)
 		return false
 	}
+	// Read the body to its end: only then does the server notice the
+	// caller going, which ends the request's context, so a long action
+	// (a long type) breaks off when the orchestrator cancels it.
+	_, _ = io.Copy(io.Discard, io.LimitReader(r.Body, 64<<10))
 	return true
 }
 

@@ -203,6 +203,11 @@ type live struct {
 	// (HumanInput), which it waits for first.
 	releasing   bool
 	humanInputs int
+	// humanCtx ends as the person's control starts to end (releasing),
+	// so an input of theirs still under way (a long Type, PROJ-195)
+	// breaks off rather than hold the hand-back.
+	humanCtx    context.Context
+	humanCancel context.CancelFunc
 	// clipboardLeft is set when a hand-back came while the browser was
 	// stopping and left its clipboard as it was: the container takes it
 	// along, but if the stop fails, runStop empties it before agents get

@@ -218,13 +218,26 @@ func (m *Manager) HumanInput(id, holder string) (done func(), err error) {
 // turn ended can't send input into the next one's, or read its clipboard,
 // even when the same admin took control again from another view.
 func (m *Manager) HumanInputTurn(id, holder string, turn uint64) (done func(), err error) {
+	_, done, err = m.HumanInputTurnContext(id, holder, turn)
+	return done, err
+}
+
+// HumanInputTurnContext is HumanInputTurn with a context that ends as the
+// person's control starts to end (a hand-back, a handoff's end, the live
+// view going), so a long input under way breaks off instead of holding
+// the hand-back up (PROJ-195).
+func (m *Manager) HumanInputTurnContext(id, holder string, turn uint64) (context.Context, func(), error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.findLocked(id)
 	if l == nil || l.releasing || l.controlTurn != turn || !l.controlledByLocked(holder) {
-		return nil, ErrNotRunning
+		return nil, nil, ErrNotRunning
 	}
-	return m.humanInputLocked(l), nil
+	done := m.humanInputLocked(l)
+	if l.humanCancel == nil {
+		l.humanCtx, l.humanCancel = context.WithCancel(m.ctx)
+	}
+	return l.humanCtx, done, nil
 }
 
 func (m *Manager) humanInputLocked(l *live) func() {
@@ -297,6 +310,10 @@ func (m *Manager) releaseLocked(id string, l *live) {
 		return
 	}
 	l.releasing = true
+	if l.humanCancel != nil {
+		l.humanCancel()
+		l.humanCtx, l.humanCancel = nil, nil
+	}
 	for l.humanInputs > 0 {
 		m.inputsDone.Wait()
 	}

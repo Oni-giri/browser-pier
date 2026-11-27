@@ -8,9 +8,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 )
@@ -321,4 +323,74 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.b.String()
+}
+
+// slowType is a browser whose Type takes until its request ends, and says
+// whether it was cut short.
+type slowType struct {
+	started chan struct{}
+	cut     chan struct{}
+}
+
+func (st *slowType) routes(mux *http.ServeMux) {
+	ok := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }
+	mux.HandleFunc("POST /input/release", ok)
+	mux.HandleFunc("DELETE /input/clipboard", ok)
+	mux.HandleFunc("POST /input/live-type", func(w http.ResponseWriter, r *http.Request) {
+		// Read to the end, as the browser's decode does, so the server
+		// notices the client going.
+		_, _ = io.Copy(io.Discard, r.Body)
+		close(st.started)
+		select {
+		case <-r.Context().Done():
+			close(st.cut)
+		case <-time.After(30 * time.Second):
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+// A long Type breaks off as soon as the person's view goes, or their
+// control ends from elsewhere, instead of typing on for up to typeWait
+// with the view's lock and the hand-back held (PROJ-195). Text over the
+// container's cap is refused first.
+func TestViewerTypeEndsWithTheViewAndTheControl(t *testing.T) {
+	for _, end := range []string{"view closed", "handed back"} {
+		st := &slowType{started: make(chan struct{}), cut: make(chan struct{})}
+		h, m, s := offerFixtureWith(t, st.routes, slog.New(slog.DiscardHandler))
+		conn := &Viewer{closed: make(chan struct{})}
+		k := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: m.Layout().ControlSocket("google"), conn: conn})
+		k.send(`{"type":"take"}`)
+		done := make(chan struct{})
+		go func() {
+			k.v.message([]byte(`{"type":"text","text":"`+strings.Repeat("字", 1500)+`"}`), func(string) {})
+			close(done)
+		}()
+		<-st.started
+		start := time.Now()
+		if end == "view closed" {
+			close(conn.closed)
+		} else {
+			go m.ReleaseControl(s.ID)
+		}
+		select {
+		case <-st.cut:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: the Type wasn't cut short", end)
+		}
+		<-done
+		if d := time.Since(start); d > 3*time.Second {
+			t.Fatalf("%s: it took %s to stop", end, d)
+		}
+	}
+	var c fakeClipboard
+	h, m, s := offerFixtureWith(t, c.routes, slog.New(slog.DiscardHandler))
+	k := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: m.Layout().ControlSocket("google")})
+	k.send(`{"type":"take"}`)
+	if r := k.send(`{"type":"text","text":"` + strings.Repeat("a", maxLiveType+1) + `"}`); len(r) != 1 || !strings.Contains(fmt.Sprint(r[0]["msg"]), "at most 2000") {
+		t.Fatalf("over the cap: %v", r)
+	}
+	if got := c.took(); slices.Contains(got, "type") {
+		t.Fatalf("over the cap reached the browser: %v", got)
+	}
 }
