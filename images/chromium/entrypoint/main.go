@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -108,10 +109,7 @@ func run(log *slog.Logger) error {
 	}
 	defer func() { _ = fln.Close() }()
 	go fwd.serve(fln)
-	client := lookupClient(fwd)
-	where, err := decideGeo(cfg, upstream != nil, func() (string, string, string, error) {
-		return lookupGeo(ctx, client, cfg.GeoURL)
-	})
+	where, err := decideGeo(cfg, upstream != nil, startLookup(ctx, fwd, cfg.GeoURL))
 	if err != nil {
 		return err
 	}
@@ -252,6 +250,46 @@ func lookupClient(fwd *forwarder) *http.Client {
 	return &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
 		return fwd.connect(ctx, addr)
 	}}}
+}
+
+// tunnelTracked is lookupClient, and whether it has opened a connection
+// (through the proxy, a tunnel) yet.
+func tunnelTracked(fwd *forwarder) (*http.Client, *atomic.Bool) {
+	client := lookupClient(fwd)
+	var tunnel atomic.Bool
+	tr, ok := client.Transport.(*http.Transport)
+	if !ok {
+		tr = &http.Transport{}
+		client.Transport = tr
+	}
+	dial := tr.DialContext
+	if dial == nil {
+		var d net.Dialer
+		dial = d.DialContext
+	}
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		c, err := dial(ctx, network, addr)
+		if err == nil {
+			tunnel.Store(true)
+		}
+		return c, err
+	}
+	return client, &tunnel
+}
+
+// startLookup is a start's location lookup through fwd. A lookup whose
+// time runs out before the tunnel opened is the proxy's timeout, as in
+// the proxy check: the transport dials apart from the request, so the
+// forwarder's own deadline hasn't passed yet and gave no proxyError.
+func startLookup(ctx context.Context, fwd *forwarder, endpoint string) func() (ip, country, tz string, err error) {
+	client, tunnel := tunnelTracked(fwd)
+	return func() (string, string, string, error) {
+		ip, country, tz, err := lookupGeo(ctx, client, endpoint)
+		if err != nil && fwd.upstream != nil && proxyKind(err) == "" && checkReason(err, tunnel.Load()) == proxyTimeout {
+			err = &proxyError{kind: proxyTimeout, err: err}
+		}
+		return ip, country, tz, err
+	}
 }
 
 // prepareProfile checks the profile is writable and clears Chromium's
