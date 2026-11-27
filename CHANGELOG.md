@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.6.0
+
+**Before you update:**
+- The browser definition changed (file choosers without a dialog, Visual mode's element tree, exact typing, and fencing a person's control as it ends), so browsers started by 0.5.x are closed gracefully on the first start of 0.6.0, logins kept, and start again under the new definition the next time they're used. If one is still running afterwards, stop it: until it restarts it keeps Chromium's old file dialog, which can hand a page any file in its container.
+- **0.6.0 is published for amd64 only,** like 0.5.0. On arm64 (a Raspberry Pi, say), stay on 0.4.0 until a later release brings it back.
+- **Sites see a new WebGL renderer, once:** WebGL now runs on Mesa's llvmpipe instead of SwiftShader, so each profile's WebGL and canvas fingerprint changes with this update, then stays stable.
+- **`BROWSERPIER_USERNS_MODE`** takes only `keep-id` (or `keep-id:uid=…,gid=…`), or nothing; BrowserPier refuses to start with any other value, `host` included.
+- **No going back to 0.5.x:** 0.6.0 adds to the database, and 0.5.x won't open it afterwards. Back up `./data` first.
+
+**Changed for people running BrowserPier**
+- **Two-step sign-in,** off by default: Settings → Admin account → Two-step sign-in asks for an authenticator app's code after the password, with ten recovery codes shown once. Full sign-in handoffs ask for it too; agent tokens and other handoffs never do. Lost the phone and the codes: `browserpier 2fa reset` on the server (`BROWSERPIER_ADMIN_PASSWORD` resets only the password). Worth turning on for a public server.
+- **A webhook when a person is needed** (Settings → Notifications), for agents with no chat to pass a handoff link through. One signed POST on `handoff.requested`, `handoff.expired`, `handoff.cancelled` and, if ticked, `browser.failed`, with a sentence Slack and Discord show as it is. It holds BrowserPier's own words, never the agent's text or the page's, and the handoff link only for Link + PIN and Full sign-in (a chat's link preview could open a Link only one). Links are built on `BROWSERPIER_PUBLIC_URL`, or **Address for links** (set it on Umbrel). See "Notifications" in `deploy/README.md`.
+- **The activity log outlives the browser.** A stopped profile says how its last run ended ("Stopped: idle for 30 min"), and a log page per profile keeps the last 5 runs for 24 hours, in memory: agents' actions, control, watching, handoffs and tab titles.
+- **Proxies:** write `{sticky}` where your provider takes a session code, and each profile fills in its own, so one default proxy gives each profile its own exit; **New exit IP** in its ⋯ menu picks another. **Test**, next to every proxy field, shows the exit IP, country, time zone and languages a browser would get, before any browser uses it.
+- **File choosers in the live view and on the handoff page:** while you have control, a page's file chooser opens a box with the profile's uploads, **Upload from this device** and Cancel, instead of a dialog in the browser.
+- **Handing back takes effect before it says so:** the agent gets the browser back only once it has refused whatever of your control was still on its way. Meanwhile the handoff page says **Handing back…**.
+- **The live view's Type** types accents, other alphabets and emoji exactly, and Hand back stops a Type under way.
+- **The browser:** Back loads the page again rather than keeping old pages in memory for minutes; the address bar makes no search suggestions, so a typed address goes nowhere before Return; WebGL draws at about half its former frame rate, its GPU process sandboxed again (see Fixed); and Visual-mode browsers run with Chromium's accessibility on, which no page API reports but a page inserting thousands of elements at once could time.
+- **Every container is checked before it's created** against a fixed list of what it may get (no published port, device, host folder or other image). A refusal fails the start, naming the setting: please report it.
+- **Orange only means someone is needed:** a missing PIN and the export passphrase's caution are grey now.
+
+**Changed for agents**
+- **A handoff ends only once the browser is back:** `GET /api/handoffs/{id}` and `wait_for_handoff` read `pending` until the agent can act again. A withdrawal waits up to 30 s for that, then answers 503. While BrowserPier shuts down, requests answer 503. `request_handoff` says `notified: true` when the admin's webhook was told.
+- **Visual-mode typing:** control characters other than `\n`, `\r` and `\t`, and U+FFFD, are refused at once (400), and a failure says whether anything may have been typed. Over MCP, `type_text` refuses text it estimates at over 45 s (about 800 CJK characters at instant pace), so it isn't retried and typed twice: split it.
+- **Keys after a shortcut wait:** a `key` or `type` less than 150 ms after a ctrl, alt or super combination or an F-key waits out the rest, so text after `ctrl+l` reaches the address bar. A slow page can still take it: open addresses with `open_url`.
+- **Revoking a token** breaks off its Visual-mode input, which answers 401.
+- **`snapshot`:** a line of page text that starts like one of BrowserPier's (a ref, `[`, `-- `, `URL:`, `Title:`) now starts `text: `.
+- **Many tabs:** from 10 open tabs on, the page tools add a line with the count.
+
+**New**
+- **Call ids,** so a retried action isn't run twice: `Idempotency-Key` on `/click`, `/type`, `/computer`, `/act`, `/navigate` and `POST /tabs`, or `call_id` on the matching MCP tools. A repeat answers how the first went, with `Idempotency-Replayed: true`. `call_status` and `session_status` (REST `GET /api/sessions/{id}/calls/{call_id}` and `GET /api/sessions/{id}`) say how calls went. Other routes refuse the header, and action bodies with anything after the JSON are refused.
+- **`visual_snapshot`:** in Visual mode, the page's controls and text with refs and positions, read from Chromium's accessibility with no CDP attached; secret fields show only `[filled]` or `[empty]`. `click` takes a `ref` from it, and answers 409 if the element is gone, off screen or covered.
+- **`open_url`** (`/computer` `open`): opens an address by clicking the address bar, so a busy page can't take it; refused (409) when a pop-up, menu or full screen is in the way.
+- **`choose_files`** (`/api/sessions/{id}/chooser`): answers a page's file chooser with files from the uploads, or cancels it. `list_files` and action notices (`X-File-Chooser` over REST) show open choosers.
+
+**Fixed**
+- **A page could be handed any file in the browser's container,** the cookie database included, through Chromium's file dialog in Visual mode. The dialog is gone; choosers take only the profile's uploads.
+- **A live view whose control had ended elsewhere** (a handoff ending, Hand back in another tab) could still send input, read or overwrite the clipboard, or end the takeover of whoever took control next. Control now belongs to the takeover that took it.
+- **A Take control that lost to a stop** could leave agents locked out.
+- **Chromium's GPU process ran without its own sandbox.** It's sandboxed now, and if it can't be, pages get no WebGL.
+- **Visual-mode typing** of accents, other alphabets and emoji failed or dropped characters.
+- **The reason a browser ended** could name an older line from a child process instead of the browser's own.
+- `browserpier token list` showed tokens made in the same millisecond in random order.
+
 ## 0.5.0
 
 **Before you update:**
