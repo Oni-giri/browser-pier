@@ -220,12 +220,15 @@ func (a *API) getHandoff(w http.ResponseWriter, r *http.Request) {
 }
 
 // handoffError answers a handoff call that failed. Nothing when the agent
-// went away; 503 when the browser is still being handed back or a wait
-// ran out (ask again shortly), never an internal error; otherwise 500.
+// went away; 503 when the browser is still being handed back, a wait ran
+// out or BrowserPier is shutting down (ask again shortly), never an
+// internal error; otherwise 500.
 func (a *API) handoffError(w http.ResponseWriter, r *http.Request, what string, err error) {
 	switch {
 	case r.Context().Err() != nil:
 		// the agent gave up waiting
+	case errors.Is(err, handoff.ErrClosing):
+		writeError(w, http.StatusServiceUnavailable, err.Error())
 	case errors.Is(err, handoff.ErrHandingBack), errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 		writeError(w, http.StatusServiceUnavailable, handoff.ErrHandingBack.Error())
 	default:

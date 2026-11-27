@@ -431,7 +431,14 @@ func newHandler(web *auth.Web, agentAPI *api.API, live *webrtc.Handler, handoffs
 
 // serve runs the HTTP server on ln until ctx is done, then shuts it down gracefully.
 func serve(ctx context.Context, ln net.Listener, h http.Handler, log *slog.Logger) error {
-	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
+	// Every request's context ends as shutdown begins: a long-poll (a
+	// handoff's ?wait=, MCP's wait) or an explicit end waiting for a
+	// hand-back answers then, rather than outlive the shutdown's time and
+	// run on while the handoffs and the database close.
+	reqs, endReqs := context.WithCancel(context.Background())
+	defer endReqs()
+	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second,
+		BaseContext: func(net.Listener) context.Context { return reqs }}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
 
@@ -441,6 +448,7 @@ func serve(ctx context.Context, ln net.Listener, h http.Handler, log *slog.Logge
 	case <-ctx.Done():
 	}
 	log.Info("shutting down")
+	endReqs()
 	sctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(sctx); err != nil {

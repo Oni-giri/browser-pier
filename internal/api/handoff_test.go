@@ -355,3 +355,38 @@ func TestWedgedHandoffAnswersInTime(t *testing.T) {
 		t.Fatalf("logged as errors: %s", buf.String())
 	}
 }
+
+// While BrowserPier shuts down (the handoff service closed), reading a
+// handoff that would need ending answers 503, not an internal error.
+func TestHandoffWhileShuttingDown(t *testing.T) {
+	var buf bytes.Buffer
+	var mu sync.Mutex
+	log := slog.New(slog.NewTextHandler(&lockedWriter{w: &buf, mu: &mu}, &slog.HandlerOptions{Level: slog.LevelError}))
+	f := newFixtureLogging(t, log)
+	if err := f.web.Admin().SetPIN(context.Background(), "4821"); err != nil {
+		t.Fatal(err)
+	}
+	s := f.start(f.all, "github", "visual")
+	var h handoffJSON
+	if code := f.call(f.all, http.MethodPost, "/api/sessions/"+s.ID+"/handoff", `{"reason": "captcha"}`, &h); code != http.StatusCreated {
+		t.Fatalf("create: %d", code)
+	}
+	if _, err := f.db.Exec(`UPDATE handoffs SET expires_at = ? WHERE id = ?`, time.Now().Add(-time.Second).UnixMilli(), h.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.handoffs.Close()
+	var e struct{ Error string }
+	for _, path := range []string{"/api/handoffs/" + h.ID, "/api/handoffs/" + h.ID + "?wait=5"} {
+		if code := f.call(f.all, http.MethodGet, path, "", &e); code != http.StatusServiceUnavailable || !strings.Contains(e.Error, "shutting down") {
+			t.Fatalf("GET %s while shutting down: %d %q", path, code, e.Error)
+		}
+	}
+	if code := f.call(f.all, http.MethodDelete, "/api/handoffs/"+h.ID, "", &e); code != http.StatusServiceUnavailable {
+		t.Fatalf("withdrawing while shutting down: %d %q", code, e.Error)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if buf.Len() > 0 {
+		t.Fatalf("logged as errors: %s", buf.String())
+	}
+}
