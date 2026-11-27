@@ -310,7 +310,15 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 		v.releaseLocked()
 		say(map[string]any{"type": "control", "on": false})
 	case "lift":
-		v.stopTypingLocked()
+		// A lift never cuts a Type short: the phone's Type prompt itself
+		// blurs the page as it closes (Safari, desktop Chromium), so the
+		// page's blur lift arrives right behind the Type it just sent. The
+		// Type lets go of the live view's keys before it types (the drain)
+		// and of its own after; Hand back, the end of control or the view
+		// going still stop it.
+		if v.typing != nil {
+			return
+		}
 		// As input of this turn's: never lifts the next person's keys.
 		if v.holdsLocked() {
 			if done, err := v.h.m.HumanInputTurn(v.session, v.holder, v.turn); err == nil {
@@ -321,8 +329,7 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 	case "input", "text", "clipboard", "clipboard-set":
 		if v.typing != nil {
 			// The person's Type is still going: its keys and this input's
-			// would interleave. Hand back and lift are still read, and
-			// cancel it.
+			// would interleave. Hand back is still read, and cancels it.
 			msg := "Still typing: wait for it to finish, or hand back to stop it."
 			if m.Type == "clipboard" || m.Type == "clipboard-set" {
 				say(map[string]any{"type": "clipboard-error", "id": m.ID, "msg": msg})
@@ -384,8 +391,9 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 // (PROJ-151); with time for characters the keyboard map lacks
 // (PROJ-195). It holds done (its HumanInputTurn lease) until it ends, so
 // a hand-back waits for it before emptying the clipboard; and it breaks
-// off as soon as the person's control ends (inputCtx), they hand back or
-// lift (stopTypingLocked), or this view goes. One at a time: the caller
+// off as soon as the person's control ends (inputCtx), they hand back
+// (stopTypingLocked), or this view goes; a lift doesn't stop it. One at a
+// time: the caller
 // refuses another meanwhile.
 func (v *viewer) startTypingLocked(inputCtx context.Context, done func(), text string, say func(any)) {
 	ctx, cancel := context.WithCancel(inputCtx)

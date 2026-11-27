@@ -409,6 +409,34 @@ func (v *viewer) waitTyped() {
 // A Type in flight doesn't hold the view's messages up: Hand back from
 // the same view is read at once, cuts the Type short and hands back; a
 // second Type, or other input, meanwhile is refused (PROJ-195).
+// The phone's Type prompt blurs the page as it closes, so the page's blur
+// lift arrives right behind the Type: it must not cut the Type short.
+func TestViewerLiftLeavesItsOwnTypeAlone(t *testing.T) {
+	st := &slowType{started: make(chan struct{}), cut: make(chan struct{})}
+	h, m, s := offerFixtureWith(t, st.routes, slog.New(slog.DiscardHandler))
+	k := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: m.Layout().ControlSocket("google")})
+	k.send(`{"type":"take"}`)
+	if r := k.send(`{"type":"text","text":"héllo"}`); len(r) != 0 {
+		t.Fatalf("text: %v", r)
+	}
+	if r := k.send(`{"type":"lift"}`); len(r) != 0 {
+		t.Fatalf("lift: %v", r)
+	}
+	select {
+	case <-st.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the Type never reached the browser: the lift stopped it first")
+	}
+	select {
+	case <-st.cut:
+		t.Fatal("a lift cut the Type short")
+	case <-time.After(500 * time.Millisecond):
+	}
+	k.send(`{"type":"release"}`)
+	<-st.cut
+	k.v.waitTyped()
+}
+
 func TestViewerHandBackStopsItsOwnType(t *testing.T) {
 	st := &slowType{started: make(chan struct{}), cut: make(chan struct{})}
 	h, m, s := offerFixtureWith(t, st.routes, slog.New(slog.DiscardHandler))
