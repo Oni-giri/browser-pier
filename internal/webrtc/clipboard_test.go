@@ -230,6 +230,7 @@ func TestViewerTypesText(t *testing.T) {
 	if r := k.send(`{"type":"text","text":"héllo"}`); len(r) != 0 {
 		t.Errorf("text: %v", r)
 	}
+	k.v.waitTyped()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if strings.Join(c.calls, " ") != "type" || len(c.sent) != 1 || c.sent[0] != `{"text":"héllo"}` {
@@ -392,5 +393,51 @@ func TestViewerTypeEndsWithTheViewAndTheControl(t *testing.T) {
 	}
 	if got := c.took(); slices.Contains(got, "type") {
 		t.Fatalf("over the cap reached the browser: %v", got)
+	}
+}
+
+// waitTyped waits for the viewer's Type under way, if one is, to end.
+func (v *viewer) waitTyped() {
+	v.mu.Lock()
+	typed := v.typed
+	v.mu.Unlock()
+	if typed != nil {
+		<-typed
+	}
+}
+
+// A Type in flight doesn't hold the view's messages up: Hand back from
+// the same view is read at once, cuts the Type short and hands back; a
+// second Type, or other input, meanwhile is refused (PROJ-195).
+func TestViewerHandBackStopsItsOwnType(t *testing.T) {
+	st := &slowType{started: make(chan struct{}), cut: make(chan struct{})}
+	h, m, s := offerFixtureWith(t, st.routes, slog.New(slog.DiscardHandler))
+	k := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: m.Layout().ControlSocket("google")})
+	k.send(`{"type":"take"}`)
+	if r := k.send(`{"type":"text","text":"` + strings.Repeat("字", 1500) + `"}`); len(r) != 0 {
+		t.Fatalf("text: %v", r)
+	}
+	<-st.started
+	for _, msg := range []string{`{"type":"text","text":"more"}`, `{"type":"input","events":[{"t":"keydown","k":"a"}]}`} {
+		if r := k.send(msg); len(r) != 1 || !strings.Contains(fmt.Sprint(r[0]["msg"]), "Still typing") {
+			t.Fatalf("%s while typing: %v", msg, r)
+		}
+	}
+	start := time.Now()
+	r := k.send(`{"type":"release"}`)
+	if len(r) != 1 || r[0]["type"] != "control" || r[0]["on"] != false {
+		t.Fatalf("release: %v", r)
+	}
+	select {
+	case <-st.cut:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the Type wasn't cut short")
+	}
+	k.v.waitTyped()
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("hand back took %s", d)
+	}
+	if m.ControlledBy(s.ID, sessions.AdminHolder) {
+		t.Fatal("still in control after Hand back")
 	}
 }

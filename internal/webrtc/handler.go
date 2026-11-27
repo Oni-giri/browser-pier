@@ -212,6 +212,11 @@ type viewer struct {
 	// person's (PROJ-184).
 	turn      uint64
 	checkedAt time.Time // when allowed last said yes
+	// typing is the Type under way, if one is (PROJ-195): it runs on its
+	// own goroutine, so Hand back and lift are read at once and cancel
+	// it; typed is closed once it has ended (tests wait on it).
+	typing context.CancelFunc
+	typed  chan struct{}
 }
 
 // holdsLocked reports whether this viewer still has control, and forgets
@@ -301,9 +306,11 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 			say(map[string]any{"type": "error", "msg": "The browser isn't running."})
 		}
 	case "release":
+		v.stopTypingLocked()
 		v.releaseLocked()
 		say(map[string]any{"type": "control", "on": false})
 	case "lift":
+		v.stopTypingLocked()
 		// As input of this turn's: never lifts the next person's keys.
 		if v.holdsLocked() {
 			if done, err := v.h.m.HumanInputTurn(v.session, v.holder, v.turn); err == nil {
@@ -312,6 +319,24 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 			}
 		}
 	case "input", "text", "clipboard", "clipboard-set":
+		if v.typing != nil {
+			// The person's Type is still going: its keys and this input's
+			// would interleave. Hand back and lift are still read, and
+			// cancel it.
+			msg := "Still typing: wait for it to finish, or hand back to stop it."
+			if m.Type == "clipboard" || m.Type == "clipboard-set" {
+				say(map[string]any{"type": "clipboard-error", "id": m.ID, "msg": msg})
+			} else {
+				say(map[string]any{"type": "error", "msg": msg})
+			}
+			return
+		}
+		if m.Type == "text" {
+			if n := utf8.RuneCountInString(m.Text); n > maxLiveType {
+				say(map[string]any{"type": "error", "msg": fmt.Sprintf("That's %d characters: at most %d can be typed at once.", n, maxLiveType)})
+				return
+			}
+		}
 		var done func()
 		var err error
 		var inputCtx context.Context
@@ -330,6 +355,10 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 			say(map[string]any{"type": "control", "on": false})
 			return
 		}
+		if m.Type == "text" {
+			v.startTypingLocked(inputCtx, done, m.Text, say)
+			return
+		}
 		defer done()
 		switch m.Type {
 		case "clipboard":
@@ -342,37 +371,62 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 		case "clipboard-set":
 			v.setClipboard(m.ID, m.Text, m.Paste, say)
 		default:
-			path, body, wait := "/input/events", []byte(m.Events), controlWait
-			ctx := context.Background()
-			if m.Type == "text" {
-				if n := utf8.RuneCountInString(m.Text); n > maxLiveType {
-					say(map[string]any{"type": "error", "msg": fmt.Sprintf("That's %d characters: at most %d can be typed at once.", n, maxLiveType)})
-					return
-				}
-				// A person typing: at once, not at an agent's human pace,
-				// and not held back by an agent's shortcut gap (PROJ-151);
-				// with time for characters the keyboard map lacks
-				// (PROJ-195), but broken off as soon as the person's
-				// control ends or this view goes.
-				path, wait = "/input/live-type", typeWait(m.Text)
-				body, _ = json.Marshal(map[string]string{"text": m.Text})
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithCancel(inputCtx)
-				defer cancel()
-				if v.conn != nil {
-					go func() {
-						select {
-						case <-v.conn.Done():
-							cancel()
-						case <-ctx.Done():
-						}
-					}()
-				}
-			}
-			if _, err := v.doCtx(ctx, http.MethodPost, path, body, http.StatusNoContent, wait); err != nil {
+			if err := v.post("/input/events", []byte(m.Events)); err != nil {
 				say(map[string]any{"type": "error", "msg": err.Error()})
 			}
 		}
+	}
+}
+
+// startTypingLocked types the person's text (the phone's Type button) on
+// a goroutine of its own, with v.mu held to start it: at once, not at an
+// agent's human pace, and not held back by an agent's shortcut gap
+// (PROJ-151); with time for characters the keyboard map lacks
+// (PROJ-195). It holds done (its HumanInputTurn lease) until it ends, so
+// a hand-back waits for it before emptying the clipboard; and it breaks
+// off as soon as the person's control ends (inputCtx), they hand back or
+// lift (stopTypingLocked), or this view goes. One at a time: the caller
+// refuses another meanwhile.
+func (v *viewer) startTypingLocked(inputCtx context.Context, done func(), text string, say func(any)) {
+	ctx, cancel := context.WithCancel(inputCtx)
+	typed := make(chan struct{})
+	v.typing, v.typed = cancel, typed
+	var gone <-chan struct{}
+	if v.conn != nil {
+		gone = v.conn.Done()
+	}
+	body, _ := json.Marshal(map[string]string{"text": text})
+	go func() {
+		go func() {
+			select {
+			case <-gone:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+		_, err := v.doCtx(ctx, http.MethodPost, "/input/live-type", body, http.StatusNoContent, typeWait(text))
+		cancelled := ctx.Err() != nil
+		cancel()
+		// The lease first, without v.mu: a hand-back holding v.mu waits
+		// for it.
+		done()
+		v.mu.Lock()
+		if v.typed == typed {
+			v.typing, v.typed = nil, nil
+		}
+		v.mu.Unlock()
+		close(typed)
+		if err != nil && !cancelled {
+			say(map[string]any{"type": "error", "msg": err.Error()})
+		}
+	}()
+}
+
+// stopTypingLocked cancels the person's Type under way, if one is, with
+// v.mu held. It doesn't wait: a hand-back waits for its lease anyway.
+func (v *viewer) stopTypingLocked() {
+	if v.typing != nil {
+		v.typing()
 	}
 }
 

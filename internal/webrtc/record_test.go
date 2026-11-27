@@ -120,11 +120,13 @@ func TestPersonsInputNeverReachesARecordedPage(t *testing.T) {
 	}
 	v.message(input, reply)
 	v.message(text, reply)
+	v.waitTyped() // its own goroutine (PROJ-195): Hand back would cancel it
 	v.message([]byte(`{"type": "release"}`), reply)
 	agentActs()
 	v.message(input, reply) // control was handed back: refused
 	v.message([]byte(`{"type": "take"}`), reply)
 	v.message(text, reply)
+	v.waitTyped()
 	v.handBack()
 	mu.Lock()
 	defer mu.Unlock()
