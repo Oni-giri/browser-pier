@@ -139,6 +139,9 @@ func TestLiveReleaseIsQueuedOnlyOnceWritten(t *testing.T) {
 	if rec := post(li.events, `[{"t":"keyup","k":"Shift_L"}]`); rec.Code != http.StatusInternalServerError {
 		t.Fatalf("keyup with no xdotool: %d", rec.Code)
 	}
+	if !li.lost["kShift_L"] {
+		t.Fatalf("the unwritten key-up isn't lost: %v", li.lost)
+	}
 	if rec := post(li.release, ""); rec.Code != http.StatusInternalServerError {
 		t.Fatalf("release with no xdotool: %d", rec.Code)
 	}
