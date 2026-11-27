@@ -426,6 +426,16 @@ func (m *Manager) ReleaseControl(id string) {
 	_ = m.HandBack(context.Background(), id)
 }
 
+// HandBackWait bounds how long whoever explicitly ends a person's
+// control waits for its hand-back (the live view's Hand back, a
+// handoff's Done or withdrawal, the profile page's form, a reloaded
+// handoff page waiting for the closed one's), so a browser that doesn't
+// answer gets ErrHandingBack rather than a request that hangs. A
+// hand-back that answers takes a few seconds at most: the fenced lift
+// drains xdotool (2 s at most), then the settle (0.1 s) and emptying both
+// selections (1.5 s each at most).
+const HandBackWait = 30 * time.Second
+
 // ErrHandingBack: the caller stopped waiting (its context ended) before
 // the browser was handed back. The hand-back goes on to its end, agents
 // kept out until then; ask again.

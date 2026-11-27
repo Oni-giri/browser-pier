@@ -205,9 +205,11 @@ func (u *UI) handBack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// No request open: just let go of the controls, waiting for that as
-	// long as this request lasts. If it ends first, the hand-back goes on
-	// by itself.
-	if err := u.m.HandBack(r.Context(), s.ID); err != nil {
+	// long as this request lasts, and sessions.HandBackWait at most. If
+	// that ends first, the hand-back goes on by itself.
+	hctx, cancel := context.WithTimeout(r.Context(), sessions.HandBackWait)
+	defer cancel()
+	if err := u.m.HandBack(hctx, s.ID); err != nil {
 		done(w, r, back, "Couldn't hand back yet: "+err.Error(), true)
 		return
 	}

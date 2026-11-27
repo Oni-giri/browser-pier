@@ -228,7 +228,11 @@ func (h *Handler) Offer(w http.ResponseWriter, r *http.Request, profile string, 
 	if err != nil {
 		markGone()
 		if control {
-			_, _ = h.m.ReleaseTurn(r.Context(), s.ID, turn)
+			// As long as the request lasts, viewerHandBackWait at most:
+			// the hand-back goes on by itself after.
+			rctx, rcancel := context.WithTimeout(r.Context(), viewerHandBackWait)
+			_, _ = h.m.ReleaseTurn(rctx, s.ID, turn)
+			rcancel()
 		}
 		unwatch()
 		http.Error(w, "couldn't connect: "+err.Error(), http.StatusBadRequest)
@@ -544,7 +548,7 @@ func (v *viewer) releaseLocked(wait time.Duration) error {
 
 // viewerHandBackWait bounds how long a live view's message waits for its
 // hand-back (a browser that doesn't answer it).
-const viewerHandBackWait = 30 * time.Second
+const viewerHandBackWait = sessions.HandBackWait
 
 func (v *viewer) post(ctx context.Context, path string, body []byte) error {
 	_, err := v.do(ctx, http.MethodPost, path, body, http.StatusNoContent, controlWait)
