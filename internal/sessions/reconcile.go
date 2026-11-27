@@ -196,18 +196,23 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			// that it is fenced.
 			m.mu.Lock()
 			defer m.mu.Unlock()
-			if p.l.sess.State != NeedsHelp {
-				return
-			}
-			if open, err := pendingHandoff(context.Background(), m.db, p.id); err == nil && !open {
-				p.l.sess.State = Running
-				p.l.sess.UpdatedAt = m.now()
-				if err := updateSession(context.Background(), m.db, p.l.sess); err != nil {
-					m.log.Error("saving session state", "session", p.id, "err", err)
+			// A person's takeover the restart ended (one was ever taken:
+			// it is fenced above) or help that ended: a file chooser open
+			// passes back to the agent with its whole time limit, as at
+			// any hand-back (PROJ-181).
+			restart := p.gen > 0
+			if p.l.sess.State == NeedsHelp {
+				if open, err := pendingHandoff(context.Background(), m.db, p.id); err == nil && !open {
+					p.l.sess.State = Running
+					p.l.sess.UpdatedAt = m.now()
+					if err := updateSession(context.Background(), m.db, p.l.sess); err != nil {
+						m.log.Error("saving session state", "session", p.id, "err", err)
+					}
+					m.log.Info("a browser left waiting for a handoff that had ended is the agents' again", "session", p.id)
+					restart = true
 				}
-				m.log.Info("a browser left waiting for a handoff that had ended is the agents' again", "session", p.id)
-				// A file chooser open passes back to the agent with its
-				// whole time limit, as at any handoff's end (PROJ-181).
+			}
+			if restart {
 				m.restartChoosers(p.profile)
 			}
 		})

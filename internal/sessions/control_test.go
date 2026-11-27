@@ -1446,6 +1446,41 @@ func TestReconcileEndsHelpNoHandoffAsksFor(t *testing.T) {
 	}
 }
 
+// A Running browser whose person's takeover the restart ended is fenced,
+// and its file choosers get their whole time limit again, as at any
+// hand-back (PROJ-181, PROJ-196).
+func TestReconcileRestartsChoosersAfterATakeover(t *testing.T) {
+	f := newFixture(t)
+	var restarts atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	mux.HandleFunc("POST /chooser/restart", func(w http.ResponseWriter, _ *http.Request) {
+		restarts.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	f.rt.Control = mux
+	s := f.start(f.m)
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
+		t.Fatal(err)
+	}
+	f.m.Close() // with the person in control
+
+	m := f.manager()
+	time.Sleep(200 * time.Millisecond) // the take's own restart, on its way
+	before := restarts.Load()
+	if err := m.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := m.Live("google"); got.State != Running || got.HumanControl {
+		t.Fatalf("after the restart: %s, person in control %v", got.State, got.HumanControl)
+	}
+	for deadline := time.Now().Add(3 * time.Second); restarts.Load() == before; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the file choosers' time limit wasn't restarted as the restart ended the takeover")
+		}
+	}
+}
+
 // A handoff's end ends the control of the person helping, taken while
 // the browser waited for help, in the same step as the browser stops
 // waiting; never a takeover begun after that (an admin's on the profile
