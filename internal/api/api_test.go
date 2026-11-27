@@ -443,8 +443,8 @@ func TestProfiles(t *testing.T) {
 	if len(list.Profiles) != 2 || list.Profiles[0].Status != "stopped" {
 		t.Fatalf("all-profiles token sees %+v", list.Profiles)
 	}
-	if p := list.Profiles[0].Proxy; strings.Contains(p, "s3cret") || !strings.Contains(p, "proxy.example:8080") {
-		t.Fatalf("proxy shown as %q", p)
+	if !list.Profiles[0].Proxied {
+		t.Fatalf("a profile with a proxy isn't proxied: %+v", list.Profiles[0])
 	}
 	f.call(f.scoped, http.MethodGet, "/api/profiles", "", &list)
 	if len(list.Profiles) != 1 || list.Profiles[0].Name != "google" {

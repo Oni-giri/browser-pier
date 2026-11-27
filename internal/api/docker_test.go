@@ -498,8 +498,8 @@ func TestProxiedBrowserMatchesItsExit(t *testing.T) {
 			if prof.Location == nil || prof.Location.Country != "DE" || prof.Location.TimeZone != "Europe/Berlin" {
 				t.Errorf("recorded location %+v", prof.Location)
 			}
-			if strings.Contains(prof.Proxy, "s3cret") {
-				t.Error("the API shows the proxy password")
+			if !prof.Proxied {
+				t.Error("the API says the profile isn't proxied")
 			}
 
 			// WebRTC gives away no address.

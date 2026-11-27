@@ -105,12 +105,15 @@ type profileJSON struct {
 	DefaultMode     string     `json:"default_mode"`
 	AutoStopMinutes int        `json:"auto_stop_minutes"`
 	Screen          screenJSON `json:"screen"`
-	Proxy           string     `json:"proxy,omitempty"` // password redacted
-	HandoffPolicy   string     `json:"handoff_policy"`
-	TimeZone        string     `json:"time_zone,omitempty"` // set by hand
-	Locale          string     `json:"locale,omitempty"`    // set by hand
-	LocalNetwork    bool       `json:"local_network"`       // pages may reach private addresses
-	BlockAds        bool       `json:"block_ads"`           // the browser blocks ad and tracker domains
+	// Proxied says only whether the profile goes through a proxy, never
+	// which: a proxy's host, user name or {sticky} template is the admin's,
+	// and a page can talk an agent into repeating what it knows (SPEC §8).
+	Proxied       bool   `json:"proxied"`
+	HandoffPolicy string `json:"handoff_policy"`
+	TimeZone      string `json:"time_zone,omitempty"` // set by hand
+	Locale        string `json:"locale,omitempty"`    // set by hand
+	LocalNetwork  bool   `json:"local_network"`       // pages may reach private addresses
+	BlockAds      bool   `json:"block_ads"`           // the browser blocks ad and tracker domains
 	// Site is the main site as set, whose favicon is the profile's icon in
 	// the web UI. The one BrowserPier infers from the history isn't shown:
 	// it is read from pages.
@@ -142,7 +145,7 @@ func (a *API) profileOut(p profiles.Profile) profileJSON {
 		DefaultMode:     string(p.DefaultMode),
 		AutoStopMinutes: int(p.AutoStop / time.Minute),
 		Screen:          screenJSON{p.Width, p.Height},
-		Proxy:           redactProxy(p.Proxy),
+		Proxied:         p.Proxy != "",
 		HandoffPolicy:   string(p.HandoffPolicy),
 		TimeZone:        p.TimeZone,
 		Locale:          p.Locale,
@@ -158,19 +161,6 @@ func (a *API) profileOut(p profiles.Profile) profileJSON {
 	}
 	if s, ok := a.m.Live(p.Name); ok {
 		out.Status, out.SessionID, out.InUseBy = string(s.State), s.ID, s.InUseBy
-	}
-	return out
-}
-
-// redactProxy shows a profile's proxy without its password: a template
-// stays a template, its {sticky} never filled in.
-func redactProxy(raw string) string {
-	if raw == "" {
-		return ""
-	}
-	out, err := profiles.FormatProxy(raw, (*url.URL).Redacted)
-	if err != nil {
-		return "(set)"
 	}
 	return out
 }
