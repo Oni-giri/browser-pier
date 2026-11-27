@@ -20,9 +20,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/browsertest"
@@ -76,31 +79,86 @@ func newRealAPI(t *testing.T) agent {
 	return newRealAPIEnv(t)
 }
 
-// envRuntime gives every browser container it creates more environment.
-type envRuntime struct {
-	*docker.Client
-	env []string
+// imageWithEnv builds, for this test only, an image that is image with
+// env (NAME=value each) set in it, and returns its name. The browsers'
+// environment can't carry a test-only setting: the create guard lets
+// through only the variables the orchestrator sets (PROJ-159), and a
+// test's must not widen that (PROJ-208). An image's own ENV never
+// appears in a create body, so the guard sees the same body as ever.
+// Each value is taken literally: one with a $, a quote, a backslash or a
+// control character is refused rather than expanded or escaped.
+func imageWithEnv(t *testing.T, image string, env []string) string {
+	t.Helper()
+	var df strings.Builder
+	fmt.Fprintf(&df, "FROM %s\nENV", image)
+	for _, e := range env {
+		name, value, ok := strings.Cut(e, "=")
+		if !ok || !envNameRE.MatchString(name) || strings.ContainsAny(value, "\"\\$") || strings.ContainsFunc(value, unicode.IsControl) {
+			t.Fatalf("imageWithEnv: %q isn't a literal NAME=value", e)
+		}
+		fmt.Fprintf(&df, " %s=%q", name, value)
+	}
+	df.WriteByte('\n')
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(df.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tag := fmt.Sprintf("localhost/bp-test-env-%d-%d:test", time.Now().UnixNano(), testImageSeq.Add(1))
+	// Registered before anything that starts a container from tag, so it
+	// runs after their cleanups: see newRealAPIEnv.
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if out, err := exec.CommandContext(ctx, "docker", "rmi", "-f", tag).CombinedOutput(); err != nil {
+			t.Logf("removing the test image %s: %v\n%s", tag, err, out)
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, "docker", "build", "-t", tag, dir).CombinedOutput(); err != nil {
+		t.Fatalf("building the test image: %v\n%s", err, out)
+	}
+	return tag
 }
 
-func (r envRuntime) Create(ctx context.Context, spec docker.BrowserSpec) (string, error) {
-	spec.Env = append(append([]string{}, spec.Env...), r.env...)
-	return r.Client.Create(ctx, spec)
-}
+var (
+	envNameRE    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	testImageSeq atomic.Uint64
+)
 
-// newRealAPIEnv is newRealAPI with env added to each browser's
-// environment (a shorter time limit, say).
+// newRealAPIEnv is newRealAPI with env set in the browsers' image (a
+// shorter time limit, say): see imageWithEnv.
 func newRealAPIEnv(t *testing.T, env ...string) agent {
 	t.Helper()
 	image := os.Getenv("BROWSERPIER_TEST_IMAGE")
 	if image == "" {
 		t.Skip("BROWSERPIER_TEST_IMAGE not set; run `make test-docker`")
 	}
+	if len(env) > 0 {
+		image = imageWithEnv(t, image, env)
+	}
 	ctx := context.Background()
 	rt, err := docker.New(docker.Options{Image: image, UsernsMode: os.Getenv("BROWSERPIER_USERNS_MODE"), User: docker.User(os.Getuid(), os.Getgid()), Instance: fmt.Sprintf("test%d", time.Now().UnixNano())})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = rt.Close() })
+	// After the manager's cleanup (registered later, so run first): any
+	// container of this client's instance still there, a start that
+	// failed or a stop that timed out, goes, so imageWithEnv's image can.
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		cs, err := rt.List(ctx)
+		if err != nil {
+			t.Logf("listing leftover browser containers: %v", err)
+		}
+		for _, c := range cs {
+			if out, err := exec.CommandContext(ctx, "docker", "rm", "-f", c.ID).CombinedOutput(); err != nil {
+				t.Logf("removing leftover container %s: %v\n%s", c.Name, err, out)
+			}
+		}
+		_ = rt.Close()
+	})
 	dir, err := os.MkdirTemp("", "bp")
 	if err != nil {
 		t.Fatal(err)
@@ -115,11 +173,7 @@ func newRealAPIEnv(t *testing.T, env ...string) agent {
 	}
 	t.Cleanup(func() { _ = d.Close() })
 	log := slog.New(slog.DiscardHandler)
-	var runtime sessions.Runtime = rt
-	if len(env) > 0 {
-		runtime = envRuntime{rt, env}
-	}
-	m, err := sessions.NewManager(d, runtime, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)
+	m, err := sessions.NewManager(d, rt, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)
 	if err != nil {
 		t.Fatal(err)
 	}
