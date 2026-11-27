@@ -181,6 +181,7 @@ var (
 		"BROWSERPIER_LOCAL_NETWORK",
 		"BROWSERPIER_HOST_IPS",
 		"BROWSERPIER_BLOCK_ADS",
+		"BROWSERPIER_MODE", // api or visual (PROJ-150); the entrypoint refuses any other
 	}
 	guardBrowserEnvRequired = []string{"BROWSERPIER_SCREEN", "BROWSERPIER_MOUNT_CHECK"}
 )

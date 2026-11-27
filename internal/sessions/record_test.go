@@ -791,3 +791,24 @@ func TestRefreshRecordingAppliesTheSettingAsItIs(t *testing.T) {
 		t.Fatal("recording with Record sessions off")
 	}
 }
+
+// TestAReadOfTheTreeIsAnAgentActing: Visual mode's tree read (PROJ-150's
+// ReadLease) records as any page call does, while it doesn't keep a
+// person out (TestReadLeasesDontKeepAPersonOut).
+func TestAReadOfTheTreeIsAnAgentActing(t *testing.T) {
+	f, rec := recordingFixture(t, true)
+	f.clock()
+	s := f.start(f.m)
+	wantRecording(t, rec, s.ID, false, "")
+	lease, err := f.m.ReadLease(context.Background(), s.ID, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRecording(t, rec, s.ID, true, "")
+	lease.Release()
+	wantRecording(t, rec, s.ID, true, "") // the tail
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
+		t.Fatal(err)
+	}
+	wantRecording(t, rec, s.ID, false, recording.Person)
+}

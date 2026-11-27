@@ -31,6 +31,19 @@ const takeOverAfter = 3 * time.Second
 // for takeOverAfter, which breaks it off the same way; not before, nor
 // for agentQuiet after it ends.
 func (m *Manager) AgentInput(ctx context.Context, id, tokenID string) (context.Context, func(), error) {
+	return m.agentInput(ctx, id, tokenID, nil)
+}
+
+// AgentInputAt is AgentInput for an action aimed by what a read under
+// lease generation gen learnt about the page (a click by a Visual-mode
+// ref, whose point the element tree gave). It fails with ErrPersonHadIt
+// if a person has had the browser since: what the read learnt is out of
+// date, and the action must not land on the page they left.
+func (m *Manager) AgentInputAt(ctx context.Context, id, tokenID string, gen uint64) (context.Context, func(), error) {
+	return m.agentInput(ctx, id, tokenID, &gen)
+}
+
+func (m *Manager) agentInput(ctx context.Context, id, tokenID string, gen *uint64) (context.Context, func(), error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.findLocked(id)
@@ -39,6 +52,9 @@ func (m *Manager) AgentInput(ctx context.Context, id, tokenID string) (context.C
 	}
 	if l.human || l.sess.State == NeedsHelp {
 		return nil, nil, ErrHumanDriving
+	}
+	if gen != nil && *gen != l.generation {
+		return nil, nil, ErrPersonHadIt
 	}
 	if len(l.inputs) > 0 {
 		return nil, nil, ErrInputBusy
@@ -91,8 +107,11 @@ func (m *Manager) AgentInput(ctx context.Context, id, tokenID string) (context.C
 // Breakable (act), under way for less than takeOverAfter. One that has
 // run longer (a long human-paced type, or act's steps) is broken off, as
 // a handoff breaks it off, and TakeControl waits for it to end. A page
-// call not marked Breakable (a read, bounded by its own timeouts) is
-// never broken off: Take control is refused while it runs. Meanwhile agents can only watch: their input and new CDP
+// call not marked Breakable (the page tools' reads, bounded by their own
+// timeouts) is never broken off: Take control is refused while it runs.
+// A read lease (ReadLease, Visual mode's tree) is broken off at once, but
+// only once the agent's quiet time is over: a read neither starts,
+// extends nor cuts short those seconds. Meanwhile agents can only watch: their input and new CDP
 // connections are refused. During a handoff (Needs help) the agent is
 // paused, so it always succeeds.
 //
@@ -136,12 +155,16 @@ func (m *Manager) takeControlTurn(id, holder, entry string) (uint64, error) {
 		return 0, ErrNotRunning
 	}
 	now := m.now()
-	breakOff := false
+	breakOff, breakReads := false, false
 	if l.sess.State == Running {
 		if len(l.conns) > 0 {
 			return 0, ErrAgentDriving
 		}
 		for ls := range l.leases {
+			if ls.yields {
+				breakReads = true // a read: the person goes first, after the quiet time
+				continue
+			}
 			if !ls.breakable || now.Sub(ls.started) < takeOverAfter {
 				return 0, ErrAgentDriving
 			}
@@ -172,10 +195,11 @@ func (m *Manager) takeControlTurn(id, holder, entry string) (uint64, error) {
 	l.lastActivity = now
 	m.restartChoosers(l.sess.Profile)
 	l.noteLocked(now, KindControl, entry)
-	if breakOff {
+	if breakOff || breakReads {
 		// New agent input and page calls are refused from now on
 		// (l.human); what is under way breaks off. Every lease left here
-		// is Breakable and old enough, or TakeControl was refused above.
+		// is a read, or Breakable and old enough, or TakeControl was
+		// refused above.
 		for in := range l.inputs {
 			in.cancel(ErrTookControl)
 		}

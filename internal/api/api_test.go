@@ -9,8 +9,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -43,6 +45,13 @@ type browser struct {
 	pageURL string
 	// methods are the CDP methods sent on the browser's WebSocket.
 	methods []string
+	// tree is GET /tree's answer (PROJ-150); node answers GET
+	// /tree/node; treeHold, if set, holds /tree until it is closed or
+	// the request ends.
+	tree     string
+	node     func(q url.Values) string
+	treeHold chan struct{}
+	treeGets int
 	// shortcutGap, if set, makes a type or key that comes within it of a
 	// key with ctrl in it wait out the rest under its request's context,
 	// as the image's entrypoint does (PROJ-151); a wait cut short sends
@@ -187,6 +196,41 @@ func (b *browser) handler() http.Handler {
 	for _, p := range []string{"click", "type", "scroll", "key", "drag", "open"} {
 		mux.HandleFunc("POST /input/"+p, input)
 	}
+	mux.HandleFunc("GET /tree", func(w http.ResponseWriter, r *http.Request) {
+		b.mu.Lock()
+		tree, hold := b.tree, b.treeHold
+		b.treeGets++
+		b.mu.Unlock()
+		if hold != nil {
+			select {
+			case <-hold:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		if tree == "" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, tree)
+	})
+	mux.HandleFunc("GET /tree/node", func(w http.ResponseWriter, r *http.Request) {
+		b.mu.Lock()
+		node := b.node
+		b.mu.Unlock()
+		if node == nil {
+			http.NotFound(w, r)
+			return
+		}
+		answer := node(r.URL.Query())
+		if code, msg, ok := strings.Cut(answer, " "); ok && strings.HasPrefix(code, "!") {
+			// "!502 why": the reader failed.
+			status, _ := strconv.Atoi(code[1:])
+			http.Error(w, msg, status)
+			return
+		}
+		_, _ = io.WriteString(w, answer)
+	})
 	mux.HandleFunc("POST /proxy/exempt", func(w http.ResponseWriter, r *http.Request) {
 		var e struct{ Host string }
 		_ = json.NewDecoder(r.Body).Decode(&e)

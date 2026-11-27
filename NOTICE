@@ -81,7 +81,8 @@ Sources/AgwebCore/Motion.swift)
   USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 godbus/dbus v5 (github.com/godbus/dbus/v5, in the browser image's
-entrypoint: the file chooser portal, images/chromium/entrypoint/portal.go)
+entrypoint: the file chooser portal, images/chromium/entrypoint/portal.go,
+and Visual mode's tree reader, images/chromium/entrypoint/tree.go)
   Copyright (c) 2013, Georg Reinke (<guelfey at gmail dot com>), Google
   All rights reserved.
   Licensed under the BSD 2-Clause License:

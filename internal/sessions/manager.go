@@ -187,6 +187,9 @@ type live struct {
 	// (PageLease); turn lets one run at a time.
 	leases map[*lease]struct{}
 	turn   chan struct{}
+	// queued are page calls waiting for their turn, which a token's
+	// revocation ends as it ends leases.
+	queued map[*lease]struct{}
 	// holds counts HoldSession holds: page calls wait while there is one.
 	holds int
 	// generation changes each time a person takes the browser.
@@ -578,6 +581,10 @@ func (m *Manager) launch(l *live, p profiles.Profile) {
 			"BROWSERPIER_LOCAL_NETWORK=" + strconv.FormatBool(p.LocalNetwork),
 			"BROWSERPIER_HOST_IPS=" + m.hostIPs,
 			"BROWSERPIER_BLOCK_ADS=" + strconv.FormatBool(blocking),
+			// Visual mode turns on Chromium's accessibility, for its
+			// element tree (PROJ-150); fixed for the session, as its
+			// mode is. The guard allows it (internal/docker/guard.go).
+			"BROWSERPIER_MODE=" + string(m.snapshot(l).Mode),
 		},
 	}
 	var cid string
@@ -1165,6 +1172,11 @@ func (m *Manager) DisconnectToken(tokenID string) {
 				ls.cancel(ErrRevoked)
 			}
 		}
+		for q := range l.queued {
+			if q.tokenID == tokenID {
+				q.cancel(ErrRevoked)
+			}
+		}
 		for in := range l.inputs {
 			if in.tokenID == tokenID {
 				in.cancel(ErrRevoked)
@@ -1174,8 +1186,8 @@ func (m *Manager) DisconnectToken(tokenID string) {
 }
 
 // ConnectedTokens lists the tokens with an open connection to any
-// browser, or a page call (PageLease) or input action (AgentInput) under
-// way.
+// browser, or a page call (PageLease) under way or waiting for its turn,
+// or an input action (AgentInput) under way.
 func (m *Manager) ConnectedTokens() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1193,6 +1205,9 @@ func (m *Manager) ConnectedTokens() []string {
 		}
 		for ls := range l.leases {
 			add(ls.tokenID)
+		}
+		for q := range l.queued {
+			add(q.tokenID) // waiting for its turn
 		}
 		for in := range l.inputs {
 			add(in.tokenID)

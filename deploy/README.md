@@ -255,6 +255,8 @@ Leave `BROWSERPIER_LISTEN` and `BROWSERPIER_WEBRTC_PORT` alone with this compose
 | `BROWSERPIER_BROWSER_APPARMOR` | unset | The browser containers' AppArmor profile. Unset, BrowserPier picks one: see [AppArmor](#apparmor). Set, that profile is used as it is, unchecked: `browserpier`, `unconfined`, or one of your own. A named profile that isn't loaded makes every browser fail to start, with an error saying so. |
 | `BROWSERPIER_STOP_BROWSERS_ON_EXIT` | `false` | `true` stops every browser when BrowserPier stops. Otherwise they keep running through an update. |
 
+BrowserPier sets the browser containers' own settings itself, from each profile and session; they aren't for `.env`. One of them says what a browser runs for its session's mode: `BROWSERPIER_MODE` (`api` or `visual`). A Visual-mode browser turns on Chromium's accessibility, published on the private session bus inside its container (the one its file chooser portal is on), for `visual_snapshot` and clicks by ref (PROJ-150); an API-mode one doesn't. It is fixed when the session starts. The full list is in `images/chromium/README.md`.
+
 ## Notifications
 
 BrowserPier can tell one webhook when a person is needed, so a handoff asked by a headless or scheduled agent (one with no chat to pass the link through) still reaches you. Set it in **Settings → Notifications**, signed in as the admin. No agent can read or change it, and no environment variable sets it.

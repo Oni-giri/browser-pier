@@ -40,6 +40,7 @@ var toolArgs = map[string]map[string]any{
 	"upload_file":      {"session_id": "s1", "name": "a.txt", "content_base64": "aGk="},
 	"choose_files":     {"session_id": "s1", "id": "c1", "files": []string{"a.txt"}},
 	"snapshot":         {"session_id": "s1"},
+	"visual_snapshot":  {"session_id": "s1", "query": "x"},
 	"find":             {"session_id": "s1", "text": "x"},
 	"navigate":         {"session_id": "s1", "url": "https://example.com/"},
 	"act":              {"session_id": "s1", "steps": []map[string]any{{"action": "click", "ref": "a1"}}},

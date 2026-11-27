@@ -27,6 +27,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
 	"github.com/Oni-giri/browser-pier/internal/settings"
+	"github.com/Oni-giri/browser-pier/internal/visualtree"
 )
 
 // API is the agent-facing HTTP API.
@@ -39,7 +40,11 @@ type API struct {
 	log      *slog.Logger
 	public   string // BROWSERPIER_PUBLIC_URL, if set
 	tools    *pagetools.Tools
-	choosers choosersSeen // file choosers the activity log has noted
+	tree     *visualtree.Tools // Visual mode's element tree (PROJ-150)
+	// afterLocate, if set, runs between a click by ref's lookup and its
+	// dispatch (tests).
+	afterLocate func()
+	choosers    choosersSeen // file choosers the activity log has noted
 }
 
 func New(m *sessions.Manager, web *auth.Web, fs *files.Store, log *slog.Logger, publicURL string) *API {
@@ -48,7 +53,7 @@ func New(m *sessions.Manager, web *auth.Web, fs *files.Store, log *slog.Logger, 
 	if fs != nil {
 		m.OnEnd(fs.Forget) // what download notices keep about a session
 	}
-	a := &API{m: m, web: web, files: fs, log: log, public: strings.TrimRight(publicURL, "/"), tools: tools}
+	a := &API{m: m, web: web, files: fs, log: log, public: strings.TrimRight(publicURL, "/"), tools: tools, tree: visualtree.New(m)}
 	m.OnEnd(a.choosers.forget)
 	return a
 }
@@ -81,6 +86,7 @@ func (a *API) Register(mux Router) {
 	mux.Handle("DELETE /api/profiles/{name}/files/{file}", t(a.deleteFile))
 	mux.Handle("POST /api/sessions/{id}/cdp-ticket", t(a.cdpTicket))
 	a.registerPageTools(mux)
+	a.registerVisualTree(mux)
 	if a.handoffs != nil {
 		a.registerHandoffs(mux)
 	}
@@ -570,6 +576,7 @@ func (a *API) input(path string) http.HandlerFunc {
 		var mark *files.Mark
 		var wait time.Duration
 		var ms *int
+		var rc *refClick
 		if path == "/input/click" {
 			// A click may start a download (PROJ-116); the browser
 			// doesn't take download_wait_ms, which is BrowserPier's.
@@ -579,6 +586,12 @@ func (a *API) input(path string) http.HandlerFunc {
 			}
 			if err != nil {
 				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			// A click by a Visual-mode ref (PROJ-150) clicks the
+			// element's centre as it is now. The read doesn't admit a
+			// call id's call: only the input below does.
+			if body, rc, ok = a.takeRef(w, r, s, body); !ok {
 				return
 			}
 		}
@@ -592,7 +605,11 @@ func (a *API) input(path string) http.HandlerFunc {
 				mark.Expect(wait)
 			}
 		}
-		if !a.act(w, r, s, path, body) {
+		note := describeInput(path, body)
+		if rc != nil {
+			note = describeRefClick(rc.ref, body)
+		}
+		if !a.actNoted(w, r, s, path, body, note, rc.generation(), nil) {
 			return
 		}
 		if mark != nil {
@@ -600,6 +617,10 @@ func (a *API) input(path string) http.HandlerFunc {
 			a.reportDownloads(w, r, s, mark, wait)
 		}
 		a.setChooserNotice(w, r, s)
+		if rc != nil {
+			writeJSON(w, http.StatusOK, map[string]string{"text": rc.clickedText()})
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -674,19 +695,27 @@ func takeDownloadWait(body []byte) ([]byte, *int, error) {
 	return out, &ms, err
 }
 
-// act runs one input action through the control socket and logs it, or
-// writes why it didn't run.
-func (a *API) act(w http.ResponseWriter, r *http.Request, s sessions.Session, path string, body []byte) bool {
-	return a.actAfter(w, r, s, path, body, nil)
-}
-
-// actAfter is act, with first run once the agent has the input and before
-// the action is sent, under the input's context: what the action needs
-// done first (open's ad-list exemption) happens only if the agent may act,
-// not while a person has the browser (PROJ-164).
-func (a *API) actAfter(w http.ResponseWriter, r *http.Request, s sessions.Session, path string, body []byte, first func(ctx context.Context)) bool {
+// actNoted runs one input action through the control socket and logs it
+// as note, or writes why it didn't run. first, if set, runs once the agent
+// has the input and before the action is sent, under the input's context:
+// what the action needs done first (open's ad-list exemption) happens only
+// if the agent may act, not while a person has the browser (PROJ-164).
+// gen, if set, is the lease generation the action was aimed under (a click
+// by ref, PROJ-150): it is refused if a person had the browser since.
+func (a *API) actNoted(w http.ResponseWriter, r *http.Request, s sessions.Session, path string, body []byte, note string, gen *uint64, first func(ctx context.Context)) bool {
 	tok, _ := auth.TokenFromContext(r.Context())
-	ctx, done, err := a.m.AgentInput(r.Context(), s.ID, tok.ID)
+	var ctx context.Context
+	var done func()
+	var err error
+	if gen != nil {
+		ctx, done, err = a.m.AgentInputAt(r.Context(), s.ID, tok.ID, *gen)
+	} else {
+		ctx, done, err = a.m.AgentInput(r.Context(), s.ID, tok.ID)
+	}
+	if errors.Is(err, sessions.ErrPersonHadIt) {
+		writeError(w, http.StatusConflict, err.Error())
+		return false
+	}
 	if errors.Is(err, sessions.ErrInputBusy) {
 		writeError(w, http.StatusConflict, "another input is still running in this browser; wait for it to finish, then send this one")
 		return false
@@ -741,8 +770,15 @@ func (a *API) actAfter(w http.ResponseWriter, r *http.Request, s sessions.Sessio
 		writeError(w, resp.StatusCode, strings.TrimSpace(string(msg)))
 		return false
 	}
-	a.m.NoteFor(r.Context(), s.ID, tok.Name, describeInput(path, body))
+	a.m.NoteFor(r.Context(), s.ID, tok.Name, note)
 	return true
+}
+
+// describeRefClick puts a click by ref in words for the activity log: the
+// ref only, never the element's name, which is page text.
+func describeRefClick(ref string, body []byte) string {
+	what, _, _ := strings.Cut(describeInput("/input/click", body), " at ")
+	return what + " " + ref
 }
 
 // cutStatus is the status of an input action cut short: 401 when its

@@ -154,7 +154,8 @@ func run(log *slog.Logger) error {
 	// them the browser doesn't start: Chromium would show its GTK dialog,
 	// which lets whoever drives it hand a page any file the browser can
 	// read, the profile's cookies included (PROJ-183), and it aborts when
-	// its bus goes anyway.
+	// its bus goes anyway. In Visual mode Chromium's accessibility goes
+	// over the same bus, for the element tree (PROJ-150).
 	bus, portal, err := startChooser(ctx, log, cfg)
 	if err != nil {
 		return err
@@ -163,7 +164,7 @@ func run(log *slog.Logger) error {
 	defer portal.close()
 
 	chromium := exec.Command(chromiumBinary, chromiumArgs(cfg, smallShm())...)
-	chromium.Env = chromiumEnv(os.Environ(), where.env(), bus)
+	chromium.Env = chromiumEnv(os.Environ(), where.env(), bus, cfg.Visual)
 	fatal, err := watchFatal(chromium, func(msg string) { log.Warn(msg) })
 	if err != nil {
 		return fmt.Errorf("start Chromium: %w", err)
@@ -203,12 +204,16 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	defer func() { _ = os.Remove(cfg.ControlSocket) }()
+	vis := newVisual(cfg.Width, cfg.Height)
+	if cfg.Visual {
+		vis.tree = newTreeReader(bus.address(), cfg.Width, cfg.Height)
+	}
 	srv := &http.Server{
 		Handler: newControlHandler(cdpAddr,
 			&streamer{command: func() *exec.Cmd { return exec.Command("gst-launch-1.0", streamArgs()...) }},
 			&streamer{command: func() *exec.Cmd { return exec.Command("gst-launch-1.0", recordArgs(cfg.Width, cfg.Height)...) },
 				contentType: "video/mp4", wait: 2 * time.Second},
-			newVisual(cfg.Width, cfg.Height), fwd, where, portal, "the file chooser portal isn't running in this browser"),
+			vis, fwd, where, portal, "the file chooser portal isn't running in this browser"),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() { _ = srv.Serve(ln) }()
