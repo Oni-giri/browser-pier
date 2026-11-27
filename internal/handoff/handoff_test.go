@@ -1579,10 +1579,11 @@ func (f *fixture) settled(id string) (Handoff, error) {
 	return f.svc.Wait(context.Background(), id, 5*time.Second)
 }
 
-// Close waits for the ends under way and the sweep, even one whose
-// browser doesn't answer its hand-back: it stops waiting, saves the final
-// status, and nothing of the service touches the database once Close has
-// returned (the database closes right after, at shutdown).
+// Close waits for the ends under way, the sweep and the waits, even an
+// end whose browser doesn't answer its hand-back: it stops waiting and
+// leaves the handoff pending, a wait under way answers ErrClosing, and
+// nothing of the service touches the database once Close has returned
+// (the database closes right after, at shutdown).
 func TestCloseWaitsForEndsAndTheSweep(t *testing.T) {
 	f := newFixture(t, profiles.PolicyLink, auth.WebOptions{})
 	var mu sync.Mutex
@@ -1608,6 +1609,13 @@ func TestCloseWaitsForEndsAndTheSweep(t *testing.T) {
 			t.Fatal("the sweep never started the end")
 		}
 	}
+	// An agent long-polls it meanwhile.
+	waited := make(chan error, 1)
+	go func() {
+		_, err := f.svc.Wait(context.Background(), h.ID, time.Minute)
+		waited <- err
+	}()
+	time.Sleep(100 * time.Millisecond)
 	closed := make(chan struct{})
 	go func() { f.svc.Close(); close(closed) }()
 	select {
@@ -1620,9 +1628,22 @@ func TestCloseWaitsForEndsAndTheSweep(t *testing.T) {
 	default:
 		t.Fatal("the sweep outlived Close")
 	}
+	select {
+	case err := <-waited:
+		if !errors.Is(err, ErrClosing) {
+			t.Fatalf("the wait under way = %v, want ErrClosing", err)
+		}
+	default:
+		t.Fatal("the wait outlived Close")
+	}
+	// Its browser wasn't handed back in this process: nothing is saved,
+	// so no agent hears it is over; the next start ends it.
 	var status Status
-	if err := f.svc.db.QueryRow(`SELECT status FROM handoffs WHERE id = ?`, h.ID).Scan(&status); err != nil || status != Expired {
-		t.Fatalf("after Close: %s, %v; want expired, saved before it returned", status, err)
+	if err := f.svc.db.QueryRow(`SELECT status FROM handoffs WHERE id = ?`, h.ID).Scan(&status); err != nil || status != Pending {
+		t.Fatalf("after Close: %s, %v; want it left pending", status, err)
+	}
+	if _, err := f.svc.Wait(context.Background(), h.ID, time.Second); !errors.Is(err, ErrClosing) {
+		t.Fatalf("a wait after Close = %v, want ErrClosing", err)
 	}
 	// Shutdown goes on: the database closes, then the browser answers.
 	_ = f.svc.db.Close()
@@ -1639,3 +1660,95 @@ func TestCloseWaitsForEndsAndTheSweep(t *testing.T) {
 type writerFunc func([]byte) (int, error)
 
 func (w writerFunc) Write(b []byte) (int, error) { return w(b) }
+
+// While a handoff's browser is being handed back (its end under way, or
+// its time up), its page says "Handing back…" and offers nothing: no live
+// view, no Done, no PIN form, no timer that reloads it, and a PIN sent
+// then isn't counted. It asks the status, which answers anyone that it is
+// ending, until the end is over (handoff.js).
+func TestHandoffPageWhileHandingBack(t *testing.T) {
+	ending := func(t *testing.T, p reply, what string) {
+		t.Helper()
+		for _, want := range []string{"Handing back…", `data-ending="/h/`} {
+			if !strings.Contains(p.body, want) {
+				t.Fatalf("%s: no %q in %.300s", what, want, p.body)
+			}
+		}
+		for _, not := range []string{"data-expires", "data-offer", `name="pin"`, "Done, hand back", `id="timer"`, "live.js"} {
+			if strings.Contains(p.body, not) {
+				t.Fatalf("%s offers %q while handing back", what, not)
+			}
+		}
+	}
+	status := func(t *testing.T, f *fixture, c *http.Client, token string) {
+		t.Helper()
+		p := f.do(c, "GET", "/h/"+token+"/status", nil, nil)
+		if p.code != http.StatusOK || !strings.Contains(p.body, `"ending":true`) || !strings.Contains(p.body, `"handoff":"pending"`) {
+			t.Fatalf("status while handing back: %d %s", p.code, p.body)
+		}
+	}
+	wedge := func(f *fixture) {
+		stuck := make(chan struct{})
+		hold := func() { <-stuck }
+		f.onLift.Store(&hold)
+		f.t.Cleanup(func() { close(stuck) })
+	}
+
+	t.Run("done on a browser that doesn't answer", func(t *testing.T) {
+		f := newFixture(t, profiles.PolicyLink, auth.WebOptions{})
+		f.svc.SetHandBackWait(300 * time.Millisecond)
+		h, token := f.open("")
+		phone := browser()
+		f.openLink(phone, token)
+		if err := f.m.TakeControl(h.SessionID, sessions.HandoffHolder(h.ID)); err != nil {
+			t.Fatal(err)
+		}
+		wedge(f)
+		p := f.do(phone, "POST", "/h/"+token+"/finish", url.Values{"status": {"done"}}, nil)
+		if p.code != http.StatusServiceUnavailable {
+			t.Fatalf("Done on a wedged browser: %d", p.code)
+		}
+		ending(t, p, "Done's answer")
+		ending(t, f.do(phone, "GET", "/h/"+token, nil, nil), "the reloaded page")
+		status(t, f, phone, token)
+		status(t, f, browser(), token) // another browser, waiting for the end too
+	})
+
+	t.Run("expired, unopened, with a PIN", func(t *testing.T) {
+		f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
+		h, token := f.open("")
+		if err := f.m.TakeControl(h.SessionID, sessions.AdminHolder); err != nil { // someone in the live view
+			t.Fatal(err)
+		}
+		wedge(f)
+		later := time.Now().Add(Lifetime + time.Second)
+		f.svc.now = func() time.Time { return later }
+		phone := browser()
+		p := f.do(phone, "GET", "/h/"+token, nil, nil)
+		if p.code != http.StatusOK {
+			t.Fatalf("the page: %d", p.code)
+		}
+		ending(t, p, "the page")
+		ending(t, f.do(phone, "POST", "/h/"+token+"/pin", url.Values{"pin": {"0000"}}, nil), "a PIN sent")
+		var failures int
+		if err := f.svc.db.QueryRow(`SELECT pin_failures FROM handoffs WHERE id = ?`, h.ID).Scan(&failures); err != nil || failures != 0 {
+			t.Fatalf("a PIN sent while handing back counted: %d, %v", failures, err)
+		}
+		status(t, f, phone, token)
+	})
+
+	t.Run("a withdrawal under way, unopened", func(t *testing.T) {
+		f := newFixture(t, profiles.PolicyLink, auth.WebOptions{})
+		f.svc.SetHandBackWait(200 * time.Millisecond)
+		h, token := f.open("")
+		if err := f.m.TakeControl(h.SessionID, sessions.AdminHolder); err != nil {
+			t.Fatal(err)
+		}
+		wedge(f)
+		if _, err := f.svc.Withdraw(context.Background(), h, ""); !errors.Is(err, ErrHandingBack) {
+			t.Fatalf("withdrawing: %v", err)
+		}
+		// Opening the one-tap link now unlocks nothing: it is handing back.
+		ending(t, f.do(browser(), "GET", "/h/"+token, nil, nil), "the link opened")
+	})
+}

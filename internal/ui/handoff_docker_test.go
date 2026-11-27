@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -157,4 +158,130 @@ func serveToBrowser(t *testing.T, h http.Handler) string {
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
 	return "http://" + net.JoinHostPort(browsertest.SiteHost(t), fmt.Sprint(ln.Addr().(*net.TCPAddr).Port))
+}
+
+// TestHandoffPageWaitsOutAStuckHandBack (PROJ-196): a handoff page whose
+// time runs out while the browser doesn't answer its hand-back says
+// "Handing back…" and waits, asking the status less and less often: it
+// never reloads in a loop, neither as the time runs out on the page nor
+// when it is opened again meanwhile.
+func TestHandoffPageWaitsOutAStuckHandBack(t *testing.T) {
+	image := os.Getenv("BROWSERPIER_TEST_IMAGE")
+	if image == "" {
+		t.Skip("BROWSERPIER_TEST_IMAGE not set; run `make test-docker`")
+	}
+	ctx := context.Background()
+	log := slog.New(slog.DiscardHandler)
+	f := newFixture(t)
+	p := profiles.New("google")
+	p.HandoffPolicy = profiles.PolicyLink
+	if _, err := f.m.Profiles().Create(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	s, _, err := f.m.Start(ctx, "google", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, token, err := f.handoffs.Create(ctx, s.ID, "claude", handoff.SensitiveInput, "Enter the 2FA code", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.choosers.wedged.Store(true) // the stand-in browser never answers a hand-back
+	// A few seconds left, so the page's own clock runs out.
+	if _, err := f.db.Exec(`UPDATE handoffs SET expires_at = ? WHERE id = ?`, time.Now().Add(8*time.Second).UnixMilli(), h.ID); err != nil {
+		t.Fatal(err)
+	}
+	relay, err := webrtc.New(webrtc.Options{Port: 0, IPs: []string{"127.0.0.1"}}, f.m.Layout().ControlSocket, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = relay.Close() })
+	mux := http.NewServeMux()
+	handoff.NewWeb(f.handoffs, f.web, webrtc.NewHandler(relay, f.m, f.web, log), f.m, log).Register(mux)
+	mux.Handle("/", f.srv.Config.Handler)
+	// loads counts each link's page loads.
+	var loadsMu sync.Mutex
+	loaded := map[string]int{}
+	counted := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			loadsMu.Lock()
+			loaded[r.URL.Path]++
+			loadsMu.Unlock()
+		}
+		mux.ServeHTTP(w, r)
+	})
+	loads := func(token string) int {
+		loadsMu.Lock()
+		defer loadsMu.Unlock()
+		return loaded["/h/"+token]
+	}
+	link := serveToBrowser(t, counted) + "/h/" + token
+
+	// The link's holder has control (the stand-in browser streams no
+	// video for the phone's own live view to take it with), so the end
+	// has a hand-back to wait for.
+	epoch, _ := f.m.HelpEpoch(s.ID)
+	if _, err := f.m.TakeControlTurnByLink(s.ID, sessions.HandoffHolder(h.ID), epoch); err != nil {
+		t.Fatal(err)
+	}
+	phone := newPhone(t, image)
+	phone.Navigate(link)
+	if got := fmt.Sprint(phone.Eval(`document.body.innerText`)); !strings.Contains(got, "Done, hand back") {
+		t.Fatalf("the phone isn't on the control step: %q", got)
+	}
+	base := loads(token) // the link's first open redirects to the page: 2
+	// The time runs out (8 s), the end starts and sticks; give the page
+	// as long again to misbehave.
+	time.Sleep(16 * time.Second)
+	if n := loads(token) - base; n != 0 {
+		t.Fatalf("the page reloaded %d times as its time ran out during a stuck hand-back", n)
+	}
+	if got := fmt.Sprint(phone.Eval(`document.body.innerText`)); !strings.Contains(got, "Handing back") {
+		t.Fatalf("the page as the time ran out: %q", got)
+	}
+	// Opened again meanwhile: the server's "Handing back…" page, which
+	// doesn't reload either.
+	phone.Navigate(link)
+	base = loads(token)
+	time.Sleep(8 * time.Second)
+	if n := loads(token) - base; n != 0 {
+		t.Fatalf("the reopened page reloaded %d times during a stuck hand-back", n)
+	}
+	if got := fmt.Sprint(phone.Eval(`document.body.innerText`)); !strings.Contains(got, "Handing back") {
+		t.Fatalf("the reopened page: %q", got)
+	}
+
+	// A PIN link nobody opened, past its time while someone in the live
+	// view holds the browser: "Handing back…", not a PIN form that
+	// reloads as soon as it shows.
+	if err := f.admin.SetPIN(ctx, "4821"); err != nil {
+		t.Fatal(err)
+	}
+	pp := profiles.New("github")
+	pp.HandoffPolicy = profiles.PolicyPIN
+	if _, err := f.m.Profiles().Create(ctx, pp); err != nil {
+		t.Fatal(err)
+	}
+	s2, _, err := f.m.Start(ctx, "github", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h2, token2, err := f.handoffs.Create(ctx, s2.ID, "claude", handoff.SensitiveInput, "Enter the 2FA code", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.TakeControl(s2.ID, sessions.AdminHolder); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.Exec(`UPDATE handoffs SET expires_at = ? WHERE id = ?`, time.Now().Add(-time.Second).UnixMilli(), h2.ID); err != nil {
+		t.Fatal(err)
+	}
+	phone.Navigate(strings.TrimSuffix(link, token) + token2)
+	time.Sleep(8 * time.Second)
+	if n := loads(token2); n != 1 {
+		t.Fatalf("the expired PIN link's page loaded %d times in 8 s, want once", n)
+	}
+	if got := fmt.Sprint(phone.Eval(`document.body.innerText`)); !strings.Contains(got, "Handing back") {
+		t.Fatalf("the expired PIN link's page: %q", got)
+	}
 }

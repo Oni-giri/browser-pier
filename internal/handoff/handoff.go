@@ -124,8 +124,8 @@ type Service struct {
 	closeBase context.CancelFunc
 	watchPoll time.Duration
 	watchWG   sync.WaitGroup
-	// endWG counts the ends under way (runEnd) and the sweep (Sweep),
-	// which Close waits for.
+	// endWG counts the ends under way (runEnd), the sweep (Sweep) and the
+	// waits (Wait), which Close waits for.
 	endWG sync.WaitGroup
 	// handBackWait bounds how long an explicit end (Finish, Withdraw)
 	// waits for the browser's hand-back (sessions.HandBackWait; tests
@@ -158,14 +158,19 @@ func (s *Service) SetNotifier(n *notify.Notifier) { s.notify = n }
 // the service is used.
 func (s *Service) SetHandBackWait(d time.Duration) { s.handBackWait = d }
 
-// Close stops every address watch and waits for them, and for the ends
-// under way (runEnd), which stop waiting for their hand-back and save the
-// handoff's final status, so nothing of the service touches the database
-// once Close has returned. Call it before the sessions manager closes and
-// the database does. Open handoffs stay open; the next start's sweep
-// watches them again. An end saved before its hand-back finished is
-// safe: no agent can use the browser before the next start's Reconcile
-// has fenced it (PROJ-196).
+// Close stops every address watch and waits for them, and for the sweep,
+// the waits (Wait, which answer ErrClosing) and the ends under way
+// (runEnd), so nothing of the service touches the database once Close
+// has returned. Call it before the sessions manager closes and the
+// database does. Open handoffs stay open; the next start's sweep watches
+// them again.
+//
+// An end whose hand-back hasn't finished stops waiting for it and leaves
+// the handoff pending, saving nothing: its browser isn't fenced in this
+// process, so no agent is told it is over (done, say) on the strength of
+// it. The next start's Reconcile fences the browser, and the first read
+// of the handoff then ends it, cancelled, its browser no longer waiting
+// for its help (checkLive) (PROJ-196).
 func (s *Service) Close() {
 	s.mu.Lock() // so watch and startEnd, which check base under it, start nothing after
 	s.closeBase()
@@ -541,6 +546,9 @@ func (s *Service) Unlocked(ctx context.Context, h Handoff, browser string) bool 
 func (s *Service) ReservePINTry(ctx context.Context, h Handoff) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.ending[h.ID] != nil {
+		return false, nil // being handed back: no guess is counted
+	}
 	var failures int
 	err := s.db.QueryRowContext(ctx, `SELECT pin_failures FROM handoffs WHERE id = ? AND status = 'pending'`, h.ID).Scan(&failures)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -716,7 +724,7 @@ func (s *Service) startEnd(h Handoff, as endAs) (*ending, Handoff, error) {
 		return e, h, nil
 	}
 	if s.base.Err() != nil {
-		return nil, h, errClosing // the service is closing: the next start ends it
+		return nil, h, ErrClosing // the service is closing: the next start ends it
 	}
 	cur, err := scan(s.db.QueryRow(`SELECT `+columns+` FROM handoffs WHERE id = ?`, h.ID))
 	switch {
@@ -739,8 +747,9 @@ func (s *Service) startEnd(h Handoff, as endAs) (*ending, Handoff, error) {
 	return e, cur, nil
 }
 
-// errClosing: the service is closing, and starts no end.
-var errClosing = errors.New("BrowserPier is shutting down")
+// ErrClosing: the service is closing, and starts no end; ask again once
+// BrowserPier is back.
+var ErrClosing = errors.New("BrowserPier is shutting down")
 
 // ending reports whether an end of handoff id is under way.
 func (s *Service) isEnding(id string) bool {
@@ -775,6 +784,12 @@ func (s *Service) runEnd(e *ending, h Handoff, as endAs) {
 		select {
 		case <-done:
 		case <-s.base.Done():
+			select {
+			case <-done: // over just as the service closes: saved
+			default:
+				s.abandonEnd(e, h)
+				return
+			}
 		}
 	}
 	now := s.now()
@@ -826,6 +841,18 @@ func (s *Service) runEnd(e *ending, h Handoff, as endAs) {
 			s.notify.HandoffCancelled(notifyInfo(h))
 		}
 	}
+	close(e.done)
+}
+
+// abandonEnd lets go of end e of h as the service closes before its
+// browser was handed back (Close): the handoff stays pending, nothing is
+// saved, logged to the agent or told to the webhook.
+func (s *Service) abandonEnd(e *ending, h Handoff) {
+	s.log.Info("a handoff's end was left to the next start: BrowserPier is shutting down before its browser was handed back", "handoff", h.ID)
+	e.h, e.err = h, ErrClosing
+	s.mu.Lock()
+	delete(s.ending, h.ID)
+	s.mu.Unlock()
 	close(e.done)
 }
 
@@ -958,6 +985,16 @@ func (s *Service) replaceViewers(ctx context.Context, h Handoff) {
 // wait, but a browser that doesn't answer its hand-back holds it no
 // longer than that, and it answers pending.
 func (s *Service) Wait(ctx context.Context, id string, wait time.Duration) (Handoff, error) {
+	// Counted, so Close waits for it, and ended by Close: no wait reads
+	// the database once the service has closed.
+	s.mu.Lock()
+	if s.base.Err() != nil {
+		s.mu.Unlock()
+		return Handoff{}, ErrClosing
+	}
+	s.endWG.Add(1)
+	s.mu.Unlock()
+	defer s.endWG.Done()
 	h, err := s.Get(ctx, id)
 	if err != nil || h.Status.Final() || wait <= 0 {
 		return h, err
@@ -1004,6 +1041,8 @@ func (s *Service) Wait(ctx context.Context, id string, wait time.Duration) (Hand
 			return h, nil
 		case <-ctx.Done():
 			return h, ctx.Err()
+		case <-s.base.Done():
+			return h, ErrClosing
 		}
 	}
 }
