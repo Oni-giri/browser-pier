@@ -29,7 +29,7 @@ Settings, all optional:
 | Variable | Default | |
 |---|---|---|
 | `BROWSERPIER_SCREEN` | `1920x1080` | Display size. The window fills it but for the 32-pixel taskbar along the bottom. |
-| `BROWSERPIER_STOP_TIMEOUT` | `20s` | How long Chromium gets to close before it's killed. Keep it under the container's stop timeout. |
+| `BROWSERPIER_STOP_TIMEOUT` | `20s` | How long Chromium gets to close before it's killed. Keep it under the container's stop timeout. The orchestrator doesn't set it, and its create guard refuses it; a test that changes it does so in a test image's own `ENV`. |
 | `BROWSERPIER_PROFILE_DIR` | `/profile` | |
 | `BROWSERPIER_CONTROL_SOCKET` | `/run/browserpier/control.sock` | |
 | `BROWSERPIER_PROXY_FILE` | `/run/browserpier/proxy.json` | `{"url": "socks5://user:pass@host:port"}` (or `http`, `https`): the profile's proxy. Read and deleted before Chromium starts. |
