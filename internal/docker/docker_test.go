@@ -378,6 +378,7 @@ func TestOutdated(t *testing.T) {
 		{settled, "8;apparmor=browserpier", true},  // before PROJ-191
 		{settled, "9;apparmor=browserpier", true},  // before PROJ-150
 		{settled, "10;apparmor=browserpier", true}, // before PROJ-195
+		{settled, "11;apparmor=browserpier", true}, // before PROJ-196's takeover fence
 		{settled, "", true},
 		// Until the choice is known, a browser under any choice runs on;
 		// not an older definition, though.
@@ -390,6 +391,7 @@ func TestOutdated(t *testing.T) {
 		{unsettled, "7", true},
 		{unsettled, "9", true},
 		{unsettled, "10", true},
+		{unsettled, "11", true},
 	} {
 		if got := c.client.Outdated(c.spec); got != c.want {
 			t.Errorf("settled %t, Outdated(%q) = %t", c.client.apparmorSettled, c.spec, got)

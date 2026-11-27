@@ -68,6 +68,7 @@ func TestCancelledSaysWhy(t *testing.T) {
 	for range MaxPINFailures {
 		f.do(browser(), "POST", "/h/"+token+"/pin", url.Values{"pin": {"0000"}}, nil)
 	}
+	_, _ = f.settled(h.ID) // the fifth PIN starts the end; it runs on its own
 	if n := f.count(h.SessionID, pinsLog); n != 1 {
 		t.Fatalf("five wrong PINs noted %d times", n)
 	}

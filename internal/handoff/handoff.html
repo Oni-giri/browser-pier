@@ -8,8 +8,9 @@
 <title>BrowserPier · Handoff</title>
 <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/app.css">
+{{if eq .Step "ending"}}<noscript><meta http-equiv="refresh" content="15"></noscript>{{end}}
 </head>
-<body class="handoff"{{if eq .Step "control"}} data-profile="{{.H.Profile}}" data-offer="/h/{{.Token}}/offer" data-ice="/h/{{.Token}}/ice" data-status="/h/{{.Token}}/status" data-chooser="/h/{{.Token}}/chooser" data-expires="{{.ExpiresMs}}"{{else if .Token}} data-expires="{{.ExpiresMs}}"{{end}}>
+<body class="handoff"{{if eq .Step "control"}} data-profile="{{.H.Profile}}" data-offer="/h/{{.Token}}/offer" data-ice="/h/{{.Token}}/ice" data-status="/h/{{.Token}}/status" data-chooser="/h/{{.Token}}/chooser" data-expires="{{.ExpiresMs}}"{{else if eq .Step "ending"}} data-ending="/h/{{.Token}}/status"{{else if eq .Step "pin"}} data-ending-status="/h/{{.Token}}/status" data-expires="{{.ExpiresMs}}"{{else if .Token}} data-expires="{{.ExpiresMs}}"{{end}}>
 <header class="ho-top"><span class="logo"><svg width="22" height="22" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7" fill="#0F172A"/><path d="M5 12h18M8 12v9M14 12v9M20 12v9" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/><circle cx="20" cy="6.5" r="2.2" fill="#2F6BFF"/></svg>BrowserPier</span>{{if or (eq .Step "pin") (eq .Step "control")}}<span class="ho-timer num" id="timer"></span>{{end}}</header>
 
 {{if eq .Step "pin"}}
@@ -56,6 +57,8 @@
 </main>
 <dialog id="chooser" aria-labelledby="chooser-title" data-keep></dialog>
 <script src="/static/live.js"></script>
+{{else if eq .Step "ending"}}
+<main class="ho"><section class="cell ho-end" data-handing-back><h1>Handing back…</h1><p>The browser is going back to {{.H.Agent}}. This page updates by itself once it has.</p></section></main>
 {{else if eq .Step "other"}}
 <main class="ho"><section class="cell ho-end"><h1>This link is open on another device</h1><p>Handoff links work once, in one browser.</p></section></main>
 {{else}}

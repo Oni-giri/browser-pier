@@ -68,16 +68,16 @@ func TestChoosersListAndAnswer(t *testing.T) {
 	if err != nil || len(cs) != 1 || cs[0] != (Chooser{ID: "c1", Multiple: true, Left: 299 * time.Second}) {
 		t.Fatalf("Choosers: %+v %v", cs, err)
 	}
-	if err := f.m.AnswerChooser(ctx, s.Profile, "c1", []string{"a.pdf"}); err != nil {
+	if err := f.m.AnswerChooser(ctx, s.Profile, "c1", []string{"a.pdf"}, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.m.AnswerChooser(ctx, s.Profile, "c1", nil); err != nil {
+	if err := f.m.AnswerChooser(ctx, s.Profile, "c1", nil, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.m.AnswerChooser(ctx, s.Profile, "c2", nil); !errors.Is(err, ErrChooserClosed) {
+	if err := f.m.AnswerChooser(ctx, s.Profile, "c2", nil, 1); !errors.Is(err, ErrChooserClosed) {
 		t.Fatalf("a closed chooser: %v", err)
 	}
-	if err := f.m.AnswerChooser(ctx, s.Profile, "../restart", nil); !errors.Is(err, ErrChooserClosed) {
+	if err := f.m.AnswerChooser(ctx, s.Profile, "../restart", nil, 1); !errors.Is(err, ErrChooserClosed) {
 		t.Fatalf("a bad id: %v", err)
 	}
 	fc.mu.Lock()

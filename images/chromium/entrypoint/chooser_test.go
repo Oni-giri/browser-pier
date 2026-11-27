@@ -531,7 +531,7 @@ func TestChooserRoutes(t *testing.T) {
 	c, bus, _, _ := testChooser(t)
 	upload(t, c, "a.txt", "a")
 	mux := http.NewServeMux()
-	registerChooser(mux, &portal{chooser: c}, "off")
+	registerChooser(mux, &portal{chooser: c}, "off", &takeoverFence{})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	if _, err := c.openFile(browserSender, opts("handle_token", "t1", "multiple", true,
@@ -583,7 +583,7 @@ func TestChooserRoutes(t *testing.T) {
 	}
 
 	off := http.NewServeMux()
-	registerChooser(off, nil, "off")
+	registerChooser(off, nil, "off", nil)
 	srv2 := httptest.NewServer(off)
 	defer srv2.Close()
 	resp, err = http.Get(srv2.URL + "/chooser")
@@ -593,6 +593,51 @@ func TestChooserRoutes(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("no portal: %d", resp.StatusCode)
+	}
+}
+
+// A person's answer names their takeover: once the hand-back has fenced
+// it, an answer held up on its way is refused, and the chooser stays open
+// for whoever drives next (PROJ-196). One naming a later takeover goes.
+func TestChooserAnswerIsFenced(t *testing.T) {
+	c, bus, _, _ := testChooser(t)
+	upload(t, c, "a.txt", "a")
+	fence := &takeoverFence{}
+	mux := http.NewServeMux()
+	registerChooser(mux, &portal{chooser: c}, "off", fence)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	if _, err := c.openFile(browserSender, opts("handle_token", "t1")); err != nil {
+		t.Fatal(err)
+	}
+	post := func(takeover, body string) int {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/chooser/c1", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		if takeover != "" {
+			req.Header.Set(takeoverHeader, takeover)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	fence.raise(3)
+	if s := post("3", `{"files":["a.txt"]}`); s != http.StatusConflict {
+		t.Fatalf("an ended takeover's answer: %d, want 409", s)
+	}
+	if s := post("x", `{"cancel":true}`); s != http.StatusBadRequest {
+		t.Fatalf("a bad takeover number: %d, want 400", s)
+	}
+	if len(bus.got()) != 0 {
+		t.Fatal("a refused answer reached the page")
+	}
+	if s := post("4", `{"files":["a.txt"]}`); s != 204 {
+		t.Fatalf("the next takeover's answer: %d", s)
+	}
+	if len(bus.got()) != 1 {
+		t.Fatal("not answered once")
 	}
 }
 

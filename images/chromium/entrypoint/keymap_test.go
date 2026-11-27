@@ -740,15 +740,15 @@ func TestTypeRefusesTheReplacementCharacter(t *testing.T) {
 func TestTypeMappedDrainsTheLiveView(t *testing.T) {
 	v, _, _ := keymapVisual(t, 8)
 	x := &closingXdotool{}
-	v.live.start = func() (ioWriteCloser, error) { return x, nil }
+	v.live.start = func() (*xdo, error) { return x.proc(), nil }
 	if rec := post(v.live.events, `[{"t":"keydown","k":"U00E9"}]`); rec.Code != http.StatusNoContent {
 		t.Fatal(rec.Code)
 	}
 	if rec := serveVisual(v, http.MethodPost, "/input/type", `{"text": "é", "pace": "instant"}`); rec.Code != http.StatusNoContent {
 		t.Fatal(rec.Code)
 	}
-	if x.closed != 1 || v.live.stdin != nil {
-		t.Fatalf("closed %d, stdin %v", x.closed, v.live.stdin)
+	if x.closed != 1 || v.live.x != nil {
+		t.Fatalf("closed %d, stdin %v", x.closed, v.live.x)
 	}
 }
 
@@ -852,12 +852,34 @@ func (*killedXdotool) Close() error {
 	return errors.New("xdotool was killed with commands still queued")
 }
 
+// proc is a run that has exited uncleanly once its input is closed:
+// killed with commands still queued.
+func (k *killedXdotool) proc() *xdo {
+	x := k.fakeXdotool.proc()
+	x.clean = func() bool { return false }
+	return x
+}
+
+// proc is a run that counts its input's closing (a drain).
+func (c *closingXdotool) proc() *xdo {
+	x := c.fakeXdotool.proc()
+	x.stdin = closeCounter{x.stdin, &c.closed}
+	return x
+}
+
+type closeCounter struct {
+	io.WriteCloser
+	n *int
+}
+
+func (c closeCounter) Close() error { *c.n++; return c.WriteCloser.Close() }
+
 // A live xdotool killed with a release still queued may not have run it:
 // before typing, everything held is let go by a new xdotool. One that
 // exited cleanly ran its releases, and they're done.
 func TestTypeMappedLetsGoOfLiveKeysAfterAKill(t *testing.T) {
 	v, calls, _ := keymapVisual(t, 8)
-	v.live.start = func() (ioWriteCloser, error) { return &killedXdotool{}, nil }
+	v.live.start = func() (*xdo, error) { return (&killedXdotool{}).proc(), nil }
 	if rec := post(v.live.events, `[{"t":"keydown","k":"Control_L"},{"t":"down","b":1},{"t":"wheel","dy":3},{"t":"keyup","k":"Control_L"}]`); rec.Code != http.StatusNoContent {
 		t.Fatal(rec.Code)
 	}
@@ -874,7 +896,7 @@ func TestTypeMappedLetsGoOfLiveKeysAfterAKill(t *testing.T) {
 
 	// The new xdotool can't run either: nothing is typed.
 	v, calls, _ = keymapVisual(t, 8)
-	v.live.start = func() (ioWriteCloser, error) { return &killedXdotool{}, nil }
+	v.live.start = func() (*xdo, error) { return (&killedXdotool{}).proc(), nil }
 	v.run = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		*calls = append(*calls, call{name, args})
 		return nil, errors.New("xdotool: exit status 1")
@@ -890,7 +912,7 @@ func TestTypeMappedLetsGoOfLiveKeysAfterAKill(t *testing.T) {
 	// every key held had its release run).
 	v, calls, _ = keymapVisual(t, 8)
 	x := &closingXdotool{}
-	v.live.start = func() (ioWriteCloser, error) { return x, nil }
+	v.live.start = func() (*xdo, error) { return x.proc(), nil }
 	post(v.live.events, `[{"t":"keydown","k":"Control_L"},{"t":"keyup","k":"Control_L"},{"t":"keydown","k":"Shift_L"}]`)
 	serveVisual(v, http.MethodPost, "/input/type", `{"text": "é", "pace": "instant"}`)
 	if got := events(*calls); got[0] != "xdotool keyup" || strings.Join((*calls)[0].args, " ") != "keyup Shift_L" || got[1] != "keymap open" || len(v.live.held) != 0 {
@@ -904,16 +926,16 @@ func TestTypeMappedLetsGoOfLiveKeysAfterAKill(t *testing.T) {
 func TestASCIITypeDrainsTheLiveViewOnlyToRestore(t *testing.T) {
 	v, _, f := keymapVisual(t, 8)
 	x := &closingXdotool{}
-	v.live.start = func() (ioWriteCloser, error) { return x, nil }
+	v.live.start = func() (*xdo, error) { return x.proc(), nil }
 	post(v.live.events, `[{"t":"keydown","k":"a"},{"t":"keyup","k":"a"}]`)
 	serveVisual(v, http.MethodPost, "/input/type", `{"text": "abc", "pace": "instant"}`)
-	if x.closed != 0 || v.live.stdin == nil {
+	if x.closed != 0 || v.live.x == nil {
 		t.Fatalf("an ASCII type with nothing to put back drained the live view (%d)", x.closed)
 	}
 	v.leftover, v.leftoverPerKey = []keyRun{{first: 8, before: []uint32{0, 0, 0, 0}, after: []uint32{0xe9, 0xe9, 0xe9, 0xe9}}}, fakePerKey
 	copy(f.key(8), []uint32{0xe9, 0xe9, 0xe9, 0xe9})
 	f.onChange = func() {
-		if v.live.stdin != nil {
+		if v.live.x != nil {
 			t.Error("the map changed with the live view's xdotool running")
 		}
 		if v.live.mu.TryLock() {

@@ -45,6 +45,9 @@ type visual struct {
 	// clip is the live view's clipboard box's side of the X clipboard
 	// (clipboard.go).
 	clip clipState
+	// fence refuses what a person sends once their takeover has ended
+	// (fence.go): the live input's, shared.
+	fence *takeoverFence
 	// keymap opens the X keyboard map, to bind characters the map lacks
 	// before typing them (keymap.go), and bindSettle is how long Chromium
 	// gets to take a change of it (keymapSettle).
@@ -155,9 +158,10 @@ const (
 )
 
 func newVisual(width, height int) *visual {
-	v := &visual{width: width, height: height, run: runCommand, output: runStdout, mot: motion.NewRandom(), live: newLiveInput(width, height),
+	live := newLiveInput(width, height)
+	v := &visual{width: width, height: height, run: runCommand, output: runStdout, mot: motion.NewRandom(), live: live,
 		clip: clipState{hold: holdClipboard, read: readSelection}, now: time.Now, sleep: sleepCtx, look: lookAt, chromium: installedChromium(chromiumVersionFile),
-		keymap: dialKeyboard, bindSettle: keymapSettle, log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+		keymap: dialKeyboard, bindSettle: keymapSettle, log: slog.New(slog.NewTextHandler(os.Stderr, nil)), fence: live.fence}
 	v.live.runSync = func(args ...string) error {
 		_, err := v.run(context.Background(), "xdotool", args...)
 		return err
@@ -498,6 +502,25 @@ func typeArgs(text string) ([]string, error) {
 	return []string{"type", "--clearmodifiers", "--delay", "12", "--", text}, nil
 }
 
+// typeRelease lets go of what an "xdotool type" of text may hold if it
+// is killed part way (a hand-back or a Take control cutting it short):
+// libxdo holds each key, and Shift for a shifted character, for half the
+// delay. Each distinct key it can press, then Shift; letting go of a key
+// that isn't down does nothing. --clearmodifiers only puts back, at its
+// end, modifiers that were down as it began, so a kill leaves none of
+// those down.
+func typeRelease(text string) []string {
+	release := []string{"keyup"}
+	seen := map[string]bool{}
+	for _, r := range text {
+		if k := keyName(r); !seen[k] {
+			seen[k] = true
+			release = append(release, k)
+		}
+	}
+	return append(release, "Shift_L")
+}
+
 func checkText(text string, most int) error {
 	if text == "" || !utf8.ValidString(text) {
 		return fmt.Errorf("text: want non-empty UTF-8")
@@ -619,7 +642,7 @@ func (v *visual) typeText(w http.ResponseWriter, r *http.Request) {
 	if now {
 		most = maxTypeLen
 	}
-	v.typeAs(w, r, t.Text, most, now, keysAction)
+	v.typeAs(w, r, t.Text, most, now, keysAction, 0, false)
 }
 
 // liveTypeRequest is the live view's Type button's text, typed at instant
@@ -631,19 +654,27 @@ type liveTypeRequest struct{ Text string }
 // included (PROJ-195), but as the person's input, so it doesn't wait for
 // an agent's shortcut gap (PROJ-151). Only the orchestrator's live view
 // calls it; agents' input never reaches it.
+//
+// It names the person's takeover, and is refused once that has ended
+// (fence.go), checked before it types (PROJ-196).
 func (v *visual) liveType(w http.ResponseWriter, r *http.Request) {
+	gen, person, err := v.fence.takeover(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	var t liveTypeRequest
 	if !decode(w, r, &t) {
 		return
 	}
-	v.typeAs(w, r, t.Text, maxTypeLen, true, personAction)
+	v.typeAs(w, r, t.Text, maxTypeLen, true, personAction, gen, person)
 }
 
 // typeAs types text at the pace asked for, as an agent's keys
-// (keysAction: after its shortcut gap) or the person's (personAction):
-// through a binding if it has characters the keyboard map lacks
-// (typeMapped), else with charKeys's keys (typeKeys).
-func (v *visual) typeAs(w http.ResponseWriter, r *http.Request, text string, most int, now bool, kb keyboard) {
+// (keysAction: after its shortcut gap) or the person's (personAction, for
+// takeover gen if person): through a binding if it has characters the
+// keyboard map lacks (typeMapped), else with charKeys's keys (typeKeys).
+func (v *visual) typeAs(w http.ResponseWriter, r *http.Request, text string, most int, now bool, kb keyboard, gen uint64, person bool) {
 	if err := checkText(text, most); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -653,6 +684,14 @@ func (v *visual) typeAs(w http.ResponseWriter, r *http.Request, text string, mos
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// A person's text: refused if their takeover has ended, and the fence
+	// waits for it to be typed (fence.go). An agent's names none.
+	done, ok := v.fence.admit(gen, person)
+	if !ok {
+		refuseFenced(w)
+		return
+	}
+	defer done()
 	runes := []rune(text)
 	switch {
 	case needsKeymap(runes):
@@ -663,7 +702,7 @@ func (v *visual) typeAs(w http.ResponseWriter, r *http.Request, text string, mos
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		v.typeKeys(w, r, kb, func() []xcmd { return []xcmd{{args: args}} })
+		v.typeKeys(w, r, kb, func() []xcmd { return []xcmd{{args: args, release: typeRelease(text)}} })
 	default:
 		v.typeKeys(w, r, kb, func() []xcmd { return v.humanType(text) })
 	}
@@ -787,12 +826,26 @@ func (v *visual) typeKeys(w http.ResponseWriter, r *http.Request, kb keyboard, b
 			return
 		}
 	}
+	if kb == personAction && v.live != nil {
+		// The person's Type, ASCII too: with the live view's lock, once
+		// its xdotool has run what it was sent and let go of what is
+		// held, so neither their queued input nor a key they held mixes
+		// with the text (cheap with nothing queued or held: no xdotool
+		// runs).
+		v.live.mu.Lock()
+		defer v.live.mu.Unlock()
+		if err := v.live.drain(); err != nil {
+			nothingTyped(w, err)
+			return
+		}
+	}
 	if len(v.leftover) > 0 {
 		// Changing the map, as typeMapped does: with the live view's
 		// lock, once its xdotool has run what it was sent. Without
-		// leftover keys, ASCII typing changes no map and drains nothing.
+		// leftover keys, an agent's ASCII typing changes no map and
+		// drains nothing.
 		err := func() error {
-			if v.live != nil {
+			if v.live != nil && kb != personAction {
 				v.live.mu.Lock()
 				defer v.live.mu.Unlock()
 				if err := v.live.drain(); err != nil {

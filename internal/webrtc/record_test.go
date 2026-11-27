@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/db"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
@@ -73,7 +74,7 @@ func TestPersonsInputNeverReachesARecordedPage(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		})
 	}
-	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	mux.HandleFunc("POST /input/release", sessionstest.AnswerLift)
 	rt.Control = mux
 	m, err := sessions.NewManager(d, rt, sessions.Layout{DataDir: dir, HostDataDir: dir, UID: os.Getuid(), GID: os.Getgid()}, log)
 	if err != nil {
@@ -122,6 +123,7 @@ func TestPersonsInputNeverReachesARecordedPage(t *testing.T) {
 	v.message(text, reply)
 	v.waitTyped() // its own goroutine (PROJ-195): Hand back would cancel it
 	v.message([]byte(`{"type": "release"}`), reply)
+	awaitHuman(t, m, false, 5*time.Second) // the hand-back goes on by itself
 	agentActs()
 	v.message(input, reply) // control was handed back: refused
 	v.message([]byte(`{"type": "take"}`), reply)

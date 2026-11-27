@@ -910,3 +910,48 @@ func TestACutShortListWithAShortcutArmsTheGap(t *testing.T) {
 		t.Errorf("a cut-short list of plain keys made the next call wait %v", c.slept)
 	}
 }
+
+// An instant ASCII type killed part way (a Type a hand-back cuts short,
+// an agent's type a Take control breaks off) lets go of every key it may
+// hold, and Shift, which it holds for a shifted character (PROJ-196).
+func TestInstantTypeCutShortLetsGoOfItsKeys(t *testing.T) {
+	for target, body := range map[string]string{"/input/type": `{"text": "Hi! Hi", "pace": "instant"}`, "/input/live-type": `{"text": "Hi! Hi"}`} {
+		v, calls := newTestVisual(false)
+		v.run = func(_ context.Context, name string, args ...string) ([]byte, error) {
+			*calls = append(*calls, call{name, args})
+			if len(args) > 0 && args[0] == "type" {
+				return nil, errors.New("signal: killed")
+			}
+			return nil, nil
+		}
+		rec := serveVisual(v, http.MethodPost, target, body)
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("%s killed: %d %s", target, rec.Code, rec.Body)
+		}
+		last := (*calls)[len(*calls)-1]
+		if got := strings.Join(last.args, " "); got != "keyup H i exclam space Shift_L" {
+			t.Fatalf("%s: the release after the kill is %q (calls %v)", target, got, *calls)
+		}
+	}
+}
+
+// The person's Type, ASCII included, drains the live view first: what it
+// queued has run and a key it holds is let go, before the text is typed,
+// so neither mixes with it (PROJ-196).
+func TestPersonTypeDrainsTheLiveView(t *testing.T) {
+	v, calls := newTestVisual(false)
+	x := &fakeXdotool{}
+	v.live.start = func() (*xdo, error) { return x.proc(), nil }
+	if rec := post(v.live.events, `[{"t":"keydown","k":"Shift_L"}]`); rec.Code != http.StatusNoContent {
+		t.Fatal(rec.Code)
+	}
+	if rec := serveVisual(v, http.MethodPost, "/input/live-type", `{"text": "ab"}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("type: %d %s", rec.Code, rec.Body)
+	}
+	if len(*calls) < 2 || strings.Join((*calls)[0].args, " ") != "keyup Shift_L" || (*calls)[1].args[0] != "type" {
+		t.Fatalf("calls %v, want Shift let go before the type", *calls)
+	}
+	if len(v.live.held) != 0 || v.live.x != nil {
+		t.Fatalf("held %v, live xdotool still running %v", v.live.held, v.live.x != nil)
+	}
+}

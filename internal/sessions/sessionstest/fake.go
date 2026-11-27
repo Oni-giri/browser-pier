@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -128,9 +129,11 @@ func (f *FakeRuntime) Start(_ context.Context, id string) error {
 			mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
 			// A person's control ending empties the clipboard (PROJ-194).
 			mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+			// And lets go of what the person held.
+			mux.HandleFunc("POST /input/release", AnswerLift)
 			h = mux
 		}
-		c.srv = &http.Server{Handler: h} //nolint:gosec // test server
+		c.srv = &http.Server{Handler: withLift(h)} //nolint:gosec // test server
 		go func() { _ = c.srv.Serve(ln) }()
 	}
 	return nil
@@ -285,6 +288,44 @@ func (f *FakeRuntime) Count() int {
 // Outdated reports a container created under another definition than
 // docker.Spec, which Create labels containers with.
 func (f *FakeRuntime) Outdated(spec string) bool { return spec != docker.Spec }
+
+// withLift answers the lift every browser answers as a person's control
+// ends (POST /input/release, which fences the takeover: PROJ-196) for a
+// test's control mux that has no route of its own for it: the
+// orchestrator waits for that answer before agents get the browser back.
+func withLift(h http.Handler) http.Handler {
+	mux, ok := h.(*http.ServeMux)
+	if !ok {
+		return h
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/input/release" {
+			if _, pattern := mux.Handler(r); pattern == "" {
+				AnswerLift(w, r)
+				return
+			}
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// AnswerLift answers a lift as a browser does (images/chromium/entrypoint
+// fence.go): one that fences a takeover (X-BrowserPier-Fence) with 200
+// and the fence, which is all the orchestrator takes as fenced; the
+// person's own with 204.
+func AnswerLift(w http.ResponseWriter, r *http.Request) {
+	if f := r.Header.Get("X-BrowserPier-Fence"); f != "" {
+		n, err := strconv.ParseUint(f, 10, 64)
+		if err != nil {
+			http.Error(w, "bad fence", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"fence":%d}`, n)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
 
 // TestProxy reads and deletes the proxy file the way the check does (the
 // fake runs on this host, so spec.Dir is ours too), records it, and

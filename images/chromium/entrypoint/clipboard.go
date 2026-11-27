@@ -140,6 +140,17 @@ func hasTarget(targets []byte, target string) bool {
 // only then, never polled, so a page can't put text in the person's
 // clipboard on its own.
 func (v *visual) readClipboard(w http.ResponseWriter, r *http.Request) {
+	gen, person, err := v.fence.takeover(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	done, ok := v.fence.admit(gen, person)
+	if !ok {
+		refuseFenced(w)
+		return
+	}
+	defer done()
 	out, code, err := v.readClipboardText(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), code)
@@ -165,10 +176,23 @@ func clipboardText(w http.ResponseWriter, r *http.Request) (string, bool) {
 }
 
 func (v *visual) setClipboard(w http.ResponseWriter, r *http.Request) {
+	gen, person, err := v.fence.takeover(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	text, ok := clipboardText(w, r)
 	if !ok {
 		return
 	}
+	// Right before xclip starts: a takeover that ended while this waited
+	// touches nothing, not even the text it held before.
+	done, ok := v.fence.admit(gen, person)
+	if !ok {
+		refuseFenced(w)
+		return
+	}
+	defer done()
 	v.clip.mu.Lock()
 	defer v.clip.mu.Unlock()
 	if err := v.holdText(r.Context(), text); err != nil {
@@ -184,10 +208,21 @@ func (v *visual) setClipboard(w http.ResponseWriter, r *http.Request) {
 // first (keymap.go). A key press cut short lets go of Ctrl, as an agent's
 // input does (perform).
 func (v *visual) paste(w http.ResponseWriter, r *http.Request) {
+	gen, person, err := v.fence.takeover(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	text, ok := clipboardText(w, r)
 	if !ok {
 		return
 	}
+	done, ok := v.fence.admit(gen, person)
+	if !ok {
+		refuseFenced(w)
+		return
+	}
+	defer done()
 	v.clip.mu.Lock()
 	defer v.clip.mu.Unlock()
 	if err := v.holdText(r.Context(), text); err != nil {
@@ -249,16 +284,31 @@ func (*visual) await(ctx context.Context, done func() bool) error {
 // pastes). Each is taken by an xclip that offers only emptyTarget, which
 // proves it owns the selection, and which then ends, leaving no owner, so
 // a later paste of either pastes nothing.
+//
+// It names, in fenceHeader, the takeover whose end it is for: if a later
+// takeover has begun meanwhile (this was held up past its time), the
+// clipboard is that one's, and is left alone (fence.go's cleanup).
 func (v *visual) emptyClipboard(w http.ResponseWriter, r *http.Request) {
-	v.clip.mu.Lock()
-	defer v.clip.mu.Unlock()
-	v.letGoLocked()
-	var failed []string
-	for _, sel := range []string{selClipboard, selPrimary} {
-		if err := v.emptySelection(r.Context(), sel); err != nil {
-			failed = append(failed, fmt.Sprintf("%s: %v", sel, err))
-		}
+	n, _, err := fenceRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
+	var failed []string
+	_, _ = v.fence.cleanup(n, func(stale bool) error {
+		if stale {
+			return nil
+		}
+		v.clip.mu.Lock()
+		defer v.clip.mu.Unlock()
+		v.letGoLocked()
+		for _, sel := range []string{selClipboard, selPrimary} {
+			if err := v.emptySelection(r.Context(), sel); err != nil {
+				failed = append(failed, fmt.Sprintf("%s: %v", sel, err))
+			}
+		}
+		return nil
+	})
 	if len(failed) > 0 {
 		http.Error(w, "couldn't empty the clipboard: "+strings.Join(failed, "; "), http.StatusInternalServerError)
 		return

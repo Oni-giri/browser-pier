@@ -9,12 +9,14 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Oni-giri/browser-pier/internal/sessions"
+	"github.com/Oni-giri/browser-pier/internal/sessions/sessionstest"
 )
 
 // fakeClipboard is a browser container's clipboard endpoints, recording
@@ -49,7 +51,12 @@ func (c *fakeClipboard) routes(mux *http.ServeMux) {
 		c.held = t.Text
 		c.mu.Unlock()
 	}
-	mux.HandleFunc("POST /input/release", record("release", func(_ []byte, w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) }))
+	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, r *http.Request) {
+		c.mu.Lock()
+		c.calls = append(c.calls, "release")
+		c.mu.Unlock()
+		sessionstest.AnswerLift(w, r)
+	})
 	mux.HandleFunc("POST /input/events", record("events", func(_ []byte, w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) }))
 	mux.HandleFunc("POST /input/live-type", record("type", func(b []byte, w http.ResponseWriter) {
 		c.mu.Lock()
@@ -288,6 +295,7 @@ func TestClipboardEmptiedWhenControlEnds(t *testing.T) {
 				t.Fatalf("set: %v", r)
 			}
 			end.end(k)
+			awaitHuman(t, m, false, 5*time.Second) // the hand-back goes on by itself
 			if got := strings.Join(c.took(), " "); got != end.want {
 				t.Errorf("the browser got %q, want %q", got, end.want)
 			}
@@ -335,7 +343,7 @@ type slowType struct {
 
 func (st *slowType) routes(mux *http.ServeMux) {
 	ok := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }
-	mux.HandleFunc("POST /input/release", ok)
+	mux.HandleFunc("POST /input/release", sessionstest.AnswerLift) // the hand-back's lift fences the takeover
 	mux.HandleFunc("DELETE /input/clipboard", ok)
 	mux.HandleFunc("POST /input/live-type", func(w http.ResponseWriter, r *http.Request) {
 		// Read to the end, as the browser's decode does, so the server
@@ -467,5 +475,60 @@ func TestViewerHandBackStopsItsOwnType(t *testing.T) {
 	}
 	if m.ControlledBy(s.ID, sessions.AdminHolder) {
 		t.Fatal("still in control after Hand back")
+	}
+}
+
+// A lift that comes while the person's Type runs (the phone's Type prompt
+// blurs the page as it closes) isn't dropped: it waits for the Type and
+// runs once it ends, as the same turn's input, so a key held in the live
+// view (Shift, here) is let go of (PROJ-196).
+func TestLiftDuringATypeRunsAfterIt(t *testing.T) {
+	var mu sync.Mutex
+	var got []string
+	typing, finish := make(chan struct{}), make(chan struct{})
+	routes := func(mux *http.ServeMux) {
+		note := func(what string, r *http.Request) {
+			mu.Lock()
+			got = append(got, what+" "+r.Header.Get(sessions.TakeoverHeader))
+			mu.Unlock()
+		}
+		mux.HandleFunc("POST /input/events", func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.ReadAll(r.Body)
+			note("events", r)
+			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("POST /input/live-type", func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.ReadAll(r.Body)
+			note("type", r)
+			close(typing)
+			<-finish
+			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get(sessions.FenceHeader) != "" {
+				sessionstest.AnswerLift(w, r) // a hand-back's
+				return
+			}
+			note("lift", r)
+			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	}
+	h, m, s := offerFixtureWith(t, routes, slog.New(slog.DiscardHandler))
+	k := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: m.Layout().ControlSocket("google")})
+	k.send(`{"type":"take"}`)
+	turn := strconv.FormatUint(k.v.turn, 10)
+	k.send(`{"type":"input","events":[{"t":"keydown","k":"Shift_L"}]}`)
+	k.send(`{"type":"text","text":"hello"}`)
+	<-typing
+	if r := k.send(`{"type":"lift"}`); len(r) != 0 {
+		t.Fatalf("the lift during the Type said %v", r)
+	}
+	close(finish)
+	k.v.waitTyped()
+	mu.Lock()
+	defer mu.Unlock()
+	if want := "events " + turn + ",type " + turn + ",lift " + turn; strings.Join(got, ",") != want {
+		t.Fatalf("the browser got %q, want %q", strings.Join(got, ","), want)
 	}
 }

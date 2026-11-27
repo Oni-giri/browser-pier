@@ -41,6 +41,14 @@ func offerFixtureWith(t *testing.T, routes func(*http.ServeMux), log *slog.Logge
 	return r.h, r.m, r.s
 }
 
+// offerFixtureRuntime is offerFixtureWith, with the fake container
+// runtime, for its knobs.
+func offerFixtureRuntime(t *testing.T, routes func(*http.ServeMux), log *slog.Logger) (*Handler, *sessions.Manager, sessions.Session, *sessionstest.FakeRuntime) {
+	t.Helper()
+	r := newOfferRig(t, routes, log)
+	return r.h, r.m, r.s, r.rt
+}
+
 // offerRig is offerFixture's parts; register adds routes to the fake
 // browser's control socket, and log is the logger.
 type offerRig struct {
@@ -49,6 +57,7 @@ type offerRig struct {
 	s     sessions.Session
 	d     *sql.DB
 	relay *Relay
+	rt    *sessionstest.FakeRuntime
 }
 
 func newOfferRig(t *testing.T, register func(*http.ServeMux), log *slog.Logger) *offerRig {
@@ -88,7 +97,7 @@ func newOfferRig(t *testing.T, register func(*http.ServeMux), log *slog.Logger) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = relay.Close() })
-	return &offerRig{h: NewHandler(relay, m, nil, log), m: m, s: s, d: d, relay: relay}
+	return &offerRig{h: NewHandler(relay, m, nil, log), m: m, s: s, d: d, relay: relay, rt: rt}
 }
 
 func offer(h *Handler, o OfferOptions, body string) *httptest.ResponseRecorder {
@@ -102,9 +111,7 @@ func TestOfferWithControlThatFailsToConnectGivesControlBack(t *testing.T) {
 	if rec := offer(h, OfferOptions{Control: true, Holder: "viewer"}, `{"sdp": "not an offer"}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad SDP: %d %s", rec.Code, rec.Body)
 	}
-	if s, _ := m.Live("google"); s.HumanControl {
-		t.Fatal("a viewer that never connected kept control")
-	}
+	awaitHuman(t, m, false, 5*time.Second) // a viewer that never connected keeps no control
 }
 
 func TestOfferWithControlIsRefusedWhileSomeoneElseHasIt(t *testing.T) {
@@ -177,6 +184,10 @@ func (l *inputLog) register(mux *http.ServeMux) {
 		l.mu.Lock()
 		l.hits = append(l.hits, r.PathValue("what"))
 		l.mu.Unlock()
+		if r.PathValue("what") == "release" {
+			sessionstest.AnswerLift(w, r) // a hand-back's lift fences the takeover
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 }

@@ -146,6 +146,51 @@ func TestServeStopsOnCancel(t *testing.T) {
 	}
 }
 
+// Shutting down ends every request's context: a long-poll answers then,
+// rather than hold the shutdown past its time and run on while the
+// handoffs and the database close.
+func TestServeEndsRequestsAsItShutsDown(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	ended := make(chan struct{})
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		select {
+		case <-r.Context().Done():
+			close(ended)
+		case <-time.After(time.Minute):
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- serve(ctx, ln, h, slog.New(slog.DiscardHandler)) }()
+	go func() {
+		resp, err := http.Get("http://" + ln.Addr().String() + "/api/handoffs/x?wait=900")
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	<-started
+	cancel()
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the long-poll's context didn't end as shutdown began")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("serve returned %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("serve did not return")
+	}
+}
+
 func TestDefaultBrowserImage(t *testing.T) {
 	for version, want := range map[string]string{
 		"v1.2.3":              "ghcr.io/oni-giri/browser-pier-chromium:1.2.3",

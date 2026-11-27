@@ -14,6 +14,7 @@
 package picker
 
 import (
+	"context"
 	_ "embed"
 	"errors"
 	"fmt"
@@ -149,8 +150,10 @@ func (p *Picker) Answer(w http.ResponseWriter, r *http.Request, s sessions.Sessi
 		return
 	}
 	// done once the answer has reached the browser: a hand-back waits
-	// for it before emptying the clipboard (PROJ-194).
-	done, err := p.m.HumanInput(s.ID, holder)
+	// for it before emptying the clipboard (PROJ-194). ctx ends as the
+	// takeover's hand-back begins, and the browser refuses an answer
+	// for a takeover that has ended (turn, PROJ-196).
+	ctx, turn, done, err := p.m.HumanInput(s.ID, holder)
 	if err != nil {
 		http.Error(w, errNoControl, http.StatusConflict)
 		return
@@ -168,7 +171,7 @@ func (p *Picker) Answer(w http.ResponseWriter, r *http.Request, s sessions.Sessi
 			return
 		}
 	}
-	p.answer(w, r, s, id, names)
+	p.answer(ctx, w, turn, s, id, names)
 }
 
 // Upload stores a file from the person's device in the profile's uploads
@@ -242,13 +245,13 @@ func (p *Picker) Upload(w http.ResponseWriter, r *http.Request, s sessions.Sessi
 			return
 		}
 		// Still theirs after the upload, which can take a while?
-		done, err := p.m.HumanInput(s.ID, holder)
+		ctx, turn, done, err := p.m.HumanInput(s.ID, holder)
 		if err != nil {
 			http.Error(w, "You no longer have control. The file is in the uploads.", http.StatusConflict)
 			return
 		}
 		defer done()
-		p.answer(w, r, s, id, []string{f.Name})
+		p.answer(ctx, w, turn, s, id, []string{f.Name})
 		return
 	}
 }
@@ -275,11 +278,20 @@ func (p *Picker) limit() int64 {
 	return p.max
 }
 
-// answer sends the browser the person's answer, and logs it without names.
-func (p *Picker) answer(w http.ResponseWriter, r *http.Request, s sessions.Session, id string, names []string) {
-	err := p.m.AnswerChooser(r.Context(), s.Profile, id, names)
+// answer sends the browser the person's answer, for their takeover turn,
+// with ctx (HumanInput's), and logs it without names.
+func (p *Picker) answer(ctx context.Context, w http.ResponseWriter, turn uint64, s sessions.Session, id string, names []string) {
+	err := p.m.AnswerChooser(ctx, s.Profile, id, names, turn)
 	var why string
 	switch {
+	case errors.Is(err, sessions.ErrControlEnded), ctx.Err() != nil:
+		// Handed back meanwhile: the browser, or this side, refused it.
+		why = "You no longer have control."
+		if len(names) > 0 {
+			why += " The file stays in the uploads."
+		}
+		http.Error(w, why, http.StatusConflict)
+		return
 	case errors.Is(err, sessions.ErrChooserClosed):
 		why = "That file chooser closed: the page closed it, or its time ran out."
 		if len(names) > 0 {

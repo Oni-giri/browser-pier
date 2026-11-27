@@ -13,10 +13,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Oni-giri/browser-pier/internal/auth"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
+	"github.com/Oni-giri/browser-pier/internal/sessions/sessionstest"
 )
 
 // fakeChooser is the browser's file chooser portal: open is what GET
@@ -27,6 +29,8 @@ type fakeChooser struct {
 	answers []string
 	// inputs is what the live view sent the browser as mouse and keys.
 	inputs []string
+	// wedged makes every lift fail, as a browser that doesn't answer.
+	wedged atomic.Bool
 }
 
 func (c *fakeChooser) register(mux *http.ServeMux) {
@@ -42,7 +46,13 @@ func (c *fakeChooser) register(mux *http.ServeMux) {
 		c.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, r *http.Request) {
+		if c.wedged.Load() {
+			http.Error(w, "wedged", http.StatusServiceUnavailable)
+			return
+		}
+		sessionstest.AnswerLift(w, r) // a hand-back's lift fences the takeover
+	})
 	mux.HandleFunc("POST /chooser/restart", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc("POST /chooser/{id}", func(w http.ResponseWriter, r *http.Request) {
 		c.mu.Lock()

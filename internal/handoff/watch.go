@@ -299,10 +299,13 @@ func (s *Service) stillOpen(ctx context.Context, h Handoff) (open, look bool) {
 	return false, false
 }
 
-// reached ends a handoff whose page reached its until_url, as done with
-// the fixed note, unless it is over already, its time is up or its browser
-// stopped (Get ends it as that instead). A person's tap at the same moment
-// ends it once: whichever gets to the database first.
+// reached starts the end of a handoff whose page reached its until_url,
+// as done with the fixed note, unless it is over already, its time is up
+// or its browser stopped (Get starts its end as that instead). A person's
+// tap at the same moment ends it once: whichever starts first, the other
+// joining it. It doesn't wait for the browser's hand-back: the end runs
+// on its own, so the watch, which Close waits for, never waits on a
+// browser.
 func (s *Service) reached(ctx context.Context, h Handoff) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
@@ -310,7 +313,7 @@ func (s *Service) reached(ctx context.Context, h Handoff) {
 	if err != nil || cur.Status.Final() {
 		return
 	}
-	if _, err := s.end(ctx, cur, Done, AutoNote, endAuto); err != nil && !errors.Is(err, ErrInUse) {
+	if _, _, err := s.startEnd(cur, endAs{status: Done, note: AutoNote, how: endAuto}); err != nil && !errors.Is(err, ErrInUse) {
 		s.log.Warn("handing back at the address", "handoff", h.ID, "err", fmt.Sprint(err))
 	}
 }
