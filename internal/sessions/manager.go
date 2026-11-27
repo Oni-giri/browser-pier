@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -988,27 +989,84 @@ func (m *Manager) writeProxyFile(ctx context.Context, p profiles.Profile) (strin
 }
 
 // proxySecrets are the parts of a proxy URL that name the proxy or its
-// account: the URL, its host (with and without the port), user name and
-// password. A browser's log can quote them (an older image's dial or TLS
-// error, PROJ-205), and its last line reaches agents (a session's
-// last_log and error), so they are hidden there.
+// account, in the forms a log could quote them: the URL as given and as
+// net/url writes it (with the password masked too), its user info raw,
+// escaped and decoded, and its host with and without the port, lowercased
+// (as a resolver or TLS error writes a name) and, for an IP, in its
+// canonical form. A browser's log can quote them (an older image's dial
+// or TLS error, PROJ-205), and its last line reaches agents (a session's
+// last_log and error), so they are hidden there. A bare host name with no
+// dot (a container's name, "proxy") is left out: it would hide ordinary
+// words; with its port it is hidden all the same.
 func proxySecrets(raw string) []string {
 	if raw == "" {
 		return nil
 	}
 	out := []string{raw}
+	if _, rest, ok := strings.Cut(raw, "://"); ok {
+		authority, _, _ := strings.Cut(rest, "/")
+		if at := strings.LastIndex(authority, "@"); at >= 0 {
+			user, pass, hasPass := strings.Cut(authority[:at], ":")
+			out = append(out, authority[:at], user)
+			if hasPass {
+				out = append(out, pass)
+			}
+		}
+	}
 	u, err := url.Parse(raw)
 	if err != nil {
 		return out
 	}
-	out = append(out, u.Host, u.Hostname())
+	out = append(out, u.String(), u.Redacted())
+	host := u.Hostname()
+	hosts := []string{host, strings.ToLower(host)}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		hosts = append(hosts, ip.String(), ip.Unmap().String())
+	}
+	for _, h := range hosts {
+		out = append(out, net.JoinHostPort(h, u.Port()))
+		if strings.Contains(h, ".") || strings.Contains(h, ":") {
+			out = append(out, h)
+		}
+	}
 	if u.User != nil {
-		out = append(out, u.User.Username())
+		name := u.User.Username()
+		out = append(out, u.User.String(), name, url.User(name).String())
 		if pw, ok := u.User.Password(); ok {
-			out = append(out, pw)
+			out = append(out, pw, strings.TrimPrefix(url.UserPassword("", pw).String(), ":"))
 		}
 	}
 	return out
+}
+
+// proxyHideFor hides the parts of p's proxy, its {sticky} filled in with
+// the profile's token, as a start gave it to the browser. For a browser
+// picked up after a restart (Reconcile), whose start this BrowserPier
+// didn't see.
+func proxyHideFor(p profiles.Profile) *scrub.Scrubber {
+	proxy := p.Proxy
+	if profiles.HasSticky(proxy) && p.StickyToken != "" {
+		proxy = profiles.FillSticky(proxy, p.StickyToken)
+	}
+	return scrub.New(proxySecrets(proxy))
+}
+
+// scrubLogLine hides sc's secrets in a container's log line, but not in
+// its leading time= and level= fields: a secret that happens to be a
+// word such as ERROR must not hide what the line is (entrypointError).
+func scrubLogLine(sc *scrub.Scrubber, line string) string {
+	head, rest := "", line
+	for _, field := range []string{"time=", "level="} {
+		if !strings.HasPrefix(rest, field) {
+			continue
+		}
+		f, after, ok := strings.Cut(rest, " ")
+		if !ok {
+			break
+		}
+		head, rest = head+f+" ", after
+	}
+	return head + sc.String(rest)
 }
 
 // removeProxyFile deletes the credentials if the browser never read them.
@@ -1082,7 +1140,7 @@ func (m *Manager) end(l *live, lastLog string, final func(*Session) StopReason) 
 	// A handoff was open: it is cancelled once the session has ended.
 	inHelp := l.sess.State == NeedsHelp || (l.sess.State == Stopping && l.stop != nil && l.stopPrev == NeedsHelp)
 	why := final(&l.sess)
-	l.sess.LastLog = sc.String(lastLog)
+	l.sess.LastLog = scrubLogLine(sc, lastLog)
 	l.sess.Error = sc.String(l.sess.Error)
 	l.sess.UpdatedAt = m.now()
 	m.regateLocked(l)
