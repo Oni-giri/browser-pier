@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -388,5 +389,29 @@ func TestHandoffWhileShuttingDown(t *testing.T) {
 	defer mu.Unlock()
 	if buf.Len() > 0 {
 		t.Fatalf("logged as errors: %s", buf.String())
+	}
+}
+
+// As BrowserPier shuts down, every request's context ends with
+// handoff.ErrClosing as its cause; a long-poll whose agent is still there
+// is answered 503 "shutting down", not left with an empty 200.
+func TestHandoffWaitAnswers503AsItShutsDown(t *testing.T) {
+	f := newFixture(t)
+	if err := f.web.Admin().SetPIN(context.Background(), "4821"); err != nil {
+		t.Fatal(err)
+	}
+	s := f.start(f.all, "github", "visual")
+	var h handoffJSON
+	if code := f.call(f.all, http.MethodPost, "/api/sessions/"+s.ID+"/handoff", `{"reason": "captcha"}`, &h); code != http.StatusCreated {
+		t.Fatalf("create: %d", code)
+	}
+	reqs, endReqs := context.WithCancelCause(context.Background())
+	req := httptest.NewRequestWithContext(reqs, http.MethodGet, "/api/handoffs/"+h.ID+"?wait=30", nil)
+	req.Header.Set("Authorization", "Bearer "+f.all)
+	rec := httptest.NewRecorder()
+	time.AfterFunc(200*time.Millisecond, func() { endReqs(handoff.ErrClosing) })
+	f.srv.Config.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "shutting down") {
+		t.Fatalf("a long-poll as BrowserPier shuts down: %d %q", rec.Code, rec.Body.String())
 	}
 }

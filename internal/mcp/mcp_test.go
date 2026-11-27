@@ -753,3 +753,26 @@ func TestWaitForHandoffWaitsForTheHandBack(t *testing.T) {
 		done()
 	}
 }
+
+// An MCP tool's call to the API while BrowserPier shuts down hears that
+// it is shutting down, not an empty answer it can't read (PROJ-196).
+func TestToolCallAsItShutsDown(t *testing.T) {
+	f := newFixture(t)
+	s, _, err := f.m.Start(context.Background(), "google", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, _, err := f.handoffs.Create(context.Background(), s.ID, "claude", handoff.Captcha, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqs, endReqs := context.WithCancelCause(context.Background())
+	time.AfterFunc(200*time.Millisecond, func() { endReqs(handoff.ErrClosing) })
+	extra := &sdk.RequestExtra{Header: http.Header{"Authorization": {"Bearer " + f.all}}}
+	var out handoffOut
+	err = f.mcp.callJSON(reqs, extra, http.MethodGet, "/api/handoffs/"+h.ID+"?wait=30", nil, &out)
+	var te toolError
+	if !errors.As(err, &te) || !strings.Contains(err.Error(), "shutting down") {
+		t.Fatalf("wait_for_handoff's call as BrowserPier shuts down = %v", err)
+	}
+}

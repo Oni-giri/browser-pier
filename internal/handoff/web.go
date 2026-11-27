@@ -496,7 +496,11 @@ func (w *Web) finish(rw http.ResponseWriter, r *http.Request) {
 		status = Cant
 	}
 	h, err := w.svc.Finish(r.Context(), h, status, r.PostFormValue("note"))
-	if errors.Is(err, ErrHandingBack) || errors.Is(err, ErrClosing) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+	if errors.Is(err, ErrClosing) || ShuttingDown(r.Context()) {
+		http.Error(rw, "BrowserPier is shutting down. Reload in a moment.", http.StatusServiceUnavailable)
+		return
+	}
+	if errors.Is(err, ErrHandingBack) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		// Finish waits handBackWait at most: the hand-back goes on, and
 		// the page says so until it is over.
 		if r.Context().Err() == nil {

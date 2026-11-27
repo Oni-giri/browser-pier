@@ -435,8 +435,10 @@ func serve(ctx context.Context, ln net.Listener, h http.Handler, log *slog.Logge
 	// handoff's ?wait=, MCP's wait) or an explicit end waiting for a
 	// hand-back answers then, rather than outlive the shutdown's time and
 	// run on while the handoffs and the database close.
-	reqs, endReqs := context.WithCancel(context.Background())
-	defer endReqs()
+	// The cause tells handlers it is a shutdown, not their client going
+	// away, so they still answer it: 503 (handoff.ShuttingDown).
+	reqs, endReqs := context.WithCancelCause(context.Background())
+	defer endReqs(nil)
 	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second,
 		BaseContext: func(net.Listener) context.Context { return reqs }}
 	errc := make(chan error, 1)
@@ -448,7 +450,7 @@ func serve(ctx context.Context, ln net.Listener, h http.Handler, log *slog.Logge
 	case <-ctx.Done():
 	}
 	log.Info("shutting down")
-	endReqs()
+	endReqs(handoff.ErrClosing)
 	sctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(sctx); err != nil {

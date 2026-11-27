@@ -225,10 +225,12 @@ func (a *API) getHandoff(w http.ResponseWriter, r *http.Request) {
 // internal error; otherwise 500.
 func (a *API) handoffError(w http.ResponseWriter, r *http.Request, what string, err error) {
 	switch {
+	case errors.Is(err, handoff.ErrClosing), handoff.ShuttingDown(r.Context()):
+		// Shutting down, the agent still there: told so, not left with
+		// an empty answer.
+		writeError(w, http.StatusServiceUnavailable, handoff.ErrClosing.Error())
 	case r.Context().Err() != nil:
 		// the agent gave up waiting
-	case errors.Is(err, handoff.ErrClosing):
-		writeError(w, http.StatusServiceUnavailable, err.Error())
 	case errors.Is(err, handoff.ErrHandingBack), errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 		writeError(w, http.StatusServiceUnavailable, handoff.ErrHandingBack.Error())
 	default:

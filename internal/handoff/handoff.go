@@ -748,8 +748,18 @@ func (s *Service) startEnd(h Handoff, as endAs) (*ending, Handoff, error) {
 }
 
 // ErrClosing: the service is closing, and starts no end; ask again once
-// BrowserPier is back.
+// BrowserPier is back. The server also ends every request's context with
+// it as its cause as shutdown begins (cmd/browserpier's serve), so a
+// handler can tell a shutdown from a client that went away
+// (ShuttingDown).
 var ErrClosing = errors.New("BrowserPier is shutting down")
+
+// ShuttingDown reports whether ctx, a request's, ended because
+// BrowserPier is shutting down, not because its client went away: the
+// client is still there, and is answered 503.
+func ShuttingDown(ctx context.Context) bool {
+	return errors.Is(context.Cause(ctx), ErrClosing)
+}
 
 // ending reports whether an end of handoff id is under way.
 func (s *Service) isEnding(id string) bool {
