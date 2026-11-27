@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -52,6 +53,11 @@ func (r *reaper) start(cmd *exec.Cmd) (<-chan syscall.WaitStatus, error) {
 // startPid is start, also returning the child's pid: read here, under the
 // lock, since reap releases the process (and its Pid) once it exits.
 func (r *reaper) startPid(cmd *exec.Cmd) (<-chan syscall.WaitStatus, int, error) {
+	for _, out := range []io.Writer{cmd.Stdout, cmd.Stderr} {
+		if _, ok := out.(*os.File); out != nil && !ok {
+			return nil, 0, errors.New("reaper: a command's stdout and stderr must be nil or *os.File")
+		}
+	}
 	// Holding the lock across Start means reap can't collect the child
 	// before it is registered, even if it exits at once.
 	r.mu.Lock()

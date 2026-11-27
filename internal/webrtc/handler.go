@@ -287,6 +287,11 @@ type viewer struct {
 	control   bool
 	turn      uint64
 	checkedAt time.Time // when allowed last said yes
+	// typing is the Type under way, if one is (PROJ-195): it runs on its
+	// own goroutine, so Hand back and lift are read at once and cancel
+	// it; typed is closed once it has ended (tests wait on it).
+	typing context.CancelFunc
+	typed  chan struct{}
 }
 
 // stillAllowed re-checks, at most once a second, that this viewer may act.
@@ -373,11 +378,38 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 			say(map[string]any{"type": "error", "msg": "The browser isn't running."})
 		}
 	case "release":
+		v.stopTypingLocked()
 		if err := v.releaseLocked(viewerHandBackWait); errors.Is(err, sessions.ErrHandingBack) {
 			say(map[string]any{"type": "error", "msg": "The browser is still being handed back."})
 		}
 		say(map[string]any{"type": "control", "on": false})
 	case "lift", "input", "text", "clipboard", "clipboard-set":
+		if v.typing != nil {
+			// A lift never cuts a Type short: the phone's Type prompt
+			// itself blurs the page as it closes (Safari, desktop
+			// Chromium), so the page's blur lift arrives right behind the
+			// Type it just sent. The Type lets go of the live view's keys
+			// before it types (the drain) and of its own after; Hand back,
+			// the end of control or the view going still stop it.
+			if m.Type == "lift" {
+				return
+			}
+			// The person's Type is still going: its keys and this input's
+			// would interleave. Hand back is still read, and cancels it.
+			msg := "Still typing: wait for it to finish, or hand back to stop it."
+			if m.Type == "clipboard" || m.Type == "clipboard-set" {
+				say(map[string]any{"type": "clipboard-error", "id": m.ID, "msg": msg})
+			} else {
+				say(map[string]any{"type": "error", "msg": msg})
+			}
+			return
+		}
+		if m.Type == "text" {
+			if n := utf8.RuneCountInString(m.Text); n > maxLiveType {
+				say(map[string]any{"type": "error", "msg": fmt.Sprintf("That's %d characters: at most %d can be typed at once.", n, maxLiveType)})
+				return
+			}
+		}
 		var ctx context.Context
 		var done func()
 		var err error
@@ -387,8 +419,9 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 			// own turn: once its control has ended, whoever drives now (a
 			// person, another of the admin's views under the same holder,
 			// or an agent mid-drag) gets nothing from it, not even a lift.
-			// ctx ends with the session, which waits for done before its
-			// profile can have a new browser on the same socket.
+			// ctx is the takeover's: it ends as its hand-back begins, or
+			// the session ends, which waits for done before its profile
+			// can have a new browser on the same socket.
 			ctx, done, err = v.h.m.HumanInputTurn(v.session, v.holder, v.turn)
 		}
 		if !v.control || err != nil {
@@ -407,6 +440,12 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 			say(map[string]any{"type": "control", "on": false})
 			return
 		}
+		if m.Type == "text" {
+			// On a goroutine of its own, with this turn's lease (done),
+			// which it lets go of when it ends (PROJ-195).
+			v.startTypingLocked(ctx, done, m.Text, say)
+			return
+		}
 		// ended: the browser refused the operation (409) because this
 		// takeover has ended, or it was cut short as its hand-back began.
 		// The viewer then gives control up, tells its page, and sends
@@ -423,9 +462,7 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 			}
 		}()
 		ended := func(err error) bool {
-			var se *statusError
-			refused := errors.As(err, &se) && se.code == http.StatusConflict
-			if ctx.Err() == nil && !refused {
+			if !refusedOrCut(ctx, err) {
 				return false
 			}
 			giveUp = true
@@ -447,17 +484,82 @@ func (v *viewer) message(msg []byte, reply func(string)) {
 				ended(err)
 			}
 		default:
-			path, body := "/input/events", []byte(m.Events)
-			if m.Type == "text" {
-				// A person typing: at once, not at an agent's human pace,
-				// and not held back by an agent's shortcut gap (PROJ-151).
-				path = "/input/live-type"
-				body, _ = json.Marshal(map[string]string{"text": m.Text})
-			}
-			if err := v.post(ctx, path, body); err != nil && !ended(err) {
+			if err := v.post(ctx, "/input/events", []byte(m.Events)); err != nil && !ended(err) {
 				say(map[string]any{"type": "error", "msg": err.Error()})
 			}
 		}
+	}
+}
+
+// startTypingLocked types the person's text (the phone's Type button) on
+// a goroutine of its own, with v.mu held to start it: at once, not at an
+// agent's human pace, and not held back by an agent's shortcut gap
+// (PROJ-151); with time for characters the keyboard map lacks
+// (PROJ-195). It names this viewer's turn, and holds done (that turn's
+// HumanInputTurn lease) until it ends, so a hand-back waits for it before
+// emptying the clipboard; it breaks off as soon as the takeover's control
+// starts to end (inputCtx, the takeover's context), they hand back
+// (stopTypingLocked), or this view goes; a lift doesn't stop it. If the
+// browser refuses it (its takeover fenced) or the takeover's end cuts it
+// short, the viewer gives control up, as for any input. One at a time:
+// the caller refuses another meanwhile.
+func (v *viewer) startTypingLocked(inputCtx context.Context, done func(), text string, say func(any)) {
+	ctx, cancel := context.WithCancel(inputCtx)
+	typed := make(chan struct{})
+	v.typing, v.typed = cancel, typed
+	turn := v.turn
+	var gone <-chan struct{}
+	if v.conn != nil {
+		gone = v.conn.Done()
+	}
+	body, _ := json.Marshal(map[string]string{"text": text})
+	go func() {
+		go func() {
+			select {
+			case <-gone:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+		_, err := v.doAs(ctx, turn, http.MethodPost, "/input/live-type", body, http.StatusNoContent, typeWait(text))
+		cancelled := ctx.Err() != nil
+		ended := refusedOrCut(inputCtx, err)
+		cancel()
+		// The lease first, without v.mu: a hand-back holding v.mu waits
+		// for it.
+		done()
+		v.mu.Lock()
+		if v.typed == typed {
+			v.typing, v.typed = nil, nil
+		}
+		if ended && v.control && v.turn == turn {
+			_ = v.releaseLocked(viewerHandBackWait)
+			say(map[string]any{"type": "control", "on": false})
+		}
+		v.mu.Unlock()
+		close(typed)
+		if err != nil && !cancelled && !ended {
+			say(map[string]any{"type": "error", "msg": err.Error()})
+		}
+	}()
+}
+
+// refusedOrCut reports whether a person's call failed because their
+// takeover has ended: the browser refused it (409, fenced), or the
+// takeover's context (ctx) ended as its hand-back began.
+func refusedOrCut(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	var se *statusError
+	return (errors.As(err, &se) && se.code == http.StatusConflict) || ctx.Err() != nil
+}
+
+// stopTypingLocked cancels the person's Type under way, if one is, with
+// v.mu held. It doesn't wait: a hand-back waits for its lease anyway.
+func (v *viewer) stopTypingLocked() {
+	if v.typing != nil {
+		v.typing()
 	}
 }
 
@@ -558,14 +660,36 @@ func (v *viewer) post(ctx context.Context, path string, body []byte) error {
 // controlWait bounds a call to the container's control socket.
 const controlWait = 10 * time.Second
 
+// maxLiveType caps the Type button's text, as the container's maxTypeLen
+// does, before typeWait is worked out from it.
+const maxLiveType = 2000
+
+// typeWait bounds the Type button's call, which may type up to 2,000
+// characters: 12 ms a key at instant pace, and, for characters the
+// keyboard map lacks, stretches of as many bound keys as the map has
+// spare (13 with the image's layout data) that each take about 0.55 s
+// (PROJ-195). 60 ms a character covers text where every character is a
+// new one; TestTypeWaitFitsTheText checks it against keyplan.Estimate,
+// the browser's own plan.
+func typeWait(text string) time.Duration {
+	return controlWait + time.Duration(utf8.RuneCountInString(text))*60*time.Millisecond
+}
+
 // maxClipboard caps what a clipboard read brings back; the container caps
 // it too.
 const maxClipboard = 32 << 10
 
 // do calls the container's control socket for the person, wanting status
 // want, within wait and while ctx lasts (HumanInput's: the takeover's),
-// and returns the answer's body. v.mu must be held.
+// and returns the answer's body. v.mu must be held: it names this
+// viewer's turn (doAs).
 func (v *viewer) do(ctx context.Context, method, path string, body []byte, want int, wait time.Duration) ([]byte, error) {
+	return v.doAs(ctx, v.turn, method, path, body, want, wait)
+}
+
+// doAs is do for takeover turn, without v.mu: the Type's goroutine
+// (startTypingLocked) names the turn it was started in.
+func (v *viewer) doAs(ctx context.Context, turn uint64, method, path string, body []byte, want int, wait time.Duration) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	c := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -582,7 +706,7 @@ func (v *viewer) do(ctx context.Context, method, path string, body []byte, want 
 	// Every call here is the person's, for the takeover this viewer took:
 	// once its hand-back has fenced it, the browser refuses the call,
 	// however long it was held up (PROJ-196).
-	req.Header.Set(sessions.TakeoverHeader, strconv.FormatUint(v.turn, 10))
+	req.Header.Set(sessions.TakeoverHeader, strconv.FormatUint(turn, 10))
 	resp, err := c.Do(req) //nolint:gosec // as above
 	if err != nil {
 		return nil, err

@@ -223,7 +223,15 @@ func TestInputIsOnlyThisTurns(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		}
 	}
-	mux.HandleFunc("POST /input/release", record("release"))
+	rec := record("release")
+	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, r *http.Request) {
+		// The hand-back waits for the releases to run (PROJ-195): its
+		// lift fences the takeover, which drains (PROJ-196).
+		if r.Header.Get(FenceHeader) == "" {
+			t.Errorf("the hand-back's release isn't the fenced lift: %v", r.Header)
+		}
+		rec(w, r)
+	})
 	mux.HandleFunc("DELETE /input/clipboard", record("empty"))
 	f.rt.Control = mux
 	s := f.start(f.m)
@@ -1791,4 +1799,65 @@ func TestRevokingATokenCancelsItsInput(t *testing.T) {
 	if err := context.Cause(ctx); !errors.Is(err, ErrRevoked) {
 		t.Fatalf("cause = %v", err)
 	}
+}
+
+// A stop that fails leaves the person's control as it was, with a
+// context of its own again: the stop broke off their input under way, but
+// their next input isn't cut short by it.
+func TestAFailedStopGivesTheTakeoverANewContext(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	turn, err := f.m.TakeControlTurn(s.ID, AdminHolder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, done, err := f.m.HumanInputTurn(s.ID, AdminHolder, turn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.rt.Mu.Lock()
+	f.rt.StopErr = errors.New("docker said no")
+	f.rt.Mu.Unlock()
+	if _, err := f.m.Stop(context.Background(), s.ID); err == nil {
+		t.Fatal("the stop didn't fail")
+	}
+	if before.Err() == nil {
+		t.Error("the stop didn't break off the input under way")
+	}
+	done()
+	after, done, err := f.m.HumanInputTurn(s.ID, AdminHolder, turn)
+	if err != nil {
+		t.Fatalf("input after the failed stop = %v", err)
+	}
+	defer done()
+	if after.Err() != nil {
+		t.Fatal("the takeover's input after a failed stop starts cut short")
+	}
+}
+
+// The person's turn context ends as the session stops, as well as at a
+// hand-back, so a Type of theirs under way breaks off (PROJ-195).
+func TestHumanTurnContextEndsWithTheSession(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	turn, err := f.m.TakeControlTurn(s.ID, AdminHolder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, done, err := f.m.HumanInputTurn(s.ID, AdminHolder, turn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped := make(chan struct{})
+	go func() {
+		_, _ = f.m.Stop(context.Background(), s.ID)
+		close(stopped)
+	}()
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the turn's context outlived the stop")
+	}
+	done()
+	<-stopped
 }

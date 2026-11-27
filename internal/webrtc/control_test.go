@@ -576,6 +576,10 @@ func (b *fencingBrowser) routes(mux *http.ServeMux) {
 		act(w, r, "set")
 	})
 	mux.HandleFunc("POST /input/events", func(w http.ResponseWriter, r *http.Request) { act(w, r, "events") })
+	mux.HandleFunc("POST /input/live-type", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		act(w, r, "type "+strconv.FormatUint(gen(r), 10))
+	})
 	mux.HandleFunc("DELETE /input/clipboard", func(w http.ResponseWriter, _ *http.Request) {
 		b.note("empty")
 		w.WriteHeader(http.StatusNoContent)
@@ -614,6 +618,41 @@ func TestHeldUpSetNeverActsAfterTheHandBack(t *testing.T) {
 		t.Fatalf("agent input after = %v", err)
 	} else {
 		done()
+	}
+}
+
+// The live view's Type, on its own goroutine (PROJ-195), names the
+// viewer's takeover like every other input (PROJ-196): once the browser
+// has fenced it, the Type is refused, and the viewer gives its control up
+// rather than type on into nothing.
+func TestTypeNamesItsTakeover(t *testing.T) {
+	b := &fencingBrowser{}
+	h, m, s := offerFixtureWith(t, b.routes, slog.New(slog.DiscardHandler))
+	k := newTalk(t, &viewer{h: h, session: s.ID, holder: sessions.AdminHolder, sock: m.Layout().ControlSocket("google")})
+	if r := k.send(`{"type":"take"}`); len(r) != 1 || r[0]["on"] != true {
+		t.Fatalf("take: %v", r)
+	}
+	turn := k.v.turn
+	k.send(`{"type":"text","text":"hello"}`)
+	k.v.waitTyped()
+	if got := b.took(); got != "type "+strconv.FormatUint(turn, 10) {
+		t.Fatalf("the browser got %q, want the Type naming takeover %d", got, turn)
+	}
+	// The browser fences the takeover (a hand-back's lift held up on
+	// this side, say): the next Type is refused, and the viewer lets go.
+	b.mu.Lock()
+	b.fence = turn
+	b.mu.Unlock()
+	k.send(`{"type":"text","text":"again"}`)
+	k.v.waitTyped()
+	if got := b.took(); !strings.HasPrefix(got, "refused") {
+		t.Fatalf("the browser got %q, want the Type refused", got)
+	}
+	k.v.mu.Lock()
+	control := k.v.control
+	k.v.mu.Unlock()
+	if control || m.ControlledBy(s.ID, sessions.AdminHolder) {
+		t.Fatal("a viewer whose Type was refused kept its control")
 	}
 }
 

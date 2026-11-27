@@ -186,7 +186,7 @@ func (a *API) replay(w http.ResponseWriter, s sessions.Session, r sessions.Recei
 	case sessions.CallWaiting:
 		out["error"] = "This " + what + " is waiting for its turn; it wasn't run again. Ask GET /api/sessions/" + s.ID + "/calls/" + r.CallID + " (MCP: call_status) how it went. A 404 there doesn't prove it never ran: it may have been given back unrun, or have run and had its receipt dropped since (1,000 calls later, or the browser restarted). Read the page before sending it again."
 	case sessions.CallRunning:
-		out["error"] = "This " + what + " is still running; it wasn't run again. Ask GET /api/sessions/" + s.ID + "/calls/" + r.CallID + " (MCP: call_status) how it ended."
+		out["error"] = "This " + what + " is still running; it wasn't run again. Ask GET /api/sessions/" + s.ID + "/calls/" + r.CallID + " (MCP: call_status) how it ended. A 404 there doesn't prove it never ran: a type that failed before any key was pressed is given back unrun, and a call that ran may have had its receipt dropped since (1,000 calls later, or the browser restarted). Read the page before sending it again."
 	case sessions.CallInterrupted:
 		out["error"] = "This " + what + " ran already and was interrupted (a person took the browser, it stopped, or its caller went away); it wasn't run again. How far it got isn't known: read the page, then send what is still needed under a new call id."
 	default:

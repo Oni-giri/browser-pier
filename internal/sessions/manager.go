@@ -1083,7 +1083,7 @@ func (m *Manager) end(l *live, lastLog string, final func(*Session) StopReason) 
 	m.secrets.Forget(s.ID)
 	l.calls = nil
 	l.disconnectLocked()
-	l.cancelAllLocked(ErrStopping)
+	l.cancelAllLocked(ErrStopping) // the person's input broke off with opCtx, above
 	hooks := slices.Clone(m.onEnd)
 	if l.recTimer != nil {
 		l.recTimer.Stop()
@@ -1324,6 +1324,12 @@ func (m *Manager) stopIf(ctx context.Context, id string, cond func(*live) bool, 
 		// Page calls under way stop first (an act lets go of what it
 		// pressed), then the browser closes.
 		l.cancelAllLocked(ErrStopping)
+		// The person's input under way breaks off too (a long Type,
+		// PROJ-195), and new input is refused while stopping; should the
+		// stop fail, runStop gives their takeover a new context.
+		if l.human && !l.releasing {
+			l.takeCancel()
+		}
 		for len(l.leases) > 0 {
 			m.inputsDone.Wait()
 		}
@@ -1396,6 +1402,11 @@ func (m *Manager) runStop(l *live, attempt *stopAttempt, cid string) {
 						m.emptyClipboard(ctx, id, profile, gen)
 					}
 				})
+			}
+			if l.sess.State == Stopping && l.human && !l.releasing {
+				// The stop broke off the person's input; their control
+				// goes on, with a context of its own again.
+				l.takeCtx, l.takeCancel = context.WithCancel(l.opCtx)
 			}
 			if l.sess.State == Stopping {
 				l.sess.State = l.stopPrev

@@ -79,7 +79,13 @@ var (
 func startXdotool() (*xdo, error) {
 	cmd := exec.Command("xdotool", "-")
 	cmd.Env = append(os.Environ(), "DISPLAY="+display)
-	cmd.Stderr = os.Stderr
+	// Its stderr can name the keys typed: withheld (PROJ-195).
+	stderr, err := withheldStderr("xdotool")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = stderr.Close() }()
+	cmd.Stderr = stderr
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -213,14 +219,22 @@ func (li *liveInput) loseReleased() {
 // drain returns once the running xdotool has run every command sent so
 // far: it closes its input and waits for it to exit (drainWait; then it
 // is killed, and whatever it hadn't run never runs). The next input
-// starts a new one. li.mu must be held.
+// starts a new one. li.mu must be held. Nothing is held once it returns
+// without an error (PROJ-195's rule).
 //
 // Only if xdotool exited cleanly is a release written to it known to
 // have run, and its key forgotten; with none running, nothing marked
-// released can be shown to have run. Releases a dead xdotool was sent
-// (lost) run here, in one of their own. If it didn't end cleanly,
-// everything held is let go by a new, synchronous xdotool (runSync), and
-// drain fails if that fails, the keys still held.
+// released can be shown to have run. Whatever is held still (its release
+// lost with a dead xdotool, never written, never asked for, or written to
+// one that didn't end cleanly) is let go here, in a synchronous xdotool
+// of its own (runSync); if that fails, all of it is lost, for the next
+// xdotool to send first or the next drain to run, and drain fails.
+//
+// It lets go of every takeover's keys: the fenced lift drains only when
+// no later takeover has begun (fence.go's stale), so every key held then
+// is the ending takeover's or an earlier one's; typing that binds keys
+// (typeMapped, PROJ-195) drains so a queued key can't bind a keycode of
+// its own meanwhile, and the person's Type isn't typed with a key held.
 func (li *liveInput) drain() error {
 	clean := len(li.released) == 0
 	if x := li.x; x != nil {
@@ -242,24 +256,17 @@ func (li *liveInput) drain() error {
 			delete(li.held, h)
 		}
 		clear(li.released)
-		names, lines := releaseLinesOf(li.held, func(h string, _ uint64) bool { return li.lost[h] })
-		if err := li.runReleases(lines); err != nil {
-			return fmt.Errorf("couldn't let go of the live view's keys: %w", err)
-		}
-		for _, h := range names {
-			delete(li.held, h)
-		}
-		clear(li.lost)
-		return nil
 	}
+	// What the last xdotool may not have run is lost, never dropped.
 	li.loseReleased()
 	names, lines := li.releaseLines(true, math.MaxUint64)
 	if err := li.runReleases(lines); err != nil {
+		for _, h := range names {
+			li.lost[h] = true
+		}
 		return fmt.Errorf("couldn't let go of the live view's keys: %w", err)
 	}
-	for _, h := range names {
-		delete(li.held, h)
-	}
+	clear(li.held)
 	clear(li.lost)
 	return nil
 }
@@ -355,8 +362,14 @@ func (li *liveInput) events(w http.ResponseWriter, r *http.Request) {
 				delete(li.lost, h)
 			}
 		case "up", "keyup":
-			if _, ok := li.held[h]; ok && written {
-				li.released[h] = true
+			if _, ok := li.held[h]; ok {
+				if written {
+					li.released[h] = true
+				} else {
+					// Asked for and not written: the next xdotool gets it
+					// first, or drain runs it.
+					li.lost[h] = true
+				}
 			}
 		}
 	}
@@ -378,9 +391,8 @@ func (li *liveInput) events(w http.ResponseWriter, r *http.Request) {
 // under way are over), it fences N: nothing from N or earlier acts from
 // then on. Then the live xdotool is drained, so whatever input it had
 // queued has run (or, if it had to be killed, everything held is let
-// go), the keys and buttons N or an earlier takeover still holds are let
-// go through a synchronous run of their own (runSync), and only then does
-// it answer 200 with the fence; if any of that fails, it answers 500,
+// go), whatever is still held is let go through a synchronous run of its
+// own (runSync), and only then does it answer 200 with the fence; if any of that fails, it answers 500,
 // the keys still held. A lift for N held up past the start of a later
 // takeover (fence.go's stale) still fences N, which costs the later one
 // nothing, but touches neither its input nor its keys.
@@ -405,17 +417,9 @@ func (li *liveInput) release(w http.ResponseWriter, r *http.Request) {
 			}
 			li.mu.Lock()
 			defer li.mu.Unlock()
-			if err := li.drain(); err != nil {
-				return err
-			}
-			names, lines := li.releaseLines(true, n)
-			if err := li.runReleases(lines); err != nil {
-				return fmt.Errorf("couldn't let go of the live view's keys: %w", err)
-			}
-			for _, h := range names {
-				delete(li.held, h)
-			}
-			return nil
+			// Not stale: every key held is takeover N's or an earlier
+			// one's, and drain lets go of them all.
+			return li.drain()
 		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -450,6 +454,12 @@ func (li *liveInput) release(w http.ResponseWriter, r *http.Request) {
 			return lines
 		})
 		if err != nil {
+			// Not written: the next xdotool gets them first, or the
+			// hand-back's drain runs them.
+			unsent, _ := li.releaseLines(false, gen)
+			for _, h := range unsent {
+				li.lost[h] = true
+			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}

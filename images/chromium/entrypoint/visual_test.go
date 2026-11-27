@@ -38,6 +38,10 @@ func newTestVisual(fail bool) (*visual, *[]call) {
 		return []byte("x:100 y:700 screen:0 window:4194311\n"), nil
 	}
 	v.mot = motion.New(1)
+	// Never the real display's keyboard map: a map with no spare keys,
+	// unless a test gives it one (keymapVisual).
+	v.keymap = newFakeKeyboard(&calls).open
+	v.bindSettle = 0
 	v.chromium = addressBarChromium
 	return v, &calls
 }
@@ -379,9 +383,14 @@ func typed(t *testing.T, cmds []call) (text string, gaps []string) {
 	t.Helper()
 	names := map[string]rune{}
 	for r, k := range charKeys {
-		names[k] = r
+		if r != '\r' { // Return reads back as \n
+			names[k] = r
+		}
 	}
 	for _, c := range cmds {
+		if c.name != "xdotool" {
+			continue
+		}
 		a := c.args
 		for i := 0; i < len(a); i++ {
 			switch a[i] {
@@ -392,16 +401,12 @@ func typed(t *testing.T, cmds []call) (text string, gaps []string) {
 				}
 				if r, ok := names[k]; ok {
 					text += string(r)
+				} else if cp, err := strconv.ParseUint(strings.TrimPrefix(k, "U"), 16, 32); strings.HasPrefix(k, "U") && err == nil {
+					text += string(rune(cp))
 				} else {
 					text += k
 				}
 				i += 5
-			case "type":
-				if a[i+1] != "--clearmodifiers" || a[i+2] != "--" || i+4 != len(a) {
-					t.Fatalf("type not last, or not with --: %q", a[i:])
-				}
-				text += a[i+3]
-				i += 3
 			case "sleep":
 				gaps = append(gaps, a[i+1])
 				i++
@@ -414,12 +419,12 @@ func typed(t *testing.T, cmds []call) (text string, gaps []string) {
 }
 
 func TestHumanTypeHasATypistsRhythm(t *testing.T) {
-	v, calls := newTestVisual(false)
+	v, calls, _ := keymapVisual(t, 8)
 	text := "Hello, World! it's 9:30 am\tok"
 	if n := len([]rune(text)); n != 29 {
 		t.Fatal(n)
 	}
-	text += "é\n" // 31: an accent goes the old way, on its own
+	text += "é\n" // 31: an accent is a key too, once bound (keymap.go)
 	body, _ := json.Marshal(map[string]string{"text": text})
 	if rec := serveVisual(v, http.MethodPost, "/input/type", string(body)); rec.Code != http.StatusNoContent {
 		t.Fatalf("type: %d %s", rec.Code, rec.Body)
@@ -472,7 +477,7 @@ func TestCharKeysAreKeys(t *testing.T) {
 			t.Errorf("no key for %q", r)
 		}
 	}
-	for _, r := range "é€😀\r\x00" {
+	for _, r := range "é€😀\x1b\x00" {
 		if k, ok := keysym(r); ok {
 			t.Errorf("%q has key %q", r, k)
 		}
