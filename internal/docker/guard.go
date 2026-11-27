@@ -168,7 +168,11 @@ func ValidUsernsMode(s string) bool {
 }
 
 // The environment variables a browser container may get, and the ones it
-// must. A new one for the entrypoint needs its name here.
+// must. A new one for the entrypoint needs its name here. The entrypoint
+// reads a few more that the orchestrator never sets, such as
+// BROWSERPIER_CHOOSER_TIMEOUT and BROWSERPIER_STOP_TIMEOUT: a test that
+// needs one sets it in a test image's own ENV, never through a create
+// body, and the guard refuses them (PROJ-208).
 var (
 	guardBrowserEnv = []string{
 		"BROWSERPIER_SCREEN",

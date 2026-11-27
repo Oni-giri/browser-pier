@@ -309,6 +309,10 @@ var widenings = []widening{
 	{name: "no Cmd on the check", kind: kindSandboxCheck, mutate: cfgOf(func(c *container.Config) { c.Cmd = nil }), field: "Config.Cmd"},
 	{name: "Entrypoint", mutate: cfgOf(func(c *container.Config) { c.Entrypoint = []string{"/bin/sh"} }), field: "Config.Entrypoint"},
 	{name: "an unknown environment name", mutate: cfgOf(func(c *container.Config) { c.Env = append(c.Env, "LD_PRELOAD=/files/x.so") }), field: "Config.Env"},
+	// Read by the entrypoint, never set by the orchestrator: a test sets
+	// them in a test image's own ENV, not in a create body (PROJ-208).
+	{name: "the chooser timeout", mutate: cfgOf(func(c *container.Config) { c.Env = append(c.Env, "BROWSERPIER_CHOOSER_TIMEOUT=3s") }), field: "Config.Env"},
+	{name: "the stop timeout", mutate: cfgOf(func(c *container.Config) { c.Env = append(c.Env, "BROWSERPIER_STOP_TIMEOUT=1s") }), field: "Config.Env"},
 	{name: "a duplicate environment name", mutate: cfgOf(func(c *container.Config) { c.Env = append(c.Env, "BROWSERPIER_SCREEN=800x600") }), field: "Config.Env"},
 	{name: "a newline in a value", mutate: func(o *client.ContainerCreateOptions) {
 		setEnv(o, "BROWSERPIER_LOCALE_OVERRIDE", "fr-FR\nBROWSERPIER_BLOCK_ADS=false")
