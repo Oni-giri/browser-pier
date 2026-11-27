@@ -241,7 +241,8 @@ func (o *opening) typeAddress(u string) []xcmd {
 	var cmds []xcmd
 	for i := 0; i < len(runes); i += openChunk {
 		cmds = append(cmds, xcmd{check: o.still(typedOf(i, len(runes)))},
-			xcmd{args: []string{"type", "--clearmodifiers", "--delay", "12", "--", string(runes[i:min(i+openChunk, len(runes))])}})
+			xcmd{args: []string{"type", "--clearmodifiers", "--delay", "12", "--", string(runes[i:min(i+openChunk, len(runes))])},
+				release: typeRelease(string(runes[i:min(i+openChunk, len(runes))]))})
 	}
 	return cmds
 }

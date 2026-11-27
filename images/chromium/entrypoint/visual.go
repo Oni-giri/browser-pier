@@ -502,6 +502,25 @@ func typeArgs(text string) ([]string, error) {
 	return []string{"type", "--clearmodifiers", "--delay", "12", "--", text}, nil
 }
 
+// typeRelease lets go of what an "xdotool type" of text may hold if it
+// is killed part way (a hand-back or a Take control cutting it short):
+// libxdo holds each key, and Shift for a shifted character, for half the
+// delay. Each distinct key it can press, then Shift; letting go of a key
+// that isn't down does nothing. --clearmodifiers only puts back, at its
+// end, modifiers that were down as it began, so a kill leaves none of
+// those down.
+func typeRelease(text string) []string {
+	release := []string{"keyup"}
+	seen := map[string]bool{}
+	for _, r := range text {
+		if k := keyName(r); !seen[k] {
+			seen[k] = true
+			release = append(release, k)
+		}
+	}
+	return append(release, "Shift_L")
+}
+
 func checkText(text string, most int) error {
 	if text == "" || !utf8.ValidString(text) {
 		return fmt.Errorf("text: want non-empty UTF-8")
@@ -683,7 +702,7 @@ func (v *visual) typeAs(w http.ResponseWriter, r *http.Request, text string, mos
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		v.typeKeys(w, r, kb, func() []xcmd { return []xcmd{{args: args}} })
+		v.typeKeys(w, r, kb, func() []xcmd { return []xcmd{{args: args, release: typeRelease(text)}} })
 	default:
 		v.typeKeys(w, r, kb, func() []xcmd { return v.humanType(text) })
 	}
@@ -807,12 +826,26 @@ func (v *visual) typeKeys(w http.ResponseWriter, r *http.Request, kb keyboard, b
 			return
 		}
 	}
+	if kb == personAction && v.live != nil {
+		// The person's Type, ASCII too: with the live view's lock, once
+		// its xdotool has run what it was sent and let go of what is
+		// held, so neither their queued input nor a key they held mixes
+		// with the text (cheap with nothing queued or held: no xdotool
+		// runs).
+		v.live.mu.Lock()
+		defer v.live.mu.Unlock()
+		if err := v.live.drain(); err != nil {
+			nothingTyped(w, err)
+			return
+		}
+	}
 	if len(v.leftover) > 0 {
 		// Changing the map, as typeMapped does: with the live view's
 		// lock, once its xdotool has run what it was sent. Without
-		// leftover keys, ASCII typing changes no map and drains nothing.
+		// leftover keys, an agent's ASCII typing changes no map and
+		// drains nothing.
 		err := func() error {
-			if v.live != nil {
+			if v.live != nil && kb != personAction {
 				v.live.mu.Lock()
 				defer v.live.mu.Unlock()
 				if err := v.live.drain(); err != nil {
