@@ -206,6 +206,11 @@ type live struct {
 	// (HumanInput), which it waits for first.
 	releasing   bool
 	humanInputs int
+	// humanCtx ends as the person's control starts to end (releasing),
+	// so an input of theirs still under way (a long Type, PROJ-195)
+	// breaks off rather than hold the hand-back.
+	humanCtx    context.Context
+	humanCancel context.CancelFunc
 	// clipboardLeft is set when a hand-back came while the browser was
 	// stopping and left its clipboard as it was: the container takes it
 	// along, but if the stop fails, runStop empties it before agents get
@@ -1044,6 +1049,7 @@ func (m *Manager) end(l *live, lastLog string, final func(*Session) StopReason) 
 	l.calls = nil
 	l.disconnectLocked()
 	l.cancelAllLocked(ErrStopping)
+	l.cancelHumanLocked()
 	hooks := slices.Clone(m.onEnd)
 	if l.recTimer != nil {
 		l.recTimer.Stop()
@@ -1283,6 +1289,7 @@ func (m *Manager) stopIf(ctx context.Context, id string, cond func(*live) bool, 
 		// Page calls under way stop first (an act lets go of what it
 		// pressed), then the browser closes.
 		l.cancelAllLocked(ErrStopping)
+		l.cancelHumanLocked()
 		for len(l.leases) > 0 {
 			m.inputsDone.Wait()
 		}

@@ -207,7 +207,14 @@ func TestInputIsOnlyThisTurns(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		}
 	}
-	mux.HandleFunc("POST /input/release", record("release"))
+	rec := record("release")
+	mux.HandleFunc("POST /input/release", func(w http.ResponseWriter, r *http.Request) {
+		// The hand-back waits for the releases to run (PROJ-195).
+		if r.URL.RawQuery != "drain=1" {
+			t.Errorf("the hand-back's release: ?%s", r.URL.RawQuery)
+		}
+		rec(w, r)
+	})
 	mux.HandleFunc("DELETE /input/clipboard", record("empty"))
 	f.rt.Control = mux
 	s := f.start(f.m)
@@ -681,4 +688,31 @@ func TestRevokingATokenCancelsItsInput(t *testing.T) {
 	if err := context.Cause(ctx); !errors.Is(err, ErrRevoked) {
 		t.Fatalf("cause = %v", err)
 	}
+}
+
+// The person's turn context ends as the session stops, as well as at a
+// hand-back, so a Type of theirs under way breaks off (PROJ-195).
+func TestHumanTurnContextEndsWithTheSession(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	turn, err := f.m.TakeControlTurn(s.ID, AdminHolder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, done, err := f.m.HumanInputTurnContext(s.ID, AdminHolder, turn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped := make(chan struct{})
+	go func() {
+		_, _ = f.m.Stop(context.Background(), s.ID)
+		close(stopped)
+	}()
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the turn's context outlived the stop")
+	}
+	done()
+	<-stopped
 }

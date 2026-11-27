@@ -434,6 +434,95 @@ func TestClickIsScaledToTheScreen(t *testing.T) {
 	}
 }
 
+// Text with many different characters the keyboard map lacks is typed
+// in stretches; a type_text that would take over 45 s is refused before
+// anything is typed (PROJ-207), and one just under it goes through.
+func TestSlowTypingThroughMCPIsRefused(t *testing.T) {
+	f := newFixture(t)
+	cs := f.connect(f.all, versions[0], nil)
+	s, _, _ := f.m.Start(context.Background(), "google", "")
+	try := func(text, pace string) (bool, string) {
+		t.Helper()
+		res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "type_text", Arguments: map[string]any{"session_id": s.ID, "text": text, "pace": pace}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.IsError, res.Content[0].(*sdk.TextContent).Text
+	}
+	cjk := func(n int) string {
+		var b strings.Builder
+		for i := range n {
+			b.WriteRune(rune(0x4e00 + i))
+		}
+		return b.String()
+	}
+	if isErr, out := try(cjk(2000), "instant"); !isErr || !strings.Contains(out, "2000 characters, typed in 154 stretches") || !strings.HasSuffix(out, "split it across calls") || strings.Contains(out, "fill") {
+		t.Errorf("2,000 CJK characters: %v %s", isErr, out)
+	}
+	// 14 Cyrillic letters over and over: each stretch binds 13, so the
+	// 14th starts a new one: 153 stretches, though only 14 distinct.
+	if isErr, out := try(strings.Repeat("абвгдежзийклмн", 142), "instant"); !isErr || !strings.Contains(out, "typed in 153 stretches") {
+		t.Errorf("repeated Cyrillic: %v %s", isErr, out)
+	}
+	// About 2,000 characters of Russian prose: 77 stretches.
+	if isErr, out := try(strings.Repeat(prose, 9), "instant"); !isErr || !strings.Contains(out, "typed in 77 stretches") {
+		t.Errorf("Russian prose: %v %s", isErr, out)
+	}
+	// A Cyrillic sentence: 4 stretches, under 3 s.
+	if isErr, out := try("Съешь же ещё этих мягких французских булок, да выпей же чаю", "instant"); isErr {
+		t.Errorf("a Cyrillic sentence: %s", out)
+	}
+	// 800: 9.6 s of keys and 62 stretches, about 44 s.
+	if isErr, out := try(cjk(800), "instant"); isErr {
+		t.Errorf("800 CJK characters: %s", out)
+	}
+	// Human pace: 150 different ones, 37.5 s and 12 stretches, about 44 s.
+	if isErr, out := try(cjk(150), ""); isErr {
+		t.Errorf("150 CJK characters at human pace: %s", out)
+	}
+	// 2,000 ASCII characters, or one accent 2,000 times: as before.
+	if isErr, out := try(strings.Repeat("a", 2000), "instant"); isErr {
+		t.Errorf("2,000 ASCII characters: %s", out)
+	}
+	if isErr, out := try(strings.Repeat("é", 2000), "instant"); isErr {
+		t.Errorf("2,000 accents: %s", out)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.types) != 5 {
+		t.Fatalf("%d typed, want 5", len(f.types))
+	}
+}
+
+// prose is ordinary Russian, whose letters come back after more than 13
+// others again and again.
+const prose = "Мой дядя самых честных правил, когда не в шутку занемог, он уважать себя заставил и лучше выдумать не мог. Его пример другим наука; но, боже мой, какая скука с больным сидеть и день и ночь, не отходя ни шагу прочь! "
+
+// type_text refuses a control character or U+FFFD before the call's
+// turn, so its call_id isn't spent: the same id then goes through.
+func TestTypingRefusesBadTextBeforeACallID(t *testing.T) {
+	f := newFixture(t)
+	cs := f.connect(f.all, versions[0], nil)
+	s, _, _ := f.m.Start(context.Background(), "google", "")
+	try := func(text string) (bool, string) {
+		t.Helper()
+		res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "type_text", Arguments: map[string]any{"session_id": s.ID, "text": text, "pace": "instant", "call_id": "c1"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.IsError, res.Content[0].(*sdk.TextContent).Text
+	}
+	if isErr, out := try("hi\x1b"); !isErr || !strings.Contains(out, "character 3 is a control character") {
+		t.Fatalf("a control character: %v %s", isErr, out)
+	}
+	if isErr, out := try("hi\ufffd"); !isErr || !strings.Contains(out, "character 3 is U+FFFD") {
+		t.Fatalf("U+FFFD: %v %s", isErr, out)
+	}
+	if isErr, out := try("hi"); isErr || strings.Contains(out, "wasn't run again") {
+		t.Fatalf("the same call_id with good text: %v %s", isErr, out)
+	}
+}
+
 // Human-paced typing through MCP stops at 150 characters a call, so the
 // call ends (about 40 s) before a client's request timeout; instant pace,
 // and act's instant type steps, aren't held to it.

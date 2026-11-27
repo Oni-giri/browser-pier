@@ -67,8 +67,9 @@ const (
 // browsers with Chromium's accessibility on the session bus and the
 // entrypoint's /tree reader, and tells the container its mode
 // (BROWSERPIER_MODE), which visual_snapshot and click by ref rely on
-// (PROJ-150).
-const Spec = "10"
+// (PROJ-150); 11 types characters the keyboard map lacks by binding them
+// to spare keys for the whole call, so none is dropped (PROJ-195).
+const Spec = "11"
 
 const (
 	// StopTimeout is how long a browser container gets to stop before Docker

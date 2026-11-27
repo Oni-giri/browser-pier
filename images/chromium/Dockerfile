@@ -8,6 +8,7 @@ WORKDIR /src
 COPY go.mod go.sum* ./
 RUN go mod download
 COPY internal/motion ./internal/motion
+COPY internal/keyplan ./internal/keyplan
 COPY internal/domainset ./internal/domainset
 COPY internal/weburl ./internal/weburl
 COPY images/chromium/entrypoint ./images/chromium/entrypoint
@@ -73,6 +74,7 @@ RUN for t in xdg-desktop-portal xdg-desktop-portal-gtk xdg-desktop-portal-gnome 
 # above, which carries the accessibility tree in Visual mode.
 RUN for el in ximagesrc videoconvert videoscale x264enc mp4mux fdsink; do gst-inspect-1.0 "$el" >/dev/null || { echo "missing GStreamer element $el"; exit 1; }; done \
  && { command -v xclip >/dev/null || { echo "missing xclip, the live view's clipboard box"; exit 1; }; } \
+ && { command -v xdotool >/dev/null || { echo "missing xdotool, Visual mode's input"; exit 1; }; } \
  && { ls /usr/lib/*/libatk-bridge-2.0.so.0 >/dev/null || { echo "missing libatk-bridge"; exit 1; }; } \
  && for l in de fr es ja; do test -f /usr/lib/chromium/locales/$l.pak || { echo "missing Chromium locale $l"; exit 1; }; done \
  && tr '\0' '\n' < /usr/lib/chromium/chromium > /tmp/strings \
@@ -123,6 +125,11 @@ RUN useradd --uid 1000 --user-group --create-home --shell /usr/sbin/nologin pier
  && chmod 1777 /tmp/.X11-unix
 
 COPY --from=build /out/entrypoint /usr/local/bin/browserpier-entrypoint
+# Typing binds characters the keyboard map lacks to spare keys (PROJ-195),
+# and the orchestrator's time estimates assume as many as keyplan.SpareKeys:
+# fail the build if this image's layout data (xkb-data, unpinned) leaves
+# fewer. The check starts an Xvfb of its own and counts them.
+RUN /usr/local/bin/browserpier-entrypoint spare-keys
 COPY LICENSE NOTICE /usr/share/doc/browserpier/
 # Managed policy: hides the "unsupported command-line flag" bar that
 # --disable-blink-features would put over every page, and sends downloads

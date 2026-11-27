@@ -242,13 +242,26 @@ func (m *Manager) HumanInput(id, holder string) (done func(), err error) {
 // turn ended can't send input into the next one's, or read its clipboard,
 // even when the same admin took control again from another view.
 func (m *Manager) HumanInputTurn(id, holder string, turn uint64) (done func(), err error) {
+	_, done, err = m.HumanInputTurnContext(id, holder, turn)
+	return done, err
+}
+
+// HumanInputTurnContext is HumanInputTurn with a context that ends as the
+// person's control starts to end (a hand-back, a handoff's end, the live
+// view going), so a long input under way breaks off instead of holding
+// the hand-back up (PROJ-195).
+func (m *Manager) HumanInputTurnContext(id, holder string, turn uint64) (context.Context, func(), error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.findLocked(id)
 	if l == nil || l.releasing || l.controlTurn != turn || !l.controlledByLocked(holder) {
-		return nil, ErrNotRunning
+		return nil, nil, ErrNotRunning
 	}
-	return m.humanInputLocked(l), nil
+	done := m.humanInputLocked(l)
+	if l.humanCancel == nil {
+		l.humanCtx, l.humanCancel = context.WithCancel(m.ctx)
+	}
+	return l.humanCtx, done, nil
 }
 
 func (m *Manager) humanInputLocked(l *live) func() {
@@ -321,6 +334,7 @@ func (m *Manager) releaseLocked(id string, l *live) {
 		return
 	}
 	l.releasing = true
+	l.cancelHumanLocked()
 	for l.humanInputs > 0 {
 		m.inputsDone.Wait()
 	}
@@ -363,7 +377,9 @@ const clipboardSettle = 100 * time.Millisecond
 // liftLiveInput lets go of any key or button the live view's input still
 // holds in a running browser, a person's control ending.
 func (m *Manager) liftLiveInput(sessionID, profile string) {
-	if err := m.control(m.ctx, profile, http.MethodPost, "/input/release", nil, nil); err != nil {
+	// drain: answered once the releases have run, not only been queued
+	// (PROJ-195), so an agent's next click can't meet a held Ctrl.
+	if err := m.control(m.ctx, profile, http.MethodPost, "/input/release?drain=1", nil, nil); err != nil {
 		m.log.Warn("couldn't let go of the live view's keys as a person's control ended", "session", sessionID, "err", err)
 	}
 }
@@ -454,4 +470,13 @@ func HandoffHolder(handoff string) string {
 		return ""
 	}
 	return "handoff " + handoff
+}
+
+// cancelHumanLocked ends the person's turn context (HumanInputTurnContext):
+// their control is ending, or the session is (PROJ-195). With m.mu held.
+func (l *live) cancelHumanLocked() {
+	if l.humanCancel != nil {
+		l.humanCancel()
+		l.humanCtx, l.humanCancel = nil, nil
+	}
 }

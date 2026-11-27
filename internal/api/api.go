@@ -23,6 +23,7 @@ import (
 	"github.com/Oni-giri/browser-pier/internal/fence"
 	"github.com/Oni-giri/browser-pier/internal/files"
 	"github.com/Oni-giri/browser-pier/internal/handoff"
+	"github.com/Oni-giri/browser-pier/internal/keyplan"
 	"github.com/Oni-giri/browser-pier/internal/pagetools"
 	"github.com/Oni-giri/browser-pier/internal/profiles"
 	"github.com/Oni-giri/browser-pier/internal/sessions"
@@ -625,6 +626,10 @@ func (a *API) input(path string) http.HandlerFunc {
 	}
 }
 
+// nothingTypedHeader is the browser's mark on a type that failed before
+// any key was pressed (images/chromium/entrypoint, PROJ-195).
+const nothingTypedHeader = "X-Nothing-Typed"
+
 // checkInput refuses a /click or /type body the browser would refuse for
 // its shape, before the input's turn, so a call id is given back
 // (PROJ-156): fields of the wrong type or unknown, more after the JSON, a
@@ -662,6 +667,11 @@ func checkInput(path string, body []byte) error {
 		}
 		if t.Text == "" || !utf8.ValidString(t.Text) {
 			return errors.New("text: want non-empty UTF-8")
+		}
+		// A control character, or U+FFFD (what an unpaired surrogate
+		// escape decodes to): refused here too, so the id is given back.
+		if err := keyplan.Check(t.Text); err != nil {
+			return err
 		}
 		pace = t.Pace
 	default:
@@ -766,6 +776,11 @@ func (a *API) actNoted(w http.ResponseWriter, r *http.Request, s sessions.Sessio
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusNoContent {
+		if path == "/input/type" && resp.Header.Get(nothingTypedHeader) == "1" {
+			// Failed before any key was pressed (PROJ-195): give the
+			// call id back, as for a call never admitted.
+			sessions.CallFrom(r.Context()).Unrun()
+		}
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 		writeError(w, resp.StatusCode, strings.TrimSpace(string(msg)))
 		return false
