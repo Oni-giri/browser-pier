@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -153,7 +154,7 @@ func (a *API) withdrawHandoff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		a.internal(w, "loading a handoff", err)
+		a.handoffError(w, r, "loading a handoff", err)
 		return
 	}
 	var in struct {
@@ -182,15 +183,8 @@ func (a *API) withdrawHandoff(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
-	if errors.Is(err, handoff.ErrHandingBack) {
-		if r.Context().Err() != nil {
-			return // the agent gave up waiting
-		}
-		writeError(w, http.StatusServiceUnavailable, err.Error())
-		return
-	}
 	if err != nil {
-		a.internal(w, "withdrawing a handoff", err)
+		a.handoffError(w, r, "withdrawing a handoff", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, handoffOut(h))
@@ -205,7 +199,7 @@ func (a *API) getHandoff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		a.internal(w, "loading a handoff", err)
+		a.handoffError(w, r, "loading a handoff", err)
 		return
 	}
 	var wait time.Duration
@@ -219,11 +213,22 @@ func (a *API) getHandoff(w http.ResponseWriter, r *http.Request) {
 	}
 	h, err = a.handoffs.Wait(r.Context(), id, wait)
 	if err != nil {
-		if r.Context().Err() != nil {
-			return // the agent gave up waiting
-		}
-		a.internal(w, "waiting on a handoff", err)
+		a.handoffError(w, r, "waiting on a handoff", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, handoffOut(h))
+}
+
+// handoffError answers a handoff call that failed. Nothing when the agent
+// went away; 503 when the browser is still being handed back or a wait
+// ran out (ask again shortly), never an internal error; otherwise 500.
+func (a *API) handoffError(w http.ResponseWriter, r *http.Request, what string, err error) {
+	switch {
+	case r.Context().Err() != nil:
+		// the agent gave up waiting
+	case errors.Is(err, handoff.ErrHandingBack), errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+		writeError(w, http.StatusServiceUnavailable, handoff.ErrHandingBack.Error())
+	default:
+		a.internal(w, what, err)
+	}
 }

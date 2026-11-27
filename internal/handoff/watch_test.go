@@ -328,7 +328,7 @@ func TestAMatchAfterTheEndDoesNothing(t *testing.T) {
 		h, _ := f.openUntil("/account")
 		skew.Store(int64(Lifetime + time.Second))
 		f.svc.reached(ctx, h)
-		if got, _ := f.svc.Get(ctx, h.ID); got.Status != Expired || got.Auto || got.Note != "" {
+		if got, _ := f.settled(h.ID); got.Status != Expired || got.Auto || got.Note != "" {
 			t.Fatalf("a match after expiry: %+v", got)
 		}
 	})
@@ -340,7 +340,7 @@ func TestAMatchAfterTheEndDoesNothing(t *testing.T) {
 		f.svc.watchPoll = time.Hour
 		h, _ := f.openUntil("/account")
 		skew.Store(int64(Lifetime + time.Second))
-		if _, err := f.svc.end(ctx, h, Done, AutoNote, endAuto); !errors.Is(err, ErrInUse) {
+		if _, err := f.svc.endWith(ctx, h, Done, AutoNote, endAuto, "", ""); !errors.Is(err, ErrInUse) {
 			t.Fatalf("end after expiry = %v", err)
 		}
 	})
@@ -444,7 +444,7 @@ func TestTheWatchEndsWithTheHandoff(t *testing.T) {
 		w := f.watched(h.ID)
 		skew.Store(int64(Lifetime + time.Second))
 		f.watchEnds(h.ID, w)
-		if got, _ := f.svc.Get(ctx, h.ID); got.Status != Expired {
+		if got, _ := f.settled(h.ID); got.Status != Expired {
 			t.Fatalf("after its time: %s", got.Status)
 		}
 	})
@@ -456,6 +456,7 @@ func TestTheWatchEndsWithTheHandoff(t *testing.T) {
 			t.Fatal(err)
 		}
 		f.watchEnds(h.ID, w)
+		_, _ = f.settled(h.ID) // the end the watch started
 		var status Status
 		if err := f.svc.db.QueryRow(`SELECT status FROM handoffs WHERE id = ?`, h.ID).Scan(&status); err != nil || status != Cancelled {
 			t.Fatalf("after the browser stopped: %s, %v", status, err)

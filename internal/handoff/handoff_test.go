@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -353,7 +354,7 @@ func TestFiveWrongPINsCancel(t *testing.T) {
 	if last.code != http.StatusGone || !strings.Contains(last.body, "cancelled") {
 		t.Fatalf("fifth wrong PIN: %d %s", last.code, last.body)
 	}
-	got, _ := f.svc.Get(context.Background(), h.ID)
+	got, _ := f.settled(h.ID)
 	if got.Status != Cancelled || !strings.Contains(got.Note, "wrong PIN") {
 		t.Fatalf("handoff %+v", got)
 	}
@@ -484,7 +485,7 @@ func TestExpiry(t *testing.T) {
 	h, token := f.open("")
 	later := time.Now().Add(Lifetime + time.Second)
 	f.svc.now = func() time.Time { return later }
-	got, err := f.svc.Get(context.Background(), h.ID)
+	got, err := f.settled(h.ID)
 	if err != nil || got.Status != Expired {
 		t.Fatalf("after 15 minutes: %+v, %v", got, err)
 	}
@@ -527,7 +528,7 @@ func TestParallelWrongPINsStopAtFive(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	got, _ := f.svc.Get(context.Background(), h.ID)
+	got, _ := f.settled(h.ID)
 	if got.PINFailures != MaxPINFailures || got.Status != Cancelled {
 		t.Fatalf("after 25 parallel guesses: %d failures, %s", got.PINFailures, got.Status)
 	}
@@ -740,6 +741,12 @@ func TestPendingAndStats(t *testing.T) {
 	f.svc.now = time.Now
 	h2, _ := f.open("")
 	f.svc.now = func() time.Time { return h2.ExpiresAt.Add(time.Second) }
+	// Pending starts its end, listing it as it stands meanwhile; once
+	// the end is over it is gone.
+	_, _ = f.svc.Pending(ctx)
+	if got, _ := f.settled(h2.ID); got.Status != Expired {
+		t.Fatalf("an expired link: %s", got.Status)
+	}
 	if open, _ := f.svc.Pending(ctx); len(open) != 0 {
 		t.Fatalf("an expired link is still pending: %+v", open)
 	}
@@ -966,7 +973,7 @@ func TestHandoffEndEmptiesTheClipboard(t *testing.T) {
 		"expiry": func(f *fixture, h Handoff) {
 			later := time.Now().Add(Lifetime + time.Second)
 			f.svc.now = func() time.Time { return later }
-			if got, err := f.svc.Get(context.Background(), h.ID); err != nil || got.Status != Expired {
+			if got, err := f.settled(h.ID); err != nil || got.Status != Expired {
 				t.Fatalf("after 15 minutes: %+v, %v", got, err)
 			}
 		},
@@ -1204,25 +1211,31 @@ func TestWedgedBrowserDoesntHoldTheSweep(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("the sweep is held by a browser that doesn't answer")
 	}
+	// Listing the open handoffs neither waits for the wedged browser nor
+	// fails for it: the wedged one is listed as it stands.
+	start := time.Now()
+	open, err := f.svc.Pending(ctx)
+	if err != nil || !slices.ContainsFunc(open, func(h Handoff) bool { return h.ID == wedged.ID }) || time.Since(start) > 2*time.Second {
+		t.Fatalf("Pending: %+v, %v after %s", open, err, time.Since(start))
+	}
 	// The other profile's handoff ends, on its own.
-	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		short, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
-		got, err := f.svc.Get(short, waiting.ID)
-		cancel()
-		if err == nil && got.Status == Expired {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the other profile's handoff after the sweep: %s, %v", got.Status, err)
-		}
+	if got, err := f.settled(waiting.ID); err != nil || got.Status != Expired {
+		t.Fatalf("the other profile's handoff after the sweep: %s, %v", got.Status, err)
 	}
 	// The wedged one isn't told as ended while its browser isn't handed
-	// back: still handing back.
-	short, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
-	got, err := f.svc.Get(short, wedged.ID)
-	cancel()
-	if got.Status.Final() || !errors.Is(err, ErrHandingBack) {
-		t.Errorf("the wedged handoff: %s, %v; want it still handing back", got.Status, err)
+	// back: a read answers at once that it is still pending, and a wait
+	// answers that within its time.
+	start = time.Now()
+	got, err := f.svc.Get(ctx, wedged.ID)
+	if got.Status != Pending || err != nil {
+		t.Errorf("the wedged handoff: %s, %v; want it still pending", got.Status, err)
+	}
+	got, err = f.svc.Wait(ctx, wedged.ID, time.Second)
+	if got.Status != Pending || err != nil {
+		t.Errorf("waiting on the wedged handoff: %s, %v; want it still pending", got.Status, err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Errorf("reading the wedged handoff took %s", d)
 	}
 	if s, _ := f.m.Live("github"); s.State != sessions.Running {
 		t.Errorf("the other profile's browser: %s", s.State)
@@ -1275,7 +1288,11 @@ func TestHandoffIsFinalOnlyOnceHandedBack(t *testing.T) {
 				later := time.Now().Add(Lifetime + time.Second)
 				f.svc.now = func() time.Time { return later }
 				go func() {
-					_, err := f.svc.Get(ctx, h.ID) // ends it
+					// A read starts its end; the wait sees it over.
+					got, err := f.svc.Wait(ctx, h.ID, time.Minute)
+					if err == nil && !got.Status.Final() {
+						err = errors.New("still " + string(got.Status))
+					}
 					ended <- err
 				}()
 			}
@@ -1289,8 +1306,8 @@ func TestHandoffIsFinalOnlyOnceHandedBack(t *testing.T) {
 			if got.Status.Final() {
 				t.Errorf("told %s mid-hand-back", got.Status)
 			}
-			if how == "expiry" && !errors.Is(err, ErrHandingBack) {
-				t.Errorf("a look that ends it, mid-hand-back = %v, want ErrHandingBack", err)
+			if err != nil {
+				t.Errorf("a look mid-hand-back = %v, want the handoff as it stands", err)
 			}
 			// An agent withdrawing it meanwhile joins the end under way, and
 			// its request, given up, hears that it is still handing back.
@@ -1331,6 +1348,19 @@ func TestHandoffIsFinalOnlyOnceHandedBack(t *testing.T) {
 // A handoff page closed, then reloaded, gets control back, even while the
 // closed page's takeover is still being handed back (PROJ-196).
 func TestClosedThenReloadedHandoffPageGetsControlBack(t *testing.T) {
+	reloadDuringHandBack(t, 500*time.Millisecond)
+}
+
+// A hand-back that answers can take a few seconds (the lift's drain, the
+// settle, emptying both selections): a reload during a 4 s one still gets
+// control back, once it is over.
+func TestReloadDuringASlowHandBackGetsControlBack(t *testing.T) {
+	reloadDuringHandBack(t, 4*time.Second)
+}
+
+// reloadDuringHandBack closes a handoff's connected page, whose
+// hand-back's lift takes slowFor, and reloads it meanwhile.
+func reloadDuringHandBack(t *testing.T, slowFor time.Duration) {
 	f := newFixture(t, profiles.PolicyPIN, auth.WebOptions{})
 	_, token := f.open("")
 	phone := browser()
@@ -1391,7 +1421,7 @@ func TestClosedThenReloadedHandoffPageGetsControlBack(t *testing.T) {
 	var lifted sync.Once
 	slow := func() {
 		lifted.Do(func() { close(release) })
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(slowFor)
 	}
 	f.onLift.Store(&slow)
 	_ = pc.Close()
@@ -1541,3 +1571,71 @@ func TestOldHandoffEndLeavesANewerHelp(t *testing.T) {
 		t.Fatalf("the newer help: waiting %v, epoch %d; want %d", waiting, epoch, newer)
 	}
 }
+
+// settled reads handoff id as an agent waiting on it would: once an end
+// a read started, or one under way, is over (a few seconds at most with
+// a browser that answers).
+func (f *fixture) settled(id string) (Handoff, error) {
+	return f.svc.Wait(context.Background(), id, 5*time.Second)
+}
+
+// Close waits for the ends under way and the sweep, even one whose
+// browser doesn't answer its hand-back: it stops waiting, saves the final
+// status, and nothing of the service touches the database once Close has
+// returned (the database closes right after, at shutdown).
+func TestCloseWaitsForEndsAndTheSweep(t *testing.T) {
+	f := newFixture(t, profiles.PolicyLink, auth.WebOptions{})
+	var mu sync.Mutex
+	var logged strings.Builder
+	f.svc.log = slog.New(slog.NewTextHandler(writerFunc(func(b []byte) (int, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return logged.Write(b)
+	}), nil))
+	h, _ := f.open("")
+	if err := f.m.TakeControl(h.SessionID, sessions.AdminHolder); err != nil { // someone in the live view
+		t.Fatal(err)
+	}
+	stuck := make(chan struct{})
+	hold := func() { <-stuck }
+	f.onLift.Store(&hold)
+	later := time.Now().Add(Lifetime + time.Second)
+	f.svc.now = func() time.Time { return later }
+	swept := make(chan struct{})
+	go func() { f.svc.Sweep(context.Background(), 10*time.Millisecond); close(swept) }()
+	for deadline := time.Now().Add(5 * time.Second); !f.svc.isEnding(h.ID); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the sweep never started the end")
+		}
+	}
+	closed := make(chan struct{})
+	go func() { f.svc.Close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close is held by a browser that doesn't answer")
+	}
+	select {
+	case <-swept:
+	default:
+		t.Fatal("the sweep outlived Close")
+	}
+	var status Status
+	if err := f.svc.db.QueryRow(`SELECT status FROM handoffs WHERE id = ?`, h.ID).Scan(&status); err != nil || status != Expired {
+		t.Fatalf("after Close: %s, %v; want expired, saved before it returned", status, err)
+	}
+	// Shutdown goes on: the database closes, then the browser answers.
+	_ = f.svc.db.Close()
+	close(stuck)
+	time.Sleep(300 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Contains(logged.String(), "closed") {
+		t.Fatalf("the service used the database after Close: %s", logged.String())
+	}
+}
+
+// writerFunc is an io.Writer.
+type writerFunc func([]byte) (int, error)
+
+func (w writerFunc) Write(b []byte) (int, error) { return w(b) }

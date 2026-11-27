@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"io"
 	"log/slog"
 	"mime/multipart"
@@ -58,6 +59,7 @@ type fixture struct {
 	rt      *sessionstest.FakeRuntime
 	app     *UI
 	cookie  string // the signed-in admin session's
+	db      *sql.DB
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -113,6 +115,7 @@ func newFixture(t *testing.T) *fixture {
 	f := &fixture{t: t, m: m, handoffs: handoff.New(d, m, log), web: web, tokens: tokens, settings: settings.New(d), files: fs, choosers: choosers, rt: rt,
 		picker: picker.New(m, fs, log)}
 	emptied = &f.emptied
+	f.db = d
 	f.recordings = recording.NewStore(filepath.Join(dir, "recordings"), log)
 	// Names resolve to a public address; addresses are themselves.
 	f.notify, err = notify.New(ctx, d, log, notify.Options{Lookup: func(context.Context, string) ([]netip.Addr, error) {
@@ -885,5 +888,63 @@ func TestHandBackFormRedirectsOnceHandedBack(t *testing.T) {
 	}
 	if got, _ := f.m.Live("google"); got.HumanControl || got.State != sessions.Running {
 		t.Errorf("redirected with the browser %s, person in control %v", got.State, got.HumanControl)
+	}
+}
+
+// A handoff past its time whose browser doesn't answer its hand-back
+// (PROJ-196): the pages that list handoffs only start its end, never
+// wait on that browser, so they all render, another profile's included,
+// and Stop on the wedged profile works from its page, which ends the
+// hand-back.
+func TestWedgedHandoffHangsNoPage(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.profile("google")
+	f.profile("github")
+	// Every browser's lift fails: no hand-back ever ends by itself.
+	f.choosers.wedged.Store(true)
+	s, _, err := f.m.Start(ctx, "google", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.m.Start(ctx, "github", ""); err != nil {
+		t.Fatal(err)
+	}
+	h, _, err := f.handoffs.Create(ctx, s.ID, "research-bot", handoff.SensitiveInput, "Enter the 2FA code", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.TakeControl(s.ID, f.holder); err != nil { // someone in the live view
+		t.Fatal(err)
+	}
+	if _, err := f.db.Exec(`UPDATE handoffs SET expires_at = ? WHERE id = ?`, time.Now().Add(-time.Second).UnixMilli(), h.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.client.Timeout = 10 * time.Second // a hang fails, rather than holds, the test
+	for _, path := range []string{"/", "/profiles", "/profiles/google", "/profiles/google/side", "/profiles/google/log", "/profiles/github"} {
+		start := time.Now()
+		if r := f.get(path); r.code != http.StatusOK {
+			t.Fatalf("%s: %d", path, r.code)
+		}
+		if d := time.Since(start); d > 3*time.Second {
+			t.Fatalf("%s took %s", path, d)
+		}
+	}
+	short, cancel := context.WithTimeout(ctx, 3*time.Second)
+	open, err := f.handoffs.Pending(short)
+	cancel()
+	if err != nil || len(open) != 1 || open[0].ID != h.ID {
+		t.Fatalf("Pending: %+v, %v; want the wedged one, still pending", open, err)
+	}
+	r := f.post("/profiles/google/stop", url.Values{})
+	if r.code != http.StatusSeeOther {
+		t.Fatalf("stop: %d %.300s", r.code, r.body)
+	}
+	if live, ok := f.m.Live("google"); ok {
+		t.Fatalf("still %s after Stop", live.State)
+	}
+	got, err := f.handoffs.Wait(ctx, h.ID, 5*time.Second)
+	if err != nil || !got.Status.Final() {
+		t.Fatalf("the handoff after Stop: %s, %v", got.Status, err)
 	}
 }

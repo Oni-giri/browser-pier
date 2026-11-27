@@ -248,7 +248,11 @@ func run(log *slog.Logger) error {
 	live := webrtc.NewHandler(relay, mgr, web, log)
 	handoffs := handoff.New(database, mgr, log)
 	handoffs.SetNotifier(notifier)
-	defer handoffs.Close() // its until_url watches; the next start's sweep resumes them
+	// Deferred after mgr.Close and the database's, so it runs before
+	// them: its until_url watches (the next start's sweep resumes them),
+	// its sweep and the ends under way stop, and are waited for, while
+	// the database is still open.
+	defer handoffs.Close()
 	go handoffs.Sweep(ctx, 15*time.Second)
 	agentAPI.SetHandoffs(handoffs)
 	// The person's answer to a page's file chooser, in the live view and

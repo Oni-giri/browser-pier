@@ -345,7 +345,7 @@ func (w *Web) enterPIN(rw http.ResponseWriter, r *http.Request) {
 // server than its quota.
 func (w *Web) ice(rw http.ResponseWriter, r *http.Request) {
 	h, err := w.svc.ByToken(r.Context(), r.PathValue("token"))
-	if err != nil || h.Status.Final() || !w.holder(r, h) {
+	if err != nil || h.Status.Final() || w.svc.isEnding(h.ID) || !w.holder(r, h) {
 		http.Error(rw, "this link isn't open here", http.StatusForbidden)
 		return
 	}
@@ -366,7 +366,7 @@ func (w *Web) offer(rw http.ResponseWriter, r *http.Request) {
 	// waits for that help: a handoff ending while this offer is under
 	// way takes nothing back from the agent (PROJ-196).
 	epoch, ok := w.m.HelpEpoch(h.SessionID)
-	if cur, err := w.svc.Get(r.Context(), h.ID); !ok || err != nil || cur.Status != Pending {
+	if cur, err := w.svc.Get(r.Context(), h.ID); !ok || err != nil || cur.Status != Pending || w.svc.isEnding(h.ID) {
 		http.Error(rw, "this link isn't open here", http.StatusForbidden)
 		return
 	}
@@ -378,13 +378,13 @@ func (w *Web) offer(rw http.ResponseWriter, r *http.Request) {
 		Holder:  sessions.HandoffHolder(id),
 		Control: true,
 		// Only while the handoff is open: hand-back ends this viewer's
-		// control. A handoff ending meanwhile (ErrHandingBack once the
-		// wait is up) is no longer open.
+		// control. A handoff whose end is under way is no longer open.
+		// Get is a read, which never waits for the browser.
 		Allowed: func() bool {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			cur, err := w.svc.Get(ctx, id)
-			return err == nil && cur.Status == Pending
+			return err == nil && cur.Status == Pending && !w.svc.isEnding(id)
 		},
 		Opened: func(v *webrtc.Viewer) { w.svc.track(id, v) },
 		// The session this link is for: if it ended and another started
@@ -406,7 +406,7 @@ type chooserRoute = func(http.ResponseWriter, *http.Request, sessions.Session, s
 func (w *Web) chooser(route func(*picker.Picker) chooserRoute) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		h, err := w.svc.ByToken(r.Context(), r.PathValue("token"))
-		if err != nil || h.Status.Final() || !w.holder(r, h) {
+		if err != nil || h.Status.Final() || w.svc.isEnding(h.ID) || !w.holder(r, h) {
 			http.Error(rw, "This link isn't open here.", http.StatusForbidden)
 			return
 		}
@@ -453,7 +453,8 @@ func (w *Web) finish(rw http.ResponseWriter, r *http.Request) {
 		status = Cant
 	}
 	h, err := w.svc.Finish(r.Context(), h, status, r.PostFormValue("note"))
-	if errors.Is(err, ErrHandingBack) {
+	if errors.Is(err, ErrHandingBack) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		// Finish waits handBackWait at most: the hand-back goes on.
 		if r.Context().Err() == nil {
 			http.Error(rw, "Handing back: the browser hasn't answered yet. Reload in a moment.", http.StatusServiceUnavailable)
 		}

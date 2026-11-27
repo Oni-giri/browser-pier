@@ -124,6 +124,13 @@ type Service struct {
 	closeBase context.CancelFunc
 	watchPoll time.Duration
 	watchWG   sync.WaitGroup
+	// endWG counts the ends under way (runEnd) and the sweep (Sweep),
+	// which Close waits for.
+	endWG sync.WaitGroup
+	// handBackWait bounds how long an explicit end (Finish, Withdraw)
+	// waits for the browser's hand-back (sessions.HandBackWait; tests
+	// shorten it).
+	handBackWait time.Duration
 
 	mu      sync.Mutex
 	waiters map[string][]chan struct{}
@@ -137,7 +144,7 @@ type Service struct {
 
 func New(db *sql.DB, m *sessions.Manager, log *slog.Logger) *Service {
 	base, closeBase := context.WithCancel(context.Background())
-	return &Service{db: db, m: m, log: log, now: time.Now, base: base, closeBase: closeBase, watchPoll: watchEvery,
+	return &Service{db: db, m: m, log: log, now: time.Now, base: base, closeBase: closeBase, watchPoll: watchEvery, handBackWait: sessions.HandBackWait,
 		waiters: map[string][]chan struct{}{}, ending: map[string]*ending{}, viewers: map[string][]*webrtc.Viewer{}, checking: map[string]int{}, watching: map[string]*watch{}}
 }
 
@@ -145,13 +152,26 @@ func New(db *sql.DB, m *sessions.Manager, log *slog.Logger) *Service {
 // wrong PINs. Call it before the service is used.
 func (s *Service) SetNotifier(n *notify.Notifier) { s.notify = n }
 
-// Close stops every address watch and waits for them. Open handoffs stay
-// open; the next start's sweep watches them again.
+// SetHandBackWait changes how long an explicit end (Finish, Withdraw)
+// waits for the browser's hand-back before it answers ErrHandingBack
+// (sessions.HandBackWait by default; tests shorten it). Call it before
+// the service is used.
+func (s *Service) SetHandBackWait(d time.Duration) { s.handBackWait = d }
+
+// Close stops every address watch and waits for them, and for the ends
+// under way (runEnd), which stop waiting for their hand-back and save the
+// handoff's final status, so nothing of the service touches the database
+// once Close has returned. Call it before the sessions manager closes and
+// the database does. Open handoffs stay open; the next start's sweep
+// watches them again. An end saved before its hand-back finished is
+// safe: no agent can use the browser before the next start's Reconcile
+// has fenced it (PROJ-196).
 func (s *Service) Close() {
-	s.mu.Lock() // so watch, which checks base under it, adds no watch after
+	s.mu.Lock() // so watch and startEnd, which check base under it, start nothing after
 	s.closeBase()
 	s.mu.Unlock()
 	s.watchWG.Wait()
+	s.endWG.Wait()
 }
 
 var rank = map[profiles.HandoffPolicy]int{profiles.PolicyLink: 0, profiles.PolicyPIN: 1, profiles.PolicySignIn: 2}
@@ -285,11 +305,12 @@ func (s *Service) tellRequested(h Handoff, token string) bool {
 	return s.notify.HandoffRequested(notifyInfo(h), link, func() bool {
 		// Get, not the row's status alone: a handoff whose time is up or
 		// whose browser stopped stays pending until something looks, and
-		// its link is no use. Get ends it, as the sweep would.
+		// its link is no use. Get starts its end, as the sweep would; one
+		// that is ending is no longer open.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		cur, err := s.Get(ctx, h.ID)
-		return err == nil && cur.Status == Pending
+		return err == nil && cur.Status == Pending && !s.isEnding(h.ID)
 	})
 }
 
@@ -353,7 +374,9 @@ func scan(row interface{ Scan(...any) error }) (Handoff, error) {
 	return h, err
 }
 
-// Get returns a handoff, expiring it first if its time is up.
+// Get returns a handoff as it stands, starting its end if its time is up
+// or its browser stopped (checkLive): a read, which never waits for a
+// browser.
 func (s *Service) Get(ctx context.Context, id string) (Handoff, error) {
 	h, err := scan(s.db.QueryRowContext(ctx, `SELECT `+columns+` FROM handoffs WHERE id = ?`, id))
 	if err != nil {
@@ -362,7 +385,7 @@ func (s *Service) Get(ctx context.Context, id string) (Handoff, error) {
 	return s.checkLive(ctx, h)
 }
 
-// ByToken finds the handoff a link points to.
+// ByToken finds the handoff a link points to: a read, as Get.
 func (s *Service) ByToken(ctx context.Context, token string) (Handoff, error) {
 	h, err := scan(s.db.QueryRowContext(ctx, `SELECT `+columns+` FROM handoffs WHERE token_hash = ?`, hash(token)))
 	if err != nil {
@@ -371,8 +394,11 @@ func (s *Service) ByToken(ctx context.Context, token string) (Handoff, error) {
 	return s.checkLive(ctx, h)
 }
 
-// Pending returns the open handoffs, oldest first, ending any whose time
-// is up or whose browser stopped.
+// Pending returns the open handoffs, oldest first, starting the end of
+// any whose time is up or whose browser stopped (checkLive). It never
+// waits for a browser: a handoff whose end is under way is listed as it
+// stands, still pending, and one that can't be checked is listed all the
+// same, logged, rather than hide the others.
 func (s *Service) Pending(ctx context.Context) ([]Handoff, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+columns+` FROM handoffs WHERE status = 'pending' ORDER BY created_at`)
 	if err != nil {
@@ -392,12 +418,13 @@ func (s *Service) Pending(ctx context.Context) ([]Handoff, error) {
 	}
 	var out []Handoff
 	for _, h := range open {
-		h, err := s.checkLive(ctx, h)
+		cur, err := s.checkLive(ctx, h)
 		if err != nil {
-			return nil, err
+			s.log.Warn("checking a handoff", "handoff", h.ID, "err", fmt.Sprint(err))
+			cur = h
 		}
-		if h.Status == Pending {
-			out = append(out, h)
+		if cur.Status == Pending {
+			out = append(out, cur)
 		}
 	}
 	return out, nil
@@ -437,24 +464,36 @@ func (s *Service) Stats(ctx context.Context, since time.Time) (count int, median
 	return count, median, nil
 }
 
-// checkLive ends a pending handoff whose time is up or whose browser
-// stopped, or whose browser no longer waits for its help with no end of
-// it under way (an end cut short by a restart, or whose final status
-// couldn't be saved): it waits for that end as end does.
+// checkLive is what every read of a handoff does: it starts the end of a
+// pending handoff whose time is up or whose browser stopped, or whose
+// browser no longer waits for its help (an end cut short by a restart, or
+// whose final status couldn't be saved), joining an end already under
+// way, and returns the handoff as it stands. It never waits for that end,
+// which waits for the browser's hand-back: until it is over, the handoff
+// reads as pending (PROJ-196). Only explicit ends wait (Finish, Withdraw).
 func (s *Service) checkLive(ctx context.Context, h Handoff) (Handoff, error) {
 	if h.Status.Final() {
 		return h, nil
 	}
-	if !s.now().Before(h.ExpiresAt) {
-		return s.finish(ctx, h, Expired, "", notify.HandoffExpired)
+	var as endAs
+	switch {
+	case !s.now().Before(h.ExpiresAt):
+		as = endAs{status: Expired, how: endAny, tell: notify.HandoffExpired}
+	case !s.browserLive(ctx, h):
+		as = endAs{status: Cancelled, note: "the browser stopped", how: endAny}
+	case !s.isEnding(h.ID) && !s.m.WaitsForHelp(h.SessionID, h.helpEpoch):
+		as = endAs{status: Cancelled, note: "the browser stopped waiting for help", how: endAny}
+	default:
+		return h, nil
 	}
-	if sess, err := s.m.Get(ctx, h.SessionID); err != nil || !sess.State.Live() {
-		return s.finish(ctx, h, Cancelled, "the browser stopped", "")
-	}
-	if !s.isEnding(h.ID) && !s.m.WaitsForHelp(h.SessionID, h.helpEpoch) {
-		return s.finish(ctx, h, Cancelled, "the browser stopped waiting for help", "")
-	}
-	return h, nil
+	_, cur, err := s.startEnd(h, as)
+	return cur, err
+}
+
+// browserLive reports whether h's browser still runs.
+func (s *Service) browserLive(ctx context.Context, h Handoff) bool {
+	sess, err := s.m.Get(ctx, h.SessionID)
+	return err == nil && sess.State.Live()
 }
 
 // Unlock binds the handoff to one browser, identified by the value of a
@@ -556,13 +595,17 @@ func (s *Service) PINWrong(ctx context.Context, h Handoff) (int, error) {
 	}
 	left := MaxPINFailures - h.PINFailures
 	if left <= 0 && !h.Status.Final() {
-		_, err := s.endWith(ctx, h, Cancelled, "five wrong PINs", endAny, pinsLog, notify.HandoffCancelled)
+		// Its end starts; the guesser's request doesn't wait for the
+		// browser's hand-back (an admin may be driving it meanwhile).
+		_, _, err := s.startEnd(h, endAs{status: Cancelled, note: "five wrong PINs", how: endAny, logLine: pinsLog, tell: notify.HandoffCancelled})
 		return 0, err
 	}
 	return max(left, 0), nil
 }
 
-// Finish records the person's answer: done or can't, with a note.
+// Finish records the person's answer: done or can't, with a note. It is
+// an explicit end: it waits for the browser's hand-back, no longer than
+// ctx or handBackWait, and returns ErrHandingBack if that passes first.
 func (s *Service) Finish(ctx context.Context, h Handoff, status Status, note string) (Handoff, error) {
 	if status != Done && status != Cant {
 		return h, errors.New("status: want done or cant")
@@ -571,11 +614,14 @@ func (s *Service) Finish(ctx context.Context, h Handoff, status Status, note str
 	if len(note) > 1000 {
 		note = note[:1000]
 	}
+	ctx, cancel := context.WithTimeout(ctx, s.handBackWait)
+	defer cancel()
 	return s.finish(ctx, h, status, note, "")
 }
 
 // Withdraw cancels a pending handoff at the agent's request; the agent
-// gets its browser back. A handoff already over is returned as it is.
+// gets its browser back. A handoff already over is returned as it is. It
+// waits for the hand-back as Finish does.
 //
 // Once a person has opened the link it is theirs until they hand back: an
 // agent taking the browser back then could read what they were typing.
@@ -584,6 +630,8 @@ func (s *Service) Withdraw(ctx context.Context, h Handoff, note string) (Handoff
 	if len(note) > 300 {
 		note = note[:300]
 	}
+	ctx, cancel := context.WithTimeout(ctx, s.handBackWait)
+	defer cancel()
 	return s.endSaying(ctx, h, Cancelled, note, endUnopened, withdrawnLog)
 }
 
@@ -603,26 +651,23 @@ const (
 	endAuto                   // as done, by its until_url, only before it expires
 )
 
-// end is finish, as how says, telling the webhook nothing.
-func (s *Service) end(ctx context.Context, h Handoff, status Status, note string, how endHow) (Handoff, error) {
-	return s.endWith(ctx, h, status, note, how, "", "")
-}
-
-// endSaying is end, with logLine what the agent log says, in fixed words;
-// "" for the status's own (finishedNotes).
+// endSaying is endWith telling the webhook nothing.
 func (s *Service) endSaying(ctx context.Context, h Handoff, status Status, note string, how endHow, logLine string) (Handoff, error) {
 	return s.endWith(ctx, h, status, note, how, logLine, "")
 }
 
-// endWith is endSaying, then tells the webhook of tell ("" for nothing).
-// The end runs on its own (runEnd), once per handoff: an end asked for
-// while one is under way joins it, and gets its outcome, never undoing
-// it, so a sweep and a Get that both find it expired send one event. The
-// handoff's status turns final only once its browser is handed back
-// (fenced, its clipboard emptied, agents let in again), so whoever reads
-// it final can act on the browser at once; until then it reads as
-// pending. endWith waits for that, no longer than ctx: if ctx ends first
-// it returns ErrHandingBack, and the end goes on without it.
+// endWith ends h as how says, with logLine what the agent log says, in
+// fixed words ("" for the status's own, finishedNotes), and tells the
+// webhook of tell ("" for nothing). It is for explicit ends, which wait;
+// reads only start an end (startEnd, through checkLive). The end runs on
+// its own (runEnd), once per handoff: an end asked for while one is under
+// way joins it, and gets its outcome, never undoing it, so a sweep and a
+// Get that both find it expired send one event. The handoff's status
+// turns final only once its browser is handed back (fenced, its
+// clipboard emptied, agents let in again), so whoever reads it final can
+// act on the browser at once; until then it reads as pending. endWith
+// waits for that, no longer than ctx: if ctx ends first it returns
+// ErrHandingBack, and the end goes on without it.
 func (s *Service) endWith(ctx context.Context, h Handoff, status Status, note string, how endHow, logLine string, tell notify.Kind) (Handoff, error) {
 	e, cur, err := s.startEnd(h, endAs{status, note, how, logLine, tell})
 	if e == nil || err != nil {
@@ -659,7 +704,7 @@ type ending struct {
 	err  error
 }
 
-// startEnd starts ending handoff h, as end describes, unless an end of
+// startEnd starts ending handoff h, as endWith describes, unless an end of
 // it is under way, which it returns to join. It returns no ending, but
 // the handoff as it stands, if the handoff has ended already, or with
 // ErrInUse if how's condition doesn't hold (opened, for endUnopened;
@@ -669,6 +714,9 @@ func (s *Service) startEnd(h Handoff, as endAs) (*ending, Handoff, error) {
 	defer s.mu.Unlock()
 	if e := s.ending[h.ID]; e != nil {
 		return e, h, nil
+	}
+	if s.base.Err() != nil {
+		return nil, h, errClosing // the service is closing: the next start ends it
 	}
 	cur, err := scan(s.db.QueryRow(`SELECT `+columns+` FROM handoffs WHERE id = ?`, h.ID))
 	switch {
@@ -683,9 +731,16 @@ func (s *Service) startEnd(h Handoff, as endAs) (*ending, Handoff, error) {
 	}
 	e := &ending{done: make(chan struct{})}
 	s.ending[h.ID] = e
-	go s.runEnd(e, cur, as)
+	s.endWG.Add(1)
+	go func() {
+		defer s.endWG.Done()
+		s.runEnd(e, cur, as)
+	}()
 	return e, cur, nil
 }
+
+// errClosing: the service is closing, and starts no end.
+var errClosing = errors.New("BrowserPier is shutting down")
 
 // ending reports whether an end of handoff id is under way.
 func (s *Service) isEnding(id string) bool {
@@ -714,7 +769,13 @@ func (s *Service) runEnd(e *ending, h Handoff, as endAs) {
 	if done != nil {
 		// However long the browser takes: a browser that never answers is
 		// still stopped (idle, for room, or by the admin), which ends it.
-		<-done
+		// Or the service closes (Close): the status is saved without it,
+		// and the next start's Reconcile fences the browser before any
+		// agent can use it.
+		select {
+		case <-done:
+		case <-s.base.Done():
+		}
 	}
 	now := s.now()
 	auto := as.how == endAuto
@@ -875,9 +936,11 @@ func (s *Service) replaceViewers(ctx context.Context, h Handoff) {
 	}
 	// A view stays listed until it has handed its control back (track),
 	// even one already gone (a page closed, then reloaded): waiting for
-	// each to be gone waits for its hand-back, so the new view finds the
-	// browser free; a few seconds at most.
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	// each to be gone waits for its hand-back's own end, so the new view
+	// finds the browser free. Bounded by the request and by
+	// sessions.HandBackWait, as a live view's own hand-back is: a browser
+	// that doesn't answer leaves the new view refused, not hanging.
+	ctx, cancel := context.WithTimeout(ctx, sessions.HandBackWait)
 	defer cancel()
 	for _, v := range old {
 		select {
@@ -888,9 +951,12 @@ func (s *Service) replaceViewers(ctx context.Context, h Handoff) {
 	}
 }
 
-// Wait returns the handoff once it's over, or as it stands after wait.
-// Over means its browser is handed back too: its status turns final only
-// then (end).
+// Wait returns the handoff once it's over, or as it stands after wait,
+// never later. Over means its browser is handed back too: its status
+// turns final only then (runEnd). It is a read: once the handoff's time
+// is up it starts the end (checkLive) and goes on waiting for it, within
+// wait, but a browser that doesn't answer its hand-back holds it no
+// longer than that, and it answers pending.
 func (s *Service) Wait(ctx context.Context, id string, wait time.Duration) (Handoff, error) {
 	h, err := s.Get(ctx, id)
 	if err != nil || h.Status.Final() || wait <= 0 {
@@ -914,32 +980,56 @@ func (s *Service) Wait(ctx context.Context, id string, wait time.Duration) (Hand
 		}
 		s.mu.Unlock()
 	}()
-	// It may have ended before we listened, waking nobody: read it again.
-	if h, err = s.Get(ctx, id); err != nil || h.Status.Final() {
-		return h, err
+	deadline := time.NewTimer(wait)
+	defer deadline.Stop()
+	for {
+		// It may have ended before we listened, waking nobody: read it
+		// again. A read past its expiry starts its end.
+		if h, err = s.Get(ctx, id); err != nil || h.Status.Final() {
+			return h, err
+		}
+		// Wake by the expiry too, to start the end, so a waiter learns of
+		// it without polling; once it has passed, the end wakes us.
+		var expiry <-chan time.Time
+		if until := h.ExpiresAt.Sub(s.now()); until >= 0 {
+			t := time.NewTimer(until + 10*time.Millisecond)
+			defer t.Stop()
+			expiry = t.C
+		}
+		select {
+		case <-ch:
+			return s.Get(ctx, id)
+		case <-expiry:
+		case <-deadline.C:
+			return h, nil
+		case <-ctx.Done():
+			return h, ctx.Err()
+		}
 	}
-	// Wake by the expiry too, so a waiter learns of it without polling.
-	until := time.Until(h.ExpiresAt)
-	t := time.NewTimer(min(wait, max(until, 0)+time.Second))
-	defer t.Stop()
-	select {
-	case <-ch:
-	case <-t.C:
-	case <-ctx.Done():
-		return h, ctx.Err()
-	}
-	return s.Get(ctx, id)
 }
 
 // Sweep checks every pending handoff, every interval: one whose time is
 // up expires and one whose browser stopped is cancelled, so the agents
 // waiting on them hear at once and their browsers go back to them.
+//
+// It stops when ctx ends or the service closes, and Close waits for it,
+// so no sweep reads the database after Close has returned.
 func (s *Service) Sweep(ctx context.Context, every time.Duration) {
+	s.mu.Lock()
+	if s.base.Err() != nil {
+		s.mu.Unlock()
+		return
+	}
+	s.endWG.Add(1)
+	s.mu.Unlock()
+	defer s.endWG.Done()
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-s.base.Done():
 			return
 		case <-t.C:
 			s.sweep(ctx)
@@ -960,30 +1050,19 @@ func (s *Service) sweep(ctx context.Context) {
 		}
 	}
 	_ = rows.Close()
-	// Each handoff on its own: one whose browser doesn't answer its
-	// hand-back holds up neither the others nor the sweep. One whose end
-	// is under way is left to it.
+	// Get only starts an end (checkLive), which runs on its own: one
+	// whose browser doesn't answer its hand-back holds up neither the
+	// others nor the sweep.
 	for _, id := range ids {
-		if s.isEnding(id) {
+		h, err := s.Get(ctx, id)
+		if err != nil {
+			s.log.Warn("checking a handoff", "handoff", id, "err", fmt.Sprint(err))
 			continue
 		}
-		go func() {
-			ctx, cancel := context.WithTimeout(ctx, sweepWait)
-			defer cancel()
-			h, err := s.Get(ctx, id) // Get ends it if it should
-			if errors.Is(err, ErrHandingBack) {
-				return // its end goes on by itself
-			}
-			if err != nil {
-				s.log.Warn("checking a handoff", "handoff", id, "err", fmt.Sprint(err))
-				return
-			}
-			// An open handoff with an until_url and no watch (the
-			// orchestrator restarted) is watched again.
+		// An open handoff with an until_url and no watch (the
+		// orchestrator restarted) is watched again.
+		if h.Status == Pending && !s.isEnding(id) {
 			s.watch(h)
-		}()
+		}
 	}
 }
-
-// sweepWait bounds how long the sweep waits for one handoff's end.
-const sweepWait = 10 * time.Second

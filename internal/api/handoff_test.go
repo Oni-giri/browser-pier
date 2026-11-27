@@ -1,11 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -264,5 +267,91 @@ func (f *fixture) unlock(id string) {
 	}
 	if err := f.handoffs.Unlock(context.Background(), h, "the person's browser"); err != nil {
 		f.t.Fatal(err)
+	}
+}
+
+// A handoff whose browser doesn't answer its hand-back (PROJ-196): reading
+// it never waits on that browser, a wait answers within its time, still
+// pending, and a withdrawal answers 503 within its bound. None of it is
+// an internal error.
+func TestWedgedHandoffAnswersInTime(t *testing.T) {
+	var buf bytes.Buffer
+	var mu sync.Mutex
+	log := slog.New(slog.NewTextHandler(&lockedWriter{w: &buf, mu: &mu}, &slog.HandlerOptions{Level: slog.LevelError}))
+	f := newFixtureLogging(t, log)
+	if err := f.web.Admin().SetPIN(context.Background(), "4821"); err != nil {
+		t.Fatal(err)
+	}
+	f.handoffs.SetHandBackWait(2 * time.Second)
+	// Every browser's lift fails: no hand-back ever ends.
+	inner := f.b.handler()
+	f.rt.Control = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/input/release" {
+			http.Error(w, "wedged", http.StatusServiceUnavailable)
+			return
+		}
+		inner.ServeHTTP(w, r)
+	})
+	client := &http.Client{Timeout: 20 * time.Second}
+	call := func(method, path string) (int, handoffJSON, time.Duration) {
+		t.Helper()
+		req, _ := http.NewRequest(method, f.srv.URL+path, nil)
+		req.Header.Set("Authorization", "Bearer "+f.all)
+		start := time.Now()
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v after %s", method, path, err, time.Since(start))
+		}
+		defer func() { _ = resp.Body.Close() }()
+		var h handoffJSON
+		_ = json.NewDecoder(resp.Body).Decode(&h)
+		return resp.StatusCode, h, time.Since(start)
+	}
+	open := func(profile string) (sessionJSON, handoffJSON) {
+		t.Helper()
+		s := f.start(f.all, profile, "visual")
+		var h handoffJSON
+		if code := f.call(f.all, http.MethodPost, "/api/sessions/"+s.ID+"/handoff", `{"reason": "captcha"}`, &h); code != http.StatusCreated {
+			t.Fatalf("create: %d", code)
+		}
+		// The admin takes the browser in the live view meanwhile, so the
+		// handoff's end has a hand-back to wait for.
+		if err := f.m.TakeControl(s.ID, sessions.AdminHolder); err != nil {
+			t.Fatal(err)
+		}
+		return s, h
+	}
+	expired, eh := open("github")
+	withdrawn, wh := open("google")
+	t.Cleanup(func() {
+		for _, s := range []sessionJSON{expired, withdrawn} {
+			_, _ = f.m.Stop(context.Background(), s.ID) // which ends the hand-backs
+		}
+	})
+
+	// Its time is up: a wait starts its end, and answers within its time.
+	if _, err := f.db.Exec(`UPDATE handoffs SET expires_at = ? WHERE id = ?`, time.Now().Add(-time.Second).UnixMilli(), eh.ID); err != nil {
+		t.Fatal(err)
+	}
+	code, got, took := call(http.MethodGet, "/api/handoffs/"+eh.ID+"?wait=5")
+	if code != http.StatusOK || got.Status != "pending" || took < 4*time.Second || took > 8*time.Second {
+		t.Fatalf("waiting 5 s on a wedged expired handoff: %d %s after %s", code, got.Status, took)
+	}
+	if code, got, took = call(http.MethodGet, "/api/handoffs/"+eh.ID); code != http.StatusOK || got.Status != "pending" || took > 2*time.Second {
+		t.Fatalf("reading it: %d %s after %s", code, got.Status, took)
+	}
+
+	// The agent withdraws one: 503 once its bound has passed.
+	code, _, took = call(http.MethodDelete, "/api/handoffs/"+wh.ID)
+	if code != http.StatusServiceUnavailable || took > 8*time.Second {
+		t.Fatalf("withdrawing a wedged handoff: %d after %s", code, took)
+	}
+	if code, got, _ = call(http.MethodGet, "/api/handoffs/"+wh.ID+"?wait=1"); code != http.StatusOK || got.Status != "pending" {
+		t.Fatalf("after the withdrawal: %d %s", code, got.Status)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if buf.Len() > 0 {
+		t.Fatalf("logged as errors: %s", buf.String())
 	}
 }
