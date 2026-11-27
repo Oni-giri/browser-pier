@@ -170,9 +170,10 @@ func TestLiveReleaseThatFailsStaysHeld(t *testing.T) {
 	if rec := post(li.release, ""); rec.Code != http.StatusNoContent || fresh.buf.String() != "mouseup 1\nkeyup Shift_L\n" {
 		t.Fatalf("the hand-back's lift: %d %q", rec.Code, fresh.buf.String())
 	}
-	// Ups that do get through are forgotten, once xdotool has run them.
-	// Shift and button 1 are still held: the first try at their release
-	// went to an xdotool that failed, so it may not have run.
+	// Ups that do get through are forgotten, once xdotool has run them:
+	// the lift's releases went to the xdotool that took them (fresh),
+	// which exits cleanly as the fenced lift drains it, so nothing is
+	// left to let go of.
 	if rec := post(li.events, `[{"t":"keydown","k":"a"},{"t":"keyup","k":"a"}]`); rec.Code != http.StatusNoContent {
 		t.Fatalf("a key: %d", rec.Code)
 	}
@@ -185,10 +186,9 @@ func TestLiveReleaseThatFailsStaysHeld(t *testing.T) {
 		li.release(rec, req)
 		return rec
 	}
-	if rec := lift(); rec.Code != http.StatusOK || ran.buf.String() != "mouseup 1\nkeyup Shift_L\n" {
+	if rec := lift(); rec.Code != http.StatusOK || ran.buf.String() != "" {
 		t.Fatalf("the fenced lift: %d %q", rec.Code, ran.buf.String())
 	}
-	ran.buf.Reset()
 	if rec := lift(); rec.Code != http.StatusOK || ran.buf.String() != "" {
 		t.Fatalf("nothing held: %d %q", rec.Code, ran.buf.String())
 	}

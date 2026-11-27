@@ -195,7 +195,20 @@ func (q *queuedX) start() (*xdo, error) {
 	go func() {
 		defer close(exited)
 		n := 0
-		for l := range lines {
+		for {
+			var l string
+			select {
+			case got, ok := <-lines:
+				if !ok {
+					if stallAfter > 0 && n >= stallAfter {
+						<-killed
+					}
+					return
+				}
+				l = got
+			case <-killed:
+				return
+			}
 			if stallAfter > 0 && n >= stallAfter {
 				<-killed // stalled: runs nothing more
 				return
@@ -209,9 +222,6 @@ func (q *queuedX) start() (*xdo, error) {
 			q.ran = append(q.ran, l)
 			q.mu.Unlock()
 			n++
-		}
-		if stallAfter > 0 && n >= stallAfter {
-			<-killed
 		}
 	}()
 	return &xdo{
@@ -230,6 +240,11 @@ type queuedStdin struct {
 
 func (s queuedStdin) Write(p []byte) (int, error) {
 	for _, l := range strings.Split(strings.TrimSuffix(string(p), "\n"), "\n") {
+		select {
+		case <-s.killed: // a dead xdotool takes nothing
+			return 0, errors.New("broken pipe")
+		default:
+		}
 		select {
 		case s.lines <- l:
 		case <-s.killed:
@@ -495,5 +510,83 @@ func TestKeyUpLostToTheWatchdogIsLetGo(t *testing.T) {
 	sendEvents(t, mux, "3", `[{"t":"move","x":1,"y":1},{"t":"move","x":2,"y":2},{"t":"move","x":3,"y":3}]`)
 	if code := liftFor(mux, "3"); code != http.StatusOK || !releasedLast(q.log(), "Control_L") {
 		t.Fatalf("the lift: %d, ran %q: Control is still down", code, q.log())
+	}
+}
+
+// An xdotool that won't start loses no release: a key-up sent after
+// xdotool died, while no new one will start, isn't counted as released,
+// so the key stays held and the hand-back's drain lets go of it
+// (PROJ-196, the rules of PROJ-195's live.go).
+func TestReleaseSurvivesAFailedStart(t *testing.T) {
+	q := &queuedX{step: time.Millisecond}
+	li, mux := liveRig(t, q)
+	if code := sendEvents(t, mux, "3", `[{"t":"keydown","k":"Shift_L"}]`); code != http.StatusNoContent {
+		t.Fatalf("keydown: %d", code)
+	}
+	time.Sleep(20 * time.Millisecond) // it ran
+	li.mu.Lock()
+	li.x.kill() // xdotool died, and is gone: the next input starts one
+	<-li.x.exited
+	li.x = nil
+	li.mu.Unlock()
+	// The next start fails: the keyup can't be written anywhere.
+	starts := 0
+	li.start = func() (*xdo, error) {
+		starts++
+		if starts <= 2 {
+			return nil, errors.New("no display")
+		}
+		return q.start()
+	}
+	if code := sendEvents(t, mux, "3", `[{"t":"keyup","k":"Shift_L"}]`); code != http.StatusInternalServerError {
+		t.Fatalf("a keyup with no xdotool to take it: %d", code)
+	}
+	li.mu.Lock()
+	_, held := li.held["kShift_L"]
+	released := li.released["kShift_L"]
+	li.mu.Unlock()
+	if !held || released {
+		t.Fatalf("after the failed start: held %v, released %v; want held, not released", held, released)
+	}
+	// The hand-back lets go of it.
+	if code := liftFor(mux, "3"); code != http.StatusOK || !releasedLast(q.log(), "Shift_L") {
+		t.Fatalf("the lift: %d, ran %q: Shift is still down", code, q.log())
+	}
+}
+
+// The person's own lift (their page losing focus) while no xdotool will
+// start marks nothing as released: the key stays held, and the
+// hand-back's drain, finding no xdotool running, lets go of it itself
+// rather than take an unwritten release as run (PROJ-196, the rules of
+// PROJ-195's live.go).
+func TestBlurReleaseSurvivesAFailedStart(t *testing.T) {
+	q := &queuedX{step: time.Millisecond}
+	li, mux := liveRig(t, q)
+	if code := sendEvents(t, mux, "3", `[{"t":"keydown","k":"Shift_L"}]`); code != http.StatusNoContent {
+		t.Fatalf("keydown: %d", code)
+	}
+	time.Sleep(20 * time.Millisecond) // it ran
+	li.mu.Lock()
+	li.x.kill() // xdotool died, and is gone: the next input starts one
+	<-li.x.exited
+	li.x = nil
+	li.mu.Unlock()
+	failing := true
+	li.start = func() (*xdo, error) {
+		if failing {
+			return nil, errors.New("no display")
+		}
+		return q.start()
+	}
+	req := httptest.NewRequest(http.MethodPost, "/input/release", nil)
+	req.Header.Set(takeoverHeader, "3")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("the page's lift with no xdotool: %d", rec.Code)
+	}
+	failing = false
+	if code := liftFor(mux, "3"); code != http.StatusOK || !releasedLast(q.log(), "Shift_L") {
+		t.Fatalf("the hand-back's lift: %d, ran %q: Shift is still down", code, q.log())
 	}
 }
