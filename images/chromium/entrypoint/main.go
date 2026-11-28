@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -241,15 +242,26 @@ func run(log *slog.Logger) error {
 
 // lookupClient is what the location lookup goes out with: the way pages
 // do, through the upstream proxy if any, but to the endpoint the admin
-// set, so unchecked. The proxy check (proxycheck.go) uses it too, so it
-// predicts a start.
+// set, so unchecked, and following a redirect only on that endpoint's
+// host (lookupRedirect). The proxy check (proxycheck.go) uses it too, so
+// it predicts a start.
 func lookupClient(fwd *forwarder) *http.Client {
 	if fwd.upstream == nil {
-		return &http.Client{}
+		var tr http.RoundTripper
+		if lookupRoots != nil {
+			t := http.DefaultTransport.(*http.Transport).Clone()
+			t.TLSClientConfig = &tls.Config{RootCAs: lookupRoots, MinVersion: tls.VersionTLS12}
+			tr = t
+		}
+		return &http.Client{Transport: tr, CheckRedirect: lookupRedirect}
 	}
-	return &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+	tr := &http.Transport{DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
 		return fwd.connect(ctx, addr)
-	}}}
+	}}
+	if lookupRoots != nil {
+		tr.TLSClientConfig = &tls.Config{RootCAs: lookupRoots, MinVersion: tls.VersionTLS12}
+	}
+	return &http.Client{Transport: tr, CheckRedirect: lookupRedirect}
 }
 
 // tunnelTracked is lookupClient, and whether it has opened a connection

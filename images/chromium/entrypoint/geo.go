@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -34,6 +37,73 @@ var countryRE = regexp.MustCompile(`^[A-Z]{2}$`)
 // lookupTimeout bounds one location lookup, at a start and in the proxy
 // check alike.
 var lookupTimeout = 5 * time.Second
+
+// maxLookupRedirects is how many redirects one lookup follows at most.
+const maxLookupRedirects = 3
+
+// lookupRoots replaces the system's CAs for the lookup's TLS; tests only.
+var lookupRoots *x509.CertPool
+
+// lookupRedirect is the lookup's redirect rule, at a start and in the
+// proxy check alike (lookupClient): the endpoint the admin set sees the
+// exit IP, so a redirect is followed only on its host (sameLookupHost),
+// with no user name or password of its own; over http or https only, the
+// scheme going from http to https, never back; the port staying the same,
+// except that the upgrade may also go to https's own port, 443; and at most
+// maxLookupRedirects of them. Any other redirect isn't followed: its
+// answer, a 3xx, is a lookup with no usable answer.
+func lookupRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) == 0 || len(via) > maxLookupRedirects {
+		return http.ErrUseLastResponse
+	}
+	from, to := via[len(via)-1].URL, req.URL
+	if to.User != nil || !sameLookupHost(from.Hostname(), to.Hostname()) {
+		return http.ErrUseLastResponse
+	}
+	switch {
+	case (to.Scheme == "http" || to.Scheme == "https") && from.Scheme == to.Scheme && urlPort(from) == urlPort(to):
+	case from.Scheme == "http" && to.Scheme == "https" && (urlPort(to) == "443" || urlPort(to) == urlPort(from)):
+	default:
+		return http.ErrUseLastResponse
+	}
+	return nil
+}
+
+// sameLookupHost says whether a redirect from host a to host b stays on
+// the same host: two names alike but for case and a trailing dot, or two
+// IP literals naming the same address, in any of its spellings. An empty
+// host, an address with a zone, or a name against an address is not the
+// same. An IPv4-mapped IPv6 address isn't its IPv4 address: the admin's
+// URL named one of the two, and an endpoint has no reason to switch.
+func sameLookupHost(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	ia, errA := netip.ParseAddr(a)
+	ib, errB := netip.ParseAddr(b)
+	switch {
+	case errA == nil && errB == nil:
+		return ia.Zone() == "" && ib.Zone() == "" && ia == ib
+	case errA == nil || errB == nil:
+		return false
+	}
+	a, b = strings.TrimSuffix(a, "."), strings.TrimSuffix(b, ".")
+	return a != "" && strings.EqualFold(a, b)
+}
+
+// urlPort is u's port, its scheme's default if it names none.
+func urlPort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	switch u.Scheme {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	}
+	return ""
+}
 
 // lookupGeo asks an echoip-style endpoint (ifconfig.co/json) where the
 // request came from.

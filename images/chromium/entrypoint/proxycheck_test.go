@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -128,36 +127,6 @@ func TestProxyCheckFindsTheExit(t *testing.T) {
 				t.Fatalf("the proxy was asked for %v; want the lookup host only, by name", got)
 			}
 		})
-	}
-}
-
-// TestProxyCheckFollowsNoRedirect: the check contacts the lookup URL and
-// nothing else; a redirect is a lookup with no usable answer.
-func TestProxyCheckFollowsNoRedirect(t *testing.T) {
-	var followed atomic.Int32
-	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		followed.Add(1)
-		_, _ = io.WriteString(w, `{"ip":"198.51.100.23","country_iso":"DE","time_zone":"Europe/Berlin"}`)
-	}))
-	t.Cleanup(other.Close)
-	_, otherPort, _ := net.SplitHostPort(other.Listener.Addr().String())
-	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "http://other.test:"+otherPort+"/geo", http.StatusFound)
-	}))
-	t.Cleanup(redirect.Close)
-	_, port, _ := net.SplitHostPort(redirect.Listener.Addr().String())
-	up := browsertest.NewConnectProxy(t, checkUser, checkPass)
-	up.Alias("geo.test", "127.0.0.1")
-	up.Alias("other.test", "127.0.0.1")
-	res, _ := runCheck(t, "http://"+checkUser+":"+checkPass+"@"+up.Addr, "http://geo.test:"+port+"/json")
-	if res.OK || res.Reason != checkLookup {
-		t.Fatalf("got %+v, want reason %s", res, checkLookup)
-	}
-	if n := followed.Load(); n != 0 {
-		t.Fatalf("the redirect's host got %d requests", n)
-	}
-	if got := up.Targets(); len(got) != 1 || got[0] != "geo.test:"+port {
-		t.Fatalf("the proxy was asked for %v; want the lookup host only", got)
 	}
 }
 

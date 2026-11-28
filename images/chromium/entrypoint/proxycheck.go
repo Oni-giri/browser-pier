@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"net/netip"
 	"os"
 	"time"
@@ -61,10 +60,8 @@ func proxyCheck(ctx context.Context, proxyFile, geoURL string) checkResult {
 	// The lookup is a start's, with its timeout (lookupTimeout), which
 	// bounds the whole check. Whether the tunnel opened tells a slow
 	// proxy from a slow endpoint when that timeout passes.
+	// It follows a redirect as a start does (lookupRedirect).
 	client, tunnel := tunnelTracked(fwd)
-	// To BROWSERPIER_GEOIP_URL and nothing else: a redirect is an answer
-	// the check can't use, not a host to contact with this exit.
-	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	start := time.Now()
 	ip, country, tz, err := lookupGeo(ctx, client, geoURL)
 	took := time.Since(start)
