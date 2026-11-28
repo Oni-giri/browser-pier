@@ -80,6 +80,24 @@ func (a *API) checkToken(ctx context.Context, tokenID string) error {
 	return fmt.Errorf("checking the agent token: %w", err)
 }
 
+// tokenStillThere looks the request's token up again (checkToken), for a
+// call that read its body since it was let in, and writes why it can't go
+// on if not: 401 for a token revoked meanwhile, 500 for a lookup that
+// failed (it fails closed), nothing for a client gone.
+func (a *API) tokenStillThere(w http.ResponseWriter, r *http.Request, tokenID string) bool {
+	err := a.checkToken(r.Context(), tokenID)
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, sessions.ErrRevoked):
+		writeError(w, http.StatusUnauthorized, err.Error())
+	case r.Context().Err() != nil: // the client went away
+	default:
+		a.internal(w, "checking the token", err)
+	}
+	return false
+}
+
 // SetSettings makes profiles created through the API start from the
 // admin's defaults instead of the built-in ones.
 func (a *API) SetSettings(s *settings.Store) { a.settings = s }
@@ -756,14 +774,7 @@ func (a *API) actNoted(w http.ResponseWriter, r *http.Request, s sessions.Sessio
 	// since: a revocation meanwhile found no input to break off. Checked
 	// again now that the input is registered, so a revocation either shows
 	// here or breaks it off (the UI revokes, then disconnects).
-	if _, err := a.web.Tokens().Get(r.Context(), tok.ID); err != nil {
-		switch {
-		case errors.Is(err, auth.ErrTokenNotFound):
-			writeError(w, http.StatusUnauthorized, sessions.ErrRevoked.Error())
-		case r.Context().Err() != nil: // the client went away
-		default:
-			a.internal(w, "checking the token", err) // fails closed
-		}
+	if !a.tokenStillThere(w, r, tok.ID) {
 		return false
 	}
 	if first != nil {
