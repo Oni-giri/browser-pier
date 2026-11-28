@@ -49,7 +49,7 @@ var lookupRoots *x509.CertPool
 // exit IP, so a redirect is followed only on its host (sameLookupHost),
 // with no user name or password of its own; over http or https only, the
 // scheme going from http to https, never back; the port staying the same,
-// except on that upgrade, which goes to https's own port, 443; and at most
+// except that the upgrade may also go to https's own port, 443; and at most
 // maxLookupRedirects of them. Any other redirect isn't followed: its
 // answer, a 3xx, is a lookup with no usable answer.
 func lookupRedirect(req *http.Request, via []*http.Request) error {
@@ -62,7 +62,7 @@ func lookupRedirect(req *http.Request, via []*http.Request) error {
 	}
 	switch {
 	case (to.Scheme == "http" || to.Scheme == "https") && from.Scheme == to.Scheme && urlPort(from) == urlPort(to):
-	case from.Scheme == "http" && to.Scheme == "https" && urlPort(to) == "443":
+	case from.Scheme == "http" && to.Scheme == "https" && (urlPort(to) == "443" || urlPort(to) == urlPort(from)):
 	default:
 		return http.ErrUseLastResponse
 	}

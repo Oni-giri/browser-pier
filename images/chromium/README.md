@@ -33,7 +33,7 @@ Settings, all optional:
 | `BROWSERPIER_PROFILE_DIR` | `/profile` | |
 | `BROWSERPIER_CONTROL_SOCKET` | `/run/browserpier/control.sock` | |
 | `BROWSERPIER_PROXY_FILE` | `/run/browserpier/proxy.json` | `{"url": "socks5://user:pass@host:port"}` (or `http`, `https`): the profile's proxy. Read and deleted before Chromium starts. |
-| `BROWSERPIER_GEOIP_URL` | none | Endpoint to look up the exit location (`country_iso`, `time_zone`); empty for no lookup. It follows a redirect only on its own host (http → https on 443 allowed, never back), three at most, at a start and in the proxy check alike. |
+| `BROWSERPIER_GEOIP_URL` | none | Endpoint to look up the exit location (`country_iso`, `time_zone`); empty for no lookup. It follows a redirect only on its own host (http → https on the same port or on 443 allowed, never back), three at most, at a start and in the proxy check alike. |
 | `BROWSERPIER_GEO_COUNTRY`, `BROWSERPIER_GEO_TZ` | none | The location the profile ran with last time; the zone is kept while the country is the same. |
 | `BROWSERPIER_TZ_OVERRIDE`, `BROWSERPIER_LOCALE_OVERRIDE` | none | The profile's manual time zone and language; they win. |
 | `BROWSERPIER_MODE` | `api` | `visual` adds `--force-renderer-accessibility=basic`, points Chromium's accessibility at the session bus (`AT_SPI_BUS_ADDRESS`, `ACCESSIBILITY_ENABLED=1`; the bus is the one the file chooser portal is on, in every mode) and serves `/tree` (PROJ-150). `api` changes nothing. |
