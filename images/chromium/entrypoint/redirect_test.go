@@ -47,6 +47,23 @@ func TestLookupRedirectRule(t *testing.T) {
 		{"http to https on 80", []string{"http://geo.example/json", "https://geo.example:80/json"}, false},
 		{"https to another port", []string{"https://geo.example/json", "https://geo.example:8443/json"}, false},
 		{"http to another port", []string{"http://geo.example/json", "http://geo.example:8080/json"}, false},
+		{"a trailing dot added", []string{"https://geo.example/json", "https://geo.example./json"}, true},
+		{"a trailing dot dropped", []string{"https://geo.example./json", "https://geo.example/json"}, true},
+		{"IPv6, long form to canonical", []string{"http://[2001:db8:0:0:0:0:0:1]:8080/json", "http://[2001:db8::1]:8080/json"}, true},
+		{"IPv6, canonical to long form", []string{"http://[2001:db8::1]:8080/json", "http://[2001:0db8::0001]:8080/json"}, true},
+		{"IPv4, the same address", []string{"http://192.0.2.1/json", "https://192.0.2.1/json"}, true},
+
+		{"user name and password in the redirect", []string{"https://geo.example/json", "https://attacker:secret@geo.example/json"}, false},
+		{"a user name in the redirect", []string{"https://geo.example/json", "https://attacker@geo.example/json"}, false},
+		{"only dots", []string{"https://./json", "https://./json"}, false},
+		{"an empty host", []string{"https://geo.example/json", "https:///json"}, false},
+		{"IPv4-mapped IPv6 to its IPv4", []string{"http://[::ffff:192.0.2.1]/json", "http://192.0.2.1/json"}, false},
+		{"IPv4 to its IPv4-mapped IPv6", []string{"http://192.0.2.1/json", "http://[::ffff:192.0.2.1]/json"}, false},
+		{"IPv6 with a zone", []string{"http://[fe80::1%25eth0]/json", "http://[fe80::1%25eth0]/json2"}, false},
+		{"IPv6 gaining a zone", []string{"http://[fe80::1]/json", "http://[fe80::1%25eth0]/json"}, false},
+		{"a name to an address", []string{"http://localhost/json", "http://127.0.0.1/json"}, false},
+		{"another scheme, same host", []string{"http://geo.example/json", "ftp://geo.example/json"}, false},
+		{"another scheme throughout", []string{"foo://geo.example/a", "foo://geo.example/b"}, false},
 		{"four redirects", []string{"http://geo.example/0", "https://geo.example/1", "https://geo.example/2", "https://geo.example/3", "https://geo.example/4"}, false},
 	}
 	for _, c := range cases {
@@ -73,6 +90,46 @@ func mustReq(t *testing.T, u string) *http.Request {
 		t.Fatal(err)
 	}
 	return req
+}
+
+// TestDirectLookupRedirects: without a proxy, a start's lookup follows a
+// redirect on the same host and refuses one to another, which gets no
+// request.
+func TestDirectLookupRedirects(t *testing.T) {
+	var otherHits atomic.Int32
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		otherHits.Add(1)
+		_, _ = io.WriteString(w, tlsGeo)
+	}))
+	t.Cleanup(other.Close)
+	_, otherPort, _ := net.SplitHostPort(other.Listener.Addr().String())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		switch req.URL.Path {
+		case "/geo":
+			_, _ = io.WriteString(w, plainGeo)
+		case "/same":
+			http.Redirect(w, req, "/geo", http.StatusFound)
+		case "/other":
+			// Another host name, which reaches the other listener.
+			http.Redirect(w, req, "http://localhost:"+otherPort+"/geo", http.StatusFound)
+		default:
+			http.NotFound(w, req)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	ip, _, _, err := startLookup(context.Background(), &forwarder{}, srv.URL+"/same")()
+	if err != nil || ip != "198.51.100.23" {
+		t.Fatalf("same host: %q, %v", ip, err)
+	}
+	ip, _, _, err = startLookup(context.Background(), &forwarder{}, srv.URL+"/other")()
+	var ae geoAnswerError
+	if !errors.As(err, &ae) {
+		t.Fatalf("another host: %q, %v; want an unusable answer", ip, err)
+	}
+	if n := otherHits.Load(); n != 0 {
+		t.Fatalf("the other host got %d requests", n)
+	}
 }
 
 // TestLookupClientUsesTheRule: the client a start's lookup and the check
