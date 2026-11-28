@@ -56,7 +56,28 @@ func New(m *sessions.Manager, web *auth.Web, fs *files.Store, log *slog.Logger, 
 	}
 	a := &API{m: m, web: web, files: fs, log: log, public: strings.TrimRight(publicURL, "/"), tools: tools, tree: visualtree.New(m)}
 	m.OnEnd(a.choosers.forget)
+	if web != nil {
+		m.SetTokenCheck(a.checkToken)
+	}
 	return a
+}
+
+// checkToken looks an agent token up again, for the sessions manager
+// (SetTokenCheck): a page call's request is let in before its body is
+// read, so its token is checked again once the call has its lease, where
+// a revocation either shows or cancels the lease (PROJ-206). A token gone
+// is sessions.ErrRevoked; a lookup that fails refuses the call too.
+func (a *API) checkToken(ctx context.Context, tokenID string) error {
+	_, err := a.web.Tokens().Get(ctx, tokenID)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, auth.ErrTokenNotFound):
+		return sessions.ErrRevoked
+	case ctx.Err() != nil:
+		return ctx.Err() // the client went away
+	}
+	return fmt.Errorf("checking the agent token: %w", err)
 }
 
 // SetSettings makes profiles created through the API start from the

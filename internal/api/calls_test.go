@@ -531,7 +531,11 @@ func TestARepeatWhileTheFirstRuns(t *testing.T) {
 
 	// Two copies sent together make one call: the second, taken while
 	// the first waits for its turn behind another call, doesn't run.
-	hold, err := f.m.PageLease(context.Background(), a.ID, "someone")
+	someone, _, err := f.tokens.Create(context.Background(), "someone", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold, err := f.m.PageLease(context.Background(), a.ID, someone.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -59,6 +59,8 @@ type Lease struct {
 	Generation uint64
 	release    func()
 	breakable  func()
+	// call is the agent call the lease admitted, if any.
+	call *Call
 }
 
 // Release ends the lease; it is safe to call more than once.
@@ -83,7 +85,9 @@ func (l *Lease) Breakable() { l.breakable() }
 // revocation cancels them and waits for them to end.
 //
 // Calls on one session take turns: PageLease waits (until ctx ends) while
-// another lease is held, so two calls never interleave.
+// another lease is held, so two calls never interleave. Once the lease is
+// registered, the token is looked up again (SetTokenCheck): a token
+// revoked since the request came in gets ErrRevoked.
 func (m *Manager) PageLease(ctx context.Context, id, tokenID string) (*Lease, error) {
 	return m.pageLease(ctx, id, tokenID, false)
 }
@@ -98,7 +102,51 @@ func (m *Manager) ReadLease(ctx context.Context, id, tokenID string) (*Lease, er
 	return m.pageLease(ctx, id, tokenID, true)
 }
 
+// SetTokenCheck sets how a page call's token is looked up again once its
+// lease is registered (PROJ-206): check answers nil while the token
+// exists, ErrRevoked once it is gone, and any other error when it can't
+// tell, which refuses the call too (it fails closed). It is called
+// without the manager's lock. Without a check, as in tests, tokens aren't
+// looked up again.
+func (m *Manager) SetTokenCheck(check func(ctx context.Context, tokenID string) error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tokenCheck = check
+}
+
 func (m *Manager) pageLease(ctx context.Context, id, tokenID string, read bool) (*Lease, error) {
+	lease, err := m.grantLease(ctx, id, tokenID, read)
+	if err != nil {
+		return nil, err
+	}
+	if err := m.checkToken(ctx, tokenID); err != nil {
+		// Refused before it did anything: its call gives its receipt
+		// back, as for one never admitted (PROJ-156).
+		lease.call.Unrun()
+		lease.Release()
+		return nil, err
+	}
+	return lease, nil
+}
+
+// checkToken looks the token of a page call up again, once its lease is
+// registered. The call's request was let in before its body was read, and
+// a revocation in that time found no lease to cancel (DisconnectToken).
+// The UI deletes a token, then disconnects it: a revocation therefore
+// either shows here or cancels the lease. A call without a token (a
+// person's, through a handoff) has nothing to check.
+func (m *Manager) checkToken(ctx context.Context, tokenID string) error {
+	m.mu.Lock()
+	check := m.tokenCheck
+	m.mu.Unlock()
+	if check == nil || tokenID == "" {
+		return nil
+	}
+	return check(ctx, tokenID)
+}
+
+// grantLease waits for the session's turn and registers the lease.
+func (m *Manager) grantLease(ctx context.Context, id, tokenID string, read bool) (*Lease, error) {
 	m.mu.Lock()
 	l := m.findLocked(id)
 	if err := leaseRefusal(l); err != nil {
@@ -173,7 +221,7 @@ func (m *Manager) pageLease(ctx context.Context, id, tokenID string, read bool) 
 	}
 	m.agentActedLocked(l)
 	var once sync.Once
-	return &Lease{Ctx: cctx, Generation: l.generation, breakable: func() {
+	return &Lease{Ctx: cctx, Generation: l.generation, call: ls.call, breakable: func() {
 		m.mu.Lock()
 		ls.breakable = true
 		m.mu.Unlock()
