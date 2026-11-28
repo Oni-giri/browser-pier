@@ -38,6 +38,10 @@ type lease struct {
 	// started is when an agent input action (AgentInput) or a page call
 	// (PageLease) began.
 	started time.Time
+	// admitted: a page call's lease, once its token was checked again
+	// (PageLease). Before that it is registered, so it can be cancelled,
+	// but is not the agent acting: it keeps no recording going.
+	admitted bool
 	// breakable: a page call the person in the live view may break off
 	// once it has run for takeOverAfter (Lease.Breakable).
 	breakable bool
@@ -59,8 +63,6 @@ type Lease struct {
 	Generation uint64
 	release    func()
 	breakable  func()
-	// call is the agent call the lease admitted, if any.
-	call *Call
 }
 
 // Release ends the lease; it is safe to call more than once.
@@ -115,14 +117,18 @@ func (m *Manager) SetTokenCheck(check func(ctx context.Context, tokenID string) 
 }
 
 func (m *Manager) pageLease(ctx context.Context, id, tokenID string, read bool) (*Lease, error) {
-	lease, err := m.grantLease(ctx, id, tokenID, read)
+	lease, admit, err := m.grantLease(ctx, id, tokenID, read)
 	if err != nil {
 		return nil, err
 	}
-	if err := m.checkToken(ctx, tokenID); err != nil {
-		// Refused before it did anything: its call gives its receipt
-		// back, as for one never admitted (PROJ-156).
-		lease.call.Unrun()
+	err = m.checkToken(ctx, tokenID)
+	if err == nil {
+		err = admit()
+	}
+	if err != nil {
+		// Refused before it did anything: it counted as no activity,
+		// and its call was never admitted, so it gives its receipt back
+		// (PROJ-156).
 		lease.Release()
 		return nil, err
 	}
@@ -145,13 +151,18 @@ func (m *Manager) checkToken(ctx context.Context, tokenID string) error {
 	return check(ctx, tokenID)
 }
 
-// grantLease waits for the session's turn and registers the lease.
-func (m *Manager) grantLease(ctx context.Context, id, tokenID string, read bool) (*Lease, error) {
+// grantLease waits for the session's turn and registers the lease, so a
+// revocation, a handoff, a hold or a stop cancels it from now on. Until
+// admit, the lease is not yet the agent acting: it stamps no activity,
+// keeps no recording going and admits no call, and a Release before then
+// leaves no trace but the few milliseconds it held the turn. admit fails
+// if the lease was cancelled meanwhile.
+func (m *Manager) grantLease(ctx context.Context, id, tokenID string, read bool) (*Lease, func() error, error) {
 	m.mu.Lock()
 	l := m.findLocked(id)
 	if err := leaseRefusal(l); err != nil {
 		m.mu.Unlock()
-		return nil, err
+		return nil, nil, err
 	}
 	if l.turn == nil {
 		l.turn = make(chan struct{}, 1)
@@ -176,52 +187,66 @@ func (m *Manager) grantLease(ctx context.Context, id, tokenID string, read bool)
 		m.mu.Unlock()
 		cancel(context.Canceled)
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return nil, context.Cause(cctx)
+		return nil, nil, context.Cause(cctx)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(l.queued, waiting)
+	// ended is why the lease can't go on: the caller gone, or what
+	// cancelled it (a revocation, a handoff, a hold, a stop).
+	ended := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return context.Cause(cctx)
+	}
 	err := leaseRefusal(l)
 	if err == nil && m.findLocked(id) != l {
 		err = ErrNotRunning
 	}
 	if err == nil && cctx.Err() != nil {
-		// Revoked, or the caller gone, as the turn came.
-		if err = ctx.Err(); err == nil {
-			err = context.Cause(cctx)
-		}
+		err = ended() // revoked, or the caller gone, as the turn came
 	}
 	if err != nil {
 		<-turn
 		cancel(context.Canceled)
-		return nil, err
+		return nil, nil, err
 	}
-	now := m.now()
-	ls := &lease{tokenID: tokenID, cancel: cancel, started: now, yields: read}
-	if !read {
-		ls.call = CallFrom(ctx)
-	}
-	if ls.call != nil {
-		// Granted: the call is admitted (its receipt stays, PROJ-156).
-		// A read never admits one: a click by ref reads the element
-		// first, and its call is admitted only by its input
-		// (AgentInputAt), so a click refused after the read gives its
-		// receipt back.
-		ls.call.admitLocked()
-	}
+	ls := &lease{tokenID: tokenID, cancel: cancel, yields: read}
 	if l.leases == nil {
 		l.leases = map[*lease]struct{}{}
 	}
 	l.leases[ls] = struct{}{}
-	l.lastActivity = now
-	if !read {
-		l.lastAgentInput = now
+	admit := func() error {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if cctx.Err() != nil {
+			return ended()
+		}
+		now := m.now()
+		ls.admitted, ls.started = true, now
+		if !read {
+			ls.call = CallFrom(ctx)
+		}
+		if ls.call != nil {
+			// Granted: the call is admitted (its receipt stays,
+			// PROJ-156). A read never admits one: a click by ref reads
+			// the element first, and its call is admitted only by its
+			// input (AgentInputAt), so a click refused after the read
+			// gives its receipt back.
+			ls.call.admitLocked()
+		}
+		l.lastActivity = now
+		if !read {
+			l.lastAgentInput = now
+		}
+		m.agentActedLocked(l)
+		return nil
 	}
-	m.agentActedLocked(l)
 	var once sync.Once
-	return &Lease{Ctx: cctx, Generation: l.generation, call: ls.call, breakable: func() {
+	return &Lease{Ctx: cctx, Generation: l.generation, breakable: func() {
 		m.mu.Lock()
 		ls.breakable = true
 		m.mu.Unlock()
@@ -238,17 +263,19 @@ func (m *Manager) grantLease(ctx context.Context, id, tokenID string, read bool)
 				ls.call.cut = true
 			}
 			delete(l.leases, ls)
-			now := m.now()
-			l.lastActivity = now
-			if !read {
-				l.lastAgentInput = now
+			if ls.admitted {
+				now := m.now()
+				l.lastActivity = now
+				if !read {
+					l.lastAgentInput = now
+				}
+				m.agentActedLocked(l)
 			}
-			m.agentActedLocked(l)
 			m.inputsDone.Broadcast()
 			m.mu.Unlock()
 			<-turn
 		})
-	}}, nil
+	}}, admit, nil
 }
 
 // leaseRefusal says why no page call may start now, if one may not.
@@ -267,6 +294,17 @@ func leaseRefusal(l *live) error {
 		return ErrSessionHeld
 	}
 	return nil
+}
+
+// leasedLocked reports whether a page call admitted (PageLease) is under
+// way: one still having its token checked isn't the agent acting yet.
+func (l *live) leasedLocked() bool {
+	for ls := range l.leases {
+		if ls.admitted {
+			return true
+		}
+	}
+	return false
 }
 
 // cancelLeasesLocked cancels every page call under way, for why.

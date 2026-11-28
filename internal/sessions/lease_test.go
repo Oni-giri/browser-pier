@@ -576,3 +576,57 @@ func TestACallRefusedByTheTokenCheckGivesItsReceiptBack(t *testing.T) {
 		t.Fatalf("a call refused by the token check kept its receipt: %+v", r)
 	}
 }
+
+// A call refused by the token check counts as no activity: it doesn't
+// keep a person from taking control, keep the browser from idling or
+// start the recording's tail (PROJ-206).
+func TestACallRefusedByTheTokenCheckIsNoActivity(t *testing.T) {
+	f := newFixture(t)
+	advance := f.clock()
+	s := f.start(f.m)
+	advance(agentQuiet + time.Second)
+	stamps := func() [3]time.Time {
+		f.m.mu.Lock()
+		defer f.m.mu.Unlock()
+		l := f.m.findLocked(s.ID)
+		return [3]time.Time{l.lastActivity, l.lastAgentInput, l.agentAt}
+	}
+	before := stamps()
+	f.m.SetTokenCheck(func(context.Context, string) error {
+		advance(time.Second) // the lookup takes a while
+		return ErrRevoked
+	})
+	for _, lease := range []func(context.Context, string, string) (*Lease, error){f.m.PageLease, f.m.ReadLease} {
+		if _, err := lease(context.Background(), s.ID, "tok"); !errors.Is(err, ErrRevoked) {
+			t.Fatal(err)
+		}
+	}
+	if after := stamps(); after != before {
+		t.Fatalf("a refused call stamped activity: %v, was %v", after, before)
+	}
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
+		t.Fatalf("take control just after a refused call = %v", err)
+	}
+}
+
+// A lease cancelled while its token is checked (the token revoked between
+// the lookup and the disconnect, say) is refused too.
+func TestALeaseCancelledDuringTheTokenCheckIsRefused(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	f.m.SetTokenCheck(func(_ context.Context, tokenID string) error {
+		f.m.DisconnectToken(tokenID)
+		return nil
+	})
+	c := take(t, f.m, s.ID, "tok", "x", FingerprintOf("act", []byte(`{}`)))
+	if _, err := f.m.PageLease(WithCall(context.Background(), c), s.ID, "tok"); !errors.Is(err, ErrRevoked) {
+		t.Fatal(err)
+	}
+	c.End(false)
+	if r, ok := f.m.CallReceipt(s.ID, "tok", "x"); ok {
+		t.Fatalf("a call refused by the token check kept its receipt: %+v", r)
+	}
+	if got := f.m.ConnectedTokens(); len(got) != 0 {
+		t.Fatalf("still held by %v", got)
+	}
+}
