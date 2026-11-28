@@ -68,7 +68,9 @@ func pageToolWith[In any](a *API, f pageFunc[In], notice bool) http.HandlerFunc 
 		switch {
 		case errors.As(err, &pe):
 			msg := pe.Msg
-			if notice {
+			// Not for a call that never ran, nor for a token revoked
+			// under it, which is told nothing more (PROJ-206).
+			if notice && !pe.NothingRan && pe.Status != http.StatusUnauthorized {
 				// A step that failed after one that opened a chooser.
 				if line := a.chooserNotice(r.Context(), s); line != "" {
 					msg += "\n" + line
