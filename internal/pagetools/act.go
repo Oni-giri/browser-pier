@@ -224,8 +224,8 @@ func (t *Tools) Act(ctx context.Context, s sessions.Session, who Caller, in ActI
 	return out, err
 }
 
-// actNoticed is Act, before marking an error NothingRan: ran is set once
-// the call has the page.
+// actNoticed is Act, before marking an error NothingRan: ran is set as
+// the steps begin.
 func (t *Tools) actNoticed(ctx context.Context, s sessions.Session, who Caller, in ActIn, ran *bool) (string, error) {
 	if len(in.Steps) == 0 || len(in.Steps) > MaxSteps {
 		return "", &Error{Status: 400, Msg: fmt.Sprintf("steps: want 1 to %d", MaxSteps)}
@@ -252,8 +252,8 @@ func (t *Tools) actNoticed(ctx context.Context, s sessions.Session, who Caller, 
 	// A step may start a download: the folder before the steps, to
 	// compare with after (PROJ-116). The comparison, and any wait for a
 	// download to finish, comes once the call has let go of the page, so
-	// it holds up no other call. It is looked at only once the call has
-	// the page: one refused (its token revoked, say) touches nothing.
+	// it holds up no other call. It is looked at only as the steps begin:
+	// a call refused (its token revoked, say) touches nothing.
 	var mark *files.Mark
 	out, err := t.act(ctx, s, who, in, func() *files.Mark {
 		*ran = true
@@ -300,12 +300,11 @@ func (t *Tools) downloads(ctx context.Context, s sessions.Session, who Caller, m
 	return "### Downloads\n" + fence.Wrap("downloads", strings.Join(files.Lines(ds), "\n"))
 }
 
-// act runs act's steps, once they have been checked. Once the call has
-// the page, start gives the downloads folder's mark, if any, which act
+// act runs act's steps, once they have been checked. As the first step
+// begins, start gives the downloads folder's mark, if any, which act
 // tells when the steps have ended.
 func (t *Tools) act(ctx context.Context, s sessions.Session, who Caller, in ActIn, start func() *files.Mark) (string, error) {
 	return t.run(ctx, s, who, func(c *call) (string, error) {
-		mark := start()
 		// Human-paced steps can run for minutes: the person in the live
 		// view may break them off once they have run a few seconds.
 		c.lease.Breakable()
@@ -326,6 +325,9 @@ func (t *Tools) act(ctx context.Context, s sessions.Session, who Caller, in ActI
 				unkept = c.t.tooLargeToKeep(c.sess.ID, c.tgt.ID, c.frame, c.loader)
 			}
 		}
+		// The steps begin: a failure before here (the baseline's refresh)
+		// ran nothing, and comes with no notice.
+		mark := start()
 		var done []string
 		for i, st := range in.Steps {
 			if i > 0 && c.t.settle > 0 {

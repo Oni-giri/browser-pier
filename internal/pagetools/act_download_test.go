@@ -1,6 +1,8 @@
 package pagetools
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -9,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Oni-giri/browser-pier/internal/cdp/cdptest"
 	"github.com/Oni-giri/browser-pier/internal/files"
 )
 
@@ -119,5 +122,36 @@ func TestActDownloadWaitChecked(t *testing.T) {
 		if !isStatus(err, http.StatusBadRequest) || !strings.Contains(err.Error(), "download_wait_ms is 0 to 30000") {
 			t.Errorf("download_wait_ms %d: %v", ms, err)
 		}
+	}
+}
+
+// An act that fails before its first step (the baseline's refresh) ran
+// nothing: it is marked so, and tells of no download (PROJ-206).
+func TestActFailingBeforeItsStepsTellsOfNoDownload(t *testing.T) {
+	f := newFixture(t)
+	dir, r := f.downloadPage() // a snapshot: act refreshes its baseline first
+	// A download since the last look, which a notice would tell of.
+	f.tools.files.Mark(f.sess.Profile, f.sess.ID).Downloads(context.Background(), 0)
+	if err := os.WriteFile(filepath.Join(dir, "unannounced.csv"), []byte("a,b\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The frame tree read after the visibility check (findActive's last
+	// read) is the baseline's refresh: it fails.
+	visible := false
+	f.fb.mu.Lock()
+	f.fb.intercept = func(_ *ftab, m cdptest.Message) (any, bool, error) {
+		switch {
+		case m.Method == "Runtime.callFunctionOn" && strings.Contains(string(m.Params), "bp:visibility"):
+			visible = true
+		case m.Method == "Page.getFrameTree" && visible:
+			return nil, true, cdptest.Error{Message: "Target closed"}
+		}
+		return nil, false, nil
+	}
+	f.fb.mu.Unlock()
+	_, err := f.act(Step{Action: "click", Ref: r["Nothing"]})
+	var e *Error
+	if !errors.As(err, &e) || !e.NothingRan || strings.Contains(e.Msg, "Downloads") || !strings.Contains(e.Msg, "Target closed") {
+		t.Fatalf("err %#v", err)
 	}
 }
