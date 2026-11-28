@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -34,6 +36,50 @@ var countryRE = regexp.MustCompile(`^[A-Z]{2}$`)
 // lookupTimeout bounds one location lookup, at a start and in the proxy
 // check alike.
 var lookupTimeout = 5 * time.Second
+
+// maxLookupRedirects is how many redirects one lookup follows at most.
+const maxLookupRedirects = 3
+
+// lookupRoots replaces the system's CAs for the lookup's TLS; tests only.
+var lookupRoots *x509.CertPool
+
+// lookupRedirect is the lookup's redirect rule, at a start and in the
+// proxy check alike (lookupClient): the endpoint the admin set sees the
+// exit IP, so a redirect is followed only on its host. The host name stays
+// the same (in any case); the scheme may go from http to https, never
+// back; the port stays the same, except on that upgrade, which goes to
+// https's own port, 443; and at most maxLookupRedirects of them. Any other redirect isn't
+// followed: its answer, a 3xx, is a lookup with no usable answer.
+func lookupRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) == 0 || len(via) > maxLookupRedirects {
+		return http.ErrUseLastResponse
+	}
+	from, to := via[len(via)-1].URL, req.URL
+	if !strings.EqualFold(from.Hostname(), to.Hostname()) {
+		return http.ErrUseLastResponse
+	}
+	switch {
+	case from.Scheme == to.Scheme && urlPort(from) == urlPort(to):
+	case from.Scheme == "http" && to.Scheme == "https" && urlPort(to) == "443":
+	default:
+		return http.ErrUseLastResponse
+	}
+	return nil
+}
+
+// urlPort is u's port, its scheme's default if it names none.
+func urlPort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	switch u.Scheme {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	}
+	return ""
+}
 
 // lookupGeo asks an echoip-style endpoint (ifconfig.co/json) where the
 // request came from.
