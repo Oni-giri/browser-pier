@@ -150,7 +150,7 @@ Self-hosted, persistent browsers for AI agents. Agents start a browser when they
 |---|---|---|
 | Starting… | Container and browser booting, a few seconds. | Disabled until ready |
 | Running | Browser up; an agent may be attached. | Live view |
-| Needs help | An agent requested a handoff and is paused. | Help now |
+| Needs help (the UI says "Needs you", the live view's status too) | An agent requested a handoff and is paused. | Help now |
 | Stopping… | Closing the browser, profile flushed to disk. | None |
 | Stopped | No container; uses no RAM. Logins kept. | Start |
 | Failed | Browser crashed or did not start; last log line shown. | Retry |
