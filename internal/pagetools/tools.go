@@ -78,6 +78,10 @@ type Error struct {
 	// final: the answer already says why the lease ended (act broken
 	// off by Take control), so fail keeps it.
 	final bool
+	// NothingRan: act failed before any of its steps ran (a bad request,
+	// the call refused, the browser out of reach), so nothing happened
+	// that a notice after it (a download, a file chooser) could tell of.
+	NothingRan bool
 }
 
 func (e *Error) Error() string { return e.Msg }

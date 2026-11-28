@@ -34,8 +34,9 @@ type browser struct {
 	mu     sync.Mutex
 	inputs []string // path and body of each input request
 	leaks  []string // credentials that reached the browser
-	// noScreen makes screenshots fail.
-	noScreen bool
+	// noScreen makes screenshots fail; screenshots counts them.
+	noScreen    bool
+	screenshots int
 	// onInput, if set, runs as each input action does, with its path:
 	// a click that starts a download, say.
 	onInput func(path string)
@@ -66,6 +67,8 @@ type browser struct {
 	choosers string
 	noPortal bool
 	chosen   []string
+	// chooserGets counts GET /chooser.
+	chooserGets int
 	// chooserStatus, if set, is what POST /chooser/{id} answers.
 	chooserStatus int
 }
@@ -122,6 +125,7 @@ func (b *browser) handler() http.Handler {
 	})
 	mux.HandleFunc("GET /screenshot", func(w http.ResponseWriter, r *http.Request) {
 		b.mu.Lock()
+		b.screenshots++
 		broken := b.noScreen
 		b.mu.Unlock()
 		if broken {
@@ -248,6 +252,7 @@ func (b *browser) handler() http.Handler {
 	mux.HandleFunc("GET /chooser", func(w http.ResponseWriter, _ *http.Request) {
 		b.mu.Lock()
 		defer b.mu.Unlock()
+		b.chooserGets++
 		if b.noPortal {
 			http.Error(w, "the file chooser portal isn't running in this browser", http.StatusServiceUnavailable)
 			return

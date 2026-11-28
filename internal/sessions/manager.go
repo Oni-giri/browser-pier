@@ -141,6 +141,9 @@ type Manager struct {
 	inputsDone *sync.Cond
 	// onEnd is called with a session's ID once it has ended (OnEnd).
 	onEnd []func(id string)
+	// tokenCheck, if set, looks a page call's token up again once its
+	// lease is registered (SetTokenCheck).
+	tokenCheck func(ctx context.Context, tokenID string) error
 	// onFailed is called with each session that failed, and how (OnFailed).
 	onFailed []func(s Session, how EndReason)
 	// secrets are the values BrowserPier typed into each live session's

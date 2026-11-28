@@ -502,3 +502,155 @@ func TestAgentInputAtRefusesAfterAPerson(t *testing.T) {
 		done()
 	}
 }
+
+// A page call's token is looked up again once its lease is registered
+// (PROJ-206): a revocation since the request came in refuses it, as does a
+// lookup that fails, and the refused lease is let go.
+func TestAPageCallsTokenIsCheckedOnceItHasItsLease(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	errLookup := errors.New("the database is locked")
+	var answer error
+	var checked []string
+	f.m.SetTokenCheck(func(_ context.Context, tokenID string) error {
+		// Called without the lock, once the lease is registered: a
+		// revocation now would cancel it.
+		if got := f.m.ConnectedTokens(); len(got) != 1 || got[0] != tokenID {
+			t.Errorf("checked before the lease was registered: ConnectedTokens = %v", got)
+		}
+		checked = append(checked, tokenID)
+		return answer
+	})
+	for _, read := range []bool{false, true} {
+		lease := f.m.PageLease
+		if read {
+			lease = f.m.ReadLease
+		}
+		checked = nil
+		answer = nil
+		ls, err := lease(context.Background(), s.ID, "tok")
+		if err != nil {
+			t.Fatalf("read %v, a live token: %v", read, err)
+		}
+		ls.Release()
+		for _, c := range []struct {
+			answer, want error
+		}{{ErrRevoked, ErrRevoked}, {errLookup, errLookup}} {
+			answer = c.answer
+			if _, err := lease(context.Background(), s.ID, "tok"); !errors.Is(err, c.want) {
+				t.Fatalf("read %v, the check answering %v: %v", read, c.answer, err)
+			}
+			if got := f.m.ConnectedTokens(); len(got) != 0 {
+				t.Fatalf("read %v: a refused lease is still held by %v", read, got)
+			}
+		}
+		if len(checked) != 3 {
+			t.Fatalf("read %v: checked %v", read, checked)
+		}
+	}
+	// The turn was given back: a call without a token (a person's) gets
+	// its lease, and isn't checked.
+	answer, checked = ErrRevoked, nil
+	ls, err := f.m.PageLease(context.Background(), s.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ls.Release()
+	if len(checked) != 0 {
+		t.Fatalf("a call without a token was checked: %v", checked)
+	}
+}
+
+// A call refused by the token check gives its receipt back: it did
+// nothing (PROJ-206).
+func TestACallRefusedByTheTokenCheckGivesItsReceiptBack(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	f.m.SetTokenCheck(func(context.Context, string) error { return ErrRevoked })
+	c := take(t, f.m, s.ID, "tok", "x", FingerprintOf("act", []byte(`{}`)))
+	if _, err := f.m.PageLease(WithCall(context.Background(), c), s.ID, "tok"); !errors.Is(err, ErrRevoked) {
+		t.Fatal(err)
+	}
+	c.End(false)
+	if r, ok := f.m.CallReceipt(s.ID, "tok", "x"); ok {
+		t.Fatalf("a call refused by the token check kept its receipt: %+v", r)
+	}
+}
+
+// A call refused by the token check counts as no activity: it doesn't
+// keep a person from taking control, keep the browser from idling or
+// start the recording's tail (PROJ-206).
+func TestACallRefusedByTheTokenCheckIsNoActivity(t *testing.T) {
+	f := newFixture(t)
+	advance := f.clock()
+	s := f.start(f.m)
+	advance(agentQuiet + time.Second)
+	stamps := func() [3]time.Time {
+		f.m.mu.Lock()
+		defer f.m.mu.Unlock()
+		l := f.m.findLocked(s.ID)
+		return [3]time.Time{l.lastActivity, l.lastAgentInput, l.agentAt}
+	}
+	before := stamps()
+	f.m.SetTokenCheck(func(context.Context, string) error {
+		advance(time.Second) // the lookup takes a while
+		return ErrRevoked
+	})
+	for _, lease := range []func(context.Context, string, string) (*Lease, error){f.m.PageLease, f.m.ReadLease} {
+		if _, err := lease(context.Background(), s.ID, "tok"); !errors.Is(err, ErrRevoked) {
+			t.Fatal(err)
+		}
+	}
+	if after := stamps(); after != before {
+		t.Fatalf("a refused call stamped activity: %v, was %v", after, before)
+	}
+	if err := f.m.TakeControl(s.ID, "person"); err != nil {
+		t.Fatalf("take control just after a refused call = %v", err)
+	}
+}
+
+// A lease cancelled while its token is checked (the token revoked between
+// the lookup and the disconnect, say) is refused too.
+func TestALeaseCancelledDuringTheTokenCheckIsRefused(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	f.m.SetTokenCheck(func(_ context.Context, tokenID string) error {
+		f.m.DisconnectToken(tokenID)
+		return nil
+	})
+	c := take(t, f.m, s.ID, "tok", "x", FingerprintOf("act", []byte(`{}`)))
+	if _, err := f.m.PageLease(WithCall(context.Background(), c), s.ID, "tok"); !errors.Is(err, ErrRevoked) {
+		t.Fatal(err)
+	}
+	c.End(false)
+	if r, ok := f.m.CallReceipt(s.ID, "tok", "x"); ok {
+		t.Fatalf("a call refused by the token check kept its receipt: %+v", r)
+	}
+	if got := f.m.ConnectedTokens(); len(got) != 0 {
+		t.Fatalf("still held by %v", got)
+	}
+}
+
+// A session that ends while a call's token is checked, before it cancels
+// its leases (end saves its final state without the lock first), refuses
+// the call (PROJ-206).
+func TestALeaseOnASessionThatEndedDuringTheTokenCheckIsRefused(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	setState := func(st State) {
+		f.m.mu.Lock()
+		f.m.findLocked(s.ID).sess.State = st
+		f.m.mu.Unlock()
+	}
+	f.m.SetTokenCheck(func(context.Context, string) error {
+		setState(Failed)
+		return nil
+	})
+	defer setState(Running)
+	if _, err := f.m.PageLease(context.Background(), s.ID, "tok"); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("a lease on a session that failed meanwhile = %v", err)
+	}
+	if got := f.m.ConnectedTokens(); len(got) != 0 {
+		t.Fatalf("still held by %v", got)
+	}
+}

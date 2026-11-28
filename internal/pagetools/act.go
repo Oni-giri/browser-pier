@@ -209,7 +209,24 @@ func checkUploadName(name string) error {
 // and check it has the focus before and after. The page can still change in
 // the milliseconds between a check and the input: act resolves, checks
 // and dispatches back to back and echoes what it hit, but promises no more.
+//
+// An error from before any step ran (a bad request, the call refused, the
+// browser out of reach) is marked NothingRan, and comes with no notice.
 func (t *Tools) Act(ctx context.Context, s sessions.Session, who Caller, in ActIn) (string, error) {
+	ran := false
+	out, err := t.actNoticed(ctx, s, who, in, &ran)
+	var e *Error
+	if !ran && errors.As(err, &e) {
+		nothing := *e // e may be shared (errUnresponsive)
+		nothing.NothingRan = true
+		return "", &nothing
+	}
+	return out, err
+}
+
+// actNoticed is Act, before marking an error NothingRan: ran is set as
+// the steps begin.
+func (t *Tools) actNoticed(ctx context.Context, s sessions.Session, who Caller, in ActIn, ran *bool) (string, error) {
 	if len(in.Steps) == 0 || len(in.Steps) > MaxSteps {
 		return "", &Error{Status: 400, Msg: fmt.Sprintf("steps: want 1 to %d", MaxSteps)}
 	}
@@ -235,18 +252,27 @@ func (t *Tools) Act(ctx context.Context, s sessions.Session, who Caller, in ActI
 	// A step may start a download: the folder before the steps, to
 	// compare with after (PROJ-116). The comparison, and any wait for a
 	// download to finish, comes once the call has let go of the page, so
-	// it holds up no other call.
+	// it holds up no other call. It is looked at only as the steps begin:
+	// a call refused (its token revoked, say) touches nothing.
 	var mark *files.Mark
-	if t.files != nil {
-		mark = t.files.Mark(s.Profile, s.ID)
-		if in.DownloadWaitMS != nil {
-			mark.Expect(wait) // the caller expects a download: look as long for it to start
+	out, err := t.act(ctx, s, who, in, func() *files.Mark {
+		*ran = true
+		if t.files != nil {
+			mark = t.files.Mark(s.Profile, s.ID)
+			if in.DownloadWaitMS != nil {
+				mark.Expect(wait) // the caller expects a download: look as long for it to start
+			}
 		}
-	}
-	out, err := t.act(ctx, s, who, in, mark)
+		return mark
+	})
 	var e *Error
-	if mark == nil || (err != nil && !errors.As(err, &e)) {
-		return out, err // no files store, or the caller went away
+	switch {
+	case mark == nil || (err != nil && !errors.As(err, &e)):
+		return out, err // nothing ran, no files store, or the caller went away
+	case e != nil && e.Status == http.StatusUnauthorized:
+		// The token was revoked under the call: it is told nothing
+		// more. The next call's notice tells of what it started.
+		return "", e
 	}
 	notice := t.downloads(ctx, s, who, mark, wait)
 	switch {
@@ -274,9 +300,10 @@ func (t *Tools) downloads(ctx context.Context, s sessions.Session, who Caller, m
 	return "### Downloads\n" + fence.Wrap("downloads", strings.Join(files.Lines(ds), "\n"))
 }
 
-// act runs act's steps, once they have been checked, and tells mark when
-// they have ended.
-func (t *Tools) act(ctx context.Context, s sessions.Session, who Caller, in ActIn, mark *files.Mark) (string, error) {
+// act runs act's steps, once they have been checked. As the first step
+// begins, start gives the downloads folder's mark, if any, which act
+// tells when the steps have ended.
+func (t *Tools) act(ctx context.Context, s sessions.Session, who Caller, in ActIn, start func() *files.Mark) (string, error) {
 	return t.run(ctx, s, who, func(c *call) (string, error) {
 		// Human-paced steps can run for minutes: the person in the live
 		// view may break them off once they have run a few seconds.
@@ -298,6 +325,9 @@ func (t *Tools) act(ctx context.Context, s sessions.Session, who Caller, in ActI
 				unkept = c.t.tooLargeToKeep(c.sess.ID, c.tgt.ID, c.frame, c.loader)
 			}
 		}
+		// The steps begin: a failure before here (the baseline's refresh)
+		// ran nothing, and comes with no notice.
+		mark := start()
 		var done []string
 		for i, st := range in.Steps {
 			if i > 0 && c.t.settle > 0 {

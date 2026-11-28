@@ -71,6 +71,12 @@ func (a *API) content(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
+		// The body was read since the token was checked, and a
+		// screenshot takes no lease a revocation could cancel: the token
+		// is looked up again (PROJ-206).
+		if !a.tokenStillThere(w, r, tok.ID) {
+			return
+		}
 		target := "/screenshot"
 		if in.Width != nil {
 			if *in.Width < 16 {

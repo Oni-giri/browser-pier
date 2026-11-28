@@ -59,7 +59,7 @@ func (m *Manager) regateLocked(l *live) {
 		return
 	}
 	now := m.now()
-	acting := len(l.conns) > 0 || len(l.leases) > 0 || len(l.inputs) > 0
+	acting := len(l.conns) > 0 || l.leasedLocked() || len(l.inputs) > 0
 	tail := !acting && !l.agentAt.IsZero() && now.Sub(l.agentAt) < recording.Tail
 	allow, why := recording.Gate{
 		Enabled:     l.record,
