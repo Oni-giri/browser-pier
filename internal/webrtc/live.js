@@ -10,7 +10,7 @@
   const statusURL = root.dataset.status || `/live/${encodeURIComponent(profile)}/status`;
   const iceURL = root.dataset.ice || `/live/${encodeURIComponent(profile)}/ice`;
   // A page whose offer brings control (a handoff) keeps its own pill until
-  // the offer has answered: until then the status says "Needs help", as
+  // the offer has answered: until then the status says "Needs you", as
   // nobody has control yet.
   let offerAnswered = !root.dataset.offer;
   // connectError, once set, is why this view couldn't connect: it stays in
@@ -92,7 +92,7 @@
     let label = "Stopped", cls = "";
     if (s === "running" || s === "needs_help") {
       if (control) { label = "You have control"; cls = "you"; }
-      else if (s === "needs_help") { label = "Needs help"; cls = "help"; }
+      else if (s === "needs_help") { label = "Needs you"; cls = "help"; }
       else if (status.in_use_by && status.in_use_by.length) { label = "Agent driving: " + status.in_use_by.join(", "); cls = "agent"; }
       else if (status.human_control) { label = "Someone else has control"; }
       else { label = "Idle"; }

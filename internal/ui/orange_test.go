@@ -67,7 +67,7 @@ var (
 		},
 		"../webrtc/live.js": {
 			// The live view's pill while the browser needs help, whatever its
-			// label says (PROJ-198 may reword it). That only this state is
+			// label says (it may be reworded). That only this state is
 			// orange, and that the pill doesn't stay orange after it, is
 			// TestLiveViewPillIsOrangeOnlyWhileHelpIsNeeded's, in a browser.
 			regexp.MustCompile(`else if \(s === "needs_help"\) \{\s*label = [^;]+;\s*cls = "help";\s*\}`),
@@ -404,16 +404,16 @@ func TestOrangeChecksCatchSeededViolations(t *testing.T) {
 	// A comment may quote a label, at the end of a line or in a block; a
 	// URL in a string isn't a comment.
 	for seed, want := range map[string]int{
-		`label = "Idle"; // previously "Needs help"`: 0,
-		`/* was cls = "help" */ label = "Idle";`:     0,
-		`const u = "http://x"; const c = "help";`:    1, // the string isn't cut at its //
+		`label = "Idle"; // previously "Needs you"`: 0,
+		`/* was cls = "help" */ label = "Idle";`:    0,
+		`const u = "http://x"; const c = "help";`:   1, // the string isn't cut at its //
 	} {
 		if got := warmMarkupProblems(live, js+"\n"+seed+"\n"); len(got) != want {
 			t.Errorf("%s with %s: %q, want %d problems", live, seed, got, want)
 		}
 	}
 	// The needs-help branch may be reworded, comment and all.
-	reworded := strings.Replace(js, `label = "Needs help"; cls = "help";`, `label = "Needs you"; /* PROJ-198 */ cls = "help";`, 1)
+	reworded := strings.Replace(js, `label = "Needs you"; cls = "help";`, `label = "Someone is needed"; /* reworded */ cls = "help";`, 1)
 	if reworded == js {
 		t.Fatal("live.js's needs-help branch moved: update this test")
 	}
@@ -423,6 +423,19 @@ func TestOrangeChecksCatchSeededViolations(t *testing.T) {
 	// A warm class anywhere else in it is caught.
 	if p := warmMarkupProblems(live, js+"\nwho.className = \"pill help\";\n"); len(p) != 1 {
 		t.Errorf("live.js with another warm class: %q", p)
+	}
+}
+
+// The live view's pill names the needs-help state with the design's word,
+// the one every other page uses (DESIGN.md, Status vocabulary).
+func TestLiveViewSaysNeedsYou(t *testing.T) {
+	js := readMarkup(t, "../webrtc/live.js")
+	m := regexp.MustCompile(`else if \(s === "needs_help"\) \{\s*label = "([^"]*)";`).FindStringSubmatch(js)
+	if m == nil {
+		t.Fatal("live.js's needs-help branch moved: update this test")
+	}
+	if m[1] != stHelp.Label {
+		t.Errorf("the live view says %q while help is needed, want %q", m[1], stHelp.Label)
 	}
 }
 

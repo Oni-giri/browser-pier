@@ -34,8 +34,8 @@ const fakePeer = `window.RTCPeerConnection = class {
 
 // TestLiveViewPillIsOrangeOnlyWhileHelpIsNeeded runs the live view's own
 // script on the profile page, with its status served by the test, and
-// reads the pill's class in each state, whatever its label says: orange
-// (help) while the browser needs help and nobody has control, and never
+// reads the pill's class in each state: orange (help), saying "Needs
+// you", while the browser needs help and nobody has control, and never
 // after, whether it goes idle, an agent drives, or the person takes
 // control. orange_test.go only checks the script's text.
 func TestLiveViewPillIsOrangeOnlyWhileHelpIsNeeded(t *testing.T) {
@@ -120,6 +120,12 @@ func TestLiveViewPillIsOrangeOnlyWhileHelpIsNeeded(t *testing.T) {
 		}
 		if got := b.Eval(orange); got != want {
 			t.Errorf("%s: the pill is %q (%q); orange %v, want %v", what, b.Eval(`document.querySelector("#who").className`), b.Eval(`document.querySelector("#who").textContent`), got, want)
+		}
+		// While help is needed it says so in the design's words.
+		if want {
+			if got := b.Eval(`document.querySelector("#who").textContent`); got != stHelp.Label {
+				t.Errorf("%s: the pill says %q, want %q", what, got, stHelp.Label)
+			}
 		}
 	}
 	needsHelp := map[string]any{"state": "needs_help"}
