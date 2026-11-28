@@ -223,7 +223,15 @@ func (m *Manager) grantLease(ctx context.Context, id, tokenID string, read bool)
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		if cctx.Err() != nil {
-			return ended()
+			return ended() // the specific cause first
+		}
+		// A session that ended meanwhile, before it cancelled its
+		// leases (end saves the final state without the lock first).
+		if err := leaseRefusal(l); err != nil {
+			return err
+		}
+		if m.findLocked(id) != l {
+			return ErrNotRunning
 		}
 		now := m.now()
 		ls.admitted, ls.started = true, now

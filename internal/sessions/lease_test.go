@@ -630,3 +630,27 @@ func TestALeaseCancelledDuringTheTokenCheckIsRefused(t *testing.T) {
 		t.Fatalf("still held by %v", got)
 	}
 }
+
+// A session that ends while a call's token is checked, before it cancels
+// its leases (end saves its final state without the lock first), refuses
+// the call (PROJ-206).
+func TestALeaseOnASessionThatEndedDuringTheTokenCheckIsRefused(t *testing.T) {
+	f := newFixture(t)
+	s := f.start(f.m)
+	setState := func(st State) {
+		f.m.mu.Lock()
+		f.m.findLocked(s.ID).sess.State = st
+		f.m.mu.Unlock()
+	}
+	f.m.SetTokenCheck(func(context.Context, string) error {
+		setState(Failed)
+		return nil
+	})
+	defer setState(Running)
+	if _, err := f.m.PageLease(context.Background(), s.ID, "tok"); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("a lease on a session that failed meanwhile = %v", err)
+	}
+	if got := f.m.ConnectedTokens(); len(got) != 0 {
+		t.Fatalf("still held by %v", got)
+	}
+}
